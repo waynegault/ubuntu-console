@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 82
+# Module Version: 83
 #   v81 (2026-10-15): legal/agentic profiles run one deterministic task-contract probe at
 #   the final winner before persistence; malformed legal labels or agentic tool-call JSON
 #   refuse the save. Probe calls are separate from the throughput samples and use no judge.
@@ -538,6 +538,17 @@ __autotune_measurement_verdict() {
     fi
     if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
     return 0
+}
+
+# __autotune_collapse_verdict <recorded> <measured> — the tps-collapse guard's predicate,
+# extracted for the same reason __autotune_measurement_verdict exists: it is a policy, so it
+# is a pure function that can be tested without a GPU.  True when the row's PREVIOUS
+# filled-cache tps (registry field 17) is a plausible measured decode — the OpenClaw
+# gateway's 1000000 sentinel is not one — and is at least DOUBLE the fresh reading.
+__autotune_collapse_verdict() {
+    local recorded="${1:-}" measured="${2:-}"
+    [[ "$recorded" =~ ^[0-9]+([.][0-9]+)?$ && "$measured" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+    awk -v r="$recorded" -v m="$measured" 'BEGIN{exit !(r > 0 && r < 1000 && r >= 2*m)}'
 }
 
 # ── 1a: the position term ────────────────────────────────────────────────────
@@ -2281,13 +2292,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # large factor below its previously-recorded filled-cache tps (registry
     # field 17).  The OpenClaw gateway marks tiny/instant models with a
     # sentinel 1000000, so a recorded value is only compared when it is a
-    # plausible measured decode (0 < tps < 1000).  Warn only — a drop can also
-    # be a genuine hardware/quant regression, so never abort.
-    if [[ "${_tps:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
-        && [[ "${BEST_TPS:-0}" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
-        && [[ $(echo "${_tps:-0} > 0" | bc 2>/dev/null || echo "0") == 1 ]] \
-        && [[ $(echo "${_tps:-0} < 1000" | bc 2>/dev/null || echo "0") == 1 ]] \
-        && [[ $(echo "${_tps:-0} >= 2 * ${BEST_TPS:-0}" | bc 2>/dev/null || echo "0") == 1 ]]; then
+    # plausible measured decode (0 < tps < 1000).  A drop can also be a genuine
+    # hardware/quant regression, so it never ABORTS the run — but it does stop
+    # the row being stamped `certified` (see the write gate below): a figure this
+    # run has just called untrustworthy must not retire the row from the plan.
+    if __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
+        _meas_collapse=1
         echo ""
         echo "  ⚠ WARN: tps collapse — certified ${BEST_TPS} tps vs recorded ${_tps} tps (>=2x drop)."
         echo "           GPU may be degraded (WSL2 dxgkrnl leak); the re-certified numbers are untrustworthy."
@@ -2763,6 +2773,16 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             echo "  was CONTENDED, so this row's tps is indicative, not certified — nothing was written."
             echo "  Re-run on a quiet box, or pass --allow-contended to save it as meas_state=indicative."
             exit 1
+        fi
+        # The verdict is the WEAKEST of the three terms, not the load alone.  A collapse is a
+        # third way a reading can be untrustworthy, and it used to be warn-only: the row was
+        # written `certified`, the plan derivation drops certified rows, and the row retired
+        # itself on a number this same run had just called untrustworthy.  Measured
+        # 2026-10-17 22:34 — grounded-ai re-certified 15.08 -> 3.59 tps, saved `certified`,
+        # and left the plan (re-flagged by hand to `indicative` the same night).
+        if [[ "${_meas_collapse:-0}" == "1" && "$_meas_state" == "certified" ]]; then
+            echo "  stamping this row INDICATIVE: the collapse above makes this a re-tune owed, not a certification"
+            _meas_state="indicative"
         fi
         # 1a — the POSITION term.  The winner above is a median of 5 taken at ONE point in
         # the run, and this box drifts with position (the cache-ram probe measured 45-65%

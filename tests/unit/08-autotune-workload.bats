@@ -726,7 +726,6 @@ STUB
     eval "$(sed -n '/^__autotune_measurement_verdict()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
     # Both constructs must exist or this case asserts nothing.
     declare -f __autotune_measurement_verdict >/dev/null
-
     run __autotune_measurement_verdict "1.77" "16" "0"
     [[ "$output" == "certified" ]] || { echo "a QUIET box (load 1.77/16) must certify (got '$output')"; return 1; }
 
@@ -743,6 +742,37 @@ STUB
     # ...and --allow-contended still permits the unreadable case, stamped indicative.
     run __autotune_measurement_verdict "?" "16" "1"
     [[ "$output" == "indicative" ]] || { echo "an unreadable load + --allow-contended must be indicative (got '$output')"; return 1; }
+}
+
+@test "3c: a >=2x tps collapse is a third way a reading is untrustworthy" {
+    # Catches: the pre-v83 behaviour, where the collapse guard only WARNED and the row was
+    # written `certified` anyway — which retires it from the plan on a figure the run itself
+    # had just called untrustworthy.  Measured 2026-10-17 22:34: grounded-ai re-certified
+    # 15.08 -> 3.59 tps, saved certified, and left the plan.
+    eval "$(sed -n '/^__autotune_collapse_verdict()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    declare -f __autotune_collapse_verdict >/dev/null
+
+    run __autotune_collapse_verdict "15.08" "3.59"
+    [[ "$status" -eq 0 ]] || { echo "a 4.2x drop (15.08 -> 3.59) must count as a collapse"; return 1; }
+
+    # The bound is inclusive: exactly 2x is the criterion's own boundary.
+    run __autotune_collapse_verdict "20" "10"
+    [[ "$status" -eq 0 ]] || { echo "exactly 2x must count as a collapse (the bound is inclusive)"; return 1; }
+
+    # A normal re-measure drifts a few percent and must NOT demote the row.
+    run __autotune_collapse_verdict "15.08" "15.02"
+    [[ "$status" -ne 0 ]] || { echo "a 0.4% re-measure must not count as a collapse"; return 1; }
+
+    run __autotune_collapse_verdict "10" "5.01"
+    [[ "$status" -ne 0 ]] || { echo "just under 2x must not count as a collapse"; return 1; }
+
+    # The gateway's 1000000 sentinel is not a measurement, so it cannot fabricate one.
+    run __autotune_collapse_verdict "1000000" "3.59"
+    [[ "$status" -ne 0 ]] || { echo "the 1000000 sentinel must not be compared"; return 1; }
+
+    # No recorded figure (a fresh row) is not a collapse either.
+    run __autotune_collapse_verdict "" "3.59"
+    [[ "$status" -ne 0 ]] || { echo "an absent recorded tps must not fabricate a collapse"; return 1; }
 }
 
 @test "3c: the certification parses --allow-contended and refuses BEFORE the save" {
