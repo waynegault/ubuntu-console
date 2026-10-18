@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 #   v3 (2026-10-18): same change, made §18.3-clean — a comment above each function (9.5), the
 #   usage line carries its exit-code comment (9.7), and no hand-rolled `>&2` (10.7): the usage
 #   text goes to stdout, which the `wsl.exe` hop's caller already merges into one log.
@@ -89,9 +89,20 @@ ensure_running() {
     while (( SECONDS < _deadline )); do
         _tries=$(( _tries + 1 ))
         if systemctl --user start "$UNIT"; then
-            printf 'ensure: start accepted after %ss (%s tries) — %s\n' \
-                "$(( SECONDS - _start ))" "$_tries" "$(systemctl --user is-active "$UNIT" 2>&1)"
-            return 0
+            # `start` reports the JOB, never the unit.  Measured 2026-10-18: the job was
+            # accepted at boot and the gateway exited 1 fourteen seconds later, still
+            # refusing "state … undergoing offline maintenance", so this function returned
+            # success and only systemd's Restart=always brought it back — 24 minutes later
+            # (21:42:22 start, 22:06:02 ActiveEnterTimestamp).  Verify it is STILL active
+            # after a settle window, and keep retrying within the bound.
+            sleep 5
+            if systemctl --user is-active --quiet "$UNIT"; then
+                printf 'ensure: start verified after %ss (%s tries) — %s\n' \
+                    "$(( SECONDS - _start ))" "$_tries" "$(systemctl --user is-active "$UNIT" 2>&1)"
+                return 0
+            fi
+            printf 'ensure: start attempt %s exited after acceptance — retrying (bound %ss)\n' \
+                "$_tries" "$BOUND"
         fi
         sleep 3
     done
