@@ -140,6 +140,14 @@
 # 2026-10-18: 4.2.4 +2 and 8.1.8 +2 are also the peer commit 15e09a4a
 # (bin/wsl-restart.sh fleet gate): two case blocks without a *) arm and two
 # over-120-character lines. Corpus growth from that peer commit.
+# 2026-10-19: 10.4 50 -> 51 and 10.7 219 -> 220 are the peer commit c6478eb4
+# (scripts/09c-oc-core.sh, "oc purge resets the session stores"): its new
+# `oc-purge` function is 120 lines, and one printf site carries a hand-written
+# `>&2`.  Measured at e32f9666 vs c6478eb4 on that ONE file — its 10.4 population
+# goes from {oc: 166} to {oc: 166, oc-purge: 120}, and 10.7 from 0 to 1; every
+# other counter is unchanged.  Corpus growth from that peer commit, not drift
+# in the two commits beneath it.  Hand-edited, NEVER `--update`: the tool
+# rewrites this file as header+rows and would strip every block above.
 4.2.4	20
 4.2.6	9
 4.3.6	31
@@ -147,6 +155,6 @@
 8.1.8	292
 9.5	119
 9.7	80
-10.4	50
-10.7	219
+10.4	51
+10.7	220
 10.8	0
