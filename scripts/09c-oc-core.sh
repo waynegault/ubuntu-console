@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 17
+#   v17 (2026-10-18): `oc purge` never sends a MAIN session to `sessions delete`.
+#   Measured live: the CLI refuses it ("Cannot delete the main session"), and one
+#   refused key fails the whole batch — so the first live purge deleted the non-main
+#   sessions but reported the store delete as FAILED.  Mains are now counted and
+#   reported as KEPT ("use /reset in that chat"), the batch carries only non-main keys,
+#   and the roster read-back counts non-main rows so a correct purge is not a failure.
 # Module Version: 16
 #   v16 (2026-10-18): `oc purge` resets the session STORES, not just the directories.
 #   Measured: 47 sessions across 14 agents lived in agent/openclaw-agent.sqlite while the
@@ -380,13 +387,22 @@ function __oc_purge_session_keys() {
 # with the CLI's own output on stderr rather than discarded.
 function __oc_purge_delete_sessions() {
     local -a _keys=()
-    local _key _out=""
+    local _key _out="" _mains=0
     while IFS= read -r _key
     do
-        [[ -n "$_key" ]] && _keys+=("$_key")
+        [[ -n "$_key" ]] || continue
+        # The CLI REFUSES to delete a main session ("Cannot delete the main session"),
+        # and one refused key fails the whole batch.  So mains are counted and reported
+        # rather than sent: the supported reset for a main is /reset in that chat.
+        if [[ "$_key" == *":main" ]]
+        then
+            _mains=$(( _mains + 1 ))
+            continue
+        fi
+        _keys+=("$_key")
     done < <(__oc_purge_session_keys)
 
-    printf '%s\n' "${#_keys[@]}"
+    printf '%s %s\n' "${#_keys[@]}" "$_mains"
     (( ${#_keys[@]} > 0 )) || return 0
 
     if ! _out=$(timeout 300 openclaw sessions delete "${_keys[@]}" --yes --json 2>&1)
@@ -430,7 +446,7 @@ function oc-purge() {
         return 0
     fi
 
-    local _purge_count=0 _failed=0 _deleted=0 _purge_left=""
+    local _purge_count=0 _failed=0 _deleted=0 _mains=0 _purge_left="" _counts=""
 
     # 1. Stop the gateway with DB-safe sequencing, then WAIT for it to be gone.  A stop
     #    that does not land is a refusal: everything below deletes state.
@@ -484,27 +500,36 @@ function oc-purge() {
         return 1
     fi
 
-    # 5. Delete every stored session, main included.  This is the half the directories
-    #    could never reach: the store rows, the tombstones and the cold-archive refs.
-    if ! _deleted=$(__oc_purge_delete_sessions)
+    # 5. Delete every stored session EXCEPT each agent's main.  The CLI refuses to
+    #    delete a main ("Cannot delete the main session", measured 2026-10-18), and one
+    #    refused key fails the whole batch — so mains are counted, named, and left to
+    #    /reset in their chat instead of failing the purge.
+    if ! _counts=$(__oc_purge_delete_sessions)
     then
         __tac_info "Sessions" "[FAILED to delete store rows - reported, not claimed]" "$C_Error"
         _failed=$(( _failed + 1 ))
     else
-        __tac_info "Sessions" "[$_deleted session key(s) deleted, main included]" "$C_Dim"
+        _deleted="${_counts%% *}"
+        _mains="${_counts##* }"
+        __tac_info "Sessions" "[$_deleted session key(s) deleted]" "$C_Dim"
+        if (( _mains > 0 ))
+        then
+            __tac_info "Sessions" "[$_mains main session(s) KEPT - the CLI refuses to delete main; use /reset in that chat]" "$C_Dim"
+        fi
     fi
 
-    # 6. Read the roster back.  "Purge complete" is a claim about the store, so it is
-    #    made from a fresh read, never from the delete's own return code.
+    # 6. Read the NON-MAIN roster back.  Mains are kept by design, so counting them would
+    #    turn every correct purge into a failure.  "Purge complete" is a claim about the
+    #    store, so it is made from a fresh read, never from the delete's return code.
     if ! _purge_left=$(timeout 60 openclaw sessions --all-agents --json \
-        | jq -r '.count // empty')
+        | jq -r '[.sessions[].key | select(endswith(":main")|not)] | length')
     then
         _failed=$(( _failed + 1 ))
         __tac_info "Sessions" "[could not read the roster back after delete]" "$C_Error"
     elif [[ -n "$_purge_left" && "$_purge_left" != "0" ]]
     then
         _failed=$(( _failed + 1 ))
-        __tac_info "Sessions" "[$_purge_left session(s) STILL STORED after delete]" "$C_Error"
+        __tac_info "Sessions" "[$_purge_left non-main session(s) STILL STORED after delete]" "$C_Error"
     fi
 
     # Report result

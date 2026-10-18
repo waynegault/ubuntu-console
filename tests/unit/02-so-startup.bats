@@ -609,11 +609,19 @@ __so_test_prelude() {
     # and `timeout` execs a binary, so a function stub would be invisible and the REAL
     # CLI would answer (measured: that is what made this case hang on first run).
     mkdir -p "$TAC_TEST_TMPDIR/bin"
-    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<MOCK
 #!/usr/bin/env bash
-case "$1 ${2:-}" in
-    "sessions --all-agents") printf '%s\n' '{"count":0,"sessions":[{"key":"agent:alpha:main"}]}' ;;
-    "sessions delete") printf '%s\n' '{"ok":true}' ;;
+case "\$1 \${2:-}" in
+    "sessions --all-agents")
+        if [[ -f "$TAC_TEST_TMPDIR/deleted" ]]; then
+            printf '%s\n' '{"count":1,"sessions":[{"key":"agent:alpha:main"}]}'
+        else
+            printf '%s\n' '{"count":2,"sessions":[{"key":"agent:alpha:scratch"},{"key":"agent:alpha:main"}]}'
+        fi ;;
+    "sessions delete")
+        : > "$TAC_TEST_TMPDIR/deleted"
+        printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/delete-argv"
+        printf '%s\n' '{"ok":true}' ;;
 esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
@@ -640,8 +648,13 @@ MOCK
     [ "$status" -eq 0 ]
     [[ "$output" == *"[PURGED] $OC_AGENTS/alpha/sessions"* ]]
     [[ "$output" == *"[PURGED] $OC_AGENTS/beta/sessions"* ]]
-    [[ "$output" == *"[1 session key(s) deleted, main included]"* ]]
+    [[ "$output" == *"[1 session key(s) deleted]"* ]]
+    [[ "$output" == *"[1 main session(s) KEPT"* ]]
     [[ "$output" == *"[2 agent dir(s) cleared, store reset]"* ]]
+    # The CLI refuses to delete a main, and one refused key fails the whole batch, so a
+    # main must never be SENT: scratch goes, main stays, and the argv proves both.
+    grep -qF 'agent:alpha:scratch' "$TAC_TEST_TMPDIR/delete-argv"
+    ! grep -qF 'agent:alpha:main' "$TAC_TEST_TMPDIR/delete-argv"
     [ -e "$TAC_TEST_TMPDIR/stopped" ]
     [ ! -d "$OC_AGENTS/alpha/sessions" ]
     [ ! -d "$OC_AGENTS/beta/sessions" ]
