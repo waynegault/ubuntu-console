@@ -59,7 +59,14 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-10-18): THE CAP NO LONGER PARKS A CAMPAIGN THAT STILL OWES ROWS.  Wayne's ruling,
+#   option b: the 8-restart cap bounds restarts WITHIN a campaign; it is not a reason to leave
+#   work and a GPU idle.  Measured the same night — the loop stopped at 06:16:29 with 2 rows owed
+#   and 8/8 used, and the box sat idle for 4 h 41 m because that stop existed only in the journal.
+#   At the cap with rows owed, arm_restart now RESETS THE COUNTER FILE (via reset_restart_count,
+#   the same path `--plan` uses — never a re-plan, which would re-derive the scope from the
+#   registry) and arms, logging the figure it replaced so a runaway arm loop stays visible.
 #   v11 (2026-10-17): the ARM's refusal NAMES its bound ("arm bound 900s").  The proof that the
 #   arm and the chunk consult different bounds could not distinguish them while both refusals
 #   read identically; with the value in the message, a live run (chunk bound 0, arm bound 5, CI
@@ -394,9 +401,17 @@ arm_restart() {
     local _n _rc=0
     _n=$(restart_count)
     if (( _n >= ARM_MAX )); then
-        printf 'NOT arming a restart: %s automatic restarts already (cap %s)\n' "$_n" "$ARM_MAX"
-        printf '  the cap is a stop, not a fault - re-run --plan to start a fresh campaign\n'
-        return "$EXIT_PAUSED"
+        # Wayne's ruling 2026-10-18 (option b): the cap bounds restarts WITHIN a campaign; it
+        # does not park one that still owes rows.  Measured the same night — the loop stopped at
+        # 06:16:29 with 2 rows owed and 8/8 used, and the GPU sat idle for 4 h 41 m because that
+        # stop existed only in the journal.  The reset is the documented one: the COUNTER FILE,
+        # never `--plan` (which re-derives the scope from the registry).  It is logged with the
+        # figure it replaced, so a runaway arm loop stays visible rather than silent.
+        printf 'cap reached: %s/%s automatic restarts - RESETTING the counter and continuing\n' \
+            "$_n" "$ARM_MAX"
+        printf '  (Wayne, 2026-10-18: a cap must not park a campaign that still owes rows)\n'
+        reset_restart_count
+        _n=0
     fi
     if ! wait_for_ci_clear "$ARM_CI_WAIT_S"; then
         printf 'NOT arming a restart: a CI job is executing on this box (arm bound %ss)\n' "$ARM_CI_WAIT_S"

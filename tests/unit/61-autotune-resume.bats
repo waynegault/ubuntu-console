@@ -285,6 +285,30 @@ EOS
     [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "1" ]
 }
 
+@test "autotune-resume: at the CAP with rows owed it RESETS the counter and ARMS (Wayne 2026-10-18)" {
+    # CRITERION (Wayne, 2026-10-18, option b): the 8-restart cap bounds restarts WITHIN a
+    # campaign; reaching it must not park a campaign that still owes rows.  Catches the shipped
+    # behaviour, which stopped at 06:16:29 with 2 rows owed and left the GPU idle for 4 h 41 m
+    # because that stop existed only in the journal.
+    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
+    {
+        _row 1 uncertified.gguf 2.00 yes 1.00
+        _row 2 flagged.gguf     1.00 yes 5.00
+    } > "$TAC_RESUME_REGISTRY"
+    printf '4\n' > "$ENTRY_RC_FILE"
+    # The counter is already AT the cap before the arm is attempted.
+    printf '8\n' > "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cap reached: 8/8"* ]] || { echo "the cap must be reported (got: $output)"; return 1; }
+    [[ "$output" == *"armed restart 1/8"* ]] || { echo "it must ARM after the reset (got: $output)"; return 1; }
+
+    # Re-based, not incremented past the cap: the next boot starts a fresh batch of 8.
+    [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "1" ]
+    grep -q '^--restart$' "$RESTART_ARGV"
+}
+
 @test "autotune-resume: a budget halt that did NOT shrink the remainder STILL arms (v7 criterion)" {
     # CRITERION CHANGE (Wayne, 2026-10-16): the INDICATIVE rows stay in the SCOPE and are RETRIED,
     # and he asked for a "much smoother" campaign - so a boot that retried them and certified
