@@ -99,7 +99,7 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
 #   v18 (2026-10-18): same change, one line shortened to stay under the 120-column bound (8.1.8).
 #   v17 (2026-10-18): STEP 3a STARTS THE GATEWAY AGAIN, EVEN IF IT WAS DOWN BEFORE THE RESTART.
 #   v16 stopped it before the teardown, which cured the mid-drain kill — but stopping is half the
@@ -921,6 +921,20 @@ confirm_armed() {
 # always present.  A parent that has already exited leaves a gap rather than a wrong name.
 log_caller() {
     local _pid=$$ _depth=0 _line=""
+    # Every arm writes ~14 KB (six ancestors, argv included), so the log is capped rather than
+    # left to grow: keeping the newest 2000 lines is ~a month of campaign arms and enough to
+    # answer "who asked" after the fact.  Rotation happens BEFORE the append, never during it.
+    local _size=0
+    # swallow-ok: a log that does not exist (or cannot be stat'ed) is 0 bytes - nothing to rotate
+    _size=$(stat -c %s "$ARM_LOG" 2>/dev/null || echo 0)
+    if (( _size > 1048576 )); then
+        # swallow-ok: the `if` tests this write and says so; the log is not touched on failure
+        if tail -n 2000 "$ARM_LOG" > "$ARM_LOG.tmp" 2>/dev/null; then
+            mv -f "$ARM_LOG.tmp" "$ARM_LOG"
+        else
+            _say "WARN: could not rotate the arm log at $ARM_LOG (it is over 1 MB)"
+        fi
+    fi
     # swallow-ok: the append below reports its own failure, so a mkdir problem surfaces there
     mkdir -p "$(dirname "$ARM_LOG")" 2>/dev/null || true
     {

@@ -739,3 +739,26 @@ EOS
     [ -f "$TAC_WSL_RESTART_ARM_LOG" ]
     grep -q 'restart --delay 5' "$TAC_WSL_RESTART_ARM_LOG"
 }
+
+@test "wsl-restart: the arm log is CAPPED, so it cannot grow without bound" {
+    # ~14 KB per arm (six ancestors with argv), and the campaign arms several times a day.
+    # An unbounded log is the growth defect this repo has already paid for twice; the cap is
+    # asserted by SIZE here, not by reading the code, because a broken cap looks like a cap.
+    export TAC_WSL_RESTART_ARM_LOG="$SANDBOX/arms-big.log"
+    # Pre-fill past the 1 MB bound with distinguishable lines, then arm once.
+    python3 - "$TAC_WSL_RESTART_ARM_LOG" <<'PYGEN'
+import sys
+with open(sys.argv[1], 'w') as fh:
+    for i in range(30000):
+        fh.write("filler line %06d aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" % i)
+PYGEN
+    [ "$(stat -c %s "$TAC_WSL_RESTART_ARM_LOG")" -gt 1048576 ]
+    export QUERY_MODE=registered
+    run bash -c "cd '$SANDBOX' && '$SCRIPT' --restart --delay 5"
+    [ "$status" -eq 0 ]
+    local after
+    after=$(stat -c %s "$TAC_WSL_RESTART_ARM_LOG")
+    [ "$after" -lt 1048576 ] || { echo "the log was not rotated (size $after)"; return 1; }
+    # The newest arm survives the rotation: rotation keeps the tail, which includes it.
+    grep -q 'restart --delay 5' "$TAC_WSL_RESTART_ARM_LOG"
+}
