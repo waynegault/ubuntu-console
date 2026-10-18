@@ -59,7 +59,16 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-10-18): THE WARNING STOPPED BEING PART OF THE COUNT.  Measured after the 14:17
+#   restart: the unit's PATH is the systemd default (no `~/.local/bin`), so `gh` is not found,
+#   the queued probe fails, and `ci_workers` printed "WARN …\n0" — the caller's numeric test then
+#   failed on EVERY poll and `wait_for_ci_clear` slept for 55 minutes with a clear queue, holding
+#   the whole campaign.  The count is now the only thing on stdout, and the warning is printed by
+#   `wait_for_ci_clear` once, where its stdout is not captured.  Also: `gh` genuinely is not on
+#   that PATH, so the queued half is inert INSIDE the unit until the unit's PATH or the probe's
+#   own resolution is fixed — the local-worker half still gates, which is the safe fallback v13
+#   promised.
 #   v14 (2026-10-18): two defects in v13's own queued probe, both found by running it.
 #   (1) `gh run list` prints `[]` when nothing is queued, so `grep -o databaseId` exits 1 — and
 #   under `pipefail` that turned a CLEAR answer into a reported failure ("probe unavailable")
@@ -457,21 +466,14 @@ ci_workers() {
         return 0
     fi
     _n=$(ci_local_workers)
+    # The COUNT is the only thing on stdout.  A warning printed here becomes PART of the value
+    # the caller compares, and the gate then never sees a numeric zero — measured 2026-10-18:
+    # `gh` is not on the unit's PATH, so every poll returned "WARN…\n0" and the loop slept for
+    # 55 minutes with a clear queue.  wait_for_ci_clear prints the warning instead, where its
+    # stdout is not captured.
     if _q=$(ci_queued_runs) && [[ "$_q" =~ ^[0-9]+$ ]]; then
         printf '%s\n' "$(( ${_n:-0} + _q ))"
         return 0
-    fi
-    # `$( )` is a SUBSHELL: anything the probe assigned inside it is gone, so the reason it
-    # prints on failure is what arrives here.
-    _ci_queued_err="${_q:-no detail}"
-    # An unavailable probe must NOT read as BUSY: a box with no network or an expired token
-    # would then never claim a plan, which is the failure this loop exists to prevent.  Say it
-    # once per boot rather than on every poll, and keep counting what the box can see.
-    if [[ "${_ci_queued_warned:-0}" != "1" ]]; then
-        printf 'WARN: the queued-run probe is unavailable (%s) — counting LOCAL workers only (%s)\n' \
-            "${_ci_queued_err:-no detail}" "${_n:-0}"
-        printf '  a push whose job has not started yet is invisible to this gate\n'
-        _ci_queued_warned=1
     fi
     printf '%s\n' "${_n:-0}"
 }
@@ -480,7 +482,16 @@ ci_workers() {
 # rather than falling through to the restart it guards (a bounded wait whose only
 # failure path is the action it guards is the shape that has bitten this repo).
 wait_for_ci_clear() {
-    local _bound="${1:-$CI_WAIT_S}" _n _deadline _clear=0
+    local _bound="${1:-$CI_WAIT_S}" _n _deadline _clear=0 _why
+    # Say it HERE, once, where stdout is not captured.  A warning printed inside $(ci_workers)
+    # becomes part of the count and the gate never sees a numeric zero — measured 2026-10-18:
+    # the unit's PATH has no `gh`, so every poll returned "WARN…\n0" and the loop slept for 55
+    # minutes with a clear queue.  The count itself is always a bare number.
+    if ! _why=$(ci_queued_runs); then
+        printf 'WARN: the queued-run probe is unavailable (%s) — counting LOCAL workers only\n' \
+            "${_why:-no detail}"
+        printf '  a push whose job has not started yet is invisible to this gate\n'
+    fi
     _deadline=$(( SECONDS + _bound ))
     while :; do
         _n=$(ci_workers)
