@@ -121,7 +121,11 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 55
+# Module Version: 56
+#   v56 (2026-10-18): the active-but-not-running branch now says what it is NOT stacking —
+#   "a restart" — matching the activating/deactivating branch and
+#   tests/unit/01-refresh-keys.bats:697.  The branch already refused to stack; only the
+#   message disagreed with the asserted wording (pre-existing CI red, no behaviour change).
 #   v55 (2026-10-17): THE STACKING GUARD REQUIRES A CONVERGED PRE-STATE, NOT `is-active`.  Wayne's
 #   order was to harden the guard once the autotune chunk halted.  `oc-refresh-keys` refused to
 #   stack only when `is-active` read activating/deactivating — and the gateway unit is Type=simple,
@@ -2463,7 +2467,8 @@ function oc-refresh-keys() {
             # NEVER STACK, whatever the phase: a start that has not converged inside the bound is
             # left alone rather than restarted on top of.  The env is already in the manager, so the
             # next restart applies it — strictly safer than the collision this replaces.
-            local _pre_note="[active and still starting (${_pre_phase:-unknown}) — not stacking; env is applied]"
+            local _pre_note="[active and still starting (${_pre_phase:-unknown})"
+            _pre_note+=" — not stacking a restart; env is applied]"
             __tac_info "Gateway" "$_pre_note" "$C_Warning"
         elif systemctl --user restart --no-block openclaw-gateway.service 2>/dev/null
         then
