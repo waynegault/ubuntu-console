@@ -60,7 +60,15 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 20
+#   v19 (2026-10-18): the v18 pattern is WRAPPED so no line exceeds the §18.3 120-char bound.
+#   v18 (2026-10-18): A CHUNK MUST BE AN INVOCATION, NOT A MENTION.  Measured 23:37: pid 435033
+#   was `shellcheck -s bash -x … <files>` from the CI lint job; the file list names
+#   `bin/autotune-rows.sh`, and `pgrep -f` matches anywhere in the command line, so the lint read
+#   as a LIVE CHUNK.  A phantom chunk makes the loop believe a row is measuring (it can skip its
+#   CI gate and its claim), and made the quiet-box supervisor hold for minutes on nothing.
+#   CHUNK_PATTERN is now anchored to argv[0]: an interpreter followed by the script, or the
+#   script itself.  Real invocations still match; a process that merely names the file does not.
 #   v17 (2026-10-18): AN EXHAUSTED CI WAIT ARMS A BOUNDED RETRY INSTEAD OF STOPPING.
 #   Wayne's ruling, option (b).  Measured the same evening: the chunk ended 20:19:24, the arm
 #   waited its 900 s and at 20:34:26 PAUSED because a CI job was executing - while the run
@@ -278,7 +286,16 @@ PARKED_ROWS='MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf'
 # `while pgrep -f 'run-autotune-batch'` made two cases take the "a chunk is already running"
 # branch, i.e. a foreign process decided them.  The seam lets a suite PIN what counts as a
 # chunk (the same override the restart wrapper carries as TAC_WSL_RESTART_CHUNK_PATTERN).
-CHUNK_PATTERN="${TAC_RESUME_CHUNK_PATTERN:-autotune[-]rows|run-autotune[-]batch|autotune[-]model|bench[-]rows}"
+# A chunk is a process that INVOKES one of our runners: argv[0] is the interpreter (or the script
+# itself) and the script name follows.  The pattern used to be a bare alternation over the script
+# names, and `pgrep -f` matches ANYWHERE in the command line — measured 2026-10-18 23:37, pid 435033
+# was `shellcheck -s bash -x --severity=warning --source-path=… <files>` from the CI lint job, and
+# because that file list names `bin/autotune-rows.sh` it read as a LIVE CHUNK.  A lint therefore
+# looked like a measurement: the loop can skip its CI gate on a phantom, and the supervisor held on
+# one.  Anchoring `^` to argv[0] keeps every real invocation (`bash <path>/autotune-rows.sh`) and
+# drops every process that merely mentions the file.
+_CHUNK_NAMES='autotune[-]rows|run-autotune[-]batch|autotune[-]model|bench[-]rows'
+CHUNK_PATTERN="${TAC_RESUME_CHUNK_PATTERN:-^(bash|sh|dash) [^ ]*($_CHUNK_NAMES)[.]sh|^[^ ]*($_CHUNK_NAMES)[.]sh}"
 
 # Print the usage block out of this file's own header, so the two cannot drift.
 usage() {
