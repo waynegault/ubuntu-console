@@ -60,7 +60,16 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-10-18): AN EXHAUSTED CI WAIT ARMS A BOUNDED RETRY INSTEAD OF STOPPING.
+#   Wayne's ruling, option (b).  Measured the same evening: the chunk ended 20:19:24, the arm
+#   waited its 900 s and at 20:34:26 PAUSED because a CI job was executing - while the run
+#   that mattered had ended at 20:34:15, nine seconds before the deadline, and a second run
+#   held the queue to 20:45:35.  A PAUSE is a dead end (the unit is oneshot and nothing
+#   re-enters it), so the box sat idle until a hand re-arm at 21:38.  Both exhaustion sites -
+#   the arm and the pre-claim chunk gate - now call schedule_retry, which arms a transient
+#   systemd timer that starts this unit again after RETRY_DELAY_S, bounded by RETRY_MAX so a
+#   permanently busy queue ends in a named stop.  The budget resets when a chunk starts.
 #   v15 (2026-10-18): THE WARNING STOPPED BEING PART OF THE COUNT.  Measured after the 14:17
 #   restart: the unit's PATH is the systemd default (no `~/.local/bin`), so `gh` is not found,
 #   the queued probe fails, and `ci_workers` printed "WARN …\n0" — the caller's numeric test then
@@ -223,6 +232,16 @@ CI_SETTLE_POLLS="${TAC_RESUME_CI_SETTLE_POLLS:-2}"
 # loudly, so a signal has a narrow window instead of a whole afternoon.
 ARM_CI_WAIT_S="${TAC_RESUME_ARM_CI_WAIT_S:-900}"   # 15 min: arm promptly, or say so
 RESTARTS_FILE="$STATE_DIR/autotune-resume.auto-restarts"
+# A PAUSE is otherwise a DEAD END: this unit is oneshot and nothing re-enters it, so an exhausted
+# CI wait leaves the campaign idle until a boot or a hand start.  Measured 2026-10-18 20:34:26 —
+# the arm's 900 s expired nine seconds after one CI run ended (20:34:15) while a second run held
+# the queue to 20:45:35, and the box sat idle until a hand re-arm at 21:38.  Wayne's ruling,
+# option (b): an exhausted wait ARMS A BOUNDED RETRY instead of stopping.
+RETRY_DELAY_S="${TAC_RESUME_RETRY_DELAY_S:-900}"   # 15 min: a CI job's typical tail
+RETRY_MAX="${TAC_RESUME_RETRY_MAX:-8}"             # consecutive retries, then a named stop
+RETRIES_FILE="$STATE_DIR/autotune-resume.retries"
+SELF_UNIT="${TAC_RESUME_SELF_UNIT:-autotune-resume.service}"
+RETRY_UNIT="autotune-resume-retry"
 
 # THE ARM RECORD (v4.2.0).  `--restart --delay N` is `schtasks /create` + `/run`: it returns 0
 # when the task is REGISTERED, minutes before the wrapper makes its decision.  So the loop used
@@ -406,6 +425,54 @@ restart_count() {
 reset_restart_count() {
     mkdir -p "$STATE_DIR"
     printf '0\n' > "$RESTARTS_FILE"
+}
+
+# How many retries have been scheduled since the last successful claim.
+retry_count() {
+    local _n=0
+    if [[ -r "$RETRIES_FILE" ]]; then
+        _n=$(< "$RETRIES_FILE")
+    fi
+    printf '%s' "${_n:-0}"
+}
+
+# A successful claim clears the retry budget.
+reset_retry_count() {
+    mkdir -p "$STATE_DIR"
+    printf '0\n' > "$RETRIES_FILE"
+}
+
+# Arm a transient systemd timer that starts this unit again after RETRY_DELAY_S, so an exhausted
+# CI wait becomes a RETRY rather than a stop.  Bounded by RETRY_MAX: a permanently busy queue ends
+# in a named stop instead of an endless wake-up loop.
+schedule_retry() {
+    local _n
+    _n=$(retry_count)
+    if (( _n >= RETRY_MAX )); then
+        printf 'retry budget spent: %s/%s — a boot or a hand start is needed\n' "$_n" "$RETRY_MAX"
+        return 1
+    fi
+    if [[ -n "${TAC_RESUME_RETRY_CMD:-}" ]]; then
+        if ! "${TAC_RESUME_RETRY_CMD}" "$RETRY_DELAY_S" "$RETRY_UNIT" "$SELF_UNIT"; then
+            printf 'retry NOT armed: %s failed\n' "$TAC_RESUME_RETRY_CMD"
+            return 1
+        fi
+    else
+        if systemctl --user is-active --quiet "${RETRY_UNIT}.timer"; then
+            systemctl --user stop "${RETRY_UNIT}.timer" \
+                || printf 'WARN: could not clear the previous retry timer\n'
+        fi
+        if ! systemd-run --user --on-active="${RETRY_DELAY_S}s" --unit="$RETRY_UNIT" --collect \
+                systemctl --user start "$SELF_UNIT"; then
+            printf 'retry NOT armed: systemd-run failed\n'
+            return 1
+        fi
+    fi
+    mkdir -p "$STATE_DIR"
+    printf '%s\n' "$(( _n + 1 ))" > "$RETRIES_FILE"
+    printf 'retry %s/%s armed: %s starts in %ss\n' \
+        "$(( _n + 1 ))" "$RETRY_MAX" "$SELF_UNIT" "$RETRY_DELAY_S"
+    return 0
 }
 
 # GitHub says a run is QUEUED or IN PROGRESS for this repo, as a count.  The local worker
@@ -597,6 +664,8 @@ arm_restart() {
         printf '  a restart cancels it, and a cancelled run leaves main red here\n'
         printf '  re-arm by hand when the queue is empty: %s --restart --delay %s\n' \
             "$RESTART_TOOL" "$ARM_DELAY_MIN"
+        # v16: a PAUSE used to be a dead end (nothing re-enters a oneshot).  Schedule the retry.
+        schedule_retry
         return "$EXIT_PAUSED"
     fi
     if [[ ! -x "$RESTART_TOOL" ]]; then
@@ -802,8 +871,13 @@ run_plan() {
         printf 'a CI job is executing on this box - PAUSING rather than measuring under load\n'
         printf '  waited %ss; nothing was claimed, and %s is left in place for a later run\n' \
             "$CI_WAIT_S" "$PLAN"
+        # v16: a PAUSE used to be a dead end (nothing re-enters a oneshot).  Schedule the retry.
+        schedule_retry
         return "$EXIT_PAUSED"
     fi
+    # The gate cleared and a chunk is about to run: this attempt SUCCEEDED, so the retry budget
+    # starts over.  Without this a long campaign would spend its budget one CI delay at a time.
+    reset_retry_count
 
     # Claim it BEFORE the run: a boot loop must not re-tune rows it already has.  The claim
     # doubles as the resume marker (latest_unretired_claim): it is retired as soon as the
