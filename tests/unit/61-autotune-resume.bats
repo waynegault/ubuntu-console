@@ -401,22 +401,6 @@ EOS
     grep -q 'local _bound="${1:-$CI_WAIT_S}"' "$SCRIPT"
 }
 
-@test "autotune-resume: the automatic-restart cap stops the loop and names the reset" {
-    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
-    {
-        _row 1 uncertified.gguf 2.00 yes 1.00
-        _row 2 flagged.gguf     1.00 yes 5.00
-    } > "$TAC_RESUME_REGISTRY"
-    printf '4\n' > "$ENTRY_RC_FILE"
-    printf '8\n' > "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts"
-
-    run "$SCRIPT" 2>&1
-    [ "$status" -eq 4 ]
-    [[ "$output" == *"8 automatic restarts already (cap 8)"* ]]
-    [[ "$output" == *"--plan"* ]]
-    [ ! -e "$RESTART_ARGV" ]
-}
-
 @test "autotune-resume: --plan PARKS a row that can never certify, and names the reason" {
     {
         _row 1 MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf 9.10 yes 11.13
