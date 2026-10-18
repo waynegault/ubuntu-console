@@ -252,10 +252,15 @@ _line_of() {
 printf '%s\n' "$*" >> "$STUB_LOG"
 case "$*" in
     *is-active*)
-        if [ "${STUB_ACTIVE:-0}" = "1" ]; then exit 0; fi
+        # A successful start makes the unit ACTIVE: `--ensure-running` verifies after a
+        # settle window (v4), because `systemctl start` reports the JOB, not the unit.
+        # Without this the stub models a start that never brings anything up - which is
+        # the failure that verification exists to catch, not a passing case.
+        if [ "${STUB_ACTIVE:-0}" = "1" ] || [ -f "${STUB_LOG}.started" ]; then exit 0; fi
         exit 3 ;;
     *start*)
         if [ "${STUB_START_FAIL:-0}" = "1" ]; then exit 1; fi
+        : > "${STUB_LOG}.started"
         exit 0 ;;
 esac
 exit 0
@@ -267,6 +272,7 @@ STUB
 
     # (1) DOWN before the restart: it must be STARTED — never restarted, never stopped.
     export STUB_ACTIVE=0
+    rm -f "$STUB_LOG.started"
     : > "$STUB_LOG"
     run bash "$helper" --ensure-running
     [ "$status" -eq 0 ]
@@ -278,6 +284,7 @@ STUB
 
     # (2) UP already: a no-op, so it cannot bounce a healthy or still-starting gateway.
     export STUB_ACTIVE=1
+    rm -f "$STUB_LOG.started"
     : > "$STUB_LOG"
     run bash "$helper" --ensure-running
     [ "$status" -eq 0 ]
@@ -761,4 +768,41 @@ PYGEN
     [ "$after" -lt 1048576 ] || { echo "the log was not rotated (size $after)"; return 1; }
     # The newest arm survives the rotation: rotation keeps the tail, which includes it.
     grep -q 'restart --delay 5' "$TAC_WSL_RESTART_ARM_LOG"
+}
+
+# Falsification: fails before v1.4.1, where TASK_NAME was a bare literal.  A smoke test
+# exported this seam expecting isolation and armed the PRODUCTION task instead - measured
+# 2026-10-18 19:49, disarmed within a minute, but the point is that the seam only LOOKED
+# like one.  The override must reach the argv Windows actually receives.
+@test "wsl-restart: the task-name override reaches schtasks, so a probe cannot arm production" {
+    # registered: the arm's read-back must succeed, or this case would fail for the read-back
+    # rather than for the name it is testing (the stub has no state of its own).
+    export QUERY_MODE=registered
+    export TAC_WSL_RESTART_ARM_LOG="$SANDBOX/arms-seam.log"
+    run bash -c "cd '$SANDBOX' && TAC_WSL_RESTART_TASK_NAME=zz-probe-nope '$SCRIPT' --restart --delay 5"
+    [ "$status" -eq 0 ]
+    # Every /create and /query names the OVERRIDE, and no call names the production task.
+    grep -q '/create.*/tn zz-probe-nope' "$ARGV_LOG" || { echo "create argv did not use the override:"; cat "$ARGV_LOG"; return 1; }
+    grep -q '/query /tn zz-probe-nope' "$ARGV_LOG"
+    ! grep -q '/tn tac-wsl-restart' "$ARGV_LOG" || { echo "production name reached schtasks:"; cat "$ARGV_LOG"; return 1; }
+    # And the arm log records the effective name, which is what makes a past arm explain itself.
+    grep -q 'task=zz-probe-nope' "$TAC_WSL_RESTART_ARM_LOG"
+}
+
+# A name the wrapper cannot quote is refused BEFORE any Windows call: the cmd.exe line embeds
+# it unquoted and the PowerShell prompt embeds it in single quotes, so a space or a quote would
+# produce a half-created registration that the read-back reports as a create failure.
+@test "wsl-restart: a task name the wrapper cannot quote is refused untouched" {
+    export QUERY_MODE=absent
+    local _bad
+    # Exported rather than interpolated: a quote inside an inline assignment would be a
+    # quoting error in THIS test, which says nothing about the script.
+    for _bad in 'zz bad' "zz'bad" 'zz;bad' 'zz&bad' 'zz|bad' ''; do
+        export TAC_WSL_RESTART_TASK_NAME="$_bad"
+        run bash -c "cd '$SANDBOX' && '$SCRIPT' --restart --delay 5"
+        [ "$status" -eq 2 ] || { echo "name '$_bad' was not refused (rc=$status)"; return 1; }
+        [[ "$output" == *"refusing"* || "$output" == *"cannot quote"* ]] || { echo "no refusal message for '$_bad': $output"; return 1; }
+    done
+    # NOTHING reached Windows: not a query, not a create, not a delete.
+    [ ! -s "$ARGV_LOG" ] || { echo "a refused name still called schtasks:"; cat "$ARGV_LOG"; return 1; }
 }

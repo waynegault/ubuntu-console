@@ -99,7 +99,7 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
 #   v18 (2026-10-18): same change, one line shortened to stay under the 120-column bound (8.1.8).
 #   v17 (2026-10-18): STEP 3a STARTS THE GATEWAY AGAIN, EVEN IF IT WAS DOWN BEFORE THE RESTART.
 #   v16 stopped it before the teardown, which cured the mid-drain kill — but stopping is half the
@@ -236,11 +236,21 @@
 #   v2 (2026-10-15): record the measured Logon Mode ("Interactive only") - it is
 #   both what lets the wrapper's relaunch reach the desktop and what bounds the
 #   task to a logged-on user.
-VERSION="1.4.0"
+VERSION="1.4.1"
 
 set -uo pipefail
 
-TASK_NAME="tac-wsl-restart"
+# The task name, and a REAL seam.  Until v1.4.1 this was a bare literal: a smoke test that
+# exported TAC_WSL_RESTART_TASK_NAME=zz-probe-nope was silently IGNORED and armed the
+# production `tac-wsl-restart` instead (measured 2026-10-18 19:49, disarmed within a minute;
+# `--status` and `schtasks /query` both clean).  A seam that looks like a seam is worse than
+# no seam - the test believed it was isolated and was not.  The name reaches three places that
+# cannot re-quote it safely, so validate_seams() bounds it before anything runs.
+#
+# A BARE dash, not `:-`: with `:-` an EMPTY override silently falls back to the production
+# name, so `TAC_WSL_RESTART_TASK_NAME=$SOMETHING_UNSET` would arm production while looking
+# isolated - the same mistake in a new costume.  Empty is now a refusal.
+TASK_NAME="${TAC_WSL_RESTART_TASK_NAME-tac-wsl-restart}"
 DISTRO="Ubuntu-24.04"
 FOLDER_DEFAULT="/home/wayne/ubuntu-console"
 DELAY_MINUTES_DEFAULT=2
@@ -938,8 +948,8 @@ log_caller() {
     # swallow-ok: the append below reports its own failure, so a mkdir problem surfaces there
     mkdir -p "$(dirname "$ARM_LOG")" 2>/dev/null || true
     {
-        printf '%s uid=%s pid=%s deep=%s\n' \
-            "$(date -Iseconds)" "$(id -u)" "$$" "$1"
+        printf '%s uid=%s pid=%s task=%s deep=%s\n' \
+            "$(date -Iseconds)" "$(id -u)" "$$" "$TASK_NAME" "$1"
         while [[ -n "$_pid" && "$_pid" != "0" && "$_depth" -lt 6 ]]; do
             local _cmd _ppid
             # swallow-ok: an ancestor that already exited has no cmdline/status; the chain prints a named gap instead
@@ -1104,10 +1114,28 @@ show_status() {
     return "$_verdict"
 }
 
+# The task name is interpolated into a cmd.exe line (`/tn ${TASK_NAME}`, unquoted) and into a
+# single-quoted PowerShell string, so whitespace would split the first and a quote would escape
+# the second.  A name outside this alphabet is refused BEFORE any Windows call: the alternative
+# is a half-created registration that the read-back then reports as a create failure.
+validate_seams() {
+    if [[ -z "$TASK_NAME" ]]; then
+        _say "ERROR: TAC_WSL_RESTART_TASK_NAME is empty; refusing to guess a task name"
+        return "$EXIT_USAGE"
+    fi
+    if [[ "$TASK_NAME" =~ [^A-Za-z0-9._\\-] ]]; then
+        _say "ERROR: TAC_WSL_RESTART_TASK_NAME='$TASK_NAME' has a character the wrapper cannot quote"
+        _say "  allowed: letters, digits, dot, underscore, hyphen, backslash (folder path)"
+        return "$EXIT_USAGE"
+    fi
+    return 0
+}
+
 # Argument parsing only; --restart is never reached by accident.
 main() {
     local _mode="" _folder="$FOLDER_DEFAULT" _delay="$DELAY_MINUTES_DEFAULT" _time="" _want=""
     local _recur="once"
+    validate_seams || return $?
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --restart)    _mode="restart" ;;
