@@ -658,3 +658,55 @@ EOS
 }
 
 # end of file
+
+@test "wsl-restart: the FLEET gate runs after the chunk gate and BEFORE anything destructive" {
+    # Wayne, 2026-10-18: a restart must not cut a live agent turn without giving it
+    # the chance to reach a safe place.  The fleet gate asks the gateway (its own
+    # activeWork accounting) and drains for a bounded window; still busy at the
+    # bound means SKIP.  Order is load-bearing: the chunk gate first (a live row is
+    # unrecoverable), then the fleet, then everything that closes or kills.
+    run "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+
+    chunk_n=$(_line_of "$output" '--precheck')
+    fleet_n=$(_line_of "$output" 'fleet-quiesce.sh --drain')
+    fleet_skip_n=$(_line_of "$output" 'fleet gate BUSY - restart SKIPPED')
+    close_n=$(_line_of "$output" 'taskkill /im Code.exe')
+    shutdown_n=$(_line_of "$output" 'wsl.exe --shutdown')
+
+    [ "$chunk_n" -gt 0 ]
+    [ "$fleet_n" -gt 0 ]
+    [ "$fleet_skip_n" -gt 0 ]
+    [ "$chunk_n" -lt "$fleet_n" ]
+    [ "$fleet_n" -lt "$close_n" ]
+    [ "$fleet_n" -lt "$shutdown_n" ]
+    # Skipping must jump PAST every destructive step, not fall through to them.
+    [ "$fleet_skip_n" -lt "$close_n" ]
+    [ "$fleet_skip_n" -lt "$shutdown_n" ]
+}
+
+@test "wsl-restart: the fleet gate fails CLOSED - an unanswerable gate skips the restart" {
+    # exit 2 from the gate is "could not tell", and a fleet that cannot be read must
+    # never license a reset.  The wrapper routes 2 to its own skip label before 1.
+    run "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+
+    unknown_n=$(_line_of "$output" 'fleet gate could not answer - restart SKIPPED')
+    close_n=$(_line_of "$output" 'taskkill /im Code.exe')
+    [ "$unknown_n" -gt 0 ]
+    [ "$unknown_n" -lt "$close_n" ]
+    # And the route is wired: errorlevel 2 is tested before errorlevel 1.
+    two_n=$(_line_of "$output" 'if errorlevel 2 goto fleet_unknown')
+    one_n=$(_line_of "$output" 'if errorlevel 1 goto fleet_busy')
+    [ "$two_n" -gt 0 ]
+    [ "$one_n" -gt 0 ]
+    [ "$two_n" -lt "$one_n" ]
+}
+
+@test "wsl-restart: the fleet gate is a precondition, so it cannot silently skip every fire" {
+    # A missing gate would read as UNKNOWN forever and the restart would never happen;
+    # v1.3.0 requires it beside the chunk gate.
+    run bash -c "grep -c 'the fleet gate is not executable' '$SCRIPT'"
+    [ "$status" -eq 0 ]
+    [ "$output" -ge 1 ]
+}

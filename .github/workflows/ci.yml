@@ -231,7 +231,8 @@ jobs:
                tests/unit/60-wsl-restart.bats \
                tests/unit/61-autotune-resume.bats \
                tests/unit/62-vscode-companion-state-trim.bats \
-               tests/unit/63-ctx-profile-check.bats
+               tests/unit/63-ctx-profile-check.bats \
+               tests/unit/64-fleet-quiesce.bats
 
       - name: Run integration tests
         run: |

@@ -36,6 +36,10 @@
 # WHAT THE WRAPPER THEN DOES (Windows side, in the Task Scheduler's own session)
 #   - appends every step to C:\Users\wayne\wsl-restart-action.log
 #   - CHUNK GATE: asks the distro first, and stops here when a chunk is in flight
+#   - FLEET GATE: then asks the gateway whether any agent turn is in flight, and DRAINS
+#     for a bounded window so a running turn can reach a safe place. Still busy at the
+#     bound means the restart is SKIPPED - a cut-off turn cannot be resumed, a skipped
+#     restart can.  (Wayne, 2026-10-18: no reset without that opportunity.)
 #   - OPERATOR GATE: when the box looks OBVIOUSLY IN USE (a VS Code client running
 #     AND input within the idle window), a popup asks whether to cancel, and expires
 #     by itself after a few seconds.  No answer, an OK, a missing prompt, or a popup
@@ -95,7 +99,7 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 #   v18 (2026-10-18): same change, one line shortened to stay under the 120-column bound (8.1.8).
 #   v17 (2026-10-18): STEP 3a STARTS THE GATEWAY AGAIN, EVEN IF IT WAS DOWN BEFORE THE RESTART.
 #   v16 stopped it before the teardown, which cured the mid-drain kill — but stopping is half the
@@ -232,7 +236,7 @@
 #   v2 (2026-10-15): record the measured Logon Mode ("Interactive only") - it is
 #   both what lets the wrapper's relaunch reach the desktop and what bounds the
 #   task to a logged-on user.
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 set -uo pipefail
 
@@ -284,6 +288,10 @@ PROMPT_UNIX="${TAC_WSL_RESTART_PROMPT_UNIX:-/mnt/c/Users/wayne/wsl-restart-promp
 # The chunk gate's implementation, reached from the Windows side.  ~/.local/bin is the
 # stable path install.sh maintains for exactly this kind of caller.
 GATE_CMD_UNIX="${TAC_WSL_RESTART_GATE_CMD:-$HOME/.local/bin/wsl-restart.sh}"
+# The FLEET gate's implementation (v1.3.0): same stable path convention.  It is a separate
+# script because the question is separate - the chunk gate asks about MEASUREMENTS, this one
+# asks whether an agent turn is mid-flight, and the two must be testable apart.
+FLEET_CMD_UNIX="${TAC_WSL_RESTART_FLEET_CMD:-$HOME/.local/bin/fleet-quiesce.sh}"
 # The compaction step the wrapper runs while the client is CLOSED (step 3b): only a VACUUM
 # returns the pages a deleted value freed, and this restart is the one window where nothing
 # holds the state DBs open.  Same stable path convention as the gate.
@@ -519,7 +527,7 @@ render_prompt() {
 render_operator_gate() {
     printf '%s\r\n' \
         '' \
-        'REM 0b. OPERATOR GATE. Run the prompt FIRST, before anything is closed: it asks' \
+        'REM 0c. OPERATOR GATE. Run the prompt FIRST, before anything is closed: it asks' \
         'REM     only when the box looks obviously in use (a VS Code client running AND' \
         'REM     input within the idle window), its popup expires by itself, and the' \
         'REM     EXPIRY RESOLVES TO THIS RESTART: it goes ahead unless the operator' \
@@ -640,6 +648,38 @@ render_gateway_start_step() {
         ''
 }
 
+# The FLEET GATE (v1.3.0), rendered as the cmd the wrapper runs after the chunk gate
+# and before anything destructive.  Wayne, 2026-10-18: a WSL reset kills every in-flight
+# agent turn, so it must not happen without giving running turns a bounded window to
+# reach a safe place.  Still busy at the bound means SKIP — a cut-off turn cannot be
+# resumed, a skipped restart can.
+render_fleet_gate() {
+    printf '%s\r\n' \
+        'REM 0b. FLEET GATE (v1.3.0). A restart kills every in-flight agent turn - the' \
+        'REM     gateway, both CI runners and every running turn go with the distro. Ask' \
+        'REM     the gateway (its own activeWork accounting) and DRAIN for a bounded' \
+        'REM     window, so a turn three tool calls from a commit gets to finish. Still' \
+        'REM     busy at the bound means SKIP: a cut-off turn cannot be resumed, a' \
+        'REM     skipped restart can. A distro that is NOT running has no turns to cut.' \
+        'set FGATE=clear' \
+        'wsl.exe --list --running | findstr /i /c:"ubuntu" >nul 2>&1' \
+        'if errorlevel 1 goto fleet_clear' \
+        "wsl.exe -d ${DISTRO} -u wayne -- ${FLEET_CMD_UNIX} --drain >> \"%LOG%\" 2>&1" \
+        'if errorlevel 2 goto fleet_unknown' \
+        'if errorlevel 1 goto fleet_busy' \
+        'goto fleet_clear' \
+        ':fleet_busy' \
+        'set FGATE=busy' \
+        'echo [%DATE% %TIME%] fleet gate BUSY - restart SKIPPED, agent turns left intact >> "%LOG%"' \
+        'goto final' \
+        ':fleet_unknown' \
+        'set FGATE=unknown' \
+        'echo [%DATE% %TIME%] WARN: fleet gate could not answer - restart SKIPPED (fail closed) >> "%LOG%"' \
+        'goto final' \
+        ':fleet_clear' \
+        'echo [%DATE% %TIME%] fleet gate clear - proceeding >> "%LOG%"'
+}
+
 # The wrapper that runs on the Windows side.  CRLF is deliberate: cmd.exe parses a
 # LF-only .cmd unreliably around labels and goto, and this file is full of both.
 # `_mode` is `oneshot` (fired once, deletes its own registration) or `scheduled`
@@ -659,7 +699,6 @@ render_wrapper() {
         'setlocal' \
         "set \"LOG=${LOG_WIN}\"" \
         "set \"PROMPT=${PROMPT_WIN}\"" \
-        '' \
         'echo [%DATE% %TIME%] wsl-restart-action: start >> "%LOG%"' \
         "echo [%DATE% %TIME%] mode=${_mode} >> \"%LOG%\"" \
         '' \
@@ -684,7 +723,11 @@ render_wrapper() {
         'echo [%DATE% %TIME%] WARN: chunk gate could not answer - restart SKIPPED (fail closed) >> "%LOG%"' \
         'goto final' \
         ':gate_clear' \
-        'echo [%DATE% %TIME%] chunk gate clear - proceeding >> "%LOG%"'
+        'echo [%DATE% %TIME%] chunk gate clear - proceeding >> "%LOG%"' \
+    # STEP 0b — the fleet gate (v1.3.0) prints itself: inlined it pushed render_wrapper
+    # past the §18.3 10.4 hundred-line bound, the same reason the operator gate lives in
+    # its own renderer.  The STEP LIST above is what a reader comes here for.
+    render_fleet_gate
     # The operator gate prints itself (render_operator_gate): keeping it inline pushed
     # this function past the §18.3 10.4 hundred-line bound, and the STEP LIST is what a
     # reader comes here for.
@@ -821,6 +864,13 @@ check_preconditions() {
     if [[ ! -x "$GATE_CMD_UNIX" ]]; then
         _say "ERROR: the chunk gate is not executable at $GATE_CMD_UNIX"
         _say "       (install.sh links bin/* into ~/.local/bin; run it, or ln -s this script)"
+        _rc=1
+    fi
+    # Same rule for the fleet gate: if it cannot be reached, every fire would read it as
+    # "unknown" and skip - a restart that never happens is the failure mode this prevents.
+    if [[ ! -x "$FLEET_CMD_UNIX" ]]; then
+        _say "ERROR: the fleet gate is not executable at $FLEET_CMD_UNIX"
+        _say "       (install.sh links bin/* into ~/.local/bin; run it, or ln -s that script)"
         _rc=1
     fi
     # ADVISORY, not a gate: a missing compaction helper costs an OPPORTUNITY, never the

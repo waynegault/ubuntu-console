@@ -45,7 +45,9 @@ the whole run; this unit inherits that serialisation instead of adding a second 
 
 **What it does NOT do.** It does not decide the scope (the plan does, and the plan's
 rule is Wayne's ruling), and it does not restart WSL itself — it ARMS a restart through
-`bin/wsl-restart.sh`, which owns the Windows side and the chunk gate.
+`bin/wsl-restart.sh`, which owns the Windows side, the chunk gate AND the fleet gate
+(`bin/fleet-quiesce.sh`, v1.3.0): a reset that would cut a live agent turn drains for a
+bounded window first, and is skipped if the fleet is still busy.
 
 ## The loop (v2, 2026-10-15) — why a boot is not the end of the campaign
 
