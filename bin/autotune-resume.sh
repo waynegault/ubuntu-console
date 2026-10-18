@@ -59,7 +59,15 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-10-18): two defects in v13's own queued probe, both found by running it.
+#   (1) `gh run list` prints `[]` when nothing is queued, so `grep -o databaseId` exits 1 — and
+#   under `pipefail` that turned a CLEAR answer into a reported failure ("probe unavailable")
+#   while the count it printed was 0.  The count is now guarded on the key being present, so
+#   "none queued" is a successful zero.  (2) The failure reason was assigned inside
+#   `$(ci_queued_runs)` — a SUBSHELL — so it never reached the caller and the WARN read
+#   "(no detail)"; the probe now PRINTS the reason and the caller captures it.  Neither defect
+#   could make the gate unsafe (the local count still gated), but both made it lie about why.
 #   v13 (2026-10-18): THE CI GATE SEES A RUN THAT IS QUEUED, AND REQUIRES THE BOX TO STAY CLEAR.
 #   Measured the same day: the gate read 0 CI jobs at 12:03:37 and a job started at 12:03:38, one
 #   second later, so the chunk claimed a contended box and measured two rows at 0.9 cycles/min
@@ -402,7 +410,7 @@ ci_queued_runs() {
         _slug=$(printf '%s\n' "$_remote" | sed -E 's#^.*github\.com[:/]##; s#\.git$##')
     fi
     if [[ -z "$_slug" ]]; then
-        _ci_queued_err="no GitHub repo slug could be resolved from this checkout"
+        printf 'no GitHub repo slug could be resolved from this checkout\n'
         return 1
     fi
     # Merge stderr rather than discard it: the reason the probe failed is what the one-time
@@ -410,11 +418,17 @@ ci_queued_runs() {
     _out=$(timeout 20 gh run list -R "$_slug" --status queued --status in_progress \
         --json databaseId --limit 20 2>&1)
     if [[ $? -ne 0 ]]; then
-        _ci_queued_err=$(printf '%s\n' "$_out" | grep -m1 -E '.' )
-        : "${_ci_queued_err:=gh exited non-zero with no message}"
+        printf '%s\n' "$(printf '%s\n' "$_out" | grep -m1 -E '.' || echo 'gh exited non-zero with no message')"
         return 1
     fi
-    printf '%s\n' "$_out" | grep -o 'databaseId' | wc -l
+    # `gh` prints `[]` when nothing is queued, and an empty array makes grep exit 1 — with
+    # `pipefail` that turned a CLEAR answer into a reported failure (measured 2026-10-18: the
+    # gate warned "probe unavailable" while `gh` had answered `[]` and rc 0).  Count only when
+    # the key is present, so "none queued" is a successful zero rather than an error.
+    case "$_out" in
+        *databaseId*) printf '%s\n' "$_out" | grep -o 'databaseId' | wc -l ;;
+        *) printf '0\n' ;;
+    esac
 }
 
 # A CI job EXECUTING on this box, as a count, from the process table.  Its own seam because
@@ -447,6 +461,9 @@ ci_workers() {
         printf '%s\n' "$(( ${_n:-0} + _q ))"
         return 0
     fi
+    # `$( )` is a SUBSHELL: anything the probe assigned inside it is gone, so the reason it
+    # prints on failure is what arrives here.
+    _ci_queued_err="${_q:-no detail}"
     # An unavailable probe must NOT read as BUSY: a box with no network or an expired token
     # would then never claim a plan, which is the failure this loop exists to prevent.  Say it
     # once per boot rather than on every poll, and keep counting what the box can see.
