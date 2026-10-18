@@ -445,6 +445,7 @@ from the repo root. It exposes all features as subcommands:
 | `kgraph html` | Write the HTML viewer (the default mode) |
 | `kgraph ast --repo .` | Extract AST code concepts from a repo |
 | `kgraph update --source-dir .` | Incremental rebuild (memory DB → AST → communities) |
+| `kgraph import-source --source markdown --source-path <dir> --source-db <db>` | Import a memory source into the files/chunks store the graph reads |
 | `kgraph watch` | Watch files and auto-rebuild |
 | `kgraph report` | Generate GRAPH_REPORT.md with god nodes, communities, surprises |
 | `kgraph wiring --repo .` | Analyze source-tree wiring (orphans, broken imports, weak wiring, facades) |
@@ -462,6 +463,23 @@ from the repo root. It exposes all features as subcommands:
 | `kgraph install-hook` | Install git post-commit/post-merge hooks for auto-rebuild |
 | `kgraph uninstall-hook` | Remove the git post-commit/post-merge hooks |
 | `kgraph remove-source --remove-source <key>` | Remove one source document's assertions |
+
+### Importing a Memory Source (`kgraph import-source`)
+
+`kgraph import-source` adapts a source into the `files`/`chunks` store the graph
+reader consumes; the existing co-occurrence/similarity pass then emits the
+scored edges. Markdown memory is the first adapter:
+
+```bash
+kgraph import-source --source markdown --source-path ~/.openclaw/memory \
+    --source-db ~/.openclaw/kgraph-memory-source.sqlite
+kgraph update --import-db ~/.openclaw/kgraph-memory-source.sqlite --source-dir .
+```
+
+`MemorySource` (`kgraph.source_import`) is the extension point for investigator
+Layers 1–5: one `SourceRecord` per document section, with `source_kind` naming
+the layer and `path` carrying the layer/case/document. `source_meta` preserves
+the provenance for audit.
 
 ### Interactive Viewer Features
 

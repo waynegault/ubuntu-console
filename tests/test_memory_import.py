@@ -650,6 +650,12 @@ class TestMemoryImportConceptConfig(unittest.TestCase):
                     # The loader now lives in constants.py, which owns the single
                     # source for concept classification (item 11.14) — so the path
                     # to patch and the logger to watch moved there with it.
+                    # The loader tries THREE candidates (the package copy, this
+                    # path, <sys.prefix>/config).  Patch the package copy's
+                    # location too, or a valid package file masks the failure and
+                    # the case proves nothing.
+                    mock.patch("kgraph.constants.__file__",
+                               os.path.join(td, "kgraph", "constants.py")),
                     mock.patch("kgraph.constants._CONCEPT_CONFIG_PATH", path),
                     self.assertLogs("kgraph.constants", level="WARNING") as logs,
                 ):

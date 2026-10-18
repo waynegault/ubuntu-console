@@ -37,8 +37,9 @@ The following file classes are in-scope for every audit pass:
 - `tests/integration/*.bats` — BATS integration test files
 - `tests/test_bats_bridge.py` — Pytest parametrize bridge for BATS suites
 - `tests/test_kgraph.py` — Python tests for kgraph package
+- `tests/test_source_import.py` — source adapter, idempotent replacement/pruning, layer provenance, and the scored-edge end-to-end
 - `tests/test_models.py` — Pydantic model tests (GraphNode, GraphEdge, Graph, GraphBuilder)
-- `tests/test_<module>.py` — per-module kgraph tests (call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate, server, report, cli, memory_import, projection, ast_extractor), split out of the former `test_untested_modules.py` (card 842f2b93); `tests/_kgraph_fixtures.py` holds the shared graph fixtures
+- `tests/test_<module>.py` — per-module kgraph tests (call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate, server, report, cli, memory_import, projection, ast_extractor, source_import), split out of the former `test_untested_modules.py` (card 842f2b93); `tests/_kgraph_fixtures.py` holds the shared graph fixtures
 - `tests/conftest.py` — Pytest fixtures (BATS serialization via flock)
 - `pytest.ini` — Pytest configuration (markers, testpaths)
 - `scripts/kgraph/models.py` — Pydantic models (GraphNode, GraphEdge, Graph, GraphBuilder, ConfidenceLevel)
@@ -47,6 +48,7 @@ The following file classes are in-scope for every audit pass:
   from the labelling file, `--score` turns filled-in labels into per-signal
   precision/recall curves. Tests: `tests/test_kgraph_calibration.py` — that file pins the
   harness's honesty, not a calibration
+- `scripts/kgraph/source_import.py` — the MemorySource protocol and markdown adapter: a source becomes a files/chunks store the existing scored-edge ingest reads; `source_meta` keeps layer provenance (KG-SOURCE-001)
 - `scripts/kgraph/templates/kgraph.html` — Cytoscape.js viewer template
 - `config/concept-aliases.json` — kgraph concept classification data
 - `tools/hooks/pre-commit` — pre-commit hook: runs `tools/lint.sh --staged`

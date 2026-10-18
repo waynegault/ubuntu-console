@@ -46,6 +46,14 @@ if _t.TYPE_CHECKING:
     from .life_index import load_life_index, load_relations, merge_relations, resolve_life_root
     from .mcp_server import serve_mcp
     from .memory_import import load_from_memory_db
+    from .source_import import (
+        ImportResult,
+        MarkdownMemorySource,
+        MemorySource,
+        SourceRecord,
+        import_source,
+        write_files_chunks,
+    )
     from .models import (
         ConfidenceLevel,
         Graph,
@@ -133,6 +141,10 @@ _lazy(".life_index", ["resolve_life_root", "load_life_index", "load_relations", 
 _lazy(".graph_db", ["resolve_memory_db_path", "init_graph_db", "load_from_graph_db", "save_to_graph_db"])
 _lazy(".server", ["resolve_serve_target", "serve_file"])
 _lazy(".memory_import", ["load_from_memory_db"])
+_lazy(".source_import", [
+    "ImportResult", "MarkdownMemorySource", "MemorySource", "SourceRecord",
+    "import_source", "write_files_chunks",
+])
 _lazy(".ast_extractor", ["ast_available", "extract_repo_graph"])
 _lazy(".community", ["communities_available", "detect_communities", "compute_centrality",
                      "find_god_nodes", "digest_communities", "community_for_node",
@@ -161,6 +173,8 @@ __all__ = [
     "resolve_memory_db_path", "init_graph_db", "load_from_graph_db", "save_to_graph_db",
     "resolve_serve_target", "serve_file",
     "load_from_memory_db",
+    "ImportResult", "MarkdownMemorySource", "MemorySource", "SourceRecord",
+    "import_source", "write_files_chunks",
     "main",
     "ast_available", "extract_repo_graph",
     "communities_available", "detect_communities", "compute_centrality", "find_god_nodes",

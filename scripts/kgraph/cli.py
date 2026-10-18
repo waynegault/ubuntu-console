@@ -159,6 +159,14 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--store", help="Path to persistent graph JSON store")
     parser.add_argument("--graph-db", default=GRAPH_DB_DEFAULT, help=f"SQLite graph DB path (default: {GRAPH_DB_DEFAULT})")
     parser.add_argument("--import-db", help="Memory SQLite DB path (overrides auto-detect)")
+    parser.add_argument("--source", choices=("markdown",), default="markdown",
+                        help="Memory source adapter for import-source")
+    parser.add_argument("--source-path", help="Source root or file for import-source")
+    parser.add_argument("--source-db", help="Output files/chunks store for import-source")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Count import-source records without writing")
+    parser.add_argument("--min-chars", type=int, default=1,
+                        help="Skip source sections shorter than this (import-source)")
     parser.add_argument("--include-all", action="store_true",
                         help="Skip registry filter (import stale/low-value memories too)")
     parser.add_argument("--host", default="127.0.0.1", help="Server bind host")
@@ -293,6 +301,36 @@ def cmd_uninstall_hook(args: argparse.Namespace) -> None:
             continue
         os.remove(path)
         print(f"Removed {path}")
+
+
+def cmd_import_source(args: argparse.Namespace) -> None:
+    """Write a memory source into the files/chunks store kgraph reads."""
+    from .source_import import MarkdownMemorySource, import_source
+
+    if not args.source_path:
+        print("Error: --source-path is required for import-source", file=sys.stderr)
+        sys.exit(1)
+    if args.min_chars < 0:
+        print("Error: --min-chars must be non-negative", file=sys.stderr)
+        sys.exit(1)
+    try:
+        source = MarkdownMemorySource(args.source_path, min_chars=args.min_chars)
+    except (OSError, ValueError) as exc:
+        print(f"Error: cannot read source: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.dry_run:
+        records = list(source.iter_records())
+        files = len({record.path for record in records})
+        print(f"Would import {len(records)} chunk(s) from {files} file(s)")
+        return
+    if not args.source_db:
+        print("Error: --source-db is required unless --dry-run", file=sys.stderr)
+        sys.exit(1)
+    result = import_source(source, args.source_db, prune_prefix=source.root)
+    print(f"Imported {result.chunks} chunk(s) from {result.files} file(s) into "
+          f"{result.dbpath}")
+    print(f"Next: kgraph update --import-db {result.dbpath} --source-dir <repo>")
 
 
 def cmd_update(args: argparse.Namespace) -> None:
@@ -509,6 +547,7 @@ _COMMANDS: tuple[tuple[str, str], ...] = (
     ("serve", "Write the HTML viewer and serve it in the browser"),
     ("html", "Write the HTML viewer (the default mode)"),
     ("update", "Incremental rebuild from the memory DB + AST"),
+    ("import-source", "Import a memory source into a files/chunks store (markdown now; layer adapters)"),
     ("watch", "Watch files and auto-rebuild"),
     ("report", "Generate GRAPH_REPORT.md"),
     ("ast", "Extract AST code concepts from a repo"),
@@ -533,6 +572,7 @@ _DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "serve": cmd_serve,
     "html": cmd_render,
     "update": cmd_update,
+    "import-source": cmd_import_source,
     "watch": cmd_watch,
     "report": cmd_report,
     "ast": cmd_ast,

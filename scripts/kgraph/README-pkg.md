@@ -107,6 +107,25 @@ Exit 2 means "no number can be named": either nothing scored to sample, or fewer
 constant into the source — a re-run cannot change behaviour by accident, and the
 report is the review evidence for a hand edit.
 
+## Importing a memory source
+
+`kgraph import-source` writes a source into the `files`/`chunks` store the graph
+reader consumes, so the existing co-occurrence/similarity pass is the only graph
+builder. Markdown memory is the first adapter:
+
+```bash
+kgraph import-source --source markdown --source-path ~/.openclaw/memory \
+    --source-db ~/.openclaw/kgraph-memory-source.sqlite
+kgraph update --import-db ~/.openclaw/kgraph-memory-source.sqlite --source-dir .
+```
+
+The seam is the `MemorySource` protocol (`kgraph.source_import`): yield one
+`SourceRecord` per document section, set `source_kind` (for example
+`investigator-layer1`), and put the layer/case/document in `path` so the graph's
+file nodes carry the provenance. `source_meta` keeps the kind/date/section for
+audit. Re-importing a path replaces its chunks; a source root that loses a file
+is pruned on the next import.
+
 ## CLI Entry Points
 
 | Command  | Function |
