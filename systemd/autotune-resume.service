@@ -10,6 +10,13 @@ Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
 
 [Service]
 Type=oneshot
+# The queued-run probe needs `gh`, and systemd's default user PATH has neither ~/.local/bin
+# (the console's own shim) nor the brew prefix that shim execs.  Measured 2026-10-18: without
+# this line the probe failed on every poll, and v13's warning was printed into the value the
+# gate compares — the loop slept 55 minutes with a clear queue (fixed in v15; this removes the
+# cause rather than only the symptom).  The shim refuses to run when it is the ONLY gh on PATH,
+# so the brew prefix has to follow it.
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # The entry point owns the card and waits for the box lock, so "queued behind another
 # lane" plus a chunk is a normal lifetime.  systemd's 90 s default would kill this
 # mid-wait, so the bound is generous - but it IS a bound: a wedged unit fails visibly
