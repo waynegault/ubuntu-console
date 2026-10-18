@@ -407,6 +407,41 @@ EOS
     [ ! -s "$RETRY_ARGV" ]
 }
 
+@test "autotune-resume: a chunk is an INVOCATION, not a mention (v18 anchor)" {
+    # CRITERION (Wayne, 2026-10-18): the 23:37 reading "a chunk IS live: 435033" was a
+    # `shellcheck -s bash -x --severity=warning … <files>` process from the CI lint job. Its file
+    # list names bin/autotune-rows.sh, and an unanchored `pgrep -f` matched that mention, so a LINT
+    # read as a measurement - enough to skip the loop's CI gate and to hold the supervisor.
+    # The predicate is checked by PID rather than by its total, so a real chunk running on this
+    # box cannot make either assertion vacuous.
+    # The harness PINS TAC_RESUME_CHUNK_PATTERN (so a foreign process cannot decide its cases);
+    # this case is about the SHIPPED default, so the pin is dropped before it is expanded.
+    unset TAC_RESUME_CHUNK_PATTERN
+    eval "$(sed -n '/^_CHUNK_NAMES=/,/^CHUNK_PATTERN=/p' "$SCRIPT")"
+    [[ -n "${CHUNK_PATTERN:-}" ]] || { echo "CHUNK_PATTERN is not defined"; return 1; }
+
+    printf '#!/usr/bin/env bash\nsleep 20\n' > "$SANDBOX/autotune-rows.sh"
+    chmod +x "$SANDBOX/autotune-rows.sh"
+    bash "$SANDBOX/autotune-rows.sh" & _real=$!
+    python3 -c 'import time; time.sleep(20)' autotune-rows.sh & _decoy=$!
+    sleep 1
+
+    # The predicate is applied to each process's OWN command line, read from /proc, so this
+    # depends on nothing but the regex (pgrep is not guaranteed on the suite's sandboxed PATH).
+    _cmdline() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+
+    # CONTROL: a real invocation matches, so the negative below cannot pass vacuously.
+    _cmdline "$_real" | grep -Eq "$CHUNK_PATTERN" \
+        || { echo "a real bash invocation must match the chunk pattern (got: $(_cmdline "$_real"))"; kill "$_real" "$_decoy" 2>/dev/null; return 1; }
+    # FALSIFIER: a decoy that only NAMES the script (argv[0] is python3) must not.
+    if _cmdline "$_decoy" | grep -Eq "$CHUNK_PATTERN"; then
+        echo "a process that only NAMES the script must not read as a live chunk (got: $(_cmdline "$_decoy"))"
+        kill "$_real" "$_decoy" 2>/dev/null
+        return 1
+    fi
+    kill "$_real" "$_decoy" 2>/dev/null
+}
+
 @test "autotune-resume: a budget halt that did NOT shrink the remainder STILL arms (v7 criterion)" {
     # CRITERION CHANGE (Wayne, 2026-10-16): the INDICATIVE rows stay in the SCOPE and are RETRIED,
     # and he asked for a "much smoother" campaign - so a boot that retried them and certified
