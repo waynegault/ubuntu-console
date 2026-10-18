@@ -1,6 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 20
+#   v20 (2026-10-18): a purge with any failed step exits NON-ZERO.  The live run printed
+#   "2 FAILED" and returned 0, so the caller could not tell that it had failed.
 # Module Version: 19
 #   v19 (2026-10-18): a sessions dir with NO cold/ is still removed whole.  The cold/
 #   guard must not leave an empty sessions/ behind, which would make the directory purge
@@ -559,6 +562,10 @@ function oc-purge() {
     if (( _failed > 0 ))
     then
         __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, $_failed FAILED]" "$C_Error"
+        # A summary that says FAILED must not exit 0.  Measured live 2026-10-19: the run
+        # printed "2 FAILED" and returned 0, so a caller (and the background task's
+        # rc=0) read it as success — the exit code is what a caller actually sees.
+        return 1
     elif (( _purge_count > 0 ))
     then
         __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, store reset]" "$C_Success"

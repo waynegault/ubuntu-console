@@ -696,6 +696,34 @@ MOCK
     grep -qF 'agent:hal:whatsapp:direct:+447720061019' "$TAC_TEST_TMPDIR/delete-argv"
 }
 
+@test "oc purge: a failed step is a NON-ZERO exit, not a zero with a FAILED row" {
+    # Measured live 2026-10-19: the purge printed "2 FAILED" and exited 0, so the caller
+    # (and the background task's rc) read it as success.  The failure here is the CLI's
+    # own non-zero delete; the command must propagate it.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/hal/sessions"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }
+    __so_start_gateway() { return 0; }
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+    "sessions --all-agents") printf '%s\n' '{"count":0,"sessions":[{"key":"agent:hal:scratch"}]}' ;;
+    "sessions delete") printf '%s\n' '{"ok":false}' >&2; exit 1 ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    run oc-purge
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAILED to delete store rows"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # so: the daemon guard patch row (card SELFHEAL-GUARD-DELIVERY-001)
 #
