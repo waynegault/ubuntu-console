@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 #   v1 (2026-10-18): the FLEET GATE — a distro reset must not cut live agent turns.
 # ─────────────────────────────────────────────────────────────────────────────
 # fleet-quiesce.sh — is the FLEET quiet enough to reset this distro?
@@ -37,7 +37,7 @@
 #
 # ENV SEAMS (the suite drives each branch without a gateway):
 #   TAC_FLEET_STATUS_CMD       command printing the status JSON  (default: openclaw status --json)
-#   TAC_FLEET_BOUND_S          drain bound in seconds            (default: 600)
+#   TAC_FLEET_BOUND_S          drain bound in seconds            (default: 330 = the gateway's own 325 s shutdown budget + 5)
 #   TAC_FLEET_POLL_S           seconds between readings          (default: 20)
 #   TAC_FLEET_PROBE_TIMEOUT_S  per-reading timeout               (default: 25)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,7 +50,14 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export HOME="${HOME:-/home/wayne}"
 export PATH="$HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:$PATH"
 
-BOUND="${TAC_FLEET_BOUND_S:-600}"
+# 330 s, not 600 (Wayne, 2026-10-18).  The gateway declares its OWN shutdown budget -
+# `shutdownBudget.timeoutMs` in `openclaw status --json` - and on this box it is 325 s with
+# a 10 s reserve.  Waiting longer than the platform's own answer protects turns the platform
+# would itself abandon, and every extra minute is a minute the autotune campaign neither
+# measures nor restarts.  A short bound is only safe because a skipped restart is now
+# recoverable: autotune-resume.sh records the arm and its keeper timer re-arms a fire the
+# wrapper dropped, so "skip" costs a retry instead of parking the campaign.
+BOUND="${TAC_FLEET_BOUND_S:-330}"
 POLL="${TAC_FLEET_POLL_S:-20}"
 PROBE_TIMEOUT="${TAC_FLEET_PROBE_TIMEOUT_S:-25}"
 STATUS_CMD="${TAC_FLEET_STATUS_CMD:-openclaw status --json}"

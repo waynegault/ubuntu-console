@@ -1,0 +1,24 @@
+[Unit]
+Description=Autotune keeper — re-arm a restart whose fire never rebooted us (timer)
+Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+
+[Timer]
+# Every 15 minutes, on a fixed phase (:10/:25/:40/:55).
+#
+# THIS IS DELIBERATELY A RECURRING TIMER, unlike autotune-resume.timer.  That one is
+# boot-scoped because the engine needs no repetition: it runs the chunk and arms the next
+# restart.  The gap is AFTER the arm - a fire the wrapper skipped (chunk gate, fleet gate,
+# a dropped registration) produces no boot, so nothing boot-scoped can notice.  A quarter of
+# an hour is far below anything that would let the GPU sit idle for a working day.
+# OnCalendar (the house shape for sub-hourly) rather than OnUnitActiveSec: a fixed phase
+# is readable in `list-timers` and cannot drift.  :10/:25/:40/:55 sits clear of the boot
+# engine's 2-minute start and of the 3-minute arm delay plus the gate's 330 s drain window,
+# so a restart that is merely late is never mistaken for one that was dropped.
+OnCalendar=*-*-* *:10/15:00
+# Catch up a fire missed while the host was off - the whole point is a restart that did not
+# happen, and a missed keeper tick is the same kind of silence.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

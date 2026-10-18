@@ -1,0 +1,29 @@
+[Unit]
+Description=Autotune keeper — re-arm a restart whose fire never rebooted us
+Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+# Started by autotune-resume-keeper.timer, never by default.target (see
+# autotune-resume.service for why boot-transaction oneshots are forbidden here).
+#
+# WHAT THIS EXISTS FOR.  `wsl-restart.sh --restart --delay N` returns 0 when the task is
+# REGISTERED.  The wrapper decides minutes later, and it can SKIP: the chunk gate, and from
+# v1.3.0 the fleet gate (which skips rather than cutting a live agent turn).  With a
+# boot-scoped resume unit, a skipped fire left nothing to re-arm the campaign - rows owed,
+# GPU idle, and the stop visible only in the Windows-side log (2026-10-18).
+#
+# WHAT IT MAY NOT DO.  It cannot start a campaign.  It acts only on an arm RECORDED by
+# `--restart` whose fire time passed in the SAME boot with no task registered.  A running
+# campaign has no record (the boot clears it); a person's stop has no record either.
+
+[Service]
+Type=oneshot
+# Same gh/PATH reason as autotune-resume.service: the keeper's re-arm goes through
+# arm_restart, which reads the queued-run probe.
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Bounded and short: the keeper either re-arms (one `schtasks /create`) or says why not.
+# The CI wait inside arm_restart is the long part, and it is itself bounded (15 min), so
+# this leaves room without letting a wedged unit sit in "activating".
+TimeoutStartSec=1200
+ExecStart=%h/.local/bin/autotune-resume.sh --ensure-armed
+
+# Exit 4 = the re-arm cap was reached, or the Task Scheduler could not be read: a person
+# decides.  `failed` is a real signal here, never noise.

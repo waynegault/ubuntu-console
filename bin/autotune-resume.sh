@@ -47,6 +47,7 @@
 #   autotune-resume.sh --plan      derive the remainder and write the plan
 #   autotune-resume.sh             execute the plan, then continue the campaign
 #   autotune-resume.sh --status    the plan, the ledger, the chunk, and the loop
+#   autotune-resume.sh --ensure-armed  re-arm a restart whose fire never rebooted us
 #   autotune-resume.sh --help | --version
 #
 # EXIT CODES
@@ -59,7 +60,7 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 #   v15 (2026-10-18): THE WARNING STOPPED BEING PART OF THE COUNT.  Measured after the 14:17
 #   restart: the unit's PATH is the systemd default (no `~/.local/bin`), so `gh` is not found,
 #   the queued probe fails, and `ci_workers` printed "WARN …\n0" — the caller's numeric test then
@@ -172,7 +173,7 @@
 #   still unretired re-derives the remainder and continues; --status surfaces it.
 #   v2 (2026-10-15): the chunk runs as a CHILD so its exit code can be read; a budget halt
 #   that shrank the remainder re-derives the plan and arms the restart (four stops, cap 8).
-VERSION="4.1.0"
+VERSION="4.2.0"
 
 set -uo pipefail
 
@@ -222,6 +223,20 @@ CI_SETTLE_POLLS="${TAC_RESUME_CI_SETTLE_POLLS:-2}"
 # loudly, so a signal has a narrow window instead of a whole afternoon.
 ARM_CI_WAIT_S="${TAC_RESUME_ARM_CI_WAIT_S:-900}"   # 15 min: arm promptly, or say so
 RESTARTS_FILE="$STATE_DIR/autotune-resume.auto-restarts"
+
+# THE ARM RECORD (v4.2.0).  `--restart --delay N` is `schtasks /create` + `/run`: it returns 0
+# when the task is REGISTERED, minutes before the wrapper makes its decision.  So the loop used
+# to bump RESTARTS_FILE and exit believing a reboot was coming, while the wrapper could still
+# SKIP the restart afterwards (the chunk gate, the fleet gate, a task the Task Scheduler
+# dropped) - and nothing re-armed it, because the unit is boot-scoped and there was no boot.
+# Measured cause: 2026-10-18, the fleet gate landed and could skip a fire; the counter then
+# counted a restart that never happened and the campaign sat parked with rows owed, which is
+# the stall Wayne ruled against on 06:16 and again on 10-17.
+# This file records what the arm PROMISED: the fire time, the boot id it was armed from, and
+# the rows owed.  The keeper timer reads it and re-arms only when that promise was broken.
+ARMED_FILE="$STATE_DIR/autotune-resume.armed"
+KEEPER_REARMS_FILE="$STATE_DIR/autotune-resume.keeper-rearms"
+KEEPER_MAX_REARMS="${TAC_RESUME_KEEPER_MAX_REARMS:-4}"
 
 # The scope Wayne ruled on 2026-10-13, by MODEL FILE NAME and never by row number (a
 # row number is only a view of the registry, reassigned by every `model scan`): the
@@ -513,6 +528,51 @@ wait_for_ci_clear() {
     done
 }
 
+# An epoch as a readable stamp.  GNU `date` is what is installed here, but a bare
+# `date -d @N` that fails would print an empty field into a log line that the reader then
+# has to interpret, so the raw epoch is the fallback and the failure is deliberately not
+# an error: the caller is always a human-readable message, never a decision.
+fmt_epoch() {
+    # swallow-ok: cosmetic stamp; the raw epoch is the fallback, and no decision reads this
+    date -d "@${1:-0}" '+%F %T' 2>/dev/null || printf '%s' "${1:-?}"
+}
+
+# The id of the boot we are in, as an epoch, from /proc/stat's `btime`.  It is the only
+# cheap fact that tells "the arm fired and rebooted us" from "the arm was dropped in THIS
+# boot" - a wall-clock comparison could not, because a skipped fire leaves the clock moving.
+boot_epoch() {
+    awk '/^btime /{print $2; found=1} END{if (!found) exit 1}' /proc/stat
+}
+
+# Record what the arm PROMISED: fire epoch, the boot it was armed from, rows owed at arm
+# time.  Written only after the Task Scheduler accepted the registration, so it describes
+# an arm that exists rather than one that was merely attempted.
+record_arm() {
+    local _fire _rows
+    _fire=$(( $(date +%s) + ARM_DELAY_MIN * 60 ))
+    _rows=$(plan_rows | awk 'END{print NR}')
+    mkdir -p "$STATE_DIR"
+    printf '%s %s %s\n' "$_fire" "$(boot_epoch || echo 0)" "${_rows:-0}" > "$ARMED_FILE"
+}
+
+# Drop an arm record written by an EARLIER boot: that restart fired and rebooted us, so
+# the promise is spent.  A record from THIS boot is kept either way - a fire time already
+# behind us in the same boot is the broken promise the keeper exists to act on.
+clear_fired_marker() {
+    local _fire _boot _rows _cur
+    [[ -f "$ARMED_FILE" ]] || return 0
+    if ! read -r _fire _boot _rows < "$ARMED_FILE"; then
+        rm -f "$ARMED_FILE"
+        return 0
+    fi
+    _cur=$(boot_epoch || echo 0)
+    if [[ "${_boot:-0}" != "$_cur" ]]; then
+        rm -f "$ARMED_FILE"
+        printf 'keeper: the arm from boot %s fired - record cleared\n' "${_boot:-?}"
+    fi
+    return 0
+}
+
 # Arm the next restart through the TRACKED tool, and read its registration back.
 # Nothing here touches Windows itself: bin/wsl-restart.sh owns that, including the
 # chunk gate that refuses to cut a row in half.
@@ -550,8 +610,82 @@ arm_restart() {
     fi
     mkdir -p "$STATE_DIR"
     printf '%s\n' "$(( _n + 1 ))" > "$RESTARTS_FILE"
+    record_arm
     printf 'armed restart %s/%s: the next boot resumes the remainder at %s\n' \
         "$(( _n + 1 ))" "$ARM_MAX" "$(date -Iseconds)"
+    return 0
+}
+
+# --ensure-armed: the keeper timer's ONE job - re-arm a promise that was broken.
+#
+# It deliberately cannot start a campaign.  It acts only when an arm was RECORDED and its
+# fire time passed in the same boot with no task registered: that is the signature of a
+# fire the wrapper skipped (the chunk gate, the fleet gate) or a registration the Task
+# Scheduler dropped.  A campaign that is running normally has no record, because a boot
+# clears it; a campaign a person stopped has no record either, so the keeper stays out of
+# the way.  That narrowness is the point - a supervisor that can start work on its own
+# guess is a second campaign engine, and this box already has one.
+ensure_armed() {
+    local _fire _boot _rows _now _rc=0 _n=0 _owed=0
+    clear_fired_marker
+    if [[ ! -f "$ARMED_FILE" ]]; then
+        printf 'keeper: no arm outstanding - nothing to do\n'
+        return 0
+    fi
+    if ! read -r _fire _boot _rows < "$ARMED_FILE"; then
+        printf 'keeper: the arm record is unreadable - discarding it (it proves nothing)\n'
+        rm -f "$ARMED_FILE"
+        return 0
+    fi
+    _now=$(date +%s)
+    if (( _fire > _now )); then
+        printf 'keeper: the restart is still due (%s) - nothing to do\n' \
+            "$(fmt_epoch "$_fire")"
+        return 0
+    fi
+    # Past its fire time in the same boot.  Registered still means the wrapper has not run
+    # yet (an operator prompt waiting, a slow chunk gate): overdue is not broken.
+    "$RESTART_TOOL" --status >/dev/null 2>&1 || _rc=$?
+    case "$_rc" in
+        0) : ;;  # nothing armed: the promise WAS broken, fall through
+        1) printf 'keeper: the restart is armed and overdue - the wrapper has not fired yet, nothing to do\n'
+           return 0 ;;
+        *) printf 'keeper: the Task Scheduler could not be read (status %s) - not re-arming blind\n' "$_rc"
+           return "$EXIT_PAUSED" ;;
+    esac
+    # Nothing armed.  Was the work actually still owed, and is anything already happening?
+    _owed=$(plan_rows | awk 'END{print NR}')
+    if (( ${_owed:-0} == 0 )); then
+        printf 'keeper: no rows owed (the arm was for %s) - the campaign is done, record cleared\n' "${_rows:-?}"
+        rm -f "$ARMED_FILE"
+        return 0
+    fi
+    if chunk_is_live; then
+        printf 'keeper: a chunk IS running with %s row(s) owed - the campaign is already moving,\n' "$_owed"
+        printf '  so the dropped restart costs nothing yet; not arming over a live chunk\n'
+        return 0
+    fi
+    # Absent on the first re-arm of a boot, and absent means zero - the counter is only
+    # ever written by this function.
+    # swallow-ok: an absent counter IS zero; only this function ever writes it
+    _n=$(cat "$KEEPER_REARMS_FILE" 2>/dev/null || echo 0)
+    [[ "$_n" =~ ^[0-9]+$ ]] || _n=0
+    if (( _n >= KEEPER_MAX_REARMS )); then
+        printf 'keeper: the restart was dropped %s time(s) in this boot (cap %s) and %s row(s) are owed\n' \
+            "$_n" "$KEEPER_MAX_REARMS" "$_owed"
+        printf '  NOT re-arming again - a person decides. Re-arm by hand:\n'
+        printf '    %s --restart --delay %s\n' "$RESTART_TOOL" "$ARM_DELAY_MIN"
+        return "$EXIT_PAUSED"
+    fi
+    mkdir -p "$STATE_DIR"
+    printf '%s\n' "$(( _n + 1 ))" > "$KEEPER_REARMS_FILE"
+    printf 'keeper: the restart armed at %s never fired in this boot, %s row(s) are owed - RE-ARMING (%s/%s)\n' \
+        "$(fmt_epoch "$_fire")" "$_owed" \
+        "$(( _n + 1 ))" "$KEEPER_MAX_REARMS"
+    if ! arm_restart; then
+        printf 'keeper: the re-arm FAILED - the campaign needs a person now\n'
+        return "$EXIT_PAUSED"
+    fi
     return 0
 }
 
@@ -604,6 +738,9 @@ _on_signal() {
 run_plan() {
     trap '_on_signal TERM' TERM
     trap '_on_signal INT' INT
+    # This boot IS the restart an arm record was waiting for (or it is a fresh boot with
+    # a stale record): clear it before anything else, so the keeper never re-arms on it.
+    clear_fired_marker
     local _row _kept=() _missing=0 _rc=0 _recover=""
     if [[ ! -f "$PLAN" ]]; then
         # No plan, but a claim that was never retired means the last chunk was CUT OFF
@@ -719,6 +856,15 @@ show_status() {
         fi
     fi
     printf 'automatic restarts armed since --plan: %s (cap %s)\n' "$(restart_count)" "$ARM_MAX"
+    if [[ -f "$ARMED_FILE" ]]; then
+        local _f _b _r
+        read -r _f _b _r < "$ARMED_FILE" || _f=""
+        printf 'arm record: fired due %s from boot %s with %s row(s) owed (boot %s)\n' \
+            "$(fmt_epoch "${_f:-0}")" \
+            "${_b:-?}" "${_r:-?}" "$(boot_epoch || echo 0)"
+    else
+        printf 'arm record: none outstanding\n'
+    fi
     printf 'CI jobs on this box: %s (a restart waits for these to drain)\n' "$(ci_workers)"
     report_parked
     return 0
@@ -729,6 +875,7 @@ main() {
     case "${1:-}" in
         --plan)    reset_restart_count; write_plan ;;
         --status)  show_status ;;
+        --ensure-armed) ensure_armed ;;
         "")        run_plan ;;
         --help|-h) usage; return 0 ;;
         --version|-V) printf 'autotune-resume %s\n' "$VERSION"; return 0 ;;

@@ -85,3 +85,38 @@ place. Parked is not deleted: its row and columns are untouched.
 `TAC_RESUME_ARM_DELAY` (minutes, default 3), `TAC_RESUME_CI_WAIT_S` /
 `TAC_RESUME_CI_POLL_S`, `TAC_RESUME_RESTART_TOOL`, and `TAC_RESUME_CI_WORKERS_CMD` (a
 command that prints the CI-worker count — the seam the suite drives instead of a runner).
+
+## autotune-resume-keeper — the timer that closes the gap AFTER the arm (2026-10-18)
+
+**What it fixes.** `wsl-restart.sh --restart --delay N` is `schtasks /create` + `/run`: it
+returns 0 when the task is **registered**, three minutes before the wrapper decides
+anything. The wrapper can still **skip** — the chunk gate, and since v1.3.0 the fleet gate,
+which skips rather than cutting a live agent turn. `autotune-resume.timer` is boot-scoped,
+so a skipped fire produced no boot, nothing re-armed, and the campaign sat with rows owed
+while the GPU went idle. The loop had already bumped its restart counter, so its own state
+said a restart had happened.
+
+**What it is.** `autotune-resume-keeper.timer` runs `autotune-resume.sh --ensure-armed`
+every 15 minutes (`OnCalendar=*:10/15:00`, `Persistent=true`). `--restart` now records what
+it **promised** to `~/.local/state/tactical-console/autotune-resume.armed` — the fire epoch,
+the boot it was armed from, and the rows owed. The keeper acts on exactly one case:
+
+> a record from **this** boot whose fire time has passed, with **no** task registered.
+
+That is the signature of a dropped fire. Anything else is left alone: an arm still due, an
+overdue arm still registered (the wrapper has not run yet), an unreadable Task Scheduler
+(`--status` 2 — unknown never licenses a restart), a record from an earlier boot (the
+restart happened; it is cleared), no rows owed (the campaign finished), or a chunk already
+running (the campaign is moving; arming would cut it).
+
+**What it may not do.** Start a campaign. A campaign a person stopped has no record, so the
+keeper cannot resurrect it, and a running campaign's record is cleared at boot. Four
+re-arms per boot, then it stops with exit 4 and prints the manual command.
+
+**Exit codes.** 0 = nothing to do or a re-arm landed. 4 = the Task Scheduler could not be
+read, or the re-arm cap was reached — a person decides. A no-op run is exit 0 by design: a
+green unit means the keeper ran, not that it found a broken promise.
+
+**Install.** `ln -sfn …/autotune-resume-keeper.{service,timer} ~/.config/systemd/user/`,
+`daemon-reload`, `systemctl --user enable --now autotune-resume-keeper.timer`. Installed and
+enabled 2026-10-18 17:15, first real run `Result=success`, `keeper: no arm outstanding`.
