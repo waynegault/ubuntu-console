@@ -119,6 +119,20 @@ kgraph import-source --source markdown --source-path ~/.openclaw/memory \
 kgraph update --import-db ~/.openclaw/kgraph-memory-source.sqlite --source-dir .
 ```
 
+For a document tree (the investigator Layer 1-5 directories), use the directory
+adapter. It reads the text-bearing files (`*.md`, `*.txt`, `*.html`) and skips
+PDF/DOCX; a binary extractor supplies those separately.
+
+```bash
+kgraph import-source --source directory --source-kind investigator-layer3 \
+    --source-path "/home/wayne/investigator/data/Layer 3 Rebuttal" \
+    --source-db ~/.openclaw/kgraph-layer3.sqlite
+kgraph update --import-db ~/.openclaw/kgraph-layer3.sqlite --source-dir .
+```
+
+Measured 2026-10-18: 211 text files -> 211 chunks -> 778 nodes, 1,385 edges,
+4 scored (a 4-row export sample).
+
 The seam is the `MemorySource` protocol (`kgraph.source_import`): yield one
 `SourceRecord` per document section, set `source_kind` (for example
 `investigator-layer1`), and put the layer/case/document in `path` so the graph's

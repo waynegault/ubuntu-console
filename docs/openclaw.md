@@ -476,6 +476,10 @@ kgraph import-source --source markdown --source-path ~/.openclaw/memory \
 kgraph update --import-db ~/.openclaw/kgraph-memory-source.sqlite --source-dir .
 ```
 
+`--source directory --source-kind investigator-layer3` reads a document tree's
+text-bearing files (`*.md`, `*.txt`, `*.html`) and skips PDF/DOCX; measured on
+Layer 3: 211 chunks, 4 scored.
+
 `MemorySource` (`kgraph.source_import`) is the extension point for investigator
 Layers 1–5: one `SourceRecord` per document section, with `source_kind` naming
 the layer and `path` carrying the layer/case/document. `source_meta` preserves

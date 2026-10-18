@@ -209,3 +209,90 @@ class TestCliSeam(unittest.TestCase):
                 "--source-path", src, "--source-db", dry, "--dry-run",
             ])
             self.assertFalse(os.path.exists(dry))
+
+
+class TestDirectorySource(unittest.TestCase):
+    def test_reads_text_and_html_and_skips_binary(self):
+        from kgraph.source_import import DirectoryMemorySource
+
+        with tempfile.TemporaryDirectory() as tmp:
+            case = os.path.join(tmp, "Layer 3 Rebuttal", "case")
+            os.makedirs(case)
+            with open(os.path.join(case, "a.md"), "w", encoding="utf-8") as handle:
+                handle.write("# A\n\nDecision: token rotation\n")
+            with open(os.path.join(case, "b.html"), "w", encoding="utf-8") as handle:
+                handle.write("<p>Hello <b>world</b></p>")
+            with open(os.path.join(case, "skip.pdf"), "wb") as handle:
+                handle.write(b"%PDF-1.4")
+            records = list(DirectoryMemorySource(
+                tmp, source_kind="investigator-layer3").iter_records())
+
+        self.assertEqual(len(records), 2)
+        by_name = {os.path.basename(record.path): record for record in records}
+        self.assertEqual(by_name["a.md"].source_kind, "investigator-layer3")
+        self.assertIn("Decision: token rotation", by_name["a.md"].text)
+        self.assertNotIn("<b>", by_name["b.html"].text)
+        self.assertIn("Hello", by_name["b.html"].text)
+        self.assertIn("world", by_name["b.html"].text)
+        self.assertNotIn("skip.pdf", by_name)
+
+    def test_min_chars_skips_short_files(self):
+        from kgraph.source_import import DirectoryMemorySource
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "short.md"), "w", encoding="utf-8") as handle:
+                handle.write("hi")
+            with open(os.path.join(tmp, "long.md"), "w", encoding="utf-8") as handle:
+                handle.write("a long enough body")
+            records = list(DirectoryMemorySource(
+                tmp, source_kind="investigator-layer1", min_chars=5).iter_records())
+
+        self.assertEqual([os.path.basename(r.path) for r in records], ["long.md"])
+
+    def test_directory_store_feeds_the_scored_edge_path(self):
+        from kgraph.calibrate import sample_scored_edges
+        from kgraph.memory_import import load_from_memory_db
+        from kgraph.source_import import DirectoryMemorySource, import_source
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "a.md"), "w", encoding="utf-8") as handle:
+                handle.write(_CONCEPTS.split("## Notes")[0])
+            with open(os.path.join(tmp, "b.md"), "w", encoding="utf-8") as handle:
+                handle.write("## Notes\n\nWe decided to rotate the gateway token\n")
+            db = os.path.join(tmp, "source.sqlite")
+            import_source(
+                DirectoryMemorySource(tmp, source_kind="investigator-layer3"),
+                db, prune_prefix=tmp)
+            graph = load_from_memory_db(db)
+
+        scored = [
+            edge for edge in graph.edges
+            if edge.cooccurrence_count is not None or edge.semantic_score is not None
+        ]
+        self.assertTrue(scored, "the directory source must feed the scored-edge path")
+        sample = sample_scored_edges(graph, limit=5, seed=0)
+        self.assertGreater(sample.population, 0)
+        self.assertTrue(sample.rows)
+
+    def test_cli_directory_import_writes(self):
+        from kgraph.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "case.md"), "w", encoding="utf-8") as handle:
+                handle.write("# Case\n\nDecision: token rotation\n")
+            db = os.path.join(tmp, "source.sqlite")
+            main([
+                "import-source", "--source", "directory",
+                "--source-kind", "investigator-layer3",
+                "--source-path", tmp, "--source-db", db,
+            ])
+            self.assertTrue(os.path.exists(db))
+            conn = sqlite3.connect(db)
+            try:
+                self.assertEqual(
+                    conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 1)
+                self.assertEqual(
+                    conn.execute("SELECT source_kind FROM source_meta").fetchone()[0],
+                    "investigator-layer3")
+            finally:
+                conn.close()

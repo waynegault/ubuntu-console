@@ -26,6 +26,7 @@ registry is the schema the graph consumes.
 """
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -38,6 +39,7 @@ from typing import Protocol
 _DATE_STEM = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 _DATE_HEADING = re.compile(r'^#\s+(\d{4}-\d{2}-\d{2})\s*$')
 _PROJECT = re.compile(r'<!--\s*project:\s*(.*?)\s*-->')
+_HTML_TAG = re.compile(r'<[^>]+>')
 
 SOURCE_KIND_MARKDOWN = 'markdown-memory'
 _CHUNK_ID_PREFIX = 'src-'
@@ -164,6 +166,61 @@ class MarkdownMemorySource:
                 section=_PROJECT.sub('', heading).strip(),
                 scope='shared',
                 metadata=metadata,
+            )
+
+
+
+class DirectoryMemorySource:
+    """Read a directory of text-bearing documents as one record per file.
+
+    The investigator Layer 1-5 directories mix text files with PDF/DOCX. This
+    adapter imports the text-bearing subset (``*.md``, ``*.txt``, ``*.html``)
+    and leaves binary documents to a separate extractor; it never pretends a
+    PDF was read. ``source_kind`` labels the layer (for example
+    ``investigator-layer3``), and each record's ``path`` carries the
+    layer/case provenance into the graph.
+    """
+
+    def __init__(self, root: str, *, source_kind: str,
+                 patterns: tuple[str, ...] = ('*.md', '*.txt', '*.html'),
+                 min_chars: int = 1, scope: str | None = None) -> None:
+        if min_chars < 0:
+            raise ValueError('min_chars must be non-negative')
+        if not source_kind.strip():
+            raise ValueError('source_kind must not be empty')
+        self.root = os.path.abspath(os.path.expanduser(root))
+        self.source_kind = source_kind.strip()
+        self.patterns = patterns
+        self.min_chars = min_chars
+        self.scope = scope
+        if not os.path.exists(self.root):
+            raise FileNotFoundError(self.root)
+
+    def _paths(self) -> list[Path]:
+        root = Path(self.root)
+        if root.is_file():
+            return [root]
+        found: set[Path] = set()
+        for pattern in self.patterns:
+            found.update(root.rglob(pattern))
+        return sorted(found)
+
+    def iter_records(self) -> Iterator[SourceRecord]:
+        for path in self._paths():
+            text = path.read_text(encoding='utf-8', errors='replace')
+            if path.suffix.lower() in ('.html', '.htm'):
+                text = html.unescape(_HTML_TAG.sub(' ', text))
+            text = '\n'.join(line.rstrip() for line in text.splitlines()).strip()
+            if len(text) < self.min_chars:
+                continue
+            yield SourceRecord(
+                path=str(path),
+                start_line=1,
+                end_line=max(1, len(text.splitlines())),
+                text=text,
+                source_kind=self.source_kind,
+                section=path.stem,
+                scope=self.scope,
             )
 
 
