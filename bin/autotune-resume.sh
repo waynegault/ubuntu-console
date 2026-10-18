@@ -59,7 +59,18 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-10-18): THE CI GATE SEES A RUN THAT IS QUEUED, AND REQUIRES THE BOX TO STAY CLEAR.
+#   Measured the same day: the gate read 0 CI jobs at 12:03:37 and a job started at 12:03:38, one
+#   second later, so the chunk claimed a contended box and measured two rows at 0.9 cycles/min
+#   instead of 3.05.  Two changes, option A of Wayne's ruling: (1) `ci_queued_runs` asks GitHub
+#   for QUEUED + IN PROGRESS runs, so a push is visible within seconds rather than only when the
+#   runner picks the job up; it degrades to the local count and SAYS SO once per boot when the
+#   probe cannot answer, because "unknown" must not read as busy or a network-less box would never
+#   claim a plan; (2) `wait_for_ci_clear` needs CI_SETTLE_POLLS (2) CONSECUTIVE zeros — a single
+#   zero is a sample, and the gap between two jobs is exactly what it looked like.  Both counts
+#   have their own seams (`TAC_RESUME_CI_QUEUED_CMD`, `TAC_RESUME_CI_LOCAL_CMD`) so a test pins
+#   them rather than letting a foreign Runner.Worker decide the answer.
 #   v12 (2026-10-18): THE CAP NO LONGER PARKS A CAMPAIGN THAT STILL OWES ROWS.  Wayne's ruling,
 #   option b: the 8-restart cap bounds restarts WITHIN a campaign; it is not a reason to leave
 #   work and a GPU idle.  Measured the same night — the loop stopped at 06:16:29 with 2 rows owed
@@ -182,6 +193,10 @@ ARM_DELAY_MIN="${TAC_RESUME_ARM_DELAY:-3}"     # minutes after the halt to resta
 # step.  It must also sit UNDER the unit's TimeoutStartSec (21600) or systemd kills the wait.
 CI_WAIT_S="${TAC_RESUME_CI_WAIT_S:-18000}"      # 5 h: outlasts a CI run, under TimeoutStartSec 21600
 CI_POLL_S="${TAC_RESUME_CI_POLL_S:-30}"
+# How many CONSECUTIVE zero readings mean "clear".  One is a sample, not a clearance: it can
+# be the gap between two jobs, which is what let a chunk claim the plan one second before a
+# CI job started (measured 2026-10-18, 12:03:37 vs 12:03:38).  Two spans one poll of quiet.
+CI_SETTLE_POLLS="${TAC_RESUME_CI_SETTLE_POLLS:-2}"
 # The ARM's wait is a DIFFERENT question from the chunk's, and conflating them cost three idle
 # hours on 2026-10-17.  The chunk needs a bound longer than a CI run (5 h); the arm is the LAST
 # step of a oneshot that sits in the boot transaction, and it was SIGTERMed at 14:07:50 —
@@ -361,12 +376,54 @@ reset_restart_count() {
     printf '0\n' > "$RESTARTS_FILE"
 }
 
-# A CI job executing on THIS box, as a count.  A restart cancels it, and a cancelled
-# run leaves main red here, so this is a gate rather than a note.
-ci_workers() {
+# GitHub says a run is QUEUED or IN PROGRESS for this repo, as a count.  The local worker
+# count is authoritative for "a job is EXECUTING", but it only becomes non-zero when the
+# runner PICKS THE JOB UP — measured 2026-10-18: the gate read 0 at 12:03:37 and the job
+# started at 12:03:38, one second later, so the chunk claimed a contended box.  A push is
+# visible to `gh` within seconds, which is the warning the local probe cannot give.
+# Returns non-zero when the probe cannot answer; the caller degrades to the local count.
+ci_queued_runs() {
+    local _slug _out
+    if [[ -n "${TAC_RESUME_CI_QUEUED_CMD:-}" ]]; then
+        "$TAC_RESUME_CI_QUEUED_CMD"
+        return $?
+    fi
+    # swallow-ok: a PRESENCE probe — "no gh here" is the answer, and ci_workers names it in its WARN
+    command -v gh >/dev/null 2>&1 || return 1
+    _slug="${TAC_RESUME_CI_REPO:-}"
+    if [[ -z "$_slug" ]]; then
+        # Capture the reason rather than discarding it: a checkout with no remote is a real
+        # case and its message is what the one-time WARN reports.
+        local _remote
+        if ! _remote=$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" remote get-url origin 2>&1); then
+            _ci_queued_err="no origin remote: $(printf '%s\n' "$_remote" | head -1)"
+            return 1
+        fi
+        _slug=$(printf '%s\n' "$_remote" | sed -E 's#^.*github\.com[:/]##; s#\.git$##')
+    fi
+    if [[ -z "$_slug" ]]; then
+        _ci_queued_err="no GitHub repo slug could be resolved from this checkout"
+        return 1
+    fi
+    # Merge stderr rather than discard it: the reason the probe failed is what the one-time
+    # WARN reports, and a discarded diagnostic is the failure this repo has already paid for.
+    _out=$(timeout 20 gh run list -R "$_slug" --status queued --status in_progress \
+        --json databaseId --limit 20 2>&1)
+    if [[ $? -ne 0 ]]; then
+        _ci_queued_err=$(printf '%s\n' "$_out" | grep -m1 -E '.' )
+        : "${_ci_queued_err:=gh exited non-zero with no message}"
+        return 1
+    fi
+    printf '%s\n' "$_out" | grep -o 'databaseId' | wc -l
+}
+
+# A CI job EXECUTING on this box, as a count, from the process table.  Its own seam because
+# the count is host state: a test that cannot pin it is decided by whatever else this box is
+# running (measured 2026-10-17, a foreign `[R]unner.Worker` chose the answer).
+ci_local_workers() {
     local _n
-    if [[ -n "${TAC_RESUME_CI_WORKERS_CMD:-}" ]]; then
-        _n=$("$TAC_RESUME_CI_WORKERS_CMD") || _n=""
+    if [[ -n "${TAC_RESUME_CI_LOCAL_CMD:-}" ]]; then
+        _n=$("$TAC_RESUME_CI_LOCAL_CMD") || _n=""
         printf '%s\n' "${_n:-0}"
         return 0
     fi
@@ -376,16 +433,50 @@ ci_workers() {
     printf '%s\n' "${_n:-0}"
 }
 
+# A CI job executing on THIS box, as a count.  A restart cancels it, and a cancelled
+# run leaves main red here, so this is a gate rather than a note.
+ci_workers() {
+    local _n _q
+    if [[ -n "${TAC_RESUME_CI_WORKERS_CMD:-}" ]]; then
+        _n=$("$TAC_RESUME_CI_WORKERS_CMD") || _n=""
+        printf '%s\n' "${_n:-0}"
+        return 0
+    fi
+    _n=$(ci_local_workers)
+    if _q=$(ci_queued_runs) && [[ "$_q" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$(( ${_n:-0} + _q ))"
+        return 0
+    fi
+    # An unavailable probe must NOT read as BUSY: a box with no network or an expired token
+    # would then never claim a plan, which is the failure this loop exists to prevent.  Say it
+    # once per boot rather than on every poll, and keep counting what the box can see.
+    if [[ "${_ci_queued_warned:-0}" != "1" ]]; then
+        printf 'WARN: the queued-run probe is unavailable (%s) — counting LOCAL workers only (%s)\n' \
+            "${_ci_queued_err:-no detail}" "${_n:-0}"
+        printf '  a push whose job has not started yet is invisible to this gate\n'
+        _ci_queued_warned=1
+    fi
+    printf '%s\n' "${_n:-0}"
+}
+
 # Wait, bounded, for the CI job to finish.  Returns 1 on EXHAUSTION - it aborts
 # rather than falling through to the restart it guards (a bounded wait whose only
 # failure path is the action it guards is the shape that has bitten this repo).
 wait_for_ci_clear() {
-    local _bound="${1:-$CI_WAIT_S}" _n _deadline
+    local _bound="${1:-$CI_WAIT_S}" _n _deadline _clear=0
     _deadline=$(( SECONDS + _bound ))
     while :; do
         _n=$(ci_workers)
         if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n == 0 )); then
-            return 0
+            _clear=$(( _clear + 1 ))
+            # A single zero is a SAMPLE, not a clearance: it can be the gap between two jobs,
+            # which is what let a chunk claim the plan one second before a CI job (measured
+            # 2026-10-18, gate 12:03:37 / job 12:03:38).  Require CONSECUTIVE quiet polls.
+            if (( _clear >= CI_SETTLE_POLLS )); then
+                return 0
+            fi
+        else
+            _clear=0
         fi
         if (( SECONDS >= _deadline )); then
             return 1

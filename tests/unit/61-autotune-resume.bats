@@ -92,6 +92,9 @@ RESTART_EOF
     export TAC_RESUME_ARM_DELAY=1
     export TAC_RESUME_CI_WAIT_S=0
     export TAC_RESUME_CI_POLL_S=1
+    # The settle is proved by its OWN case; the rest of the matrix runs a 0-bound gate and must
+    # not gain a poll for it.  The shipped default (2) is asserted from the SOURCE there.
+    export TAC_RESUME_CI_SETTLE_POLLS=1
 
     # Registry rows carry the real column layout: 3 = model file, 17 = tps,
     # 18 = certified (yes/no), 25 = p2_tps.  Built by position so the field count
@@ -307,6 +310,66 @@ EOS
     # Re-based, not incremented past the cap: the next boot starts a fresh batch of 8.
     [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "1" ]
     grep -q '^--restart$' "$RESTART_ARGV"
+}
+
+@test "autotune-resume: a QUEUED run gates the chunk, and the settle needs two quiet polls" {
+    # CRITERION (Wayne, 2026-10-18, option A): the gate must see a run that is QUEUED, not only one
+    # the runner has PICKED UP — measured 12:03:37 (gate read 0) vs 12:03:38 (the job started), after
+    # which the chunk measured at 0.9 cycles/min instead of 3.05.  And a single zero is a SAMPLE, not
+    # a clearance: the gap between two jobs is exactly what it looked like.
+    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
+    _row 1 uncertified.gguf 2.00 yes 1.00 > "$TAC_RESUME_REGISTRY"
+    printf '4\n' > "$ENTRY_RC_FILE"
+
+    local stub="$SANDBOX/ci-seq.sh" seq="$SANDBOX/ci-seq.txt"
+    cat > "$stub" <<'EOS'
+#!/usr/bin/env bash
+first=$(head -1 "$CI_SEQ_FILE")
+sed -i '1d' "$CI_SEQ_FILE"
+printf '%s\n' "${first:-0}"
+EOS
+    chmod +x "$stub"
+    printf '#!/usr/bin/env bash\nprintf "0\\n"\n' > "$SANDBOX/ci-queued.sh"
+    chmod +x "$SANDBOX/ci-queued.sh"
+
+    # The local probe is the sequence; the queued probe answers 0 so the two sum to the sequence.
+    unset TAC_RESUME_CI_WORKERS_CMD
+    export TAC_RESUME_CI_QUEUED_CMD="$SANDBOX/ci-queued.sh"
+    export TAC_RESUME_CI_LOCAL_CMD="$stub" CI_SEQ_FILE="$seq"
+    export TAC_RESUME_CI_SETTLE_POLLS=2 TAC_RESUME_CI_POLL_S=1 TAC_RESUME_CI_WAIT_S=2
+
+    # (1) FALSIFIER: 0,1,0 is NOT two consecutive quiet polls.  The old one-zero rule cleared at
+    # the first 0 and claimed the plan; this must PAUSE, leaving the plan in place.
+    printf '0\n1\n0\n0\n' > "$seq"
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 4 ] || { echo "a 0,1,0 sequence must PAUSE (got $status)"; return 1; }
+    [[ "$output" == *"a CI job is executing on this box"* ]]
+    grep -q '^uncertified.gguf$' "$TAC_RESUME_PLAN"
+
+    # (2) CONTROL: two consecutive quiet polls clear the gate and allow the chunk.
+    printf '0\n0\n0\n' > "$seq"
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ] || { echo "two consecutive quiet polls must clear (got $status)"; return 1; }
+}
+
+@test "autotune-resume: a QUEUED run counts as CI before any worker exists" {
+    # Catches the shipped pre-v13 behaviour, where ci_workers counted ONLY local [R]unner.Worker
+    # processes, so a run sitting in GitHub's queue was invisible until the runner picked it up.
+    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
+    _row 1 uncertified.gguf 2.00 yes 1.00 > "$TAC_RESUME_REGISTRY"
+    printf '4\n' > "$ENTRY_RC_FILE"
+
+    printf '#!/usr/bin/env bash\nprintf "0\\n"\n' > "$SANDBOX/ci-local.sh"
+    printf '#!/usr/bin/env bash\nprintf "1\\n"\n' > "$SANDBOX/ci-queued.sh"
+    chmod +x "$SANDBOX/ci-local.sh" "$SANDBOX/ci-queued.sh"
+    unset TAC_RESUME_CI_WORKERS_CMD
+    export TAC_RESUME_CI_LOCAL_CMD="$SANDBOX/ci-local.sh"
+    export TAC_RESUME_CI_QUEUED_CMD="$SANDBOX/ci-queued.sh"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 4 ] || { echo "a QUEUED run must gate with no worker running (got $status)"; return 1; }
+    [[ "$output" == *"a CI job is executing on this box"* ]]
+    [ ! -e "$ARGV_LOG" ]
 }
 
 @test "autotune-resume: a budget halt that did NOT shrink the remainder STILL arms (v7 criterion)" {
