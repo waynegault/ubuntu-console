@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 65
+# Module Version: 66
+#   v66 (2026-10-18): `model ctx-check` dispatches scripts/check-ctx-profile.sh.  The
+#   checker stays OPT-IN rather than a CI gate: a registry with no measurable profile
+#   (all 28 rows at HEAD) exits 2, which is correct for an operator and wrong for a
+#   routine gate.  It reads the header by name and changes no certification.
 #   v65 (2026-10-18): the three fixed `read -r` row lists bind ctx_policy (col 45) as a
 #   trailing, unread position holder, so the new 45th field cannot be glued onto meas_state
 #   by bash's last-variable-gets-the-rest rule (CTXBUDGET-003; no output change).
@@ -3725,6 +3729,14 @@ function model() {
 
         recommend)
             __model_recommend
+            ;;
+
+        ctx-check)
+            # CTXBUDGET-003: the observed-profile check is opt-in on purpose — a
+            # registry with no measurable profile exits 2, so it must not turn a routine
+            # gate red.  The script reads the header by name and changes no certification.
+            local _ctx_probe="${BASH_SOURCE[0]%/*}/check-ctx-profile.sh"
+            "$_ctx_probe" "$@"
             ;;
 
         info)

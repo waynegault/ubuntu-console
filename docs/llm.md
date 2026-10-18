@@ -72,6 +72,9 @@ Singh, XDA, 2026-10-05) —
 <https://www.xda-developers.com/local-llm-wasting-ram-context-never-use-one-setting-gives-back/> —
 insight ids `TDS-ollama-context-window-ram#2` and `TDS-ollama-context-window-ram#5`.
 
+Run it as `tac-exec model ctx-check` (the script's options are forwarded). It is
+opt-in rather than a CI gate because an all-missing profile exits 2 by design.
+
 ## Hardware Tuning
 
 | Parameter | Value | Rationale |

@@ -550,3 +550,15 @@ meas_spread|meas_drift|meas_state|ctx_policy"
     # The mapping is a POLICY, so it is stated where a reader can argue with it.
     [[ "$output" == *"certified reading of: agentic mix"* ]]
 }
+
+@test "integration: model ctx-check dispatches the observed-profile checker" {
+    local reg="$TAC_TEST_TMPDIR/ctx-profile.conf"
+    cat > "$reg" <<'EOF'
+#|name|file|ctx|bench_avg_prompt_tokens
+1|fit.gguf|fit.gguf|5120|1000
+EOF
+    run model ctx-check --registry "$reg"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Summary: 1 row(s): 1 fits"* ]]
+    [[ "$output" == *"profile-fits:5120"* ]]
+}
