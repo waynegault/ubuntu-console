@@ -137,11 +137,14 @@
 # 2026-10-18: 9.7 +3 is the peer commit 15e09a4a (bin/wsl-restart.sh fleet
 # gate): three literal return/exit 2 sites without an explanatory comment.
 # Corpus growth from that peer commit, not the kgraph source adapters.
-4.2.4	18
+# 2026-10-18: 4.2.4 +2 and 8.1.8 +2 are also the peer commit 15e09a4a
+# (bin/wsl-restart.sh fleet gate): two case blocks without a *) arm and two
+# over-120-character lines. Corpus growth from that peer commit.
+4.2.4	20
 4.2.6	9
 4.3.6	31
 6.7	108
-8.1.8	290
+8.1.8	292
 9.5	119
 9.7	80
 10.4	50
