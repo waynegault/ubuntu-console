@@ -517,6 +517,16 @@ Exposes 6 tools via JSON-RPC over HTTP (binds localhost only):
 - `kgraph_report` — generate current graph report
 - `kgraph_stats` — basic graph statistics
 
+All six data tools return an untrusted-content envelope:
+`{"trust": "untrusted", "source": "kgraph graph (repository source + memory records)",
+"notice": "<sentence>", "content": <payload>}`. The payload keeps its previous
+shape under `content` (a list for `kgraph_query`, an object for the other five),
+and each tool description carries the same notice so the trust value is visible
+at discovery time. `list_tools` is metadata and is not wrapped; neither are
+`{"error": ...}` results, which the server generates itself. The HTML viewer's
+`_check_xss` is an XSS control, not an injection control, and does not cover
+this consumer.
+
 Every node and edge carries a `sources` list of source documents
 (`file:<path>`, `chunk:<id>`, `memory:<uuid>`, `life:relations.json`) so a fact
 can be cited and one source can be removed without discarding what other sources

@@ -267,6 +267,39 @@ cat ~/.openclaw/logs/bash-errors.log | tail -20
 - `oc-llm-sync.sh` SHA256 is verified before sourcing
 - Exec approval is required (configured in `~/.openclaw/exec-approvals.json`)
 
+## Lethal-trifecta surfaces
+
+The lethal trifecta is the combination of (1) access to private data, (2) exposure to
+untrusted content, and (3) the ability to act or exfiltrate. No single console surface
+grants all three, but together the agent surfaces below supply every leg. This table
+records which surface grants which leg and what bounds it.
+
+| Leg | Console surface | What it grants | Bound | Where enforced |
+|-----|-----------------|----------------|-------|----------------|
+| Read untrusted | kgraph MCP (`kgraph mcp`) | Repository source and memory records as graph text to a model | Every data tool returns a `trust: "untrusted"` envelope with the payload under `content`, and each tool description carries the same notice | `scripts/kgraph/mcp_server.py` |
+| Read untrusted | `tac-exec --read <command>` | The console commands that normally open a file print its content instead (e.g. `llmconf`, `mlogs`, `occonf`, `oedit`) | Whatever the current user can read — the console imposes no path restriction here; the agent framework's exec approval and allowlist decide whether the call runs | Agent framework (`~/.openclaw/exec-approvals.json`); `bin/tac-exec` read mode |
+| Internal knowledge | kgraph MCP | Memory registries and accumulated graph facts | Read-only except `kgraph_report`, which writes only inside `KG_REPORTS_DIR`; `GET /graph.json` redacts memory text | `scripts/kgraph/mcp_server.py` |
+| Internal knowledge | `tac-exec` | Filesystem, shell history, the repository, the model registry | Runs as the current user with that user's OS permissions | OS permissions; exec approval in the agent framework |
+| Act / egress | `tac-exec` | Sources `env.sh`, exposing ~100+ shell functions and full shell execution | Exec approval and per-agent tool allowlists — **in the agent framework, not in the console** | `~/.openclaw/exec-approvals.json` (openclaw) |
+| Act / egress | `oc` gateway control | Start/stop/restart and configure the gateway, read its logs | Gateway binds loopback (`gateway.bind: "loopback"`, port 18789) and requires auth | `~/.openclaw/openclaw.json` (`gateway`) |
+| Act / egress | Network-capable commands | Any command the shell can run (`curl`, `git push`, an LLM client) | `commit_auto` blocks git diffs to non-localhost LLM URLs; `oc-llm-sync.sh` SHA256 is verified before sourcing | `scripts/10-deployment.sh` (`commit_auto`); the sync script |
+
+**The console does not enforce a trifecta separation — the agent framework does.** It
+provides the surfaces above; exec approvals (`~/.openclaw/exec-approvals.json`) and
+per-agent tool allowlists, which live in openclaw, decide what an agent may actually
+call. A change in this repo is not an approval change.
+
+The kgraph MCP graph surface is **read-only by decision** and must stay that way: the
+data tools never mutate the graph, and `kgraph_report` is the only writer, confined to
+`KG_REPORTS_DIR`. The untrusted envelope on every data-tool result is the bound on
+graph-derived text — it tells the consumer that labels, ids, paths and connection text
+are data, never instructions. The HTML viewer's `_check_xss` is an XSS control, not a
+prompt-injection control, and does not cover the MCP (LLM) consumer.
+
+REF: "How Can AI Agents Read Untrusted Sources Safely?", Thuwarakesh Murallie, TDS,
+2026-10-10 — insight ids `TDS-how-ai-agents-read-untrusted-sources-safely#1` and `#10`;
+<https://towardsdatascience.com/how-can-ai-agents-read-untrusted-sources-safely/>.
+
 ---
 
 ## Troubleshooting

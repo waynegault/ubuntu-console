@@ -68,6 +68,16 @@ must not carry a cross-origin `Origin`, and writes only inside
 it — absolute paths and `..` are rejected. `GET /graph.json` echoes CORS only
 for the Vite dev frontend's origin and redacts memory text.
 
+Every data-tool result is an untrusted-content envelope:
+`{"trust": "untrusted", "source": "kgraph graph (repository source + memory records)",
+"notice": "...", "content": <payload>}`. The payload is unchanged under
+`content`; `content` is a list for `kgraph_query` and an object for the other
+five. Each tool description carries the same notice, so a consumer sees the
+trust value at discovery time. `list_tools` is metadata, not graph text, and is
+not wrapped; neither are `{"error": ...}` results, which are server-generated.
+The HTML viewer's `_check_xss` is an XSS control, not an injection control, and
+does not apply to this consumer.
+
 Graph JSON validation is a module entry point, not a CLI flag:
 
 ```bash
