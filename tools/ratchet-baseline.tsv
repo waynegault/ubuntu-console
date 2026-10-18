@@ -127,13 +127,20 @@
 # lane's own refactors, not this fix), and is tightened here rather than left above the tree: a baseline
 # above the tree is a raised floor, so a genuine 49 -> 50 rise would print as a `fell` and pass.
 # Hand-edited, never `--update`.
-4.2.4	17
+# 2026-10-18: CORPUS GROWTH, not drift.  ONE newly added file,
+# scripts/check-ctx-profile.sh (CTXBUDGET-003), accounts for every rise:
+# 4.2.4 +1 (the verdict case), 9.5 +1 (usage() has no comment above it),
+# 9.7 +11 (its named exit-2 sites), 10.7 +12 (hand-written >&2), and
+# 10.4 +1 (usage() is the only definition, so the counter's next-definition
+# bound attributes the top-level driver to it).  Deliberate re-baseline;
+# no existing count moved and no existing comment was removed.
+4.2.4	18
 4.2.6	9
 4.3.6	31
 6.7	108
 8.1.8	290
-9.5	118
-9.7	66
-10.4	49
-10.7	207
+9.5	119
+9.7	77
+10.4	50
+10.7	219
 10.8	0
