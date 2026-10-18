@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 #   v1 (2026-10-18): the FLEET GATE — a distro reset must not cut live agent turns.
 # ─────────────────────────────────────────────────────────────────────────────
 # fleet-quiesce.sh — is the FLEET quiet enough to reset this distro?
@@ -37,7 +37,7 @@
 #
 # ENV SEAMS (the suite drives each branch without a gateway):
 #   TAC_FLEET_STATUS_CMD       command printing the status JSON  (default: openclaw status --json)
-#   TAC_FLEET_BOUND_S          drain bound in seconds            (default: 330 = the gateway's own 325 s shutdown budget + 5)
+#   TAC_FLEET_BOUND_S          drain bound in seconds            (default: 180 = the largest model request timeout)
 #   TAC_FLEET_POLL_S           seconds between readings          (default: 20)
 #   TAC_FLEET_PROBE_TIMEOUT_S  per-reading timeout               (default: 90)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,14 +50,19 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export HOME="${HOME:-/home/wayne}"
 export PATH="$HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:$PATH"
 
-# 330 s, not 600 (Wayne, 2026-10-18).  The gateway declares its OWN shutdown budget -
-# `shutdownBudget.timeoutMs` in `openclaw status --json` - and on this box it is 325 s with
-# a 10 s reserve.  Waiting longer than the platform's own answer protects turns the platform
-# would itself abandon, and every extra minute is a minute the autotune campaign neither
-# measures nor restarts.  A short bound is only safe because a skipped restart is now
-# recoverable: autotune-resume.sh records the arm and its keeper timer re-arms a fire the
-# wrapper dropped, so "skip" costs a retry instead of parking the campaign.
-BOUND="${TAC_FLEET_BOUND_S:-330}"
+# 180 s.  Two measured facts fix this number, both from the gateway's own shutdown path
+# (Rook's filing 2026-10-18, echoing the gateway log):
+#   * the gateway's PRE-STOP drain is 20 s; on timeout it calls
+#     abortEmbeddedAgentRun(mode:"all") and aborts cron runs - so 20 s is what the platform
+#     gives work before it aborts it, not 325 s;
+#   * the largest observed MODEL REQUEST timeout is 180 s.
+# So the bound covers one in-flight model call - the thing that must not be cut mid-flight -
+# and stops there.  Waiting 600 s protected turns the platform would itself abandon, and on a
+# box that restarts this often every extra minute is downtime for all 14 agents.  A restart
+# that is still blocked at the bound is SKIPPED, and a skipped restart is now recoverable:
+# autotune-resume.sh records the arm and its keeper re-arms a dropped fire, so the cost of a
+# short bound is a retry rather than a parked campaign.
+BOUND="${TAC_FLEET_BOUND_S:-180}"
 POLL="${TAC_FLEET_POLL_S:-20}"
 # 90 s, measured rather than guessed (2026-10-18 17:44).  `openclaw status --json` is a node
 # process that reads live gateway state; it took 15.5 s at load 7 and was still running at 25 s
