@@ -735,6 +735,8 @@ __so_healthy_prelude() {
     # refuses at admission.  The watch must read THIS attempt's window, so a marker
     # left by an earlier boot cannot decide a healthy start.
     openclaw() { return 0; }
+    # The read this attempt makes must carry the refusal; every other journalctl
+    # call in the module must stay empty, so the window is matched explicitly.
     journalctl() {
         case " $* " in
             *" --since @"*)

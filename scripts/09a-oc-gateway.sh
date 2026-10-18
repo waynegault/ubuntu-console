@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 32
+#   v32 (2026-10-18): the start wait's five-secondly checks move into `__so_start_stall`.
+#   Adding the refusal watch pushed `__so_start_gateway` past the §18.3 10.4 bound (a
+#   function over 100 lines), so the block is extracted rather than the count
+#   re-baselined. Behaviour is identical — same rows, same order, same exit.
 # Module Version: 31
 #   v31 (2026-10-18): a start the state-DB guard REFUSES is reported at once, by name.
 #   Measured 2026-10-18 (20:52-22:13 BST): a WSL shutdown cut the gateway's drain, which
@@ -483,6 +488,51 @@ function __so_report_refusal() {
 }
 
 # ---------------------------------------------------------------------------
+# __so_start_stall — the five-secondly checks inside a start wait.
+# Returns 0 to keep waiting, 1 when the wait must end (the caller returns 1).
+#
+# A function rather than an inline block because the checks together ran past the
+# §18.3 10.4 bound (a function over 100 lines).  Behaviour is identical: the same
+# rows in the same order, and the caller's return follows this one's.
+# ---------------------------------------------------------------------------
+function __so_start_stall() {
+    local _svc="$1" _since="$2" _restarts_before="$3"
+    local _restarts_now _sub_state
+
+    # The unit refuses after the CLI has returned, so watch THIS attempt's own window
+    # rather than the classifier's 15 minutes: a marker from an earlier boot must never
+    # decide a healthy start.
+    if journalctl --user -u "$_svc" --since "@${_since}" --no-pager --output=cat \
+        | grep -qF 'is undergoing offline maintenance'
+    then
+        printf '\r%s\n' "$(printf '%*s' 40 '')"
+        __so_report_refusal
+        return 1
+    fi
+
+    _restarts_now=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
+    _sub_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
+
+    if (( _restarts_now > _restarts_before + 1 ))
+    then
+        printf '\r%s\n' "$(printf '%*s' 40 '')"
+        __tac_info "Gateway" "[CRASH LOOP]" "$C_Error"
+        __so_show_errors "$_svc"
+        __so_check_win_port "$OC_PORT"
+        printf '%s\n' "  ${C_Dim}Run 'xo' then 'so' to retry.${C_Reset}"
+        return 1
+    fi
+    if [[ "$_sub_state" == "failed" ]]
+    then
+        printf '\r%s\n' "$(printf '%*s' 40 '')"
+        __tac_info "Gateway" "[FAILED]" "$C_Error"
+        __so_show_errors "$_svc"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __so_start_gateway — Start gateway and wait for ready state.
 # Returns 0 if gateway is ready, 1 on failure.
 # ---------------------------------------------------------------------------
@@ -520,35 +570,8 @@ function __so_start_gateway() {
 
         if (( elapsed > 0 && elapsed % 5 == 0 ))
         then
-            # The unit refuses after the CLI has returned, so watch THIS attempt's own
-            # window rather than the classifier's 15 minutes: a marker from an earlier
-            # boot must never decide a healthy start.
-            if journalctl --user -u "$_svc" --since "@${_since}" --no-pager --output=cat \
-                | grep -qF 'is undergoing offline maintenance'
+            if ! __so_start_stall "$_svc" "$_since" "$_restarts_before"
             then
-                printf '\r%s\n' "$(printf '%*s' 40 '')"
-                __so_report_refusal
-                return 1
-            fi
-
-            local _restarts_now _sub_state
-            _restarts_now=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
-            _sub_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
-
-            if (( _restarts_now > _restarts_before + 1 ))
-            then
-                printf '\r%s\n' "$(printf '%*s' 40 '')"
-                __tac_info "Gateway" "[CRASH LOOP]" "$C_Error"
-                __so_show_errors "$_svc"
-                __so_check_win_port "$OC_PORT"
-                printf '%s\n' "  ${C_Dim}Run 'xo' then 'so' to retry.${C_Reset}"
-                return 1
-            fi
-            if [[ "$_sub_state" == "failed" ]]
-            then
-                printf '\r%s\n' "$(printf '%*s' 40 '')"
-                __tac_info "Gateway" "[FAILED]" "$C_Error"
-                __so_show_errors "$_svc"
                 return 1
             fi
         fi
