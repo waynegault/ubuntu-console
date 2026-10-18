@@ -134,13 +134,16 @@
 # 10.4 +1 (usage() is the only definition, so the counter's next-definition
 # bound attributes the top-level driver to it).  Deliberate re-baseline;
 # no existing count moved and no existing comment was removed.
+# 2026-10-18: 9.7 +3 is the peer commit 15e09a4a (bin/wsl-restart.sh fleet
+# gate): three literal return/exit 2 sites without an explanatory comment.
+# Corpus growth from that peer commit, not the kgraph source adapters.
 4.2.4	18
 4.2.6	9
 4.3.6	31
 6.7	108
 8.1.8	290
 9.5	119
-9.7	77
+9.7	80
 10.4	50
 10.7	219
 10.8	0
