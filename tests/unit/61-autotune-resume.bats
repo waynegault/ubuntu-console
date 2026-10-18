@@ -372,6 +372,41 @@ EOS
     [ ! -e "$ARGV_LOG" ]
 }
 
+@test "autotune-resume: an exhausted CI wait ARMS A RETRY, and the budget stops it" {
+    # CRITERION (Wayne, 2026-10-18, option b): an exhausted CI wait must RE-ENTER the loop instead
+    # of dead-ending.  Measured that evening: the arm's 900 s expired nine seconds after one CI run
+    # ended (20:34:15) while a second held the queue to 20:45:35, nothing was armed, and the box sat
+    # idle until a hand start at 21:38.  The shipped pre-v16 code PAUSED and stopped there.
+    printf 'uncertified.gguf\n' > "$TAC_RESUME_PLAN"
+    _row 1 uncertified.gguf 2.00 yes 1.00 > "$TAC_RESUME_REGISTRY"
+    printf '0\n' > "$ENTRY_RC_FILE"
+    _write_ci_workers 1                       # a CI job is executing: the gate cannot clear
+    export RETRY_ARGV="$SANDBOX/retry.argv"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$RETRY_ARGV"\n' > "$SANDBOX/retry-stub.sh"
+    chmod +x "$SANDBOX/retry-stub.sh"
+    export TAC_RESUME_RETRY_CMD="$SANDBOX/retry-stub.sh"
+    : > "$RETRY_ARGV"
+
+    # (1) The wait exhausts: a retry is armed with the shipped delay and the unit it must start.
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 4 ] || { echo "an exhausted wait must still pause (got $status)"; return 1; }
+    [[ "$output" == *"retry 1/8 armed"* ]] || { echo "the retry was not announced (got: $output)"; return 1; }
+    grep -qxF '900 autotune-resume-retry autotune-resume.service' "$RETRY_ARGV" \
+        || { echo "the retry called with the wrong argv: $(cat "$RETRY_ARGV")"; return 1; }
+    [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.retries")" = "1" ]
+    # A retry is not a chunk: the plan stays and nothing was measured.
+    grep -q '^uncertified.gguf$' "$TAC_RESUME_PLAN"
+    [ ! -e "$ARGV_LOG" ]
+
+    # (2) The budget is spent: the stub must NOT run again, and the stop must be NAMED.
+    printf '8\n' > "$TAC_RESUME_STATE_DIR/autotune-resume.retries"
+    : > "$RETRY_ARGV"
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 4 ]
+    [[ "$output" == *"retry budget spent: 8/8"* ]] || { echo "a spent budget must say so (got: $output)"; return 1; }
+    [ ! -s "$RETRY_ARGV" ]
+}
+
 @test "autotune-resume: a budget halt that did NOT shrink the remainder STILL arms (v7 criterion)" {
     # CRITERION CHANGE (Wayne, 2026-10-16): the INDICATIVE rows stay in the SCOPE and are RETRIED,
     # and he asked for a "much smoother" campaign - so a boot that retried them and certified
