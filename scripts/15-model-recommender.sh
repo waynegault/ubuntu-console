@@ -2,7 +2,11 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-10-18): replace a bare postfix increment with the errexit-safe assignment
+#   form.  Under errexit `((shown++))` returns 1 while the value is 0, and
+#   tests/unit/29-errexit-arithmetic.bats:100 flags it (pre-existing CI red; no
+#   behaviour change at any non-zero value).
 #   v8 (2026-10-18): the fixed `read -r` row list binds ctx_policy (col 45) as a trailing,
 #   unread position holder so the new 45th field cannot be glued onto meas_state by bash's
 #   last-variable-gets-the-rest rule (CTXBUDGET-003; no scoring or output change).
@@ -291,7 +295,7 @@ function model-recommend() {
         do
             ((shown >= 10)) && break
             printf '  %s%s%s\n' "${C_Dim:-}" "$line" "${C_Reset:-}"
-            ((shown++))
+            shown=$(( shown + 1 ))
         done
         if (( flagged > shown ))
         then
