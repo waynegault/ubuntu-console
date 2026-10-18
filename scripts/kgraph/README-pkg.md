@@ -133,6 +133,17 @@ kgraph update --import-db ~/.openclaw/kgraph-layer3.sqlite --source-dir .
 Measured 2026-10-18: 211 text files -> 211 chunks -> 778 nodes, 1,385 edges,
 4 scored (a 4-row export sample).
 
+For the investigator production Chroma store, use `--source chroma`; it matches
+`mves_layer` (integer) and `layer` (string). L4's tag is synthetic fixtures while
+the real report is untagged, so do not treat it as the layer.
+
+```bash
+kgraph import-source --source chroma \
+    --source-path /home/wayne/investigator/production/vector_db/chroma.sqlite3 \
+    --layer-values 1,2,3,5 --source-db ~/.openclaw/kgraph-layers.sqlite
+```
+Measured 2026-10-18: L1 136, L2 26,271, L3 51,885, L5 85,045 tagged chunks.
+
 The seam is the `MemorySource` protocol (`kgraph.source_import`): yield one
 `SourceRecord` per document section, set `source_kind` (for example
 `investigator-layer1`), and put the layer/case/document in `path` so the graph's

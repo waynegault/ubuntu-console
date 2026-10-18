@@ -479,6 +479,9 @@ kgraph update --import-db ~/.openclaw/kgraph-memory-source.sqlite --source-dir .
 `--source directory --source-kind investigator-layer3` reads a document tree's
 text-bearing files (`*.md`, `*.txt`, `*.html`) and skips PDF/DOCX; measured on
 Layer 3: 211 chunks, 4 scored.
+`--source chroma --source-path <chroma.sqlite3> --layer-values 1,2,3,5`
+reads the investigator production chunk store (L1 136, L2 26,271, L3 51,885,
+L5 85,045 chunks); a `mves_layer='4'` tag is synthetic fixtures, not the report.
 
 `MemorySource` (`kgraph.source_import`) is the extension point for investigator
 Layers 1–5: one `SourceRecord` per document section, with `source_kind` naming

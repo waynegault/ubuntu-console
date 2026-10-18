@@ -159,10 +159,16 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--store", help="Path to persistent graph JSON store")
     parser.add_argument("--graph-db", default=GRAPH_DB_DEFAULT, help=f"SQLite graph DB path (default: {GRAPH_DB_DEFAULT})")
     parser.add_argument("--import-db", help="Memory SQLite DB path (overrides auto-detect)")
-    parser.add_argument("--source", choices=("markdown", "directory"), default="markdown",
+    parser.add_argument("--source", choices=("markdown", "directory", "chroma"), default="markdown",
                         help="Memory source adapter for import-source")
     parser.add_argument("--source-kind", default="directory",
                         help="source_kind label for the directory adapter (e.g. investigator-layer3)")
+    parser.add_argument("--layer-key", default="mves_layer",
+                        help="Chroma metadata key for the layer filter (default: mves_layer)")
+    parser.add_argument("--layer-values", default="1,2,3,5",
+                        help="comma-separated layer values for the chroma source")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="max chunks per layer for the chroma source (0 = all)")
     parser.add_argument("--source-path", help="Source root or file for import-source")
     parser.add_argument("--source-db", help="Output files/chunks store for import-source")
     parser.add_argument("--dry-run", action="store_true",
@@ -308,7 +314,7 @@ def cmd_uninstall_hook(args: argparse.Namespace) -> None:
 def cmd_import_source(args: argparse.Namespace) -> None:
     """Write a memory source into the files/chunks store kgraph reads."""
     from .source_import import (
-        DirectoryMemorySource, MarkdownMemorySource, import_source,
+        ChromaMemorySource, DirectoryMemorySource, MarkdownMemorySource, import_source,
     )
 
     if not args.source_path:
@@ -317,12 +323,20 @@ def cmd_import_source(args: argparse.Namespace) -> None:
     if args.min_chars < 0:
         print("Error: --min-chars must be non-negative", file=sys.stderr)
         sys.exit(1)
-    source: MarkdownMemorySource | DirectoryMemorySource
+    source: MarkdownMemorySource | DirectoryMemorySource | ChromaMemorySource
     try:
         if args.source == "directory":
             source = DirectoryMemorySource(
                 args.source_path, source_kind=args.source_kind,
                 min_chars=args.min_chars,
+            )
+        elif args.source == "chroma":
+            layers = tuple(
+                part.strip() for part in args.layer_values.split(",") if part.strip()
+            )
+            source = ChromaMemorySource(
+                args.source_path, layer_values=layers, layer_key=args.layer_key,
+                limit=args.limit,
             )
         else:
             source = MarkdownMemorySource(args.source_path, min_chars=args.min_chars)

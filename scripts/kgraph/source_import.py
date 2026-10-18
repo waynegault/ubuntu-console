@@ -224,6 +224,94 @@ class DirectoryMemorySource:
             )
 
 
+
+class ChromaMemorySource:
+    """Read layer-tagged chunks from a Chroma SQLite store.
+
+    The investigator production store is the only machine-readable Layer 1-5
+    corpus: ``embedding_metadata`` carries ``mves_layer``/``layer``,
+    ``source_path``, ``document_role``, ``section_title`` and the chunk text
+    under ``chroma:document``. The store is opened READ-ONLY.
+
+    L4 CAVEAT: the rows tagged ``mves_layer='4'`` are synthetic benchmark
+    fixtures, while the real report's chunks are untagged. Do not treat the
+    ``4`` tag as the layer; supply the report at document grain instead.
+    """
+
+    def __init__(self, dbpath: str, *, layer_values: tuple[str, ...],
+                 layer_key: str = 'mves_layer',
+                 source_kind_prefix: str = 'investigator-layer',
+                 limit: int = 0, scope: str | None = None) -> None:
+        if not layer_values:
+            raise ValueError('layer_values must not be empty')
+        if limit < 0:
+            raise ValueError('limit must be non-negative')
+        self.root = os.path.abspath(os.path.expanduser(dbpath))
+        self.layer_values = layer_values
+        self.layer_key = layer_key
+        self.source_kind_prefix = source_kind_prefix
+        self.limit = limit
+        self.scope = scope
+        if not os.path.isfile(self.root):
+            raise FileNotFoundError(self.root)
+
+    def iter_records(self) -> Iterator[SourceRecord]:
+        conn = sqlite3.connect(f'file:{self.root}?mode=ro', uri=True)
+        try:
+            for layer in self.layer_values:
+                sql = (
+                    "SELECT m.id,"
+                    " max(CASE WHEN m.key='source_path' THEN m.string_value END),"
+                    " max(CASE WHEN m.key='document_id' THEN m.string_value END),"
+                    " max(CASE WHEN m.key='document_role' THEN m.string_value END),"
+                    " max(CASE WHEN m.key='section_title' THEN m.string_value END),"
+                    " max(CASE WHEN m.key='page_number' THEN"
+                    "     COALESCE(m.string_value, CAST(m.int_value AS TEXT)) END),"
+                    " max(CASE WHEN m.key='chunk_index' THEN"
+                    "     COALESCE(m.string_value, CAST(m.int_value AS TEXT)) END),"
+                    " max(CASE WHEN m.key='document_year' THEN"
+                    "     COALESCE(m.string_value, CAST(m.int_value AS TEXT)) END),"
+                    " max(CASE WHEN m.key='chroma:document' THEN m.string_value END)"
+                    "  FROM embedding_metadata m"
+                    " WHERE m.id IN (SELECT id FROM embedding_metadata"
+                    "                WHERE key=? AND (string_value=?"
+                    "                                 OR CAST(int_value AS TEXT)=?))"
+                    " GROUP BY m.id"
+                )
+                # The investigator store keeps `layer` as a string and
+                # `mves_layer` as an INTEGER, so match either representation.
+                params: list[object] = [self.layer_key, layer, layer]
+                if self.limit:
+                    sql += " LIMIT ?"
+                    params.append(self.limit)
+                for row in conn.execute(sql, params):
+                    text = (row[8] or '').strip()
+                    if not text:
+                        continue
+                    path = row[1] or row[2] or f'chroma:{row[0]}'
+                    metadata = {
+                        key: value for key, value in (
+                            ('document_id', row[2]),
+                            ('document_role', row[3]),
+                            ('page_number', row[5]),
+                            ('chunk_index', row[6]),
+                        ) if value
+                    }
+                    yield SourceRecord(
+                        path=str(path),
+                        start_line=1,
+                        end_line=1,
+                        text=text,
+                        source_kind=f'{self.source_kind_prefix}{layer}',
+                        source_date=row[7] or None,
+                        section=row[4] or None,
+                        scope=self.scope,
+                        metadata=metadata,
+                    )
+        finally:
+            conn.close()
+
+
 def _chunk_id(record: SourceRecord) -> str:
     raw = (
         f'{record.path}\x1f{record.start_line}\x1f{record.end_line}\x1f{record.text}'

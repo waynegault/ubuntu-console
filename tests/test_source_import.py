@@ -296,3 +296,103 @@ class TestDirectorySource(unittest.TestCase):
                     "investigator-layer3")
             finally:
                 conn.close()
+
+
+class TestChromaSource(unittest.TestCase):
+    def _db(self, tmp):
+        db = os.path.join(tmp, "chroma.sqlite3")
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE embedding_metadata"
+            " (id TEXT, key TEXT, string_value TEXT, int_value INTEGER,"
+            "  float_value REAL, bool_value INTEGER)")
+        rows = (
+            ("e1", "1", _CONCEPTS.split("## Notes")[0]),
+            ("e2", "1", "## Notes\n\nWe decided to rotate the gateway token\n"),
+            ("e3", "2", "## Layer two\n\nDecision: separate layer\n"),
+        )
+        for embedding_id, layer, text in rows:
+            for key, string_value, int_value in (
+                ("mves_layer", layer, None),
+                ("source_path", f"Layer {layer}/case.md", None),
+                ("document_role", f"L{layer}_role", None),
+                ("section_title", "Section", None),
+                ("page_number", None, 1),
+                ("chunk_index", None, 0),
+                ("chroma:document", text, None),
+            ):
+                conn.execute(
+                    "INSERT INTO embedding_metadata VALUES (?,?,?,?,?,?)",
+                    (embedding_id, key, string_value, int_value, None, None))
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_filters_layer_and_carries_provenance(self):
+        from kgraph.source_import import ChromaMemorySource
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self._db(tmp)
+            records = list(ChromaMemorySource(db, layer_values=("1",)).iter_records())
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0].source_kind, "investigator-layer1")
+        self.assertEqual(records[0].path, "Layer 1/case.md")
+        self.assertEqual(records[0].section, "Section")
+        self.assertEqual(records[0].metadata["document_role"], "L1_role")
+        self.assertEqual(records[0].metadata["page_number"], "1")
+        self.assertIn("Decision: token rotation", records[0].text)
+
+    def test_limit_is_per_layer(self):
+        from kgraph.source_import import ChromaMemorySource
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self._db(tmp)
+            records = list(ChromaMemorySource(
+                db, layer_values=("1", "2"), limit=1).iter_records())
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual([record.source_kind for record in records],
+                         ["investigator-layer1", "investigator-layer2"])
+
+    def test_store_feeds_scored_edges(self):
+        from kgraph.calibrate import sample_scored_edges
+        from kgraph.memory_import import load_from_memory_db
+        from kgraph.source_import import ChromaMemorySource, import_source
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self._db(tmp)
+            out = os.path.join(tmp, "source.sqlite")
+            import_source(ChromaMemorySource(db, layer_values=("1",)), out)
+            graph = load_from_memory_db(out)
+
+        scored = [
+            edge for edge in graph.edges
+            if edge.cooccurrence_count is not None or edge.semantic_score is not None
+        ]
+        self.assertTrue(scored, "the chroma source must feed the scored-edge path")
+        sample = sample_scored_edges(graph, limit=5, seed=0)
+        self.assertGreater(sample.population, 0)
+        self.assertTrue(sample.rows)
+
+    def test_cli_chroma_import_writes(self):
+        from kgraph.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self._db(tmp)
+            out = os.path.join(tmp, "source.sqlite")
+            main([
+                "import-source", "--source", "chroma",
+                "--source-path", db, "--layer-values", "1",
+                "--source-db", out,
+            ])
+            self.assertTrue(os.path.exists(out))
+            conn = sqlite3.connect(out)
+            try:
+                self.assertEqual(
+                    conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 2)
+                self.assertEqual(
+                    conn.execute("SELECT source_kind FROM source_meta").fetchone()[0],
+                    "investigator-layer1")
+            finally:
+                conn.close()

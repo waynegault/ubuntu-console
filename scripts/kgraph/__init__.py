@@ -47,6 +47,7 @@ if _t.TYPE_CHECKING:
     from .mcp_server import serve_mcp
     from .memory_import import load_from_memory_db
     from .source_import import (
+        ChromaMemorySource,
         DirectoryMemorySource,
         ImportResult,
         MarkdownMemorySource,
@@ -143,7 +144,7 @@ _lazy(".graph_db", ["resolve_memory_db_path", "init_graph_db", "load_from_graph_
 _lazy(".server", ["resolve_serve_target", "serve_file"])
 _lazy(".memory_import", ["load_from_memory_db"])
 _lazy(".source_import", [
-    "DirectoryMemorySource", "ImportResult", "MarkdownMemorySource", "MemorySource", "SourceRecord",
+    "ChromaMemorySource", "DirectoryMemorySource", "ImportResult", "MarkdownMemorySource", "MemorySource", "SourceRecord",
     "import_source", "write_files_chunks",
 ])
 _lazy(".ast_extractor", ["ast_available", "extract_repo_graph"])
@@ -174,7 +175,8 @@ __all__ = [
     "resolve_memory_db_path", "init_graph_db", "load_from_graph_db", "save_to_graph_db",
     "resolve_serve_target", "serve_file",
     "load_from_memory_db",
-    "DirectoryMemorySource", "ImportResult", "MarkdownMemorySource", "MemorySource",
+    "ChromaMemorySource", "DirectoryMemorySource", "ImportResult", "MarkdownMemorySource",
+    "MemorySource",
     "SourceRecord",
     "import_source", "write_files_chunks",
     "main",
