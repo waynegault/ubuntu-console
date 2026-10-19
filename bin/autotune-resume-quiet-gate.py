@@ -63,7 +63,7 @@ def probe() -> tuple[int, list[str]]:
     dbs = sorted(glob.glob(AGENT_DB_GLOB))
     if not dbs:
         print(f"[quiet-gate] no agent DBs match {AGENT_DB_GLOB}", file=sys.stderr)
-        return 2, []
+        return 2, []  # "could not ask" is a refusal to arm, never "quiet"
 
     now_ms = time.time() * 1000.0
     busy: list[str] = []
@@ -80,7 +80,7 @@ def probe() -> tuple[int, list[str]]:
                 con.close()
         except sqlite3.Error as exc:
             print(f"[quiet-gate] cannot read {db}: {exc}", file=sys.stderr)
-            return 2, []
+            return 2, []  # unreadable DB is a refusal to arm, never "quiet"
         for key, updated_at, created_at in rows:
             last = updated_at or created_at or 0
             age_s = (now_ms - last) / 1000.0 if last else float("inf")
@@ -115,7 +115,7 @@ def main() -> int:
             os.execv(REAL, [REAL, *args])
         if verdict == 2:
             print("[quiet-gate] REFUSING to arm: the fleet probe could not answer", file=sys.stderr)
-            return 2
+            return 2  # exit 2 is the probe-failure contract (see module docstring)
         print(
             f"[quiet-gate] {len(busy)} running turn(s): {', '.join(busy[:6])}; waiting {POLL_SECONDS}s",
             file=sys.stderr,
