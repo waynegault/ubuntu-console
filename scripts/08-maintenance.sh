@@ -2,6 +2,9 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
+# Module Version: 75
+#   v75 (2026-10-18): `timeout -k 5 30 openclaw doctor …` — the CLI ignores SIGTERM
+#   (measured on `gateway stop`), so a plain timeout never fired.
 # Module Version: 74
 #   v73 (2026-10-03, card 15da0400): __update_plugin (241 lines) split into named
 #   helpers — __update_plugin_npm_deps (the four duplicated dep-install blocks),
@@ -716,7 +719,7 @@ function __up_openclaw_doctor() {
         if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
         then
             local doc_rc
-            timeout 30 openclaw doctor --non-interactive --no-workspace-suggestions >/dev/null 2>&1
+            timeout -k 5 30 openclaw doctor --non-interactive --no-workspace-suggestions >/dev/null 2>&1
             doc_rc=$?
             if (( doc_rc == 0 ))
             then

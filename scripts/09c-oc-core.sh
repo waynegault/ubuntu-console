@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 21
+#   v21 (2026-10-18): the purge's `timeout … openclaw` calls carry `-k` (10 s for a read,
+#   15 s for the delete).  The CLI ignores SIGTERM — measured on `gateway stop` — so a
+#   plain timeout could wait forever on a hung CLI.
 # Module Version: 20
 #   v20 (2026-10-18): a purge with any failed step exits NON-ZERO.  The live run printed
 #   "2 FAILED" and returned 0, so the caller could not tell that it had failed.
@@ -383,7 +387,7 @@ function __oc_purge_wait_gone() {
 function __oc_purge_session_keys() {
     local _db
     {
-        timeout 60 openclaw sessions --all-agents --json \
+        timeout -k 10 60 openclaw sessions --all-agents --json \
             | jq -r '.sessions[].key'
         for _db in "$OC_AGENTS"/*/agent/openclaw-agent.sqlite
         do
@@ -417,7 +421,7 @@ function __oc_purge_delete_sessions() {
     printf '%s %s\n' "${#_keys[@]}" "$_mains"
     (( ${#_keys[@]} > 0 )) || return 0
 
-    if ! _out=$(timeout 300 openclaw sessions delete "${_keys[@]}" --yes --json 2>&1)
+    if ! _out=$(timeout -k 15 300 openclaw sessions delete "${_keys[@]}" --yes --json 2>&1)
     then
         printf '%s\n' "$_out" >&2
         return 1
@@ -547,7 +551,7 @@ function oc-purge() {
     # 6. Read the NON-MAIN roster back.  Mains are kept by design, so counting them would
     #    turn every correct purge into a failure.  "Purge complete" is a claim about the
     #    store, so it is made from a fresh read, never from the delete's return code.
-    if ! _purge_left=$(timeout 60 openclaw sessions --all-agents --json \
+    if ! _purge_left=$(timeout -k 10 60 openclaw sessions --all-agents --json \
         | jq -r '[.sessions[].key | select(endswith(":main")|not)] | length')
     then
         _failed=$(( _failed + 1 ))

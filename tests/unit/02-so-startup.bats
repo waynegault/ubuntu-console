@@ -724,6 +724,40 @@ MOCK
     [[ "$output" == *"FAILED to delete store rows"* ]]
 }
 
+@test "xo: a gateway stop that ignores TERM is KILLED, not waited out" {
+    # Measured 2026-10-18: `openclaw gateway stop` ignores SIGTERM, so `timeout 30` sent
+    # TERM, was ignored, and waited forever — the live purge hung inside it until the
+    # child was killed by hand.  The wrapper now escalates with `-k`; this pins the
+    # escalation through the budget seam, with a stub that traps TERM.
+    export OC_GATEWAY_STOP_BUDGET_S=1
+    export OC_ROOT="$TAC_TEST_TMPDIR/oc"
+    mkdir -p "$OC_ROOT" "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+trap '' TERM
+exec sleep 60
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    # `systemctl` must be a PATH stub too: the function calls it as `timeout 60
+    # systemctl …`, and `timeout` execs a binary — a shell-function stub is invisible
+    # there, so the first version of this case ran the REAL stop against the live gateway.
+    cat > "$TAC_TEST_TMPDIR/bin/systemctl" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/systemctl"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+    __oc_gateway_databases_closed() { return 0; }
+
+    local _t0 _elapsed
+    _t0=$(date +%s)
+    run __oc_safe_gateway_shutdown
+    _elapsed=$(( $(date +%s) - _t0 ))
+
+    (( _elapsed < 20 )) || { echo "waited ${_elapsed}s past a TERM-ignoring stop"; return 1; }
+    [[ "$output" == *"past its 1s budget"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # so: the daemon guard patch row (card SELFHEAL-GUARD-DELIVERY-001)
 #

@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 33
+#   v33 (2026-10-18): every `timeout … openclaw` call carries `-k 5` (or `-k 10/15` in
+#   09c).  Measured: `openclaw gateway stop` IGNORES SIGTERM, so `timeout 30` sent TERM,
+#   was ignored, and waited forever — the live purge hung inside it until I killed the
+#   child by hand.  The stop's budget is now also a seam (OC_GATEWAY_STOP_BUDGET_S) so
+#   the escalation is testable in seconds.  BATS: "a gateway stop that ignores TERM is
+#   KILLED, not waited out".
 # Module Version: 32
 #   v32 (2026-10-18): the start wait's five-secondly checks move into `__so_start_stall`.
 #   Adding the refusal watch pushed `__so_start_gateway` past the §18.3 10.4 bound (a
@@ -1034,7 +1041,7 @@ function __so_ensure_default_agent_session() {
     # shell never tracks a background job (no [N] PID noise).
     (bash -c '
         # Check if any sessions exist (with timeout to prevent hanging)
-        _session_count=$(timeout 10 openclaw sessions --all-agents --json 2>/dev/null | jq -r '\''
+        _session_count=$(timeout -k 5 10 openclaw sessions --all-agents --json 2>/dev/null | jq -r '\''
             (if type=="array" then . elif (.sessions?) then .sessions elif (.items?) then .items else . end)
             | length'\'' 2>/dev/null)
 
@@ -1170,9 +1177,13 @@ function __oc_safe_gateway_shutdown() {
     # a matter of course — and reported a normal, slow stop as "failed".  A client
     # budget expiring does not cancel the request it already sent, so the wording now
     # says what happened, and the DB-handle check below still decides the outcome.
-    if ! timeout 30 openclaw gateway stop >/dev/null 2>&1
+    # `-k` is load-bearing: measured 2026-10-18, `openclaw gateway stop` IGNORES SIGTERM,
+    # so a plain `timeout 30` sent TERM, was ignored, and waited forever — the purge hung
+    # inside it until the child was killed by hand.  TERM at the budget, KILL 5 s later.
+    local _stop_budget="${OC_GATEWAY_STOP_BUDGET_S:-30}"
+    if ! timeout -k 5 "$_stop_budget" openclaw gateway stop >/dev/null 2>&1
     then
-        __tac_info "Gateway" "['gateway stop' past its 30s budget — request stands]" "$C_Dim"
+        __tac_info "Gateway" "['gateway stop' past its ${_stop_budget}s budget — request stands]" "$C_Dim"
     fi
     if ! timeout 60 systemctl --user stop "$_svc" 2>/dev/null
     then
