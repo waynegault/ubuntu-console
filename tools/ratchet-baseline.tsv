@@ -148,11 +148,16 @@
 # other counter is unchanged.  Corpus growth from that peer commit, not drift
 # in the two commits beneath it.  Hand-edited, NEVER `--update`: the tool
 # rewrites this file as header+rows and would strip every block above.
+# 2026-10-19 (later): 8.1.8 292 -> 293 is the SAME peer lane, later commits
+# (16e1804f / 57ce15ca / 4e382752 on scripts/09c-oc-core.sh): one added
+# 123-character `__tac_info "Sessions" "[$_mains main session(s) KEPT — …]"`
+# line.  Corpus growth from their edits, measured on that one file; every
+# other counter is unchanged.
 4.2.4	20
 4.2.6	9
 4.3.6	31
 6.7	108
-8.1.8	292
+8.1.8	293
 9.5	119
 9.7	80
 10.4	51
