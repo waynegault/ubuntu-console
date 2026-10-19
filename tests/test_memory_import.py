@@ -657,6 +657,12 @@ class TestMemoryImportConceptConfig(unittest.TestCase):
                     mock.patch("kgraph.constants.__file__",
                                os.path.join(td, "kgraph", "constants.py")),
                     mock.patch("kgraph.constants._CONCEPT_CONFIG_PATH", path),
+                    # The THIRD candidate is <sys.prefix>/config/concept-aliases.json and
+                    # was NOT patched, so an interpreter whose prefix carries a real file
+                    # (the installed layout the loader's own comment describes) satisfied
+                    # the load and the case proved nothing. Point the prefix at the temp
+                    # dir so the malformed file is the only readable candidate.
+                    mock.patch("kgraph.constants.sys.prefix", td),
                     self.assertLogs("kgraph.constants", level="WARNING") as logs,
                 ):
                     self.assertEqual(memory_import._load_concept_config(), {})
