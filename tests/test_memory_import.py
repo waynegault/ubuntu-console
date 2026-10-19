@@ -26,9 +26,9 @@ class TestMemoryImportConnection(unittest.TestCase):
                 memory_import, "_load_from_memory_db_conn",
                 side_effect=RuntimeError("boom"),
             ),
+            self.assertRaises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                memory_import.load_from_memory_db("/tmp/whatever.db")
+            memory_import.load_from_memory_db("/tmp/whatever.db")
         fake_conn.close.assert_called_once()
 
 
