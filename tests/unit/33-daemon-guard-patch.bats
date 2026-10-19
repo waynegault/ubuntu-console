@@ -46,6 +46,15 @@ setup() {
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
     # shellcheck source=scripts/09e-oc-health.sh
     source "$REPO_ROOT/scripts/09e-oc-health.sh"
+
+    # oc-health's "Token-less gh" forensic row scans the REAL user journal
+    # (`journalctl --user --since '7 days ago'`).  Measured 2026-10-19 on this box that read is
+    # 323,118 lines / 87 s on its own, and it put this suite's two wiring cases at 233 s — inside
+    # the 300 s bridge bound alone, and OVER it under suite load (two timeouts in a Testing run).
+    # Nothing here asserts that row, and a unit suite reading the machine's journal is not the
+    # hermetic harness its header claims, so the scan is stubbed.  Defined AFTER the sources, so
+    # the module's `journalctl …` calls resolve to this function rather than to the binary.
+    journalctl() { return 0; }
 }
 
 # A patcher stub that reports like the real one and exits with the code under test.
