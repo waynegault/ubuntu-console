@@ -16,8 +16,6 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
-workflow=Nightly Full Suite | owner=Wayne | card=CI-RED-2026-10-16-nightly-sentinel | expiry=2026-10-18 | reason=Tip 1ca5511a is RED (run 38846368983): the `Nightly Full Suite` hygiene case `not ok 127 hygiene: tools/*.sh scripts end with # end of file marker` failed (`echo "$last" | grep -qi 'end of file'`), i.e. three tools scripts lacked the repo-wide sentinel. The fix is e0a17b25, which the push carrying this entry delivers; but the nightly reads main's HEAD only at 04:23 BST, so no run of the fixed tip can exist before ~04:25 BST on 2026-10-17 and a green nightly is roughly a day away. The red therefore blocks the very push that fixes it, which is the case this file exists for. DELETE this the moment a GREEN `Nightly Full Suite` run exists for the new tip (verify live - `scripts/check_ci_status.py --fail --strict-unknown --cache-ttl 0` at rc 0, with no RED and no PENDING row for that workflow).
-workflow=CI | owner=Wayne | card=CI-RED-2026-10-15-unit-venv-python | expiry=2026-10-18 | reason=Tip ccb51e4d is RED (run 38804176354), the SAME one case as run 38762999750: `not ok 61 explicit update installs from a stubbed release and preserves the old link` (tests/unit/04-llama-cpp-tools.bats:90).  My first fix (c4577c05) only swapped `.venv/bin/python` for `.venv/bin/python3` WITHOUT checking the runner's layout, and CI proved it wrong - the runner's checkout has NO .venv at all, so BOTH names die with status 127.  Every other job of that run was success, so this entry covers one red and names it.  The real fix is a35fa36e, which this push delivers: the case sources tools/python-runtime.sh and uses _tac_python_path, which falls back to PATH python3 (proved in a no-venv scratch tree).  A red tip blocks the very push that fixes it, so this is the same time-boxed escape Wayne answered "a" to on 2026-10-15, re-entered for the corrected fix.  DELETE this the moment a GREEN `CI` run exists for the new tip.
 # (none — the `CI` entry added 2026-10-15 (card CI-RED-2026-10-15-unit-venv-python) was deleted the
 #  same day, and deliberately NOT against a green run.  Its red (run 38762999750 at tip 70823378) is
 #  SUPERSEDED by tip 158729df, and the live probe (`--cache-ttl 0`) read "no red, but not every workflow
@@ -47,4 +45,18 @@ workflow=CI | owner=Wayne | card=CI-RED-2026-10-15-unit-venv-python | expiry=202
 #  and needs no exemption; and `Nightly Full Suite`, whose red was on the superseded
 #  64b18037, which the gate had already stopped reading as the tip's verdict.  An entry
 #  kept past its red parks the NEXT one, per the header above.)
-
+# (none — BOTH entries deleted 2026-10-19 on Wayne's "please push repo".  They had expired
+#  2026-10-18, and an expired entry FAILS both the gate and
+#  tests/test_check_ci_status.py::test_the_baseline_sits_with_the_other_baselines, so main
+#  could not go green with them in place.  Each red was checked before deleting, not assumed:
+#  - `Nightly Full Suite` (card CI-RED-2026-10-16-nightly-sentinel): its own named red was the
+#    hygiene sentinel at 1ca5511a, fixed by e0a17b25.  The newest nightly (run 39094182424 at
+#    431257e0) then failed on exactly ONE case — tests/test_memory_import.py::
+#    TestMemoryImportConceptConfig::test_unreadable_or_malformed_config_warns_and_disables_filtering,
+#    whose short summary lists no other FAILED line — and that case PASSES at HEAD (measured
+#    2026-10-19: `.venv/bin/python3 -m pytest ...TestMemoryImportConceptConfig -x -q` -> 1 passed).
+#  - `CI` (card CI-RED-2026-10-15-unit-venv-python): its red was `not ok 61 explicit update
+#    installs from a stubbed release ...` at tip ccb51e4d.  CI has run GREEN on later tips since
+#    (39169729074 at d44297b5 and 39166891603 at 90fe45ad, every job success), so the fix is in.
+#  Re-entry condition: if the next nightly is red, that is a NEW red and needs its own card —
+#  it is NOT covered here.
