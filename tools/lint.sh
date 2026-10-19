@@ -14,7 +14,14 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 27
+# Module Version: 28
+#   v28 (2026-10-19): the whole-tree loops skip a non-shell member of `bin/*`.
+#   bin/ is the entry-point directory and was pure shell; a tracked Python tool
+#   (bin/autotune-resume-quiet-gate.py) now lives there, and `bash -n` / ShellCheck
+#   on it failed with `syntax error near unexpected token '('`, refusing the push
+#   for every lane.  _tac_is_shell() keeps the corpus honest without narrowing the
+#   glob — the extensionless shell entry points (gh, so, tac-exec, ...) still need
+#   `bin/*`.  A Python file's own gate is ruff + mypy, never ShellCheck.
 #   v27 (2026-10-13): four intentional glyphs join `_UNICODE_ALLOWED`, so the
 #   advisory non-ASCII WARN becomes a recorded glyph rather than a standing
 #   notice — U+2013 EN DASH (a separator in qwen-memory-index-patch.sh), U+2705
@@ -313,6 +320,15 @@ _tac_lint_coverage_guard() {
     return "$_rc"
 }
 
+# _tac_is_shell — Is a corpus file shell?  `bin/*` is a broad glob because the
+# directory carries extensionless entry points (gh, so, tac-exec), so it also
+# sweeps in a tracked Python tool; `bash -n` and ShellCheck reject that with a
+# syntax error, which reds the whole-tree gate for every pusher (measured
+# 2026-10-19 on bin/autotune-resume-quiet-gate.py).  The Python gate is ruff+mypy.
+_tac_is_shell() {
+    [[ "$1" != *.py ]]
+}
+
 # _tac_in_lint_scope — Is a shellcheck-reported path inside the repo's lint
 # scope?  That scope is the one documented in docs/AGENT-GUIDELINES.md.
 #
@@ -573,6 +589,7 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/tools/qwen-hooks/*.sh \
          "$REPO_ROOT"/bin/*
 do
+    _tac_is_shell "$f" || continue
     if bash -n "$f" 2>&1
     then
         echo "  PASS  ${f#"$REPO_ROOT"/}"
@@ -600,6 +617,7 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/tools/qwen-hooks/*.sh \
          "$REPO_ROOT"/bin/*
 do
+    _tac_is_shell "$f" || continue
     local_rc=0
     # Graph members are analysed once, as a set, below — see the note above.
     if _tac_skip_perfile "$f"
@@ -651,6 +669,7 @@ then
              "$REPO_ROOT"/tools/qwen-hooks/*.sh \
              "$REPO_ROOT"/bin/*
     do
+        _tac_is_shell "$f" || continue
         hits=$(grep -Pn '[\x{061C}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]' "$f" 2>/dev/null || true)
         if [[ -n "$hits" ]]
         then
@@ -684,6 +703,7 @@ else
              "$REPO_ROOT"/tools/qwen-hooks/*.sh \
              "$REPO_ROOT"/bin/*
     do
+        _tac_is_shell "$f" || continue
         # Find non-ASCII outside the approved glyph allowlist.
         # Comment lines (# ...) are always excluded from the check.
         hits=$(grep -Pn "[^\x00-\x7F${_UNICODE_ALLOWED}]" "$f" 2>/dev/null \
