@@ -60,7 +60,14 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-10-19): THE SIX UNCERTIFIED ROWS ARE OWED WORK.  Wayne, verbatim: "i want thos 6
+#   autotuned" - the five rows reading meas_state=indicative plus MemSFT, whose measurement is
+#   EMPTY.  derive_rows now selects an `indicative` row by state; MemSFT is selected BY NAME via
+#   NEW_QUANTS (an EMPTY state predates the provenance columns and is not owed on its own).  The
+#   park added 2026-10-15 is LIFTED (PARKED_ROWS is empty, machinery kept), accepting the measured
+#   cost: MemSFT may spend ~20 of a boot's 60 cycles inside its filled-cache descent and still not
+#   clear its floor.  That is the deliberate trade - never measured was the worse outcome.
 #   v19 (2026-10-18): the v18 pattern is WRAPPED so no line exceeds the §18.3 120-char bound.
 #   v18 (2026-10-18): A CHUNK MUST BE AN INVOCATION, NOT A MENTION.  Measured 23:37: pid 435033
 #   was `shellcheck -s bash -x … <files>` from the CI lint job; the file list names
@@ -269,7 +276,7 @@ KEEPER_MAX_REARMS="${TAC_RESUME_KEEPER_MAX_REARMS:-4}"
 # row number is only a view of the registry, reassigned by every `model scan`): the
 # uncertified rows, the flagged family (p2_tps above tps), and the two rows ruled NEW
 # QUANTS.  Derived live from the registry, so it cannot go stale behind a hand list.
-NEW_QUANTS='law-chat-Q2_K.gguf|Spark-X2.5-4B-Q4_K_M.gguf'
+NEW_QUANTS='law-chat-Q2_K.gguf|Spark-X2.5-4B-Q4_K_M.gguf|MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf'
 
 # PARKED rows - deliberately OUT of the plan (Wayne, 2026-10-15).  A row that cannot
 # certify still spends a boot's remainder every time, and this one ends every boot at
@@ -278,7 +285,14 @@ NEW_QUANTS='law-chat-Q2_K.gguf|Spark-X2.5-4B-Q4_K_M.gguf'
 # floor descent, which re-spawns a server once per ctx step and never clears the
 # floor.  So it stays flagged in the registry whatever it costs, and comes back in
 # every derivation.  Parked is not deleted: the row and its columns are untouched.
-PARKED_ROWS='MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf'
+#
+# LIFTED 2026-10-19 (Wayne, verbatim: "i want thos 6 autotuned").  The six rows reading
+# meas_state=indicative or EMPTY are owed work, MemSFT included, so the park is gone.  The
+# cost measured above still stands and is accepted deliberately: the row may spend ~20 of a
+# boot's 60 cycles inside that descent and still not clear its floor.  The alternative was a
+# row that is never measured and never certified.  parked_reason/report_parked stay, naming
+# nothing while the list is empty.
+PARKED_ROWS=''
 
 # The bracket class keeps a chunk probe from matching its OWN command line.  Overridable
 # since v5: the pattern is a pgrep pattern, so ANY process whose argv merely CONTAINS one of
@@ -334,7 +348,18 @@ derive_rows() {
             # A ruled NEW QUANT stays in BY NAME - but only while it is not certified (v6).  Pinning it
             # unconditionally re-measured law-chat-Q2_K and Spark-X2.5-4B on EVERY boot after both had
             # certified, about 40 of the 60-cycle boot budget (measured 2026-10-16).
-            if ($18 != "yes" || (p > t && t > 0) || ($3 ~ ("^(" nq ")$") && $44 != "certified")) print $3
+            #
+            # v21 (2026-10-19): an UNCERTIFIED MEASUREMENT is owed work.  The 2026-10-16 ruling
+            # keeps the INDICATIVE rows in scope and retries them, and on 2026-10-19 Wayne named
+            # the six that read indicative or EMPTY ("i want thos 6 autotuned").  `autotuned`
+            # alone could never select them: it records "was it ever tuned" and all 28 say yes.
+            #
+            # The state test is deliberately `== "indicative"`, NOT `!= "certified"`: a row whose
+            # column is EMPTY predates the provenance columns and is not owed on its own.  The one
+            # such row that IS owed is MemSFT, and it is owed BY NAME through NEW_QUANTS.
+            if ($18 != "yes" || (p > t && t > 0) || $44 == "indicative") { print $3; next }
+            # A ruled NEW QUANT is owed while its measurement is not certified, whatever its state.
+            if ($3 ~ ("^(" nq ")$") && $44 != "certified") print $3
         }' "$REGISTRY" | sort -u
 }
 

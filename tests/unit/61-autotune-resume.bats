@@ -108,6 +108,17 @@ RESTART_EOF
         out+="|$p2"
         printf '%s\n' "$out"
     }
+    # _row stops at column 25, i.e. the PRE-PROVENANCE shape, whose meas_state is EMPTY —
+    # and an empty state is NOT owed on its own (v21).  This variant fills columns 26-43
+    # and pins meas_state (column 44), for the v21 criterion that selects an INDICATIVE row.
+    _row_state() {
+        local state="$1"
+        shift
+        _row "$@" | awk -F'|' -v s="$state" '
+            BEGIN { OFS = "|" }
+            { for (i = NF + 1; i <= 43; i++) $i = "0"; $44 = s; print }
+        '
+    }
     {
         _row 1 uncertified.gguf 2.00 no  0.00
         _row 2 flagged.gguf     1.00 yes 5.00
@@ -534,19 +545,25 @@ EOS
     grep -q 'local _bound="${1:-$CI_WAIT_S}"' "$SCRIPT"
 }
 
-@test "autotune-resume: --plan PARKS a row that can never certify, and names the reason" {
+@test "autotune-resume: --plan SELECTS an indicative row and MemSFT by name (v21)" {
     {
-        _row 1 MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf 9.10 yes 11.13
-        _row 2 flagged.gguf 1.00 yes 5.00
+        # MemSFT: tuned once (yes), p2 BELOW tps (not flagged), measurement EMPTY — so the
+        # ONLY thing that can select it is its NEW_QUANTS name entry.
+        _row 1 MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf 9.10 yes 1.00
+        # Not flagged either: selected purely because its measurement is INDICATIVE.
+        _row_state indicative 2 drifted.gguf 5.00 yes 1.00
+        _row 3 certified.gguf 3.00 yes 1.00
     } > "$TAC_RESUME_REGISTRY"
 
     run "$SCRIPT" --plan 2>&1
     [ "$status" -eq 0 ]
-    # The parked row is kept OUT of the plan and NAMED, with its reason.
-    ! grep -q '^MemSFT' "$TAC_RESUME_PLAN"
-    grep -q '^flagged.gguf$' "$TAC_RESUME_PLAN"
-    [[ "$output" == *"parked (out of the plan): MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf"* ]]
-    [[ "$output" == *"never clears the filled-cache TPS floor"* ]]
+    # Wayne, 2026-10-19 ("i want thos 6 autotuned"): a measurement that is not certified is owed
+    # work — an INDICATIVE row by state, and MemSFT by NAME (its state is EMPTY, the pre-provenance
+    # shape, which is not owed on its own).  The 2026-10-15 park is LIFTED, so nothing is parked.
+    grep -q '^MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf$' "$TAC_RESUME_PLAN"
+    grep -q '^drifted.gguf$' "$TAC_RESUME_PLAN"
+    ! grep -q '^certified.gguf$' "$TAC_RESUME_PLAN"
+    [[ "$output" != *"parked (out of the plan)"* ]]
     # A fresh campaign resets the loop's counter.
     [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "0" ]
 }
