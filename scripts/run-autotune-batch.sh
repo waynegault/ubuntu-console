@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 23
+#   v23 (2026-10-20): a degraded paravirtualization (TAC_LOAD_DEGRADED=1) refuses at startup
+#   with exit 5 — the row script already checked it, but this batch discarded env.sh's report
+#   and ran against a card it could not attribute.  And the row engine now runs from
+#   $_SELF_DIR, not $HOME/ubuntu-console, so a worktree measures with its own tree.
 #   v22 (2026-10-16): the two card-tenancy halts (a supervised TRAINING run, or a foreign
 #   owner) now exit 5 instead of falling through with HALT_EXIT unset.  Measured
 #   2026-10-16: a 10-row batch halted on the training-tenant gate 9 s in and exited 0, so
@@ -90,6 +94,12 @@ fi
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
+# A degraded paravirtualization is a halt-for-a-person, not a row failure (v85).  The row
+# script already checks this; the batch used to discard env.sh's report and run anyway.
+if [[ "${TAC_LOAD_DEGRADED:-0}" == "1" ]]; then
+    echo "ERROR: env.sh reports a degraded load — refusing to run the batch"
+    exit 5  # degraded load: a person must look, not a retry
+fi
 # Shared helpers (_tac_suspend_held / _tac_suspend_pid) — the SAME tenancy predicate the
 # wrapper acquires the hold with and the watchdog honours, never a second copy of the rule.
 # shellcheck source=_tac-bin-lib.sh
@@ -319,7 +329,7 @@ for ((i = 0; i < TOTAL; i++)); do
     printf '\n[%d/%d] model %s (row %s, cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" \
         "$(__llm_registry_row_for_file "$m" 2>/dev/null || echo '?')" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
     _row_rc=0
-    bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$m" 2>&1 || _row_rc=$?
+    bash "$_SELF_DIR/autotune-model.sh" "$m" 2>&1 || _row_rc=$?
     if (( _row_rc == 0 )); then
         printf 'done\n'
         TUNED_COUNT=$((TUNED_COUNT + 1))

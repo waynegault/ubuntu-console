@@ -881,8 +881,11 @@ STUB
     [[ "$src" == *'AUTOTUNE_DRIFT_WARN_PCT=25'* ]]
     [[ "$src" == *'_meas_pos2=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5'* ]]
     [[ "$src" == *'_meas_drift_pct=$(__autotune_position_drift "${BEST_TPS:-0}" "$_meas_pos2")'* ]]
-    # the figure reaches the save as meas_drift_pct — the FOURTH optional (arg 29)
-    [[ "$src" == *'"$_row_load" "5" "" "$_meas_drift_pct" "$_meas_state"'* ]]
+    # the figure reaches the save as meas_drift_pct — the FOURTH optional (arg 29), and
+    # meas_n/meas_spread_pct are the REAL survivor count and spread, read from the side file
+    # bench_once_multi writes (a global would die inside the caller's $( ) subshell).
+    [[ "$src" == *'"$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state"'* ]]
+    grep -qF '> "/tmp/at-samples-$$"' "$REPO_ROOT/scripts/autotune-model.sh"
     # ...and exceeding the bound stamps the row indicative, as contention does
     [[ "$src" == *'awk -v d="$_meas_drift_pct" -v w="$AUTOTUNE_DRIFT_WARN_PCT"'* ]]
     [[ "$src" == *'_meas_state="indicative"'* ]]
@@ -893,4 +896,25 @@ STUB
     [[ -n "$refuse_line" ]]
     [[ -n "$pos2_line" ]]
     (( refuse_line < pos2_line )) || { echo "the second bench must follow the refusal (refuse=$refuse_line pos2=$pos2_line)"; return 1; }
+
+    # v85: the VRAM baseline is READ, not defaulted.  It used to fall back to 4096/3965, so an
+    # unreadable card produced a 131 MiB "gap", passed the 800 MiB bound and every later number
+    # derived from a figure the card never reported.  The gate must refuse a non-numeric read.
+    grep -qF 'cannot read VRAM' "$REPO_ROOT/scripts/autotune-model.sh"
+    grep -qF '"$VRAM_TOTAL" =~ ^[0-9]+$' "$REPO_ROOT/scripts/autotune-model.sh"
+    ! grep -qF 'VRAM_TOTAL:-4096' "$REPO_ROOT/scripts/autotune-model.sh"
+    ! grep -qF 'FREE_VRAM:-3965' "$REPO_ROOT/scripts/autotune-model.sh"
+    # v85: an unmeasurable second position DEMOTES the row instead of warning and certifying.
+    local p2_block
+    p2_block=$(sed -n '/produced no figure/,/elif awk -v d=/p' "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$p2_block" == *'_meas_state="indicative"'* ]] || { echo "an absent p2 must stamp indicative (block: $p2_block)"; return 1; }
+    # v85: a thermally throttled card (SW Thermal Slowdown bit 0x20) is demoted, not saved as a
+    # comparable number; the check is skipped under selftest so cases stay independent of the GPU.
+    grep -qF 'SW Thermal Slowdown is ACTIVE at certification' "$REPO_ROOT/scripts/autotune-model.sh"
+    grep -qF '_throttle & 0x20' "$REPO_ROOT/scripts/autotune-model.sh"
+    # v85 batch: a degraded load halts, and the row runs the engine from THIS tree.
+    grep -qF 'TAC_LOAD_DEGRADED' "$REPO_ROOT/scripts/run-autotune-batch.sh"
+    grep -qF '$_SELF_DIR/autotune-model.sh' "$REPO_ROOT/scripts/run-autotune-batch.sh"
+    # v85 runner: a missing profile/command is a usage error, not an executed path.
+    grep -qF 'missing <profile_path> <command...>' "$REPO_ROOT/bin/bench-timeout-runner.sh"
 }

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 84
+# Module Version: 85
+#   v85 (2026-10-20): TWO FAIL-OPEN GATES CLOSED.  (1) The VRAM baseline read defaulted to
+#   4096/3965 when nvidia-smi could not answer, so an unreadable card produced a 131 MiB
+#   "gap", passed the 800 MiB bound, and the run certified against a baseline the card never
+#   reported; both readings must now be numeric or the run exits 1.  (2) An unmeasurable
+#   second position only WARNED, so the row saved `certified` with no drift evidence; it now
+#   stamps `indicative`, the same rule as the collapse guard.
 #   v84 (2026-10-18): before the save, the row's observed input profile (col 37) is run
 #   through __autotune_window_policy and the verdict is printed AND recorded in ctx_policy
 #   (col 45).  This is the card's check/flag route: certification remains the HIGHEST ctx
@@ -329,6 +335,18 @@ CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"
 # which is why it takes two rather than one.
 CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
 
+# _fail — the one refusal path for a pre-measurement check.  It routes through the repo's
+# shared UI helper (item 10.7's sanctioned form) and falls back to stdout when the helper is
+# unavailable, so no call site adds an ad-hoc stderr redirect.
+_fail() {
+    if declare -f __tac_info >/dev/null; then
+        __tac_info "Autotune" "[ERROR: $*]" "${C_Error:-}"
+    else
+        echo "ERROR: $*"
+    fi
+    exit 1
+}
+
 _cuda_cycles() {
     local n=0
     [[ -f "$_CUDA_CYCLE_FILE" ]] && n=$(cat "$_CUDA_CYCLE_FILE" 2>/dev/null || echo 0)
@@ -419,9 +437,14 @@ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1
 pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
 sleep 1
 VRAM_TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-VRAM_TOTAL=${VRAM_TOTAL:-4096}
 FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-FREE_VRAM=${FREE_VRAM:-3965}
+# FAIL CLOSED (v85): these used to default to 4096/3965, so an unreadable card produced a
+# 131 MiB "gap" that passed the 800 MiB bound below and every later number — BUDGET,
+# START_CTX, the KV math — derived from a figure the card never reported.  A reading that
+# is not a number is a refusal, exactly as _tac_gpu_wait_used_below treats it.
+if ! [[ "$VRAM_TOTAL" =~ ^[0-9]+$ ]] || ! [[ "$FREE_VRAM" =~ ^[0-9]+$ ]]; then
+    _fail "cannot read VRAM (total='${VRAM_TOTAL}' free='${FREE_VRAM}') - refusing to autotune."
+fi
 # Trust check: after clearing, free VRAM must sit ~at the card total.  A
 # large gap means a foreign process still holds the GPU — a certification
 # against that baseline would be untrustworthy, so fail loudly instead.
@@ -1347,6 +1370,14 @@ bench_once_multi() {
         tps=$(printf '%s\n' "${vals[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.2f\n", (a[NR/2]+a[NR/2+1])/2 }')
     fi
     tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
+    # Expose how many samples the figure really rests on (v85): the save used to stamp a
+    # hard-coded 5 even when bench_once_multi kept a single survivor.  A SIDE FILE, because
+    # every caller runs this inside $(...) and a global set here would be lost.  Spread is
+    # (max-min)/max over the survivors, the same shape as the position-drift figure.
+    printf '%s\n' "${#vals[@]}" > "/tmp/at-samples-$$"
+    _spread=$(printf '%s\n' "${vals[@]}" | LC_ALL=C sort -n \
+        | awk 'NR==1{min=$1} {max=$1} END{if (max>0) printf "%.2f", (max-min)*100/max}')
+    printf '%s\n' "$_spread" > "/tmp/at-spread-$$"
     echo "$tps"
     return 0
 }
@@ -2803,7 +2834,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         [[ -n "$_meas_pos2" ]] \
             && _meas_drift_pct=$(__autotune_position_drift "${BEST_TPS:-0}" "$_meas_pos2")
         if [[ -z "$_meas_drift_pct" ]]; then
-            echo "  WARNING: the second-position re-measurement produced no figure — no drift recorded"
+            # FAIL CLOSED (v85): an unmeasurable second position is not evidence of stability.
+            # It used to warn and leave the state alone, so the row saved `certified` with no
+            # drift recorded — the one check that proves the number is position-stable missing
+            # and read as passed.  Demote it exactly as an over-bound drift does.
+            echo "  the second-position re-measurement produced no figure — stamping this row INDICATIVE"
+            _meas_state="indicative"
         elif awk -v d="$_meas_drift_pct" -v w="$AUTOTUNE_DRIFT_WARN_PCT" 'BEGIN{exit !(d > w)}'; then
             echo "  position drift ${_meas_drift_pct}% (p1=${BEST_TPS} p2=${_meas_pos2}) exceeds" \
                  "the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound — stamping this row INDICATIVE"
@@ -2811,6 +2847,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         else
             echo "  position drift ${_meas_drift_pct}% (p1=${BEST_TPS} p2=${_meas_pos2}) —" \
                  "within the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound"
+        fi
+        # v85: a thermally throttled card is NOT a comparable measurement.  The SW Thermal
+        # Slowdown bit (0x20) is the driver capping the clock to chase its target — the state
+        # that saved 6.76/6.89 tps with tight drift.  Demote it exactly as contention is.
+        # Skipped under AUTOTUNE_SELFTEST, whose outcomes must not depend on this box's GPU.
+        if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]]; then
+            _throttle=$(nvidia-smi --query-gpu=clocks_throttle_reasons.active \
+                --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+            if [[ "$_throttle" =~ ^0x[0-9a-fA-F]+$ ]] && (( _throttle & 0x20 )); then
+                echo "  SW Thermal Slowdown is ACTIVE at certification — stamping this row INDICATIVE"
+                _meas_state="indicative"
+            fi
         fi
         if ! __autotune_task_quality_check; then
             __autotune_quality_error "task-quality contract was not verified — the winner was NOT saved"
@@ -2835,11 +2883,19 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             *)
                 echo "  WARNING: window policy returned an unexpected verdict '${_ctx_policy}'" ;;
         esac
+        # v85: the REAL sample count and spread written by the last bench_once_multi (the
+        # second-position run on the winner config).  Absent/unreadable falls back to 5, the
+        # configured sample count, never to a value that hides a one-sample figure.
+        _meas_n=5
+        [[ -r "/tmp/at-samples-$$" ]] && _meas_n=$(< "/tmp/at-samples-$$")
+        [[ "$_meas_n" =~ ^[0-9]+$ ]] || _meas_n=5
+        _meas_spread=""
+        [[ -r "/tmp/at-spread-$$" ]] && _meas_spread=$(< "/tmp/at-spread-$$")
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
-            "$_row_load" "5" "" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
+            "$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the

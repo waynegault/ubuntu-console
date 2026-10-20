@@ -45,7 +45,10 @@
 # (lock file cleanup, model stop) from being bypassed.
 
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-20): a missing <profile_path>/<command...> is a usage error (exit 2), and the
+#   profile is dropped with a plain `shift` — the old `shift 2` silently dropped the first
+#   command token whenever two or more args were given.
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line — any edit here must move it, or the pre-commit guard rejects the
 #   commit.  Deliberately separate from VERSION= below (significant edits only).
@@ -69,8 +72,12 @@ done
 shift $((OPTIND - 1))
 
 # --- Positional args ---------------------------------------------------------
-profile_path="${1:-}"
-shift 2>/dev/null || true
+if (( $# < 1 )); then
+    echo "bench-timeout-runner: missing <profile_path> <command...>"
+    exit 2  # usage error
+fi
+profile_path="$1"
+shift
 
 # --- Log helper --------------------------------------------------------------
 __btr_log() {
