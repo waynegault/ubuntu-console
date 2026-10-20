@@ -689,4 +689,19 @@ EOS
     grep -q '^--restart$' "$RESTART_ARGV"
 }
 
+@test "autotune-resume: a SCOPE row marked unacceptable cannot re-enter the plan" {
+    # The terminal state has to hold in BOTH derivations.  derive_rows selects only
+    # `indicative`, and scope_rows must exclude `unacceptable` too - otherwise a scope file
+    # puts a capped row back on the next boot and defeats the cap.
+    local scope="$SANDBOX/state/autotune-resume.scope.rows"
+    printf 'capped.gguf\n' > "$scope"
+    { _row_state unacceptable 1 capped.gguf 25.00 yes 25.00; } > "$TAC_RESUME_REGISTRY"
+    : > "$TAC_RESUME_MODEL_DIR/capped.gguf"
+
+    run env TAC_RESUME_SCOPE="$scope" "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to plan"* ]]
+    [ ! -e "$TAC_RESUME_PLAN" ] || ! grep -q '^capped.gguf$' "$TAC_RESUME_PLAN"
+}
+
 # end of file

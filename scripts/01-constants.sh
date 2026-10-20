@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 32
+# Module Version: 33
+#   v33 (2026-10-20): meas_state documents its THIRD value, `unacceptable` - the terminal state
+#   bin/autotune-resume.sh writes when a row fails the drift gate INDICATIVE_CAP times.  The
+#   header comment named only certified|indicative, so the contract every writer pads from
+#   described two of the three states the registry can carry.
 #   v32 (2026-10-18): LLM_REGISTRY_HEADER gains ctx_policy (45) — the recorded verdict of the
 #   observed-input-profile check (scripts/check-ctx-profile.sh, CTXBUDGET-003).  Certification
 #   stays MAX-CTX (the highest window that holds LLM_MIN_TPS; v6 semantics, D1(a)/D2(b)); the
@@ -16,7 +20,7 @@
 #   probes into a private cache instead of writing to the host-wide tmpfs.
 #   v29 (2026-10-12): LLM_REGISTRY_HEADER gains five MEASUREMENT columns (40-44) so a
 #   certified tps carries HOW it was measured: meas_load, meas_n, meas_spread_pct,
-#   meas_drift_pct, meas_state (certified|indicative).  Header-first: every writer pads
+#   meas_drift_pct, meas_state (certified|indicative|unacceptable).  Header-first: every writer pads
 #   to ncols from THIS line, so scan/sync emit them empty and only the autotune's
 #   __llm_autotune_profile_save writes them.  (Autotune/bench revision, item 2b.)
 #   v28 (2026-10-09): TAC_STATE_DIR — a PERSISTENT home for the small state markers that
