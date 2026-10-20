@@ -60,7 +60,17 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-10-20): A ROW THAT KEEPS FAILING THE DRIFT GATE IS TERMINAL AFTER A FEW BOOTS.
+#   Measured 2026-10-20: row 24 was re-measured 17 times in seven hours - every attempt saved
+#   ~25 tps at ctx 36,864 and every one was stamped indicative at 38-67 % drift against the
+#   25 % bound, because the card sat at 85-89 C against its 75 C target and the driver held
+#   735 MHz.  The 2026-10-16 retry rule was never meant to be a treadmill: apply_indicative_cap
+#   counts consecutive owed measurements per row and, at INDICATIVE_CAP (3), rewrites
+#   meas_state to `unacceptable` and says so.  derive_rows and scope_rows treat that as
+#   TERMINAL (the row keeps its numbers; the campaign stops paying for a gate the box cannot
+#   pass).  Only rows in the CURRENT PLAN are counted, so indicative rows outside the agreed
+#   scope are never marked.
 #   v21 (2026-10-19): THE SIX UNCERTIFIED ROWS ARE OWED WORK.  Wayne, verbatim: "i want thos 6
 #   autotuned" - the five rows reading meas_state=indicative plus MemSFT, whose measurement is
 #   EMPTY.  derive_rows now selects an `indicative` row by state; MemSFT is selected BY NAME via
@@ -229,6 +239,9 @@ RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
 # The loop's knobs, all overridable so a test drives them without touching Windows.
 ARM_MAX="${TAC_RESUME_ARM_MAX:-8}"             # consecutive automatic restarts allowed
 ARM_DELAY_MIN="${TAC_RESUME_ARM_DELAY:-3}"     # minutes after the halt to restart
+# The retry rule is BOUNDED, not a treadmill: a row measured this many times while still
+# indicative is recorded as `unacceptable` and leaves the plan (see apply_indicative_cap).
+INDICATIVE_CAP="${TAC_RESUME_INDICATIVE_CAP:-3}"
 # The bound must outlast a CI RUN, not a CI poll.  A single `systemctl start` can never outlive
 # a drain if the wait expires first - and it did: measured 2026-10-17, a CI run outlasted the old
 # 900 s, the loop PAUSED on the wait's expiry, and "resume when the runner drains" became a manual
@@ -247,6 +260,9 @@ CI_SETTLE_POLLS="${TAC_RESUME_CI_SETTLE_POLLS:-2}"
 # loudly, so a signal has a narrow window instead of a whole afternoon.
 ARM_CI_WAIT_S="${TAC_RESUME_ARM_CI_WAIT_S:-900}"   # 15 min: arm promptly, or say so
 RESTARTS_FILE="$STATE_DIR/autotune-resume.auto-restarts"
+# Consecutive owed measurements per row, used by apply_indicative_cap.  A row that certifies
+# drops out of the plan and therefore out of this file on the next pass.
+STREAK_FILE="$STATE_DIR/autotune-resume.indicative-streak"
 # A PAUSE is otherwise a DEAD END: this unit is oneshot and nothing re-enters it, so an exhausted
 # CI wait leaves the campaign idle until a boot or a hand start.  Measured 2026-10-18 20:34:26 —
 # the arm's 900 s expired nine seconds after one CI run ended (20:34:15) while a second run held
@@ -370,7 +386,12 @@ derive_rows() {
 scope_rows() {
     [[ -r "$SCOPE" ]] || return 0
     awk -F'|' -v parked="$PARKED_ROWS" '
-        NR == FNR { if ($1 ~ /^[0-9]+$/ && NF > 1 && $44 == "certified") done[$3] = 1; next }
+        NR == FNR {
+            # `unacceptable` is TERMINAL too: a row capped by apply_indicative_cap is recorded,
+            # not owed, so the scope cannot put it back into the plan.
+            if ($1 ~ /^[0-9]+$/ && NF > 1 && ($44 == "certified" || $44 == "unacceptable")) done[$3] = 1
+            next
+        }
         $0 == "" { next }
         parked != "" && $0 ~ ("^(" parked ")$") { next }
         done[$0] { next }
@@ -800,6 +821,56 @@ ensure_armed() {
     return 0
 }
 
+# A row that has failed the drift gate INDICATIVE_CAP times is RECORDED as unacceptable, not
+# retried for ever.  Measured 2026-10-20: row 24 was measured 17 times in seven hours at 38-67 %
+# drift against a 25 % bound, on a card held at 85-89 C (SW Thermal Slowdown, 735 MHz), and no
+# retry could move the gate.  Only rows in the CURRENT PLAN are counted, so an indicative row
+# outside the agreed scope is never marked, and a row that certifies simply drops out of the
+# plan (and out of the streak file) on the next pass.
+apply_indicative_cap() {
+    local _plan _tmp _streak_tmp
+    _plan=$(plan_rows) || return 0
+    [[ -n "$_plan" ]] || return 0
+    _tmp=$(mktemp) || return 0
+    _streak_tmp=$(mktemp) || { rm -f "$_tmp"; return 0; }
+    printf '%s\n' "$_plan" > "$_streak_tmp.plan"
+    awk -F'|' -v OFS='|' -v cap="$INDICATIVE_CAP" -v streak="$STREAK_FILE" \
+        -v newstreak="$_streak_tmp" -v planfile="$_streak_tmp.plan" '
+        BEGIN {
+            while ((getline l < streak) > 0) { split(l, a, " "); if (a[1] != "") old[a[1]] = a[2] + 0 }
+            close(streak)
+            while ((getline l < planfile) > 0) { if (l != "") owed[l] = 1 }
+            close(planfile)
+        }
+        /^#/ { print; next }
+        NF > 1 && $1 ~ /^[0-9]+$/ {
+            if (owed[$3] && $44 == "indicative") {
+                n = old[$3] + 1
+                printf "%s %d\n", $3, n > newstreak
+                if (n >= cap) {
+                    $44 = "unacceptable"
+                    # stderr, NOT stdout: stdout is the rewritten registry temp.
+                    printf "cap: %s failed the drift gate %d times - meas_state=unacceptable\n", $3, n > "/dev/stderr"
+                }
+            }
+            print
+        }
+    ' "$REGISTRY" > "$_tmp" || { rm -f "$_tmp" "$_streak_tmp" "$_streak_tmp.plan"; return 0; }
+    if ! cmp -s "$_tmp" "$REGISTRY"; then
+        if ! chmod --reference="$REGISTRY" "$_tmp"; then
+            printf 'cap: cannot match the registry mode - the file was NOT rewritten\n'
+            rm -f "$_tmp" "$_streak_tmp" "$_streak_tmp.plan"
+            return 0
+        fi
+        mv "$_tmp" "$REGISTRY" || { rm -f "$_tmp" "$_streak_tmp" "$_streak_tmp.plan"; return 0; }
+    else
+        rm -f "$_tmp"
+    fi
+    mv "$_streak_tmp" "$STREAK_FILE"
+    rm -f "$_streak_tmp.plan"
+    return 0
+}
+
 # THE LOOP.  Read the chunk's exit code and decide whether the campaign carries on.
 # ONLY the budget halt is resumable, and only when this boot SHRANK the remainder -
 # a restart that would re-run the same rows buys nothing but a reboot.
@@ -821,6 +892,7 @@ continue_after() {
     # Wayne, 2026-10-16: "i want autotune to be much smoother than this!"  The stop is now the EMPTY
     # remainder; the guards that bound the retries are the 8-restart cap and arm_restart's bounded
     # wait for a CI job to drain, and an adapter stall (handled above) still stops for a person.
+    apply_indicative_cap
     _after=$(plan_rows | awk 'END { print NR }')
     if (( _after == 0 )); then
         printf 'the remainder is EMPTY - the campaign is complete; no restart armed\n'

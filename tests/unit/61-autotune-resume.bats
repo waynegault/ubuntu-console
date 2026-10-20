@@ -649,4 +649,44 @@ EOS
     fi
 }
 
+@test "autotune-resume: a row that keeps failing the drift gate is CAPPED as unacceptable" {
+    # CRITERION (2026-10-20): a row measured INDICATIVE_CAP times without a certification is
+    # recorded, not retried for ever.  Measured the same day: row 24 was re-measured 17 times in
+    # seven hours at 38-67 % drift against a 25 % bound, on a card held at 85-89 C.  Catches the
+    # shipped behaviour, which would have armed an 18th identical attempt.
+    printf 'capped.gguf\n' > "$TAC_RESUME_PLAN"
+    { _row_state indicative 1 capped.gguf 25.00 yes 25.00; } > "$TAC_RESUME_REGISTRY"
+    : > "$TAC_RESUME_MODEL_DIR/capped.gguf"
+    # Already at cap-1, so this measurement is the third.
+    printf 'capped.gguf 2\n' > "$TAC_RESUME_STATE_DIR/autotune-resume.indicative-streak"
+    printf '4\n' > "$ENTRY_RC_FILE"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"meas_state=unacceptable"* ]]
+    # Terminal: the row leaves the plan, so the remainder is EMPTY and nothing is armed.
+    [[ "$output" == *"remainder is EMPTY"* ]]
+    [ "$(awk -F'|' '$1==1{print $44}' "$TAC_RESUME_REGISTRY")" = "unacceptable" ]
+    ! grep -q '^capped.gguf$' "$TAC_RESUME_PLAN" 2>/dev/null
+    [ "$(awk '{print $2}' "$TAC_RESUME_STATE_DIR/autotune-resume.indicative-streak")" -eq 3 ]
+    [ ! -e "$RESTART_ARGV" ] || ! grep -q '^--restart$' "$RESTART_ARGV"
+}
+
+@test "autotune-resume: below the cap the indicative row stays OWED and its count advances" {
+    # The control for the case above: the cap must not act early, or a row that could certify on
+    # the next quiet boot would be thrown away after one bad night.
+    printf 'capped.gguf\n' > "$TAC_RESUME_PLAN"
+    { _row_state indicative 1 capped.gguf 25.00 yes 25.00; } > "$TAC_RESUME_REGISTRY"
+    : > "$TAC_RESUME_MODEL_DIR/capped.gguf"
+    printf 'capped.gguf 1\n' > "$TAC_RESUME_STATE_DIR/autotune-resume.indicative-streak"
+    printf '4\n' > "$ENTRY_RC_FILE"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"still owed: 1 row(s)"* ]]
+    [ "$(awk -F'|' '$1==1{print $44}' "$TAC_RESUME_REGISTRY")" = "indicative" ]
+    [ "$(awk '{print $2}' "$TAC_RESUME_STATE_DIR/autotune-resume.indicative-streak")" -eq 2 ]
+    grep -q '^--restart$' "$RESTART_ARGV"
+}
+
 # end of file
