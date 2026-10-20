@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 3
 # bench-resume.sh — make a bench sweep survive a restart.
 #
 # The autotune campaign has a plan + a boot timer + the box's restart wrapper. The
@@ -22,7 +24,6 @@
 #   BENCH_RESUME_CMD     the bench command (default this script's own bench-rows.sh)
 #   BENCH_RESUME_ARGS    extra args passed before the rows (default none)
 #
-# Module Version: 2
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
