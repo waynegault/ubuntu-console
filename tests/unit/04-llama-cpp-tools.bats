@@ -165,3 +165,20 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
     [[ "$src" == *"--quick"* ]]
     [[ "$src" == *"--no-pull"* ]]
 }
+
+# A runner's BATS temp dir can contain a `b<digits>` fragment — measured
+# 2026-10-20: `bats-run-SULb7C` made a custom binary report build `b7` and
+# reddened CI while the same suite passed locally. The build tag must come from
+# the binary's own version or the versioned `llama.cpp/b<digits>/` layout.
+@test "inventory ignores a b<digits> fragment outside the versioned layout" {
+    local decoy="$HOME/llama.cpp/build/b7/bin/llama-server"
+    mkdir -p "$(dirname "$decoy")"
+    printf '#!/usr/bin/env bash\nprintf "custom build\\n"\n' > "$decoy"
+    chmod +x "$decoy"
+    export LLAMA_SERVER_BIN="$decoy"
+
+    run "$REPO_ROOT/tools/llama-cpp-inventory.sh" --home-only
+    [ "$status" -eq 0 ]
+    # The build field is empty: `b7` is an ancestor segment, not a build tag.
+    [[ "$output" == *"custom-tuned|$decoy||"* ]]
+}

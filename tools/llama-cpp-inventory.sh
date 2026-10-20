@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-20): a build tag is read from the binary's own version string or the
+#   versioned `<root>/llama.cpp/b<digits>/` layout, never from an arbitrary path segment.
+#   A BATS temp dir named `bats-run-SULb7C` made a custom binary report build `b7` and
+#   reddened CI while the same suite passed locally.
 #   v3 (2026-10-16): added the repo's `# end of file` sentinel, which this file never carried -
 #   the nightly's hygiene case ("tools/*.sh scripts end with # end of file marker") only runs
 #   nightly, so push CI stayed green while the tip was red there.
@@ -60,7 +64,11 @@ _classify() {
     else
         version=""
     fi
-    if [[ -z "$build_tag" && "$resolved" =~ b([0-9]+) ]]; then
+    # A build tag comes from the binary's own version string or the versioned
+    # layout `<root>/llama.cpp/b<digits>/`, NEVER from an arbitrary path segment:
+    # measured 2026-10-20, a BATS temp dir named `bats-run-SULb7C` made a custom
+    # binary report build b7 and reddened CI while the same suite passed locally.
+    if [[ -z "$build_tag" && "$resolved" =~ /llama\.cpp/b([0-9]+)/ ]]; then
         build_tag="b${BASH_REMATCH[1]}"
     fi
 
