@@ -60,7 +60,11 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 23
+#   v23 (2026-10-20): v22 polish, from a self-review.  The empty-plan message said "every row is
+#   certified and unflagged", which became FALSE once `unacceptable` existed as a terminal state;
+#   it now says "certified or terminal".  And the streak-file write is checked: a failed write
+#   names itself instead of silently freezing the count for a boot.
 #   v22 (2026-10-20): A ROW THAT KEEPS FAILING THE DRIFT GATE IS TERMINAL AFTER A FEW BOOTS.
 #   Measured 2026-10-20: row 24 was re-measured 17 times in seven hours - every attempt saved
 #   ~25 tps at ctx 36,864 and every one was stamped indicative at 38-67 % drift against the
@@ -415,7 +419,7 @@ write_plan() {
     fi
     _rows=$(plan_rows)
     if [[ -z "$_rows" ]]; then
-        printf 'nothing to plan: every row is certified and unflagged (%s)\n' "$REGISTRY"
+        printf 'nothing to plan: every row is certified or terminal (%s)\n' "$REGISTRY"
         report_parked
         return 0
     fi
@@ -866,7 +870,11 @@ apply_indicative_cap() {
     else
         rm -f "$_tmp"
     fi
-    mv "$_streak_tmp" "$STREAK_FILE"
+    if ! mv "$_streak_tmp" "$STREAK_FILE"; then
+        printf 'cap: cannot write %s - the retry count will not advance this boot\n' "$STREAK_FILE"
+        rm -f "$_streak_tmp" "$_streak_tmp.plan"
+        return 0
+    fi
     rm -f "$_streak_tmp.plan"
     return 0
 }
