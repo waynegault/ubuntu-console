@@ -1,0 +1,13 @@
+[Unit]
+Description=Resume an interrupted bench sweep after a boot
+Documentation=file:%h/ubuntu-console/bin/bench-resume.sh
+# Started by bench-resume.timer (OnBootSec=2min). Enable the TIMER, never this
+# service: a Type=oneshot inside the boot transaction would hold it open.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/bench-resume.sh --run
+# The WSL GPU libraries live in /usr/lib/wsl/lib; without them nvidia-smi in the
+# unit fails "GPU access blocked", so the bench's card gate reads nothing.
+Environment=PATH=/usr/lib/wsl/lib:/home/wayne/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=LD_LIBRARY_PATH=/usr/lib/wsl/lib

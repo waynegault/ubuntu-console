@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the bench resume two minutes after boot
+
+[Timer]
+OnBootSec=2min
+Unit=bench-resume.service
+
+[Install]
+WantedBy=timers.target

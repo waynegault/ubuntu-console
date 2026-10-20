@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 7
+#   v6 (2026-10-20): the planned rows are written to a resume plan before measuring and
+#   cleared only on success, so a restart mid-sweep is resumed by bench-resume.sh after
+#   boot instead of losing the run.  The plan is advisory: an unwritable plan never stops
+#   the bench, it only drops the restart safety net.
 #   v5 (2026-10-12): the post-stop free-VRAM wait is the shared `_tac_gpu_wait_used_below`
 #   (bin/_tac-bin-lib.sh).  The inline loop it replaced broke out on an UNREADABLE reading
 #   and fell through on exhaustion, so the bench could launch against an occupied or
@@ -61,6 +65,14 @@ if (( $# == 0 )); then
     echo "usage: $(basename "$0") <row> [<row> ...]" >&2
     exit 2
 fi
+
+# Survive a restart: the plan is the gate bench-resume.sh --run claims after a boot.
+_state_dir="${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tactical-console}"
+BENCH_RESUME_PLAN="${BENCH_RESUME_PLAN:-$_state_dir/bench-resume.rows}"
+# swallow-ok: an unwritable plan must not stop the measurement; it only removes the restart safety net
+mkdir -p "$(dirname "$BENCH_RESUME_PLAN")" 2>/dev/null || true
+# swallow-ok: same — the bench still runs, the sweep is just not resumable
+printf '%s\n' "$@" > "$BENCH_RESUME_PLAN" 2>/dev/null || true
 
 # Name the log after the FIRST and LAST row, and keep the name bounded.  `$*` joined EVERY
 # argument, and rows are addressed by .gguf FILE NAME (the durable identity), so a 6-row
@@ -124,6 +136,10 @@ echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"
 # The repo's own non-interactive function runner; `model bench` accepts several rows.
 "$HOME/.local/bin/tac-exec" model bench "$@" >> "$LOG" 2>&1
 rc=$?
+if (( rc == 0 )); then
+    # swallow-ok: clearing an absent plan is the outcome sought; the bench already succeeded
+    rm -f "$BENCH_RESUME_PLAN" 2>/dev/null || true
+fi
 {
     echo "=== bench exited $rc at $(date -Iseconds)"
     echo "=== log: $LOG"
