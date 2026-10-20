@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-10-20): __tac_ppid_is_init() recognises the system init by IDENTITY, not by
+#   pid 1.  On this WSL box the reparenting target is the relayed /init at pid 18459 (argv
+#   "/init", comm "Relay(18460)"), so the keeper reaper's bare `ppid == 1` test missed every
+#   keeper orphaned after a bench — 27 `sleep 3600` processes survived a 27-row sweep.
 #   v33 (2026-10-20): meas_state documents its THIRD value, `unacceptable` - the terminal state
 #   bin/autotune-resume.sh writes when a row fails the drift gate INDICATIVE_CAP times.  The
 #   header comment named only certified|indicative, so the contract every writer pads from
@@ -238,6 +242,26 @@ VSCODE_BIN=""
 # Guarded so re-sourcing env.sh in an already-initialised shell does not error
 # on the readonly reassignment (same pattern as the BOX_* constants below).
 if [[ -z "${__VSCODE_CACHE_TTL:-}" ]]; then readonly __VSCODE_CACHE_TTL=604800; fi
+# __tac_ppid_is_init <ppid> — true when <ppid> is gone or is this box's system init,
+# whatever PID that init holds.  Reparenting on WSL goes to the relayed /init, NOT to
+# pid 1 (measured 2026-10-20: pid 18459, argv "/init", comm "Relay(18460)"), so a bare
+# `ppid == 1` test misses every process orphaned here.  Empty output from ps is the
+# "parent already gone" case and counts as orphaned.
+function __tac_ppid_is_init() {
+    local _ppid="${1:-}"
+    [[ -n "$_ppid" ]] || return 0
+    [[ "$_ppid" =~ ^[0-9]+$ ]] || return 1
+    (( _ppid == 1 )) && return 0
+    # argv[0] only: the cmdline is NUL-delimited, and stripping the separators
+    # concatenates the arguments (`/init 30` becomes `/init30`).
+    local -a _argv=()
+    # swallow-ok: an unreadable cmdline means the pid is gone, which is not an init identity
+    mapfile -d '' -t _argv < "/proc/${_ppid}/cmdline" 2>/dev/null || return 1
+    [[ "${_argv[0]:-}" == "/init" ]] && return 0
+    # swallow-ok: an unreadable comm is the same gone-pid case, already answered by the argv check
+    [[ "$(cat "/proc/${_ppid}/comm" 2>/dev/null)" == "init" ]]
+}
+
 # Resolve the VS Code binary path, caching the result for subsequent calls.
 # Uses a timestamp file to implement TTL-based cache expiry.
 function __resolve_vscode_bin() {

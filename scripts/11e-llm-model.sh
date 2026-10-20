@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 66
+# Module Version: 67
+#   v67 (2026-10-20): __model_stop's fallback keeper reaper asks __tac_ppid_is_init instead
+#   of a bare `ppid == 1`.  On WSL the reparenting target is the relayed /init at pid 18459,
+#   so 27 `sleep 3600` keepers survived a completed 27-row bench and were reaped by hand.
 #   v66 (2026-10-18): `model ctx-check` dispatches scripts/check-ctx-profile.sh.  The
 #   checker stays OPT-IN rather than a CI gate: a registry with no measurable profile
 #   (all 28 rows at HEAD) exits 2, which is correct for an operator and wrong for a
@@ -1697,9 +1700,9 @@ function __model_stop() {
         [[ "$_keeper_cmd" == *"sleep 3600"* ]] || continue
         # swallow-ok: only keepers whose cwd is this directory are reaped, so an unreadable cwd leaves the keeper ALONE
         [[ "$(readlink "/proc/$_keeper_pid/cwd" 2>/dev/null || true)" == "$_keeper_dir" ]] || continue
-        # swallow-ok: an empty ppid is one of the two cases tested on the next line, and an orphaned keeper is exactly what this reaps
+        # swallow-ok: an empty ppid means the parent is gone, and __tac_ppid_is_init treats that as orphaned — the keeper is exactly what this reaps
         _keeper_ppid=$(ps -o ppid= -p "$_keeper_pid" 2>/dev/null | tr -d '[:space:]')
-        if [[ -z "$_keeper_ppid" ]] || [[ "$_keeper_ppid" == "1" ]]
+        if __tac_ppid_is_init "$_keeper_ppid"
         then
             # swallow-ok: best-effort KILL of a keeper that survived the TERM: an exited pid is the outcome sought
             kill -KILL "$_keeper_pid" 2>/dev/null || true

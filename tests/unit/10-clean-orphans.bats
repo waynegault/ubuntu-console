@@ -195,3 +195,49 @@ EOS
     [[ "$output" != *"Stopped unit"* ]]
     [[ "$output" != *"Restarted llama-watchdog.timer"* ]]
 }
+
+# The init is identified by IDENTITY, not by pid 1. On this WSL box a keeper
+# orphaned after a bench is reparented to the relayed /init at pid 18459
+# (argv "/init"), never to pid 1 — so the fallback reaper's old `ppid == 1`
+# test reaped nothing, and 27 keepers survived a completed 27-row sweep
+# (measured 2026-10-20).
+@test "__tac_ppid_is_init: the relayed /init counts, a normal parent does not" {
+    source "$REPO_ROOT/scripts/01-constants.sh"
+
+    run __tac_ppid_is_init 1
+    [ "$status" -eq 0 ]
+    run __tac_ppid_is_init ""
+    [ "$status" -eq 0 ]
+
+    sleep 30 &
+    local _normal_parent=$!
+    run __tac_ppid_is_init "$_normal_parent"
+    [ "$status" -ne 0 ]
+    # swallow-ok: best-effort cleanup of the control parent; an exited pid is the outcome sought
+    kill -TERM "$_normal_parent" 2>/dev/null || true
+
+    bash -c 'exec -a /init sleep 30' &
+    SLEEP_PID=$!
+    local _i
+    for _i in $(seq 1 25); do
+        [[ -r "/proc/$SLEEP_PID/cmdline" ]] && break
+        sleep 0.1
+    done
+    run __tac_ppid_is_init "$SLEEP_PID"
+    [ "$status" -eq 0 ]
+}
+
+# A helper-level case cannot see its call site, and a correct helper nothing
+# calls is the failure mode this repo has been bitten by before. Pin the wiring.
+@test "keeper reaper: __model_stop asks __tac_ppid_is_init, not ppid == 1" {
+    local src
+    src=$(< "$REPO_ROOT/scripts/11e-llm-model.sh")
+    [[ "$src" == *'if __tac_ppid_is_init "$_keeper_ppid"'* ]] || {
+        echo "the fallback reaper must ask __tac_ppid_is_init"
+        return 1
+    }
+    [[ "$src" != *'[[ "$_keeper_ppid" == "1" ]]'* ]] || {
+        echo "the bare ppid == 1 test is the bug: it misses WSL's /init"
+        return 1
+    }
+}
