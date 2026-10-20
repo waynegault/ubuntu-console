@@ -234,7 +234,8 @@ jobs:
                tests/unit/63-ctx-profile-check.bats \
                tests/unit/64-fleet-quiesce.bats \
                tests/unit/65-autotune-keeper.bats \
-               tests/unit/66-autotune-quiet-gate.bats
+               tests/unit/66-autotune-quiet-gate.bats \
+               tests/unit/67-bench-resume.bats
 
       - name: Run integration tests
         run: |
