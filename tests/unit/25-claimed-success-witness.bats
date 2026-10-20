@@ -777,6 +777,33 @@ PY
     (( _call_line < _end_line )) || { echo "the call must be inside __burn_report_result, before it ends"; return 1; }
 }
 
+@test "burn recovery: the caller's attempt counter increments (the nameref is not self-referential)" {
+    # The function's own header states the contract — "The caller's counter is
+    # incremented here."  Catches the 2026-10-20 defect where the nameref local was
+    # named after the caller's variable it referred to, so `local -n x=x` was circular:
+    # bash warned and left it unbound, the first increment died, and one transport
+    # failure in a bench became a FAILED row instead of a recovery.
+    _load_console
+    source "$REPO_ROOT/scripts/11f-llm-runtime.sh"
+    __model_use() { return 0; }
+    __llm_is_healthy() { return 0; }
+    sudo() { return 0; }
+
+    local _burn_recovery_attempt=0
+    __burn_recover_model 7 4096 1 _burn_recovery_attempt
+    (( _burn_recovery_attempt == 1 )) || {
+        echo "the first recovery must increment the caller's counter to 1, got ${_burn_recovery_attempt}"
+        return 1
+    }
+
+    # The second call takes the step-down branch, which reads the same nameref.
+    __burn_recover_model 7 4096 1 _burn_recovery_attempt
+    (( _burn_recovery_attempt == 2 )) || {
+        echo "the second recovery must increment the caller's counter to 2, got ${_burn_recovery_attempt}"
+        return 1
+    }
+}
+
 @test "read-back: __cl_paths_cleared needs the cleared paths to be empty" {
     # The witness for `cl`'s home-directory deletions.  Catches: a path reported
     # [CLEARED] from rm's exit status while entries remain — the "feedback without

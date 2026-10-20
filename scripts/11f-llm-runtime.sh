@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -196,19 +196,23 @@ function __burn_preflight_slot() {
 # ---------------------------------------------------------------------------
 function __burn_recover_model() {
     local _burn_num="$1" _ctx="$2" _retry_health_wait="$3"
-    local -n _burn_recovery_attempt="$4"
+    # The nameref local must NOT be named after the caller's variable it refers to:
+    # `local -n x=x` is a circular nameref, which bash warns about and then leaves
+    # unbound — the recovery path died here on 2026-10-20, turning one transport
+    # failure into a FAILED bench row.
+    local -n _br_attempt_ref="$4"
     printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Restarting active model #${_burn_num} after transport failure..."
     # Clear VRAM before reload to remove ghost allocations from the
     # failed server instance (WSL2 CUDA often holds stale memory).
     sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
-    _burn_recovery_attempt=$(( _burn_recovery_attempt + 1 ))
+    _br_attempt_ref=$(( _br_attempt_ref + 1 ))
     local _burn_saved_ctx="${LLAMA_N_CTX:-${_ctx:-4096}}"
-    if (( _burn_recovery_attempt > 1 )) && [[ -n "${_ctx:-}" ]]
+    if (( _br_attempt_ref > 1 )) && [[ -n "${_ctx:-}" ]]
     then
-        local _burn_reduced_ctx=$(( _ctx / (2 ** (_burn_recovery_attempt - 1)) ))
+        local _burn_reduced_ctx=$(( _ctx / (2 ** (_br_attempt_ref - 1)) ))
         [[ "$_burn_reduced_ctx" -lt 4096 ]] && _burn_reduced_ctx=4096
         export LLAMA_N_CTX="$_burn_reduced_ctx"
-        printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Step-down ctx: ${_ctx} \xe2\x86\x92 ${_burn_reduced_ctx} (attempt ${_burn_recovery_attempt})"
+        printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Step-down ctx: ${_ctx} \xe2\x86\x92 ${_burn_reduced_ctx} (attempt ${_br_attempt_ref})"
     fi
     if __model_use "$_burn_num" >/tmp/burn_transport_recover_use.log 2>&1
     then
