@@ -172,8 +172,13 @@ EOS
 
     run "$SCRIPT" --check
 
-    [[ "$output" == *"No orphan processes or stale files found."* ]]
+    # The criterion is the UNIT, not the host's orphan inventory. This runner is
+    # shared with live benches, and a bench's stdin keepers are legitimately
+    # reported as orphans: measured 2026-10-20, the 27-row sweep's keepers
+    # reddened this case while the tool was right. A foreign keeper must not be
+    # able to decide this test.
     [[ "$output" != *"Stopped unit"* ]]
+    [[ "$output" != *"Restarted llama-watchdog.timer"* ]]
 }
 
 @test "clean-orphans: --force restarts the stopped watchdog a kill left behind" {
