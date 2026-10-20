@@ -332,6 +332,55 @@ STUB
     [ ! -e "$TAC_WSL_RESTART_WRAPPER_UNIX" ]
 }
 
+@test "wsl-restart: --force without --reason is refused, and arms nothing" {
+    # A forced restart cuts the automatic gates, so it must never be anonymous.  Fails
+    # against a version that treats --force as a bare boolean.
+    run "$SCRIPT" --restart --delay 2 --force 2>&1
+    [ "$status" -eq 2 ]
+    printf '%s\n' "$output" | grep -q -- '--force requires --reason'
+    [ ! -e "$ARGV_LOG" ]
+    [ ! -e "$TAC_WSL_RESTART_WRAPPER_UNIX" ]
+}
+
+@test "wsl-restart: --reason without --force is refused (a reason alone changes nothing)" {
+    # The pair is the switch: a reason on a normal restart would be recorded but the
+    # gates would still run, which is a silent misunderstanding of the flag.
+    run "$SCRIPT" --restart --delay 2 --reason "probe" 2>&1
+    [ "$status" -eq 2 ]
+    [ ! -e "$ARGV_LOG" ]
+}
+
+@test "wsl-restart: --force --reason bypasses the two automatic gates and logs the reason" {
+    # Fails against a wrapper that renders the FORCE comment but still runs --precheck
+    # or the fleet drain, and against one that drops the operator gate or the teardown.
+    run "$SCRIPT" --dry-run --force --reason "wedged GPU probe" 2>&1
+    [ "$status" -eq 0 ]
+
+    printf '%s\n' "$output" | grep -qF 'FORCE restart - gates BYPASSED - reason: wedged GPU probe'
+    printf '%s\n' "$output" | grep -q 'set FORCE=1'
+    ! printf '%s\n' "$output" | grep -q -- '--precheck'
+    ! printf '%s\n' "$output" | grep -q -- '--drain'
+    # The human-facing and destructive halves are unchanged.
+    printf '%s\n' "$output" | grep -q '^:operator_cancel'
+    printf '%s\n' "$output" | grep -q 'wsl.exe --shutdown'
+}
+
+@test "wsl-restart: a normal --dry-run keeps both automatic gates and no FORCE flag" {
+    run "$SCRIPT" --dry-run 2>&1
+    [ "$status" -eq 0 ]
+
+    printf '%s\n' "$output" | grep -q -- '--precheck'
+    printf '%s\n' "$output" | grep -q -- '--drain'
+    ! printf '%s\n' "$output" | grep -q 'set FORCE=1'
+}
+
+@test "wsl-restart: --force is refused on a scheduled mode (the reason would be forgotten)" {
+    run "$SCRIPT" --schedule 23:59 --force --reason "probe" 2>&1
+    [ "$status" -eq 2 ]
+    printf '%s\n' "$output" | grep -q -- 'apply to --restart'
+    [ ! -e "$ARGV_LOG" ]
+}
+
 @test "wsl-restart: --restart builds one /create with the task, a one-shot near-future trigger and the Windows wrapper" {
     export QUERY_MODE=registered
     run "$SCRIPT" --restart --delay 2 2>&1

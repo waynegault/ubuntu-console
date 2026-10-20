@@ -77,6 +77,8 @@
 #
 # USAGE
 #   wsl-restart.sh --restart [--folder PATH] [--delay MINUTES]   one-shot restart in N min
+#   wsl-restart.sh --restart --force --reason TEXT [--delay N]    recovery restart: bypass the
+#                                                                chunk and fleet gates (logged)
 #   wsl-restart.sh --schedule HH:MM                              one-shot restart at HH:MM
 #   wsl-restart.sh --schedule daily HH:MM                        recurring (daily) restart
 #   wsl-restart.sh --unschedule                                  remove the task
@@ -90,6 +92,15 @@
 #   exits 0 clear, 1 a chunk is in flight, 2 the check itself failed (which is NOT
 #   a clear).
 #
+# --force IS FOR RECOVERY, NOT CONVENIENCE.  The chunk and fleet gates are automatic
+# and FAIL CLOSED, which is right for a planned restart.  It is wrong when the reason
+# a restart is needed IS one of those conditions - a wedged chunk, or a probe that
+# cannot answer.  --force skips exactly those two gates, REQUIRES a non-empty
+# --reason (a forced restart is never anonymous), records the reason in the wrapper
+# log, and still runs the operator gate and the client relaunch.  It never changes
+# HOW the restart happens: the Windows-side task, the shutdown and the relaunch are
+# identical.
+#
 # THE TASK RUNS ONLY WHILE WAYNE IS LOGGED ON.  Measured 2026-10-15 on a probe
 # task created exactly this way: `Logon Mode: Interactive only`.  That is also what
 # lets the wrapper's relaunch reach the desktop - a task given a background token
@@ -99,7 +110,17 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 24
+#   v24 (2026-10-20): same change-set — the force block pushed render_wrapper past the
+#   §18.3 10.4 hundred-line bound, so the gate renderer moved into
+#   render_chunk_and_fleet_gates (the render_fleet_gate / render_operator_gate convention).
+#   No behaviour change; the count ratchet reads PASS.
+#   v23 (2026-10-20): `--force --reason` — an explicit RECOVERY restart.  The chunk and
+#   fleet gates are automatic and FAIL CLOSED, which is right for a planned restart but
+#   wrong when the reason a restart is needed IS one of those conditions (a wedged chunk,
+#   or a probe that cannot answer).  --force skips exactly those two, requires a non-empty
+#   --reason, records it in the wrapper log, and still runs the operator gate and the
+#   client relaunch; the Windows-side mechanism is unchanged.
 #   v18 (2026-10-18): same change, one line shortened to stay under the 120-column bound (8.1.8).
 #   v17 (2026-10-18): STEP 3a STARTS THE GATEWAY AGAIN, EVEN IF IT WAS DOWN BEFORE THE RESTART.
 #   v16 stopped it before the teardown, which cured the mid-drain kill — but stopping is half the
@@ -414,6 +435,15 @@ _win() {
     timeout "$_bound" "$@"
 }
 
+# --force's reason is embedded in the generated .cmd, where `%`, `"`, `&`, `|`, `<`, `>`
+# and `^` are cmd.exe metacharacters.  Restrict it to an inert alphabet, replace anything
+# else with `_`, and bound it: the reason is a short label, not a second script.
+sanitize_reason() {
+    local _r="$1"
+    _r="${_r//[^A-Za-z0-9 ,._:/()=-]/_}"
+    printf '%.160s' "$_r"
+}
+
 # The WSL-side half of the chunk gate: is a chunk in flight RIGHT NOW?  The wrapper
 # runs this before anything destructive, because a restart cuts a live row in half.
 #   exit 0 = nothing running, safe to restart
@@ -699,12 +729,51 @@ render_fleet_gate() {
         'echo [%DATE% %TIME%] fleet gate clear - proceeding >> "%LOG%"'
 }
 
+# The chunk and fleet gates, rendered together.  --force (v23) skips both, because
+# the reason a recovery restart is needed may be one of them.  Extracted so
+# render_wrapper stays under the §18.3 10.4 hundred-line bound - the same reason
+# render_fleet_gate and render_operator_gate live in their own renderers.
+render_chunk_and_fleet_gates() {
+    local _force="${1:-0}" _reason="${2:-}" _gate_block
+    if [[ "$_force" == "1" ]]; then
+        _gate_block=$(printf '%s\r\n' \
+            'REM FORCE (v23): --force was given with a reason, so the chunk and fleet' \
+            'REM gates are BYPASSED - the reason the restart is needed may BE one of them.' \
+            'set FORCE=1' \
+            "echo [%DATE% %TIME%] FORCE restart - gates BYPASSED - reason: ${_reason} >> \"%LOG%\"" \
+            ':gate_clear' \
+            'echo [%DATE% %TIME%] gates BYPASSED by --force - proceeding >> "%LOG%"')
+    else
+        _gate_block=$(printf '%s\r\n' \
+            'wsl.exe --list --running | findstr /i /c:"ubuntu" >nul 2>&1' \
+            'if errorlevel 1 goto gate_clear' \
+            "wsl.exe -d ${DISTRO} -u wayne -- ${GATE_CMD_UNIX} --precheck >> \"%LOG%\" 2>&1" \
+            'if errorlevel 2 goto gate_unknown' \
+            'if errorlevel 1 goto gate_busy' \
+            'goto gate_clear' \
+            ':gate_busy' \
+            'set GATE=busy' \
+            'echo [%DATE% %TIME%] chunk gate BUSY - restart SKIPPED, distro and client untouched >> "%LOG%"' \
+            'goto final' \
+            ':gate_unknown' \
+            'set GATE=unknown' \
+            'echo [%DATE% %TIME%] WARN: chunk gate could not answer - restart SKIPPED (fail closed) >> "%LOG%"' \
+            'goto final' \
+            ':gate_clear' \
+            'echo [%DATE% %TIME%] chunk gate clear - proceeding >> "%LOG%"')
+    fi
+    printf '%s' "$_gate_block"
+    if [[ "$_force" != "1" ]]; then
+        render_fleet_gate
+    fi
+}
+
 # The wrapper that runs on the Windows side.  CRLF is deliberate: cmd.exe parses a
 # LF-only .cmd unreliably around labels and goto, and this file is full of both.
 # `_mode` is `oneshot` (fired once, deletes its own registration) or `scheduled`
 # (a daily task that must survive its own run).
 render_wrapper() {
-    local _folder="$1" _mode="$2" _delete_line
+    local _folder="$1" _mode="$2" _force="${3:-0}" _reason="${4:-}" _delete_line
     if [[ "$_mode" == "oneshot" ]]; then
         _delete_line="schtasks.exe /delete /f /tn ${TASK_NAME} >> \"%LOG%\" 2>&1"
     else
@@ -726,27 +795,11 @@ render_wrapper() {
         'REM    and wastes its measurement. The check has to run on the WSL side -' \
         'REM    the process table and the boot ledger live there. A distro that is' \
         'REM    NOT running has nothing to cut, so that case proceeds.' \
-        'set GATE=clear' \
-        'wsl.exe --list --running | findstr /i /c:"ubuntu" >nul 2>&1' \
-        'if errorlevel 1 goto gate_clear' \
-        "wsl.exe -d ${DISTRO} -u wayne -- ${GATE_CMD_UNIX} --precheck >> \"%LOG%\" 2>&1" \
-        'if errorlevel 2 goto gate_unknown' \
-        'if errorlevel 1 goto gate_busy' \
-        'goto gate_clear' \
-        ':gate_busy' \
-        'set GATE=busy' \
-        'echo [%DATE% %TIME%] chunk gate BUSY - restart SKIPPED, distro and client untouched >> "%LOG%"' \
-        'goto final' \
-        ':gate_unknown' \
-        'set GATE=unknown' \
-        'echo [%DATE% %TIME%] WARN: chunk gate could not answer - restart SKIPPED (fail closed) >> "%LOG%"' \
-        'goto final' \
-        ':gate_clear' \
-        'echo [%DATE% %TIME%] chunk gate clear - proceeding >> "%LOG%"' \
-    # STEP 0b — the fleet gate (v1.3.0) prints itself: inlined it pushed render_wrapper
-    # past the §18.3 10.4 hundred-line bound, the same reason the operator gate lives in
-    # its own renderer.  The STEP LIST above is what a reader comes here for.
-    render_fleet_gate
+        'set GATE=clear'
+    # The chunk and fleet gates print themselves (render_chunk_and_fleet_gates);
+    # --force (v23) skips both, and the operator gate plus every teardown step
+    # below still run.
+    render_chunk_and_fleet_gates "$_force" "$_reason"
     # The operator gate prints itself (render_operator_gate): keeping it inline pushed
     # this function past the §18.3 10.4 hundred-line bound, and the STEP LIST is what a
     # reader comes here for.
@@ -817,13 +870,13 @@ render_wrapper() {
 # Render the wrapper onto its Windows-side path, or fail loudly - a wrapper that
 # did not reach disk would be reported as armed anyway.
 write_wrapper() {
-    local _folder="$1" _mode="$2" _dest_unix _dest_win
+    local _folder="$1" _mode="$2" _force="${3:-0}" _reason="${4:-}" _dest_unix _dest_win
     if [[ "$_mode" == "scheduled" ]]; then
         _dest_unix="$DAILY_WRAPPER_UNIX"; _dest_win="$DAILY_WRAPPER_WIN"
     else
         _dest_unix="$WRAPPER_UNIX"; _dest_win="$WRAPPER_WIN"
     fi
-    if ! render_wrapper "$_folder" "$_mode" > "$_dest_unix"; then
+    if ! render_wrapper "$_folder" "$_mode" "$_force" "$_reason" > "$_dest_unix"; then
         _say "ERROR: cannot write the wrapper to $_dest_unix"
         return 1
     fi
@@ -966,8 +1019,10 @@ log_caller() {
 
 # Arm the next restart through the TRACKED tool, and read its registration back.
 arm_restart() {
-    local _folder="$1" _delay="$2" _st _sd _create_out
-    log_caller "restart --delay $_delay"
+    local _folder="$1" _delay="$2" _force="${3:-0}" _reason="${4:-}" _st _sd _create_out _arm_desc
+    _arm_desc="restart --delay $_delay"
+    [[ "$_force" == "1" ]] && _arm_desc+=" --force --reason ${_reason}"
+    log_caller "$_arm_desc"
     if ! check_preconditions; then
         return 1
     fi
@@ -980,7 +1035,7 @@ arm_restart() {
             _say "WARN: a $TASK_NAME registration exists and could not be cleared; /f must overwrite it"
         fi
     fi
-    if ! write_wrapper "$_folder" oneshot; then
+    if ! write_wrapper "$_folder" oneshot "$_force" "$_reason"; then
         return 1
     fi
 
@@ -1134,11 +1189,13 @@ validate_seams() {
 # Argument parsing only; --restart is never reached by accident.
 main() {
     local _mode="" _folder="$FOLDER_DEFAULT" _delay="$DELAY_MINUTES_DEFAULT" _time="" _want=""
-    local _recur="once"
+    local _recur="once" _force="0" _reason=""
     validate_seams || return $?
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --restart)    _mode="restart" ;;
+            --force)      _force="1" ;;
+            --reason)     _reason="${2:?--reason needs text}"; shift ;;
             --status)     _mode="status" ;;
             --precheck)   _mode="precheck" ;;
             # Handled during parsing, like --version: the capture is a pure read of VS Code's
@@ -1160,6 +1217,20 @@ main() {
         esac
         shift
     done
+    # --force is a RECOVERY switch, not a convenience one: it skips the two automatic
+    # gates, so it must name why, and it must not be attachable to a scheduled or
+    # unrelated mode where the reason would be forgotten.
+    if [[ "$_force" == "1" || -n "$_reason" ]]; then
+        if [[ "$_mode" != "restart" && "$_mode" != "dry-run" ]]; then
+            _say "ERROR: --force/--reason apply to --restart (or --dry-run for inspection) only"
+            return "$EXIT_USAGE"
+        fi
+        if [[ "$_force" != "1" || -z "$_reason" ]]; then
+            _say "ERROR: --force requires --reason TEXT - a forced restart is never anonymous"
+            return "$EXIT_USAGE"
+        fi
+        _reason=$(sanitize_reason "$_reason")
+    fi
     case "$_mode" in
         restart)
             # A zero-minute delay computes a trigger that has already passed, and
@@ -1167,7 +1238,7 @@ main() {
             # and let the failure be the loud kind rather than a surprise.
             [[ "$_delay" =~ ^[0-9]+$ && "$_delay" -ge 1 ]] ||
                 { _say "ERROR: --delay must be a whole number of minutes, at least 1"; return "$EXIT_USAGE"; }
-            arm_restart "$_folder" "$_delay"
+            arm_restart "$_folder" "$_delay" "$_force" "$_reason"
             ;;
         schedule)   schedule_restart "$_folder" "$_time" "$_recur" ;;
         unschedule) unschedule ;;
@@ -1176,7 +1247,7 @@ main() {
         dry-run)
             # Renders the wrapper to stdout RAW (CRLF intact, so the line endings
             # are inspectable) and touches nothing else - no file, no task.
-            render_wrapper "$_folder" oneshot
+            render_wrapper "$_folder" oneshot "$_force" "$_reason"
             ;;
         *) usage; return "$EXIT_USAGE" ;;
     esac
