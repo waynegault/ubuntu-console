@@ -154,7 +154,11 @@ MOCK
     local service="$REPO_ROOT/systemd/llm-lane-cache-sample.service"
     [[ -f "$timer" ]] || { echo "missing $timer"; return 1; }
     [[ -f "$service" ]] || { echo "missing $service"; return 1; }
-    grep -q '^OnUnitActiveSec=1h' "$timer" || { echo "timer is not hourly"; return 1; }
+    # CALENDAR, not OnBootSec+OnUnitActiveSec: the relative form has no next
+    # elapse when the timer is enabled after boot and the service never ran
+    # (measured 2026-10-21: list-timers printed NEXT `-`).
+    grep -q '^OnCalendar=hourly' "$timer" || { echo "timer is not calendar-hourly"; return 1; }
+    ! grep -q '^OnUnitActiveSec=' "$timer" || { echo "timer kept a relative schedule"; return 1; }
     grep -q '^WantedBy=timers.target' "$timer" || { echo "timer does not install itself"; return 1; }
     grep -q '^ExecStart=%h/.local/bin/llm-lane-cache-sample.sh' "$service" \
         || { echo "service does not run the sampler"; return 1; }

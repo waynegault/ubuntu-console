@@ -14,9 +14,15 @@ Description=Hourly prompt-cache sample for the resident LLM lanes
 # other jobs on this box start, so a sample is not systematically taken during
 # the same contention window every time.
 
+# WHY CALENDAR, NOT OnBootSec+OnUnitActiveSec.  The first version used the
+# gpu-watch-selfcheck shape, which is relative to the service's LAST activation.
+# Enabled after boot+5min had passed and before the service had ever run, it had
+# NO next elapse: `systemctl --user list-timers` printed NEXT `-`, so the hourly
+# series would never have started.  OnCalendar is absolute, so the schedule
+# exists however and whenever the timer is enabled; Persistent=true catches a
+# run missed while the box was down.
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=1h
+OnCalendar=hourly
 RandomizedDelaySec=5m
 Persistent=true
 
