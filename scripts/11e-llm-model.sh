@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 68
+# Module Version: 69
 #   v67 (2026-10-20): __model_stop's fallback keeper reaper asks __tac_ppid_is_init instead
 #   of a bare `ppid == 1`.  On WSL the reparenting target is the relayed /init at pid 18459,
 #   so 27 `sleep 3600` keepers survived a completed 27-row bench and were reaped by hand.
@@ -1486,12 +1486,40 @@ function __model_use_launch_server() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_use_switch_notice <elapsed_s> <swap 0|1>
+# @description State the cost the launch just paid.  A fresh lane paid a load;
+#   a SWAP also discarded the lane's KV state and host prompt cache, so every
+#   cached prefix is gone.  Bench mode prints nothing: its output is parsed.
+# @uses __BENCH_MODE
+# @returns 0 always.
+#
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+# (Nhu Hoang, TDS 2026-10-20) —
+# https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-AFFINITY-001
+# ---------------------------------------------------------------------------
+function __model_use_switch_notice() {
+    [[ -z "${__BENCH_MODE:-}" ]] || return 0
+    local elapsed="${1:-0}" swap="${2:-0}" _msg
+    if [[ "$swap" == "1" ]]
+    then
+        _msg="Swap: loaded in ${elapsed}s; the previous model's cached prefixes are gone"
+        _msg+=" (KV state + host prompt cache discarded)."
+    else
+        _msg="Cold start: loaded in ${elapsed}s; this lane has no cached prefixes yet."
+    fi
+    printf '%s\n' "$_msg"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __model_use_wait_healthy
 # @description Wait for server health check, run bench preflight if needed.
 # @uses size, gpu_layers, name, num, __BENCH_MODE, ACTIVE_LLM_FILE
 # @returns 0 when healthy, 1 on timeout/failure (after cleanup).
 # ---------------------------------------------------------------------------
 function __model_use_wait_healthy() {
+    local _model_swap="${1:-0}"
     local health_timeout
     health_timeout=$(__llm_health_timeout "$size" "$gpu_layers" "$name")
     local _health_elapsed=0
@@ -1571,6 +1599,9 @@ function __model_use_wait_healthy() {
             return 1
         fi
         [[ -n "${__BENCH_MODE:-}" ]] || __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
+        # The ONLINE row says READY; this says what that readiness cost.  The
+        # elapsed value is the health wait's own count, passed in deliberately.
+        __model_use_switch_notice "$_health_elapsed" "$_model_swap"
         local offload_info
         offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
         if [[ -n "$offload_info" ]]
@@ -1605,6 +1636,12 @@ function __model_use() {
     local model_path model_bytes quant_rating llm_backend python_bin
     local smi_cmd free_vram_mb type_k_val use_no_mmap
     local cmd model_shell_pid
+    # Captured BEFORE the launch stops anything.  The predicate is the MODEL-USE
+    # port, not __llm_server_running: that helper scans every llama backend the
+    # user owns, so the five resident lanes would make every `model use` claim a
+    # swap.  A listener on LLM_PORT is the lane this launch is about to replace.
+    local _model_swap=0
+    __test_port "$LLM_PORT" && _model_swap=1
 
     __model_use_resolve_model "$@" || return 1
     __model_use_ensure_downloaded || return 1
@@ -1621,7 +1658,7 @@ function __model_use() {
     # (card CLAIMED-SUCCESS-WITNESS-001): the subshell is already torn down by then,
     # so the wait would report a timeout for a server that was deliberately stopped.
     __model_use_launch_server || return 1
-    __model_use_wait_healthy
+    __model_use_wait_healthy "$_model_swap"
     return $?
 }
 

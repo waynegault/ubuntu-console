@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 37
+# Module Version: 38
 #   v35 (2026-10-21): WSL GPU library resolution moves here from ~/.bashrc.  The two
 #   exports added there on 2026-10-19 (after the Windows driver reinstall) turned the
 #   loader gate red: ~/.bashrc must stay a thin loader.  PATH and LD_LIBRARY_PATH now
@@ -490,6 +490,16 @@ export LLAMA_CACHE_RAM_MB="${LLAMA_CACHE_RAM_MB:-0}"
 # REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
 #      (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
 # CARD: SWITCH-CONSOLE-REUSE-001
+# The per-lane --cache-ram budget is an OPEN decision, not a closed trade-off
+# (SWITCH-CONSOLE-AFFINITY-001 item 3, successor to KVCACHE-PROMPT-CACHE-BUDGET-001).
+# 0 stays the current value: five resident lanes at the 8192 MiB default would reserve
+# ~40 GiB of this ~47 GiB box.  The measured cost is the 2026-10-10 order-controlled
+# BABA A/B (scripts/cache-ram-probe.sh): at 0 a clean switch re-prefills — TTFT
+# 5608 ms vs 251 ms at 8192, prompt_ms 5593 vs 96.  Sizing a per-lane number needs
+# that lane's own probe; no number is sized here and nothing is re-baselined.
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+#      (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-AFFINITY-001
 # Memory-map mode for llama-server launch:
 #   auto (default): enable --no-mmap for MoE / low-VRAM pressure / WSL
 #   on            : always enable --no-mmap

@@ -457,6 +457,58 @@ METRICS
     [[ "$output" != "not-measured" ]]
 }
 
+# ── lane affinity: the switch cost is stated, or bench mode is silent ────────
+# The notice is extracted verbatim and called with explicit arguments, so this
+# can disagree with the shipped text rather than paraphrasing it.
+_switch_notice() {
+    awk '/^function __model_use_switch_notice\(\)/,/^}/' "$LAUNCHER" > "$SANDBOX/switch-notice.sh"
+    grep -q 'cached prefixes' "$SANDBOX/switch-notice.sh" \
+        || { echo "FAIL: switch notice not extracted"; return 1; }
+    cat > "$SANDBOX/switch-harness.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+shift
+__model_use_switch_notice "$@"
+EOS
+    bash "$SANDBOX/switch-harness.sh" "$SANDBOX/switch-notice.sh" "$@"
+}
+
+@test "affinity: a fresh start and a swap name the load time and the cache loss" {
+    run _switch_notice 7 0
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "Cold start: loaded in 7s; this lane has no cached prefixes yet." ]] \
+        || { echo "FAIL: fresh-start notice wrong: $output"; return 1; }
+
+    run _switch_notice 9 1
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "Swap: loaded in 9s; the previous model's cached prefixes are gone (KV state + host prompt cache discarded)." ]] \
+        || { echo "FAIL: swap notice wrong: $output"; return 1; }
+}
+
+@test "affinity: bench mode emits no switch notice" {
+    export __BENCH_MODE=1
+    run _switch_notice 9 1
+    unset __BENCH_MODE
+    [[ "$status" -eq 0 ]]
+    [[ -z "$output" ]] || { echo "FAIL: bench mode printed: $output"; return 1; }
+}
+
+@test "affinity: model use captures the pre-launch state and passes the swap flag" {
+    # The swap bit must be the MODEL-USE port, read BEFORE the launch stops the
+    # old server; __llm_server_running would count the five resident lanes.
+    grep -q '__test_port "$LLM_PORT" && _model_swap=1' "$LAUNCHER" \
+        || { echo "FAIL: swap predicate is not the model-use port"; return 1; }
+    grep -q '__llm_server_running && _model_swap=1' "$LAUNCHER" \
+        && { echo "FAIL: __llm_server_running counts the resident lanes"; return 1; }
+    grep -q '__model_use_wait_healthy "$_model_swap"' "$LAUNCHER" \
+        || { echo "FAIL: swap flag not plumbed into the health wait"; return 1; }
+    grep -q '__model_use_switch_notice "$_health_elapsed" "$_model_swap"' "$LAUNCHER" \
+        || { echo "FAIL: notice not called with the elapsed value and swap flag"; return 1; }
+    # The ONLINE literal is load-bearing for existing greps.
+    grep -q 'ONLINE \[Port \$LLM_PORT\]' "$LAUNCHER" \
+        || { echo "FAIL: the ONLINE [Port literal moved"; return 1; }
+}
+
 # ── the KV-quant eligibility gate ────────────────────────────────────────────
 # The gate is a function, so the decision itself is exercised; the SWEEP's use of
 # it is pinned separately (it lives in a loop that needs a GPU to run).

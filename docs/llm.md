@@ -361,6 +361,36 @@ either historical, the card-less CPU tier, or wrong.
 | **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | not enabled (parked) | parked lane (disabled) |
 | **none (CPU)** | `llama-cpu-qwen25-3b-chat.service` | `llama-cpu-server` | 18084 | `--metrics` → `:18084/metrics` | CPU-only chain tier (no card) |
 
+### Lane affinity — one conversation per lane
+
+The resident lanes are **one model per port, one slot** (`--parallel 1`).  Treat
+each as a session, not as a pool:
+
+- **One conversation (or agent) to one lane.**  A lane's prefix cache only helps
+  the conversation that filled it; interleaving two conversations in one slot
+  evicts the first one's KV and it re-prefills when it returns.
+- **A swap is a cold start for that lane.**  `model use` stops the running
+  server, so the lane's KV state and host prompt cache are discarded and the
+  next request re-processes its prefix.  The launcher now states this at the
+  moment it pays it: `Swap: loaded in Ns; the previous model's cached prefixes
+  are gone`.  A lane that was not serving says `Cold start: loaded in Ns; this
+  lane has no cached prefixes yet.` instead.
+- **Prefer a second lane over swapping a live one when host RAM allows.**  Five
+  resident lanes at llama.cpp's default 8192 MiB prompt cache would reserve
+  ~40 GiB of this box's ~47 GiB, which is why every lane pins `--cache-ram 0`
+  — the number is a host-RAM budget, not a VRAM one.  When a second lane does
+  not fit, say so and swap; do not pretend the swap is free.
+
+**The per-lane `--cache-ram` budget is an OPEN decision, not a closed
+trade-off** (SWITCH-CONSOLE-AFFINITY-001 item 3, successor to
+KVCACHE-PROMPT-CACHE-BUDGET-001).  `0` stays the current value because of the
+arithmetic above.  The measured cost of that choice is recorded, not guessed:
+the order-controlled BABA A/B (`scripts/cache-ram-probe.sh`, 2026-10-10,
+`docs/llm.md` "Reading the cache counters" and the `LLAMA_CACHE_RAM_MB` block in
+`scripts/01-constants.sh`) measured a clean switch re-prefilling at `0` —
+TTFT 5608 ms against 251 ms at 8192 — so a per-lane raise would buy back that
+reuse, but sizing it needs a per-lane probe.  No number is sized here.
+
 ### Reading the cache counters
 
 Every resident lane passes `--metrics` (SWITCH-CONSOLE-METRICS-001), so
