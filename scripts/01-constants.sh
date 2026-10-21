@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-10-21): WSL GPU library resolution moves here from ~/.bashrc.  The two
+#   exports added there on 2026-10-19 (after the Windows driver reinstall) turned the
+#   loader gate red: ~/.bashrc must stay a thin loader.  PATH and LD_LIBRARY_PATH now
+#   prepend /usr/lib/wsl/lib only when that directory exists, deduplicated on re-source.
 #   v34 (2026-10-20): __tac_ppid_is_init() recognises the system init by IDENTITY, not by
 #   pid 1.  On this WSL box the reparenting target is the relayed /init at pid 18459 (argv
 #   "/init", comm "Relay(18460)"), so the keeper reaper's bare `ppid == 1` test missed every
@@ -355,6 +359,25 @@ function __tac_probe_ok() {
 }
 
 export WSL_NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
+
+# ---- WSL GPU library resolution ----
+# The driver libraries are mounted from Windows at /usr/lib/wsl/lib. Prepending that
+# directory to PATH and LD_LIBRARY_PATH is what makes nvidia-smi/NVML resolve after a
+# Windows driver reinstall (measured 2026-10-19: nvidia-smi answered "GPU access blocked
+# by the operating system" until both were prepended). Guarded on the directory's
+# existence so a non-WSL host never prepends a path that is not there, and deduplicated
+# so a re-source cannot grow either variable.
+if [[ -d /usr/lib/wsl/lib ]]
+then
+    if [[ ":$PATH:" != *":/usr/lib/wsl/lib:"* ]]
+    then
+        export PATH="/usr/lib/wsl/lib:$PATH"
+    fi
+    if [[ ":${LD_LIBRARY_PATH:-}:" != *":/usr/lib/wsl/lib:"* ]]
+    then
+        export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+fi
 
 # ---- GitHub Copilot CLI ----
 export COPILOT_CLI_DIR="$HOME/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli"
