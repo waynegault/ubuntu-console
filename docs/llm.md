@@ -444,24 +444,27 @@ but switching that slot to another conversation re-processes the prefix.  The
 rate therefore describes repeat use of one conversation on a lane, not reuse
 shared between the lanes or across slots.
 
-#### Baseline — first sampled readings, 2026-10-21 16:22–16:40 BST
+#### Baseline — sampled readings, 2026-10-21 16:22–17:50 BST
 
 No threshold is set and none is proposed until this table has a week of
 readings.  The first sample (16:22 BST) predated every restart, so all five
-lanes were `not-measured`; that is the correct record, not `0%`.  Two lanes
-were restarted at 16:38 BST and their readings are real — `not-measured` and
-`0/0` are different states and are kept apart.
+lanes were `not-measured`; that record is kept in the git history of this
+section, not restated as a current reading.  The table below is the later
+sample, after each lane had restarted with `--metrics`.  The rate is
+cumulative since the process started, so the window column is what makes it
+comparable; a lane's figure moves as it serves.
 
-| Lane | Port | Sampled reading | Why |
+| Lane | Port | Sampled reading | Window / why |
 |---|---|---|---|
-| `llama-xe-minicpm5-1b-chat` | 18081 | `not-measured` (HTTP 501) | running process predates `--metrics` |
-| `llama-xe-embeddinggemma-embed` | 18080 | `not-measured` (HTTP 401) | the endpoint sits behind the lane's `--api-key-file`, so a keyless probe cannot tell whether `--metrics` is present |
-| `llama-xe-qwen25-3b-chat` | 18085 | `not-measured` (HTTP 501) | running process predates `--metrics` |
-| `llama-cuda-llama32-3b-chat` | 18083 | `0/0 prompt tokens (no requests yet)` since 16:38 BST | restarted with `--metrics`; no prompt served since |
-| `llama-cpu-qwen25-3b-chat` | 18084 | `31/64 prompt tokens (48%)` since 16:38 BST | restarted with `--metrics`; one cold request (32 processed, 0 cached) then one warm repeat (1 processed, 31 cached) |
+| `llama-xe-minicpm5-1b-chat` | 18081 | `0/0 prompt tokens (no requests yet)` | since 16:48 BST; restarted with `--metrics`, nothing served since |
+| `llama-xe-embeddinggemma-embed` | 18080 | `not-measured` (HTTP 401) | the endpoint sits behind the lane's `--api-key-file`, so a keyless probe cannot read it — an embed lane also has no prefix reuse to measure |
+| `llama-xe-qwen25-3b-chat` | 18085 | `22691/30347 prompt tokens (75%)` | since 16:51 BST; the gateway's second Xe lane, so it accumulates traffic |
+| `llama-cuda-llama32-3b-chat` | 18083 | `0/0 prompt tokens (no requests yet)` | since 17:17 BST; restarted after a peer's GPU job released the card |
+| `llama-cpu-qwen25-3b-chat` | 18084 | `460/773 prompt tokens (60%)` | since 16:38 BST; the cold+warm probe pair plus ordinary use |
 
-Once the remaining units restart, the same sample becomes a real `cached/total`
-figure; record it here before proposing a floor.
+`0/0` is a measured value (the lane has served nothing since start);
+`not-measured` is the absence of a reading.  Record a fresh sample here before
+proposing a floor; do not carry these figures forward as if they were a series.
 
 #### `--cache-reuse` — accepted but inert here (measured 2026-10-21)
 
