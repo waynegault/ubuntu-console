@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 67
+# Module Version: 68
 #   v67 (2026-10-20): __model_stop's fallback keeper reaper asks __tac_ppid_is_init instead
 #   of a bare `ppid == 1`.  On WSL the reparenting target is the relayed /init at pid 18459,
 #   so 27 `sleep 3600` keepers survived a completed 27-row bench and were reaped by hand.
@@ -1209,6 +1209,17 @@ function __model_use_build_command() {
                 cache_ram_mb=0
             fi
             cmd+=("--cache-ram" "$cache_ram_mb")
+            # --metrics (SWITCH-CONSOLE-METRICS-001): llama.cpp's Prometheus
+            # endpoint, served by the SAME listener as the model API.  The argv
+            # above binds --host 127.0.0.1, so /metrics is loopback-only and
+            # never a wider interface.  SERVE ONLY, inside the same __BENCH_MODE
+            # guard as --cache-ram: a validation bench reproduces the CERTIFIED
+            # argv, which carries no --metrics either.
+            # REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs
+            # More" (Nhu Hoang, TDS 2026-10-20) —
+            # https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+            # CARD: SWITCH-CONSOLE-METRICS-001
+            cmd+=("--metrics")
         fi
         # Speculative decoding (SPEC-DEC-004): verified llama.cpp flags from
         # the registry row / env overrides; empty when disabled.  CPU draft
@@ -3646,6 +3657,7 @@ bench-compare|bench-latest|bench-history|delete|archive|download|register-traine
     echo "  use N [--ctx-size N] - Start model #N with optimal settings"
     echo "  stop       - Stop llama-server"
     echo "  status     - Show what's running (--json|--plain supported)"
+    echo "  lanes      - Per-lane prompt-cache hit rate (metadata surfaced by --metrics)"
     echo "  doctor     - Validate registry/default/GPU/watchdog/ports"
     echo "  recommend  - Rank scanned models for a 4GB VRAM system"
     echo "  info N     - Detailed info for model #N"
@@ -3724,6 +3736,13 @@ function model() {
 
         status)
             __model_status "${1:-}"
+            ;;
+
+        lanes)
+            # SWITCH-CONSOLE-METRICS-001: the lane-health surface for the two
+            # Prometheus counters the resident lanes now expose.  Lives in the
+            # telemetry module because it reads the endpoint, not the registry.
+            __llm_lanes_report
             ;;
 
         doctor)

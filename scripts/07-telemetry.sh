@@ -2,7 +2,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -452,6 +452,117 @@ function __get_llm_slots() {
     ) &>/dev/null & } 2>/dev/null
     __tac_track_bg_job "$!"
     [[ -f "$cache" ]] && cat "$cache"
+}
+
+# ---------------------------------------------------------------------------
+# Prompt-cache counters (SWITCH-CONSOLE-METRICS-001)
+#
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+# (Nhu Hoang, TDS 2026-10-20) —
+# https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-METRICS-001
+#
+# llama-server --metrics serves Prometheus text on the SAME loopback listener as
+# the model API, never a wider bind.  Two CUMULATIVE counters answer "how much of
+# the prompt did the prefix cache save":
+#
+#   llamacpp:prompt_tokens_cached_total   reused from the cache
+#   llamacpp:prompt_tokens_total          processed, EXCLUDING cached tokens
+#
+# The second one's own HELP line says "excluding cached tokens", so the number
+# queried is their SUM.  A rate computed as cached/prompt_tokens_total would
+# exceed 100% on a cache-heavy lane.  --cache-ram 0 means only a slot's own
+# prefix can be reused, which is what these counters then measure.
+#
+# An absent endpoint (--metrics not yet live on a running process), a refused
+# connection, or a body missing either counter is `not-measured` — NEVER 0.  A
+# measured 0/0 is a different state (the lane has served no prompt yet) and says
+# so; conflating the two hides exactly the regression this card exists to expose.
+#
+# The window is named, not implied: these are cumulative since the server
+# started, so the label comes from the unit's ActiveEnterTimestamp, not from a
+# sample interval.
+# ---------------------------------------------------------------------------
+
+# __llm_prompt_cache_read <port> → "<cached> <processed>" or rc 1.
+# Bounded: a dead or wedged lane must not stall a status render.
+function __llm_prompt_cache_read() {
+    local port="${1:-}" body cached processed
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    # swallow-ok: curl's stderr is the transport error and rc 1 renders as not-measured
+    body=$(curl -sf --max-time 2 "http://127.0.0.1:${port}/metrics" 2>/dev/null) || return 1
+    cached=$(printf '%s\n' "$body" | awk '$1 == "llamacpp:prompt_tokens_cached_total" {print $2; exit}')
+    processed=$(printf '%s\n' "$body" | awk '$1 == "llamacpp:prompt_tokens_total" {print $2; exit}')
+    # Prometheus renders these doubles, so a count past six significant digits
+    # arrives as `1.234e+06`.  Accept that shape rather than reporting a large
+    # lane as unmeasured.
+    [[ "$cached" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]] || return 1
+    [[ "$processed" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]] || return 1
+    printf '%s %s\n' "$cached" "$processed"
+}
+
+# __llm_lane_since <unit> → "since <local timestamp> (server start)".
+# The counters reset when the process starts, so the window is the unit's start.
+function __llm_lane_since() {
+    local unit="${1:-}" ts _since
+    if [[ -n "$unit" ]]
+    then
+        # swallow-ok: a missing unit leaves the window label "start time unavailable"
+        ts=$(systemctl --user show "$unit" -p ActiveEnterTimestamp --value 2>/dev/null) || ts=""
+        if [[ -n "$ts" ]]
+        then
+            # swallow-ok: an unparseable timestamp falls back to systemd's own text
+            _since=$(date -d "$ts" '+%Y-%m-%d %H:%M %Z' 2>/dev/null) || _since="$ts"
+            printf 'since %s (server start)\n' "$_since"
+            return 0
+        fi
+    fi
+    printf 'since server start (start time unavailable)\n'
+}
+
+# __llm_prompt_cache_rate <port> [unit] → one line, or `not-measured`.
+function __llm_prompt_cache_rate() {
+    local port="${1:-}" unit="${2:-}" pair cached processed total pct
+    if ! pair=$(__llm_prompt_cache_read "$port")
+    then
+        printf 'not-measured\n'
+        return 0
+    fi
+    read -r cached processed <<< "$pair"
+    cached=$(awk -v v="$cached" 'BEGIN { printf "%.0f", v }')
+    processed=$(awk -v v="$processed" 'BEGIN { printf "%.0f", v }')
+    total=$(( cached + processed ))
+    if (( total == 0 ))
+    then
+        printf '0/0 prompt tokens (no requests yet) %s\n' "$(__llm_lane_since "$unit")"
+        return 0
+    fi
+    pct=$(awk -v c="$cached" -v t="$total" 'BEGIN { printf "%.0f", 100 * c / t }')
+    printf '%s/%s prompt tokens (%s%%) %s\n' \
+        "$cached" "$total" "$pct" "$(__llm_lane_since "$unit")"
+}
+
+# __llm_lanes_report — one row per resident lane.  This is the lane-health
+# surface `model lanes` prints: state, then the prompt-cache rate with its
+# window.  A lane that is not active is `not-measured` and names the state,
+# because "down" and "serving with a cold cache" are different facts.
+function __llm_lanes_report() {
+    local unit port state rate
+    printf '%-40s %-6s %-10s %s\n' "LANE" "PORT" "STATE" "PROMPT CACHE"
+    while IFS='|' read -r unit port
+    do
+        [[ -n "$unit" ]] || continue
+        # swallow-ok: is-active exits 3 for an inactive unit; "unknown" is a named state
+        state=$(systemctl --user is-active "$unit" 2>/dev/null) || state="unknown"
+        state="${state:-unknown}"
+        if [[ "$state" == "active" ]]
+        then
+            rate=$(__llm_prompt_cache_rate "$port" "$unit")
+        else
+            rate="not-measured (unit ${state})"
+        fi
+        printf '%-40s %-6s %-10s %s\n' "${unit%.service}" "$port" "$state" "$rate"
+    done <<< "${LLAMA_LANE_SPECS:-}"
 }
 
 

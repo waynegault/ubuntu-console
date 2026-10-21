@@ -19,6 +19,11 @@
 #      classifies that reason once (with gpu-passthrough-check.sh --json) and logs
 #      which of the two situations it is — and does not re-probe a broken GPU on
 #      every tick.
+#   4. Every resident lane passes `--metrics` (SWITCH-CONSOLE-METRICS-001), the
+#      serve arm emits it while the bench arm does not, and the reader reports
+#      `not-measured` for an absent endpoint or a body without the counters —
+#      never a 0 that would read as a cold cache.  `prompt_tokens_total` EXCLUDES
+#      cached tokens, so the queried total is the sum of the two counters.
 #
 # Hermetic: nothing here touches the live box.  The launcher test extracts the
 # argv-assembly function and runs it against a stub helper; the watchdog tests run
@@ -30,6 +35,7 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 LAUNCHER="$REPO_ROOT/scripts/11e-llm-model.sh"
 AUTOTUNE="$REPO_ROOT/scripts/autotune-model.sh"
 CONSTANTS="$REPO_ROOT/scripts/01-constants.sh"
+TELEMETRY="$REPO_ROOT/scripts/07-telemetry.sh"
 ENV_SH="$REPO_ROOT/env.sh"
 UNIT_DIR="$REPO_ROOT/systemd"
 WATCHDOG="$REPO_ROOT/bin/llama-watchdog.sh"
@@ -77,6 +83,13 @@ set -uo pipefail
 op="${1:-}"; shift || true
 case "$op" in
     show)
+        # ActiveEnterTimestamp is the metric reader's window label; the watchdog
+        # cases only ask for state, so the fixture is opt-in.
+        if [[ "$*" == *"ActiveEnterTimestamp"* ]]
+        then
+            cat "$MOCK_STATE/active_enter" 2>/dev/null || echo ""
+            exit 0
+        fi
         unit="${1:-}"
         case "$unit" in
             *cuda*)      cat "$MOCK_STATE/cuda_state" 2>/dev/null || echo "inactive" ;;
@@ -95,9 +108,16 @@ MOCK
 
     cat > "$MOCK_BIN/curl" <<'MOCK'
 #!/usr/bin/env bash
-# /health unreachable (exit 22) unless the marker exists; /props empty.  The lanes
-# under test are either activating (skipped) or the CUDA lane on a busy GPU, whose
-# branch never consults health — so this mock only has to be non-zero.
+# /metrics serves the fixture body when one exists; absent means "endpoint not
+# there" (exit 7), which the reader must render as not-measured.  /props empty and
+# /health unreachable: the lanes under test are either activating (skipped) or the
+# CUDA lane on a busy GPU, whose branch never consults health.
+if [[ "$*" == *"/metrics"* ]]
+then
+    [[ -f "$MOCK_STATE/metrics_body" ]] || exit 7
+    cat "$MOCK_STATE/metrics_body"
+    exit 0
+fi
 if [[ "$*" == *"/props"* ]]
 then
     echo '{}'
@@ -181,6 +201,29 @@ __model_use_build_command || { echo "FAIL: builder returned non-zero"; exit 1; }
 printf '%s\n' "${cmd[@]}"
 EOS
     bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench"
+}
+
+# ── the prompt-cache reader ──────────────────────────────────────────────────
+# The three reader functions are extracted VERBATIM from the telemetry module and
+# run behind the suite's curl/systemctl stubs, so the assertions are about shipped
+# text, not a paraphrase.  Arg 1 is the port; arg 2 is the unit whose
+# ActiveEnterTimestamp names the window (omit it to get the "unavailable" label).
+_cached_rate() {
+    local port="$1" unit="${2:-}"
+    {
+        awk '/^function __llm_prompt_cache_read\(\)/,/^}/' "$TELEMETRY"
+        awk '/^function __llm_lane_since\(\)/,/^}/' "$TELEMETRY"
+        awk '/^function __llm_prompt_cache_rate\(\)/,/^}/' "$TELEMETRY"
+    } > "$SANDBOX/cache-reader.sh"
+    grep -q '__llm_prompt_cache_rate' "$SANDBOX/cache-reader.sh" \
+        || { echo "FAIL: cache reader not extracted"; return 1; }
+
+    cat > "$SANDBOX/cache-harness.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+__llm_prompt_cache_rate "$2" "${3:-}"
+EOS
+    bash "$SANDBOX/cache-harness.sh" "$SANDBOX/cache-reader.sh" "$port" "$unit"
 }
 
 @test "prompt-cache: the launcher emits --cache-ram, and never --slot-save-path" {
@@ -289,6 +332,129 @@ EOS
             && { echo "FAIL: ${u##*/} sets --slot-save-path (the decision is never)"; status=1; }
     done
     [[ "$status" -eq 0 ]] || return 1
+}
+
+# ── --metrics and the prompt-cache reader (SWITCH-CONSOLE-METRICS-001) ───────
+# The five resident lanes are a literal here on purpose: the card names them,
+# and the constants table is asserted to AGREE with this list, so neither side
+# can drift silently.  The counters are the serving stack's own evidence that a
+# prefix-cache regression happened; a reader that printed 0 for an unreadable
+# endpoint would hide exactly that.
+_LANE_SPECS='llama-xe-minicpm5-1b-chat.service|18081
+llama-xe-embeddinggemma-embed.service|18080
+llama-xe-qwen25-3b-chat.service|18085
+llama-cuda-llama32-3b-chat.service|18083
+llama-cpu-qwen25-3b-chat.service|18084'
+
+@test "metrics: every resident lane unit passes --metrics on its loopback listener" {
+    local spec unit port u exec_line count status=0
+    while IFS= read -r spec
+    do
+        unit="${spec%%|*}"; port="${spec##*|}"
+        u="$UNIT_DIR/$unit"
+        if [[ ! -f "$u" ]]; then echo "FAIL: $u is missing"; status=1; continue; fi
+        exec_line=$(sed -nE 's/^ExecStart=//p' "$u")
+        # Exactly one: a duplicated flag is a load-time failure, not a harmless copy.
+        count=$(grep -o -- '--metrics' <<< "$exec_line" | wc -l | tr -d ' ')
+        [[ "$count" -eq 1 ]] \
+            || { echo "FAIL: ${unit} carries --metrics ${count} times"; status=1; }
+        [[ "$exec_line" == *"--port ${port}"* ]] \
+            || { echo "FAIL: ${unit} no longer serves :${port}"; status=1; }
+        [[ "$exec_line" == *"--host 127.0.0.1"* ]] \
+            || { echo "FAIL: ${unit} is not loopback-bound"; status=1; }
+        grep -q 'SWITCH-CONSOLE-METRICS-001' "$u" \
+            || { echo "FAIL: ${unit} lacks the card comment"; status=1; }
+        grep -q 'REF: "The Hidden Cost of LLM Routing' "$u" \
+            || { echo "FAIL: ${unit} lacks the source reference"; status=1; }
+    done <<< "$_LANE_SPECS"
+    [[ "$status" -eq 0 ]] || return 1
+}
+
+@test "metrics: the constants lane table is the same five units and ports as the units" {
+    # `model lanes` iterates LLAMA_LANE_SPECS.  If it drifted it would either drop
+    # a lane from the report or query a port nobody serves — both silent.
+    local table
+    table=$(awk '/^export LLAMA_LANE_SPECS="/ { f=1; sub(/^export LLAMA_LANE_SPECS="/, "") }
+                 f { if (sub(/"$/, "")) { print; exit } print }' "$CONSTANTS")
+    [[ -n "$table" ]] || { echo "FAIL: 01-constants declares no LLAMA_LANE_SPECS"; return 1; }
+    [[ "$(printf '%s\n' "$table" | sort)" == "$(printf '%s\n' "$_LANE_SPECS" | sort)" ]] \
+        || { echo "the lane table and the units disagree:"; diff \
+             <(printf '%s\n' "$_LANE_SPECS" | sort) <(printf '%s\n' "$table" | sort); return 1; }
+}
+
+@test "metrics: the serve arm emits --metrics and the bench arm does not" {
+    run _build_argv
+    [[ "$status" -eq 0 ]]
+    [[ "$(printf '%s\n' "$output" | grep -c -x -- '--metrics')" -eq 1 ]] \
+        || { echo "FAIL: the serve argv does not carry exactly one --metrics:"; printf '%s\n' "$output"; return 1; }
+
+    # The bench argv is a certified measurement contract; it must keep reproducing
+    # the argv the autotune certifies, which has no --metrics.
+    run _build_argv "" bench
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"--metrics"* ]] \
+        || { echo "FAIL: the bench argv gained --metrics; the certified argv moved"; return 1; }
+}
+
+@test "metrics: the reader parses an exposition body into cached/total prompt tokens" {
+    cat > "$MOCK_STATE/metrics_body" <<'METRICS'
+# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed, excluding cached tokens
+# TYPE llamacpp:prompt_tokens_total counter
+llamacpp:prompt_tokens_total 300
+# HELP llamacpp:prompt_tokens_cached_total Number of prompt tokens reused from the cache
+# TYPE llamacpp:prompt_tokens_cached_total counter
+llamacpp:prompt_tokens_cached_total 700
+METRICS
+    printf '%s\n' "Wed 2026-10-21 10:00:00 BST" > "$MOCK_STATE/active_enter"
+
+    run _cached_rate 18081 llama-xe-minicpm5-1b-chat.service
+    [[ "$status" -eq 0 ]]
+    # prompt_tokens_total EXCLUDES cached tokens (its own HELP line says so), so the
+    # queried total is 700 + 300, and the rate is 70% — not 233%.
+    [[ "$output" == "700/1000 prompt tokens (70%) since 2026-10-21 10:00 BST (server start)" ]] \
+        || { echo "FAIL: unexpected reading: $output"; return 1; }
+}
+
+@test "metrics: a counter rendered in scientific notation is still measured" {
+    # Prometheus renders these as doubles, so a six-figure count arrives as 1.2e+06.
+    printf 'llamacpp:prompt_tokens_total 1.2e+06\nllamacpp:prompt_tokens_cached_total 3e+05\n' \
+        > "$MOCK_STATE/metrics_body"
+
+    run _cached_rate 18081
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "300000/1500000 prompt tokens (20%) since server start (start time unavailable)" ]] \
+        || { echo "FAIL: scientific-notation counters misread: $output"; return 1; }
+}
+
+@test "metrics: an absent endpoint is not-measured, never 0" {
+    rm -f "$MOCK_STATE/metrics_body"
+
+    run _cached_rate 18081
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "not-measured" ]]
+    [[ "$output" != *"0/"* ]]
+}
+
+@test "metrics: a body without the counters is not-measured, never 0" {
+    # A 200 from a build without --metrics, or any other body: the absence of both
+    # counters is not evidence of a cold cache.
+    printf '# HELP llamacpp:requests_processing Requests processing\nllamacpp:requests_processing 0\n' \
+        > "$MOCK_STATE/metrics_body"
+
+    run _cached_rate 18081
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "not-measured" ]]
+}
+
+@test "metrics: a measured 0/0 is a different state from not-measured" {
+    printf 'llamacpp:prompt_tokens_total 0\nllamacpp:prompt_tokens_cached_total 0\n' \
+        > "$MOCK_STATE/metrics_body"
+
+    run _cached_rate 18081
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "0/0 prompt tokens (no requests yet)"* ]] \
+        || { echo "FAIL: a measured zero was not reported as such: $output"; return 1; }
+    [[ "$output" != "not-measured" ]]
 }
 
 # ── the KV-quant eligibility gate ────────────────────────────────────────────

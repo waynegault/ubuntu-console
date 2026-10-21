@@ -123,6 +123,7 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 | `model use N` | Start model #N with `--n-gpu-layers` from the resolved GPU-layer count (`999` = full offload, `0` = CPU-only; MoE stores its total layer count; baseline `LLAMA_GPU_LAYERS=24`), clamped for large models on 4 GB VRAM by the quant rating, dynamic threads, `--flash-attn on`, `--jinja`, `--kv-offload`. Batch sizes come per row from the registry (values and fallbacks in the flag table above). Reports actual GPU offload count after boot. Uses shared adaptive health polling. |
 | `model stop` | `pkill` the llama-server process, remove state file |
 | `model status` | Show currently running model details. Supports `--json` and `--plain`. |
+| `model lanes` | Per-lane health with the prompt-cache hit rate (cached/total prompt tokens) and the window it covers. Reads each lane's `:PORT/metrics` endpoint; a lane whose endpoint is absent or unreadable prints `not-measured`, never 0. |
 | `model doctor` | Validate registry integrity, default model wiring, GPU visibility, watchdog state, and local ports |
 | `model recommend` | Rank scanned models for a 4 GB VRAM system using quant, size, architecture, and saved TPS |
 | `model info N` | Display full details for model #N including on-disk status and `quant_rating` |
@@ -351,14 +352,86 @@ other: the Xe card keeps serving while the CUDA card is cleared, and vice versa.
 are card-first as of 2026-09-15, so a name that does not say `cuda` or `xe` is
 either historical, the card-less CPU tier, or wrong.
 
-| Card | Unit | Launcher | Port | Notes |
-|---|---|---|---|---|
-| **Xe** | `llama-xe-minicpm5-1b-chat.service` | `llama-xe-server` | 18081 | the fleet server |
-| **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | embeddings (`--embedding`) |
-| **Xe** | `llama-xe-qwen25-3b-chat.service` | `llama-xe-server` | 18085 | second Xe lane (**Llama-3.2-3B** chat — the `qwen25-3b` in the unit name is a legacy lane key, see below) |
-| **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | the enabled CUDA lane |
-| **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | parked lane (disabled) |
-| **none (CPU)** | `llama-cpu-qwen25-3b-chat.service` | `llama-cpu-server` | 18084 | CPU-only chain tier (no card) |
+| Card | Unit | Launcher | Port | Metrics | Notes |
+|---|---|---|---|---|---|
+| **Xe** | `llama-xe-minicpm5-1b-chat.service` | `llama-xe-server` | 18081 | `--metrics` → `:18081/metrics` | the fleet server |
+| **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | `--metrics` → `:18080/metrics` | embeddings (`--embedding`; endpoint needs the lane's `--api-key-file`) |
+| **Xe** | `llama-xe-qwen25-3b-chat.service` | `llama-xe-server` | 18085 | `--metrics` → `:18085/metrics` | second Xe lane (**Llama-3.2-3B** chat — the `qwen25-3b` in the unit name is a legacy lane key, see below) |
+| **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | `--metrics` → `:18083/metrics` | the enabled CUDA lane |
+| **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | not enabled (parked) | parked lane (disabled) |
+| **none (CPU)** | `llama-cpu-qwen25-3b-chat.service` | `llama-cpu-server` | 18084 | `--metrics` → `:18084/metrics` | CPU-only chain tier (no card) |
+
+### Reading the cache counters
+
+Every resident lane passes `--metrics` (SWITCH-CONSOLE-METRICS-001), so
+llama.cpp serves a Prometheus exposition at `http://127.0.0.1:<port>/metrics`
+on the **same loopback listener as the model API**.  It is not a wider bind:
+each unit's `--host 127.0.0.1` is the only listener, so the endpoint is
+reachable from this box and nowhere else.  A process that predates the flag
+answers `501` until its unit is next restarted.
+
+`model lanes` prints one row per resident lane: systemd state, then the
+prompt-cache rate with the window it covers.
+
+```text
+$ model lanes
+LANE                                     PORT   STATE      PROMPT CACHE
+llama-xe-minicpm5-1b-chat                18081  active     not-measured
+...
+```
+
+The two counters are **cumulative** and reset when the process starts:
+
+| Counter | Meaning |
+|---|---|
+| `llamacpp:prompt_tokens_cached_total` | prompt tokens reused from the cache |
+| `llamacpp:prompt_tokens_total` | prompt tokens processed, **excluding** cached tokens |
+
+The second counter's own `# HELP` line says "excluding cached tokens", so the
+number of prompt tokens queried is their **sum**, and the hit rate is:
+
+```text
+rate = cached / (cached + processed)
+```
+
+Dividing by `prompt_tokens_total` alone would exceed 100% on a cache-heavy
+lane.  Compute it by hand with:
+
+```bash
+curl -s --max-time 2 http://127.0.0.1:18081/metrics | grep '^llamacpp:prompt_tokens'
+```
+
+`not-measured` is not zero.  It means the endpoint refused the connection,
+returned a non-200 status (e.g. `501` while `--metrics` is absent from the
+running argv), or the body carried no such counters.  A measured `0/0` means
+the lane has served no prompt since it started, and the row says so; the two
+states are kept distinct because a silently missing counter is exactly the
+regression this endpoint is here to expose.
+
+`--cache-ram 0` (KVCACHE-CONSOLE-PROMPT-CACHE-001) means only **intra-slot**
+reuse can be counted: a slot keeps its own prefix across consecutive turns,
+but switching that slot to another conversation re-processes the prefix.  The
+rate therefore describes repeat use of one conversation on a lane, not reuse
+shared between the lanes or across slots.
+
+#### Baseline — first sampled readings, 2026-10-21 16:22–16:40 BST
+
+No threshold is set and none is proposed until this table has a week of
+readings.  The first sample (16:22 BST) predated every restart, so all five
+lanes were `not-measured`; that is the correct record, not `0%`.  Two lanes
+were restarted at 16:38 BST and their readings are real — `not-measured` and
+`0/0` are different states and are kept apart.
+
+| Lane | Port | Sampled reading | Why |
+|---|---|---|---|
+| `llama-xe-minicpm5-1b-chat` | 18081 | `not-measured` (HTTP 501) | running process predates `--metrics` |
+| `llama-xe-embeddinggemma-embed` | 18080 | `not-measured` (HTTP 401) | the endpoint sits behind the lane's `--api-key-file`, so a keyless probe cannot tell whether `--metrics` is present |
+| `llama-xe-qwen25-3b-chat` | 18085 | `not-measured` (HTTP 501) | running process predates `--metrics` |
+| `llama-cuda-llama32-3b-chat` | 18083 | `0/0 prompt tokens (no requests yet)` since 16:38 BST | restarted with `--metrics`; no prompt served since |
+| `llama-cpu-qwen25-3b-chat` | 18084 | `31/64 prompt tokens (48%)` since 16:38 BST | restarted with `--metrics`; one cold request (32 processed, 0 cached) then one warm repeat (1 processed, 31 cached) |
+
+Once the remaining units restart, the same sample becomes a real `cached/total`
+figure; record it here before proposing a floor.
 
 **Unit names are lane keys, not weight claims (drift fixed 2026-10-21).**  The
 :18085 unit is still called `llama-xe-qwen25-3b-chat` because the watchdog, two

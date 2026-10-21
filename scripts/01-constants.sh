@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 35
+# Module Version: 36
 #   v35 (2026-10-21): WSL GPU library resolution moves here from ~/.bashrc.  The two
 #   exports added there on 2026-10-19 (after the Windows driver reinstall) turned the
 #   loader gate red: ~/.bashrc must stay a thin loader.  PATH and LD_LIBRARY_PATH now
@@ -391,6 +391,16 @@ export LLM_PORT=8081
 # port (gateway baseUrl: http://127.0.0.1:18081/v1). 'so' treats a healthy
 # server here as "LLM running" instead of loading a duplicate on LLM_PORT.
 export LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
+# The five resident lanes, as unit|port.  `model lanes` reads each one's
+# Prometheus counters (SWITCH-CONSOLE-METRICS-001); tests/unit/23-*.bats pins
+# this list and every port against the units' own ExecStart lines, so a lane
+# rename or port move that forgets this table fails the suite rather than
+# silently dropping a lane from the report.
+export LLAMA_LANE_SPECS="llama-xe-minicpm5-1b-chat.service|18081
+llama-xe-embeddinggemma-embed.service|18080
+llama-xe-qwen25-3b-chat.service|18085
+llama-cuda-llama32-3b-chat.service|18083
+llama-cpu-qwen25-3b-chat.service|18084"
 export OC_PORT=18789
 export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 

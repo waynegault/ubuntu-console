@@ -18,7 +18,14 @@ Environment=GGML_OPENCL_DEVICE=0
 # scripts/01-constants.sh (LLAMA_CACHE_RAM_MB); tests/unit/23-*.bats pins this
 # literal to that default.  An embed lane reuses no prefix, so 0 costs nothing
 # here — it is set for consistency, so no lane advertises an unbudgeted cache.
-ExecStart=%h/.local/bin/llama-xe-server -m %h/.node-llama-cpp/models/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf --embedding --port 18080 --host 127.0.0.1 --ctx-size 2048 --batch-size 2048 --ubatch-size 2048 --n-gpu-layers 99 --cache-ram 0 --alias embeddinggemma --api-key-file %h/.config/llama/embed-api-keys.txt
+# --metrics (SWITCH-CONSOLE-METRICS-001): serves llama.cpp's Prometheus counters on
+# the SAME listener as the model API.  --host 127.0.0.1 above is the only bind, so
+# /metrics is loopback-only — never a wider interface.  The endpoint sits behind the
+# same --api-key-file as the model API.
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+# (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-METRICS-001
+ExecStart=%h/.local/bin/llama-xe-server -m %h/.node-llama-cpp/models/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf --embedding --port 18080 --host 127.0.0.1 --ctx-size 2048 --batch-size 2048 --ubatch-size 2048 --n-gpu-layers 99 --cache-ram 0 --alias embeddinggemma --api-key-file %h/.config/llama/embed-api-keys.txt --metrics
 # always + the cgroup caps below came from drop-ins on the OLD name
 # (llama-embed-server.service.d/{restart-always.conf,memory.conf}), folded in so
 # the effective config is one reviewable file per unit.

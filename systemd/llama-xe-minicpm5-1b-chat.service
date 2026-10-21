@@ -33,7 +33,13 @@ Environment=GGML_OPENCL_DEVICE=0
 # it waits on investigator card KVCACHE-PROMPT-CACHE-BUDGET-001 item 1 and lives
 # in scripts/01-constants.sh (LLAMA_CACHE_RAM_MB).  Tests/unit/23-*.bats pins this
 # literal to that default, so a change must land in both.
-ExecStart=%h/.local/bin/llama-xe-server -m /mnt/m/active/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-F16.gguf --port 18081 --host 127.0.0.1 --ctx-size 65536 --batch-size 512 --ubatch-size 512 --threads 8 --n-gpu-layers 99 --parallel 1 --cache-ram 0 --fit off --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --jinja --reasoning off
+# --metrics (SWITCH-CONSOLE-METRICS-001): serves llama.cpp's Prometheus counters on
+# the SAME listener as the model API.  --host 127.0.0.1 above is the only bind, so
+# /metrics is loopback-only — never a wider interface.
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+# (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-METRICS-001
+ExecStart=%h/.local/bin/llama-xe-server -m /mnt/m/active/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-F16.gguf --port 18081 --host 127.0.0.1 --ctx-size 65536 --batch-size 512 --ubatch-size 512 --threads 8 --n-gpu-layers 99 --parallel 1 --cache-ram 0 --fit off --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --jinja --reasoning off --metrics
 # always, not on-failure: the fleet server is expected to be up; this matches the
 # drop-in that was in force before the rename.
 Restart=always
