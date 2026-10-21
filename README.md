@@ -1236,7 +1236,7 @@ where it was last present.)
     ├── llama-watchdog-guard.timer     #   Runs that guard every 5 minutes
     ├── llama-watchdog-guard.README.md #   Why the guard exists (not a unit)
     ├── llama-xe-minicpm5-1b-chat.service        # Xe, MiniCPM5-1B, chat (18081)
-    ├── llama-xe-qwen25-3b-chat.service          # Xe, Qwen2.5-3B, chat (18085)
+    ├── llama-xe-qwen25-3b-chat.service          # Xe, Llama-3.2-3B, chat (18085; unit name is a legacy lane key)
     ├── llama-xe-embeddinggemma-embed.service    # Xe, embeddinggemma-300m, embed (18080)
     ├── llama-cuda-llama32-3b-chat.service       # CUDA, Llama-3.2-3B, chat (18083)
     ├── llama-cuda-qwen35-4b-pipeline.service    # CUDA, Qwen3.5-4B, investigator pipeline (8081)
