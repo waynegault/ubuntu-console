@@ -517,6 +517,18 @@ No lane passes it.  `embeddinggemma` (:18080) refuses it outright:
 Evidence: `logs/cache-reuse-probe/result-20261021T155345Z.json`; re-run with
 `scripts/cache-ram-probe.sh --row 7 --axis reuse --order BABA --port 18082`.
 
+The verdict is **device-scoped**: it was measured on the CUDA card, with registry
+row 7's argv (ctx 36864, a CUDA certification), and it says nothing about the Xe
+lanes. An iGPU lane's window is never justified by a `models.conf` figure.
+
+**iGPU lane ctx is measured on the iGPU, never inherited from the registry.**  The
+`ctx` column in `~/.llm/models.conf` (row 7 reads 36864 for Llama-3.2-3B) is an autotune
+certification taken on the **CUDA** card.  The Xe lanes hard-code their own `--ctx-size`
+per unit, and `:18085`'s machine-local 16k drop-in does the same, so a registry figure
+must never be used to justify an iGPU lane's window.  Measured 2026-10-21: the iGPU lane
+serves `n_ctx=16384`; that is a live observation of what loads, not a headroom
+measurement — the 16k value's original measurement was CUDA-side.
+
 **Unit names are lane keys, not weight claims (drift fixed 2026-10-21).**  The
 :18085 unit is still called `llama-xe-qwen25-3b-chat` because the watchdog, two
 test files and this document address it by name, but its `ExecStart` has loaded
