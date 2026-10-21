@@ -1,0 +1,24 @@
+[Unit]
+Description=Hourly prompt-cache sample for the resident LLM lanes
+# Like gpu-watch-selfcheck.timer: no Requires=/Wants= on the service, so the
+# boot transaction is not held open by a oneshot.  The timer activates the
+# service through the implicit Unit= link on its own schedule.
+#
+# WHY HOURLY.  SWITCH-CONSOLE-METRICS-001 asks for a week of per-lane readings
+# before any floor is proposed.  The counters are cumulative and reset when a
+# lane restarts, so the sample interval decides the resolution of the series;
+# hourly gives ~168 points per lane per week at negligible cost (one 2 s-bounded
+# curl per lane).
+#
+# RandomizedDelaySec keeps the sample off the top of the hour, where several
+# other jobs on this box start, so a sample is not systematically taken during
+# the same contention window every time.
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

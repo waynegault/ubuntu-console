@@ -2,7 +2,12 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-10-21): __llm_lanes_report keeps the state `systemctl is-active`
+#   PRINTS.  `|| state="unknown"` discarded it, because is-active prints
+#   "inactive" AND exits 3 for an inactive unit — so a down lane read as
+#   "unknown" instead of "inactive".  The `if !` form keeps the printed value
+#   and falls back only on an empty read.
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -552,8 +557,13 @@ function __llm_lanes_report() {
     while IFS='|' read -r unit port
     do
         [[ -n "$unit" ]] || continue
-        # swallow-ok: is-active exits 3 for an inactive unit; "unknown" is a named state
-        state=$(systemctl --user is-active "$unit" 2>/dev/null) || state="unknown"
+        # is-active prints "inactive" AND exits 3 for an inactive unit, so the
+        # printed state is the answer and the exit status is not.
+        # swallow-ok: an unqueryable unit is reported as "unknown"; stderr is systemd's own message
+        if ! state=$(systemctl --user is-active "$unit" 2>/dev/null)
+        then
+            state="${state:-unknown}"
+        fi
         state="${state:-unknown}"
         if [[ "$state" == "active" ]]
         then

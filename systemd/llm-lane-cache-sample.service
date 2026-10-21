@@ -1,0 +1,21 @@
+[Unit]
+Description=LLM lane prompt-cache sample — one reading per resident lane
+Documentation=file:%h/.local/bin/llm-lane-cache-sample.sh
+# No network ordering: the endpoints are loopback listeners owned by local
+# units, and a sample taken before a lane is up records `inactive`, which is a
+# true reading rather than a fault to suppress.
+#
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+# (Nhu Hoang, TDS 2026-10-20) —
+# https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-METRICS-001
+
+[Service]
+Type=oneshot
+# A sample is a read: one bounded curl per lane, no lane is started or stopped.
+ExecStart=%h/.local/bin/llm-lane-cache-sample.sh
+# The state directory is the default ($XDG_STATE_HOME/tactical-console); a unit
+# does not inherit the login shell's env, so name it explicitly.
+Environment=TAC_STATE_DIR=%h/.local/state/tactical-console
+# Rewrites are 0600 files under the user's state dir; no privilege is needed
+# beyond the user manager and loopback access.

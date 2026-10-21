@@ -466,6 +466,34 @@ comparable; a lane's figure moves as it serves.
 `not-measured` is the absence of a reading.  Record a fresh sample here before
 proposing a floor; do not carry these figures forward as if they were a series.
 
+#### Collecting the series
+
+The table above is a snapshot only because the counters are cumulative and
+`model lanes` samples on demand.  `llm-lane-cache-sample.timer` runs
+`bin/llm-lane-cache-sample.sh` hourly, appending one row per lane to
+`$TAC_STATE_DIR/llm-lane-cache.tsv` (default
+`~/.local/state/tactical-console/llm-lane-cache.tsv`):
+
+| Column | Meaning |
+|---|---|
+| `epoch`, `iso` | when the sample was taken |
+| `unit`, `port` | the lane |
+| `status` | `ok`, `inactive`, or `no-endpoint` |
+| `cached`, `processed` | the two counters — a dash for anything but `ok` |
+| `rate_pct` | `cached / (cached + processed)` |
+| `window` | the unit's start time: what the counters are cumulative over |
+
+A row whose status is not `ok` carries **dashes, never zeros** — the same
+distinction `model lanes` makes.  Rows older than 30 days are pruned by the
+same run, and the header is kept.  To read the series without writing:
+
+```bash
+llm-lane-cache-sample.sh --print
+```
+
+The timer samples, it never starts or stops a lane, and it holds no card: one
+2-second-bounded loopback request per lane per hour.
+
 #### `--cache-reuse` — accepted but inert here (measured 2026-10-21)
 
 SWITCH-CONSOLE-REUSE-001 measured `--cache-reuse 256` on the CUDA lane's model
