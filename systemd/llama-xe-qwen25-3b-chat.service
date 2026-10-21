@@ -39,6 +39,13 @@ Environment=GGML_OPENCL_DEVICE=0
 # --metrics (SWITCH-CONSOLE-METRICS-001): serves llama.cpp's Prometheus counters on
 # the SAME listener as the model API.  --host 127.0.0.1 above is the only bind, so
 # /metrics is loopback-only — never a wider interface.
+# A machine-local drop-in REPLACES this ExecStart today:
+# ~/.config/systemd/user/llama-xe-qwen25-3b-chat.service.d/ctx-size-16k.conf (written
+# 2026-10-21 for the 16k-headroom test) serves --ctx-size 16384.  Any flag added HERE
+# must also be added THERE until that drop-in is folded away into this unit: --metrics
+# was added here first, the lane restarted, and it still answered 501 — which is how
+# the override was found.  The tests cannot see a host drop-in, so this note is the
+# only in-repo warning.
 # REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
 # (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
 # CARD: SWITCH-CONSOLE-METRICS-001
