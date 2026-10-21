@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 36
+# Module Version: 37
 #   v35 (2026-10-21): WSL GPU library resolution moves here from ~/.bashrc.  The two
 #   exports added there on 2026-10-19 (after the Windows driver reinstall) turned the
 #   loader gate red: ~/.bashrc must stay a thin loader.  PATH and LD_LIBRARY_PATH now
@@ -477,6 +477,19 @@ export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 # REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
 #      (Ibrahim, TDS, 2026-09-16) — https://towardsdatascience.com/the-kv-cache-tax-why-inference-servers-run-out-of-memory-before-compute/
 export LLAMA_CACHE_RAM_MB="${LLAMA_CACHE_RAM_MB:-0}"
+# --cache-reuse is NOT set on any lane (SWITCH-CONSOLE-REUSE-001, MEASURED 2026-10-21).
+# The engine ACCEPTS 256 on the CPU tier and the three q8_0 chat lanes — the refusal is
+# per-CONTEXT, not per-quant: llama_kv_cache::get_can_shift() tests LLM_ARCH_STEP35 and
+# n_pos_per_embd() > 1 only (src/llama-kv-cache.cpp:1188-1197).  But an interleaved
+# BABA A/B on Llama-3.2-3B (:18083, row 7) found the cached-token delta IDENTICAL with
+# and without it (667 cached / 657 processed at the mid-prefix realign step, 31 at a
+# clean switch) and prompt_ms WORSE with it (realign mean 2766 vs 2263 ms; clean-switch
+# mean 4349 vs 4229 ms).  It is accepted-but-INERT on this build, so no lane passes it.
+# embeddinggemma refuses it outright: "cache_reuse is not supported by this context,
+# it will be disabled".  Evidence: logs/cache-reuse-probe/result-20261021T155345Z.json.
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+#      (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-REUSE-001
 # Memory-map mode for llama-server launch:
 #   auto (default): enable --no-mmap for MoE / low-VRAM pressure / WSL
 #   on            : always enable --no-mmap

@@ -433,6 +433,29 @@ were restarted at 16:38 BST and their readings are real — `not-measured` and
 Once the remaining units restart, the same sample becomes a real `cached/total`
 figure; record it here before proposing a floor.
 
+#### `--cache-reuse` — accepted but inert here (measured 2026-10-21)
+
+SWITCH-CONSOLE-REUSE-001 measured `--cache-reuse 256` on the CUDA lane's model
+(Llama-3.2-3B, q8_0 KV, flash-attn on) with an interleaved BABA run, both arms at
+`--cache-ram 0 --metrics`, on the probe port 18082.  The engine **accepts** the flag
+on the CPU tier and the three q8_0 chat lanes — `llama_kv_cache::get_can_shift()`
+tests `LLM_ARCH_STEP35` and `n_pos_per_embd() > 1`, not KV quantisation — but it
+makes no difference to the cached-token deltas, and the realign step is slower
+with it:
+
+| step | cache-reuse 256 (mean) | absent (mean) | cached delta |
+|---|---|---|---|
+| R1 cold | prompt_ms 4417, TTFT 4568 ms | 4279, 4405 ms | 30 |
+| R3 clean switch | 4349, 4428 ms | 4229, 4497 ms | 31 |
+| R4 mid-prefix realign | **2766, 3048 ms** | **2263, 2304 ms** | **667 (identical in both arms)** |
+
+The cached-token delta is identical in both arms at every step, so the flag does
+not change what is reused; R4's +503 ms mean is the flag's overhead, not a saving.
+No lane passes it.  `embeddinggemma` (:18080) refuses it outright:
+`load_model: cache_reuse is not supported by this context, it will be disabled`.
+Evidence: `logs/cache-reuse-probe/result-20261021T155345Z.json`; re-run with
+`scripts/cache-ram-probe.sh --row 7 --axis reuse --order BABA --port 18082`.
+
 **Unit names are lane keys, not weight claims (drift fixed 2026-10-21).**  The
 :18085 unit is still called `llama-xe-qwen25-3b-chat` because the watchdog, two
 test files and this document address it by name, but its `ExecStart` has loaded

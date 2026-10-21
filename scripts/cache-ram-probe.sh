@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-21): adds a `--axis reuse` arm pair (A = served argv with
+#   `--cache-ram 0`, B = A plus `--cache-reuse N`), an R4 prompt whose prefix
+#   diverges mid-way and re-aligns, per-request prompt_tokens counters, and a
+#   loud FAIL when the loader prints "cache_reuse is not supported by this
+#   context".  Produced the SWITCH-CONSOLE-REUSE-001 verdict on 2026-10-21:
+#   accepted by the CPU and three q8_0 chat lanes, engine-disabled for
+#   embeddinggemma, and INERT on Llama-3.2-3B (identical cached-token delta,
+#   slower prompt_ms at the realign step) — so no lane passes the flag.
+#   REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+#   (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+#   CARD: SWITCH-CONSOLE-REUSE-001
 #   v4 (2026-10-12): the post-suspend free-VRAM wait calls the SHARED gate
 #   `_tac_gpu_wait_used_below` (bin/_tac-bin-lib.sh) instead of hand-rolling a
 #   free-VRAM threshold here.  Same contract as v3 — unreadable fails CLOSED,
@@ -99,6 +110,9 @@ OPT_ORDER=""
 OPT_ALLOW_NI=0
 OPT_OUT="logs/cache-ram-probe"
 OPT_DRY=0
+OPT_REUSE=256
+OPT_AXIS="cache-ram"
+REUSE_AXIS=0
 
 # warn — the ONE place this script writes to stderr.  §18.3 item 10.7 counts each
 # ad-hoc `printf … >&2` site separately; routing them through here keeps the prefix
@@ -115,7 +129,8 @@ warn() {
 usage() {
     printf '%s\n' \
         "usage: cache-ram-probe.sh [--row N] [--port N] [--order SEQ]" \
-        "           [--allow-noninterleaved] [--out DIR] [--dry-run]"
+        "           [--allow-noninterleaved] [--out DIR] [--dry-run]" \
+        "           [--axis cache-ram|reuse] [--cache-reuse N]"
 }
 
 # parse_args — the CLI.  Refuses an unknown flag rather than silently ignoring it.
@@ -128,10 +143,18 @@ parse_args() {
             --allow-noninterleaved) OPT_ALLOW_NI=1; shift ;;
             --out)   OPT_OUT="${2:?--out needs a directory}"; shift 2 ;;
             --dry-run) OPT_DRY=1; shift ;;
+            --axis) OPT_AXIS="${2:?--axis needs cache-ram or reuse}"; shift 2 ;;
+            --cache-reuse) OPT_REUSE="${2:?--cache-reuse needs a number}"; shift 2 ;;
             -h|--help) usage; exit 0 ;;
             *) usage >&2; warn "FATAL: unknown argument $1"; exit 1 ;;
         esac
     done
+    [[ "$OPT_REUSE" =~ ^[0-9]+$ ]] || { usage >&2; warn "FATAL: --cache-reuse must be a non-negative integer"; exit 1; }
+    case "$OPT_AXIS" in
+        cache-ram) ;;
+        reuse) REUSE_AXIS=1 ;;
+        *) usage >&2; warn "FATAL: --axis must be 'cache-ram' or 'reuse'"; exit 1 ;;
+    esac
 }
 
 # is_interleaved <seq> — 0 when the sequence alternates with an EVEN arm count of at
@@ -289,9 +312,44 @@ json.dump({"messages": [{"role": "user", "content": content}],
 PYEOF
 }
 
+# A mid-prefix divergence that re-aligns: the shape --cache-reuse targets.
+mk_diverged() { # <file> <seed-sentence> <approx-tokens> <max_tokens>
+    "$TAC_PYTHON" - "$1" "$2" "$3" "$4" <<'PYEOF'
+import json, sys
+out, seed, tokens, max_tokens = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+reps = (tokens * 5) // max(1, len(seed)) + 1
+body = (seed * reps)[: tokens * 5]
+half = len(body) // 2
+content = body[:half] + " The tribunal adjourned briefly for a procedural ruling. " + body[half:]
+json.dump({"messages": [{"role": "user", "content": content}],
+           "max_tokens": max_tokens, "temperature": 0, "stream": True}, open(out, "w"))
+PYEOF
+}
+
+# metrics_pair — "cached processed", or empty when the endpoint is absent.
+metrics_pair() {
+    # swallow-ok: an absent endpoint yields an empty pair, reported as not-measured
+    curl -s --max-time 2 "$HEALTH/metrics" 2>/dev/null \
+        | awk '$1 == "llamacpp:prompt_tokens_cached_total" { c = $2 }
+               $1 == "llamacpp:prompt_tokens_total"        { p = $2 }
+               END { if (c != "" && p != "") printf "%.0f %.0f", c, p }'
+}
+
 # ── dry run: prove the argv and the assertions, start nothing ────────────────
 dry_run() {
     printf '\nDRY RUN — nothing started, no lane stopped, no suspend taken, registry untouched\n'
+    if (( REUSE_AXIS )); then
+        local -a ra=("${BASE[@]}" --cache-ram 0 --metrics)
+        local -a rb=("${BASE[@]}" --cache-ram 0 --metrics --cache-reuse "$OPT_REUSE")
+        printf '  ARM A argv (%d words): %s\n' "${#ra[@]}" "${ra[*]}"
+        printf '  ARM B argv (%d words): %s\n' "${#rb[@]}" "${rb[*]}"
+        [[ "$(printf '%s\n' "${ra[@]}" | grep -c -x -- '--cache-ram')" -eq 1 ]] \
+            || { printf '  PREFLIGHT FAIL: ARM A --cache-ram count != 1\n'; return 1; }
+        [[ "$(printf '%s\n' "${rb[@]}" | grep -c -x -- '--cache-reuse')" -eq 1 ]] \
+            || { printf '  PREFLIGHT FAIL: ARM B --cache-reuse count != 1\n'; return 1; }
+        printf '  PREFLIGHT OK (A/B): --cache-ram 0 on both; --cache-reuse %s only on B\n' "$OPT_REUSE"
+        return 0
+    fi
     local -a da=("${BASE[@]}") db=("${BASE[@]}" --cache-ram 0)
     printf '  ARM A argv (%d words): %s\n' "${#da[@]}" "${da[*]}"
     printf '  ARM B argv (%d words): %s\n' "${#db[@]}" "${db[*]}"
@@ -319,6 +377,7 @@ P2_TXT="The tribunal considered the respondent's justification for the provision
 P2_TXT+="criterion or practice and weighed proportionality against the claimant's disadvantage. "
 mk_payload "$WORKDIR/p1.json" "$P1_TXT" 1800 128
 mk_payload "$WORKDIR/p2.json" "$P2_TXT" 1800 128
+mk_diverged "$WORKDIR/p3.json" "$P1_TXT" 1800 128
 mk_payload "$WORKDIR/warmup.json" "Warmup" 8 8
 
 # measure <payload.json> <out.json> — TTFT (wall) + the server's own timings from
@@ -399,11 +458,25 @@ run_arm() {
     local want=0
     [[ -n "$cram_val" ]] && want=1
     mkdir -p "$out_dir"
-    printf '\n=== pos%s ARM %s  (cache-ram: %s)\n' "$pos" "$label" "${cram_val:-OMITTED -> default 8192}"
+    local axis_label
+    if (( REUSE_AXIS )); then
+        axis_label="reuse: $([[ "$label" == B ]] && printf '%s' "$OPT_REUSE" || printf 'absent')"
+    else
+        axis_label="cache-ram: ${cram_val:-OMITTED -> default 8192}"
+    fi
+    printf '\n=== pos%s ARM %s  (%s)\n' "$pos" "$label" "$axis_label"
     local -a argv=("${BASE[@]}")
-    [[ -n "$cram_val" ]] && argv+=(--cache-ram "$cram_val")
+    if (( REUSE_AXIS )); then
+        # Both arms carry the SERVED --cache-ram 0; only B asks for KV shifting.
+        argv+=(--cache-ram 0 --metrics)
+        [[ "$label" == B ]] && argv+=(--cache-reuse "$OPT_REUSE")
+        printf '    PREFLIGHT (%s): --cache-ram 0; --cache-reuse %s\n' "$label" \
+            "$([[ "$label" == B ]] && printf '%s' "$OPT_REUSE" || printf 'absent')"
+    else
+        [[ -n "$cram_val" ]] && argv+=(--cache-ram "$cram_val")
+        assert_argv "$label" "$want" "${argv[@]}" || return 1
+    fi
     printf '    argv: %s\n' "${argv[*]}"
-    assert_argv "$label" "$want" "${argv[@]}" || return 1
     "${argv[@]}" > "$out_dir/server.log" 2>&1 &
     pid=$!
     while (( hw < 120 )); do
@@ -448,11 +521,22 @@ run_arm() {
         term_server "$pid"
         return 1
     fi
-    printf '    server healthy in %ss, pre-flight ok — measuring (R1 cold, R2 switch, R3 reuse)\n' "$hw"
+    printf '    server healthy in %ss, pre-flight ok — measuring (R1 cold, R2 switch, R3 reuse, R4 divergence)\n' "$hw"
+    if (( REUSE_AXIS )) && grep -q 'cache_reuse is not supported' "$out_dir/server.log"; then
+        printf '    FAIL: the engine DISABLED --cache-reuse for this arm — the exercise is invalid, not a null\n'
+        term_server "$pid"
+        return 1
+    fi
     measure "$WORKDIR/warmup.json" "$out_dir/warmup.json" >/dev/null
-    measure "$WORKDIR/p1.json" "$out_dir/r1.json"
-    measure "$WORKDIR/p2.json" "$out_dir/r2.json"
-    measure "$WORKDIR/p1.json" "$out_dir/r3.json"
+    local m0 m1
+    m0=$(metrics_pair); measure "$WORKDIR/p1.json" "$out_dir/r1.json"; m1=$(metrics_pair)
+    printf '%s\n%s\n' "$m0" "$m1" > "$out_dir/r1.metrics"; printf '    r1 counters: %s -> %s\n' "$m0" "$m1"
+    m0=$(metrics_pair); measure "$WORKDIR/p2.json" "$out_dir/r2.json"; m1=$(metrics_pair)
+    printf '%s\n%s\n' "$m0" "$m1" > "$out_dir/r2.metrics"; printf '    r2 counters: %s -> %s\n' "$m0" "$m1"
+    m0=$(metrics_pair); measure "$WORKDIR/p1.json" "$out_dir/r3.json"; m1=$(metrics_pair)
+    printf '%s\n%s\n' "$m0" "$m1" > "$out_dir/r3.metrics"; printf '    r3 counters: %s -> %s\n' "$m0" "$m1"
+    m0=$(metrics_pair); measure "$WORKDIR/p3.json" "$out_dir/r4.json"; m1=$(metrics_pair)
+    printf '%s\n%s\n' "$m0" "$m1" > "$out_dir/r4.metrics"; printf '    r4 counters: %s -> %s\n' "$m0" "$m1"
     term_server "$pid"
     return 0
 }
@@ -462,9 +546,10 @@ run_arm() {
 #   DELTA and the position-drift verdict, and writes the result JSON.  Extracted from
 #   `summarise` so each function stays under the §18.3 item 10.4 100-line bound.
 _summarise_py() {
-    "$TAC_PYTHON" - "$1" "$2" "$3" "$4" "$DRIFT_WARN_PCT" <<'PYEOF'
+    "$TAC_PYTHON" - "$1" "$2" "$3" "$4" "$DRIFT_WARN_PCT" "$REUSE_AXIS" "$OPT_REUSE" <<'PYEOF'
 import glob, json, os, re, sys
 wd, seq, result_path, row, drift_pct = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5])
+reuse_axis = int(sys.argv[6]); reuse_tokens = sys.argv[7]
 rows = []
 for d in sorted(glob.glob(os.path.join(wd, "pos*")), key=lambda p: int(re.search(r"pos(\d+)", p).group(1))):
     m = re.search(r"pos(\d+)_([AB])$", d)
@@ -473,7 +558,8 @@ for d in sorted(glob.glob(os.path.join(wd, "pos*")), key=lambda p: int(re.search
     def rr(name, d=d):
         p = os.path.join(d, name)
         return json.load(open(p)) if os.path.exists(p) else None
-    rows.append({"pos": int(m.group(1)), "arm": m.group(2), "r1": rr("r1.json"), "r3": rr("r3.json")})
+    rows.append({"pos": int(m.group(1)), "arm": m.group(2),
+                 "r1": rr("r1.json"), "r3": rr("r3.json"), "r4": rr("r4.json")})
 for r in rows:
     if not r["r1"] or not r["r3"]:
         print(f"  pos{r['pos']} ARM {r['arm']}: INCOMPLETE")
@@ -482,6 +568,8 @@ for r in rows:
           f"  decode_reuse={r['r3']['server_decode_tps']:.2f} tps"
           f"  | ttft_cold={r['r1']['ttft_ms']} ms  ttft_reuse={r['r3']['ttft_ms']} ms"
           f"  | prompt_ms_cold={r['r1']['server_prompt_ms']:.0f}  prompt_ms_reuse={r['r3']['server_prompt_ms']:.0f}")
+    if r.get("r4"):
+        print(f"         realign: ttft_div={r['r4']['ttft_ms']} ms  prompt_ms_div={r['r4']['server_prompt_ms']:.0f}")
 def mean(vals):
     return sum(vals) / len(vals) if vals else float("nan")
 arms = {a: [r for r in rows if r["arm"] == a and r["r1"] and r["r3"]] for a in ("A", "B")}
@@ -489,7 +577,10 @@ for a in ("A", "B"):
     rs = arms[a]
     if not rs:
         continue
-    lbl = "A (no --cache-ram, default 8192)" if a == "A" else "B (--cache-ram 0)"
+    if reuse_axis:
+        lbl = "A (no --cache-reuse)" if a == "A" else f"B (--cache-reuse {reuse_tokens})"
+    else:
+        lbl = "A (no --cache-ram, default 8192)" if a == "A" else "B (--cache-ram 0)"
     print(f"  ARM {lbl}: n={len(rs)}  mean decode_cold={mean([r['r1']['server_decode_tps'] for r in rs]):.2f}"
           f"  mean decode_reuse={mean([r['r3']['server_decode_tps'] for r in rs]):.2f}"
           f"  mean ttft_reuse={mean([r['r3']['ttft_ms'] for r in rs]):.0f} ms")
