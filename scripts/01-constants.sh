@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 39
+# Module Version: 40
+#   v40 (2026-10-22): __tac_probe_ok's atomic cache replace no longer ends in a bare
+#   swallow.  A failed rename only costs a RE-PROBE (the caller still gets `rc`), so the
+#   failure stays non-fatal — but the temp file is now removed instead of being left in
+#   /dev/shm to accumulate once per shell start, and the replace is an explicit `if` so an
+#   unchecked non-zero status cannot abort a BATS case under errexit.
 #   v35 (2026-10-21): WSL GPU library resolution moves here from ~/.bashrc.  The two
 #   exports added there on 2026-10-19 (after the Windows driver reinstall) turned the
 #   loader gate red: ~/.bashrc must stay a thin loader.  PATH and LD_LIBRARY_PATH now
@@ -353,7 +358,14 @@ function __tac_probe_ok() {
     # then latch "CLI unavailable" for the rest of the session.
     if printf '%d' "$(( rc == 0 ))" > "${cache_file}.$$" 2>/dev/null
     then
-        mv -f "${cache_file}.$$" "$cache_file" 2>/dev/null || true
+        # A failed rename only costs a RE-PROBE next time — the caller still gets `rc` —
+        # but the temp file must not be left behind, or one accumulates per shell start in
+        # /dev/shm.  An `if` rather than a bare `mv`: this module also runs under BATS with
+        # errexit, where an unchecked non-zero status aborts the case.
+        if ! mv -f "${cache_file}.$$" "$cache_file" 2>/dev/null
+        then
+            rm -f "${cache_file}.$$"
+        fi
     fi
     return "$rc"
 }

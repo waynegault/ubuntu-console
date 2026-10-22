@@ -18,7 +18,7 @@
 # went 49 -> 44 when five state-swallows were given a log); a NEW file, or a RISE, is a
 # deliberate act that has to be re-baselined on purpose.
 #
-unclassified	scripts/01-constants.sh	9
+unclassified	scripts/01-constants.sh	8
 unclassified	scripts/02-error-handling.sh	28
 unclassified	scripts/04-aliases.sh	8
 unclassified	scripts/05-ui-engine.sh	2
