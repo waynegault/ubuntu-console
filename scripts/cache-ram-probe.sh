@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 10
+#   v10 (2026-10-22): the 4.2.4 comment sits INSIDE the `case` body.  The counter only
+#   reads a comment while it is inside a case block, so one written above the `case`
+#   left the count at 21 and the second push was refused too.  Measured, not inferred:
+#   ratchet_check.py's c_case_no_default sets has_comment only when depth is non-zero.
+#   v9 (2026-10-22): the new argv `case` carries the explanatory comment §18.3 4.2.4 asks
+#   for (it has no `*)` arm because every non-special word falls through unchanged).  The
+#   gate refused the first push on that counter; fixed at source, not re-baselined.
+#   v8 (2026-10-22): `--from-unit UNIT` takes BASE from the LANE's own ExecStart instead
+#   of the models.conf row, stripping the unit's pinned `--cache-ram` pair so the arm's
+#   value is the only one.  Measured that day: :18085's row says ctx 36864 / threads 6 /
+#   ngl 999 / flash-attn on / ngram, while the unit serves 16384 / 8 / 99 / off / none —
+#   a row-based sweep would size a configuration no lane runs (the same rule as the
+#   2026-10-21 iGPU correction).  PORT and ctx are read from the unit's argv so the
+#   health checks and the report follow the lane, not the registry.
 #   v7 (2026-10-22): wraps the two new guard lines. They were one-liners of 124 and
 #   131 characters, which took §18.3 8.1.8 from 293 to 295 and refused the push —
 #   fixed at source rather than re-baselined. No behaviour change.
@@ -124,6 +138,7 @@ OPT_AXIS="cache-ram"
 REUSE_AXIS=0
 OPT_CACHE_MB=0
 OPT_PROMPT_TOKENS=1800
+OPT_FROM_UNIT=""
 
 # warn — the ONE place this script writes to stderr.  §18.3 item 10.7 counts each
 # ad-hoc `printf … >&2` site separately; routing them through here keeps the prefix
@@ -159,6 +174,7 @@ parse_args() {
             --cache-reuse) OPT_REUSE="${2:?--cache-reuse needs a number}"; shift 2 ;;
             --cache-ram-mb) OPT_CACHE_MB="${2:?--cache-ram-mb needs a number}"; shift 2 ;;
             --prompt-tokens) OPT_PROMPT_TOKENS="${2:?--prompt-tokens needs a number}"; shift 2 ;;
+            --from-unit) OPT_FROM_UNIT="${2:?--from-unit needs a unit}"; shift 2 ;;
             -h|--help) usage; exit 0 ;;
             *) usage >&2; warn "FATAL: unknown argument $1"; exit 1 ;;
         esac
@@ -314,6 +330,46 @@ printf '  registry line (READ ONLY, snapshot): %s\n' "$ROW_BEFORE"
 printf '  ctx=%s batch=%s/%s threads=%s ngl=%s parallel=%s flash-attn=%s kv=%s/%s spec=%s(block %s) rp=%s rln=%s\n' \
     "$ctx" "$ba" "$ub" "$thr" "$ngl" "$pa" "$fa" "$KVK" "$KVV" "${stype:-none}" "$BLOCK" "${rp:-unset}" "${rln:-unset}"
 
+# __base_from_unit <unit> — replace BASE with the lane unit's own ExecStart argv.
+#
+# WHY: a models.conf row describes the AUTOTUNE configuration, and on this box that
+# is not what a lane serves.  Measured 2026-10-22: :18085's row says ctx 36864,
+# threads 6, ngl 999, flash-attn on and an ngram spec, while the unit serves ctx
+# 16384, threads 8, ngl 99, flash-attn off and no spec.  A sweep through the row
+# would size a configuration nobody runs.
+#
+# The unit pins its own --cache-ram; that pair is STRIPPED here so the arm's value
+# is the only one in the argv (a duplicate would be the 2026-10-10 malformed arm).
+function __base_from_unit() {
+    local _unit="$1" _line _argv _i
+    _line=$(systemctl --user show "$_unit" -p ExecStart --value) \
+        || { warn "FATAL: no ExecStart for $_unit"; return 1; }
+    _argv="${_line#*argv[]=}"
+    _argv="${_argv%% ;*}"
+    if [[ -z "$_argv" || "$_argv" == "$_line" ]]
+    then
+        warn "FATAL: could not parse argv from $_unit"
+        return 1
+    fi
+    local -a _words=() _out=()
+    read -ra _words <<< "$_argv"
+    for (( _i=0; _i<${#_words[@]}; _i++ ))
+    do
+        # Only these three spellings are special; every other argv word falls
+        # through unchanged, so a `*)` arm would be an empty no-op.
+        case "${_words[_i]}" in
+            # The comment must sit INSIDE the block: the counter only reads one
+            # while it is inside a case, not one written above the `case`.
+            --cache-ram) _i=$(( _i + 1 )); continue ;;
+            --port) PORT="${_words[_i+1]:-$PORT}" ;;
+            --ctx-size) ctx="${_words[_i+1]:-$ctx}" ;;
+        esac
+        _out+=("${_words[_i]}")
+    done
+    BASE=("${_out[@]}")
+    printf '  BASE from %s: %s\n' "$_unit" "${BASE[*]}"
+}
+
 # The base argv is identical across arms; ONLY --cache-ram differs.
 BASE=("$LLAMA_BIN" --model "$MODEL_PATH" --port "$PORT" --host 127.0.0.1
       --ctx-size "$ctx" --batch-size "$ba" --ubatch-size "$ub"
@@ -324,6 +380,13 @@ BASE=("$LLAMA_BIN" --model "$MODEL_PATH" --port "$PORT" --host 127.0.0.1
 [[ -n "$rln" ]] && BASE+=(--repeat-last-n "$rln")
 if [[ "$stype" == "ngram" ]]; then
     BASE+=(--spec-type ngram-mod --spec-ngram-mod-n-max "$BLOCK" --spec-ngram-mod-n-min "$BLOCK")
+fi
+
+# --from-unit replaces the ROW-derived argv with the lane's own (see the function's
+# WHY block): the row is the autotune configuration, not what the lane serves.
+if [[ -n "$OPT_FROM_UNIT" ]]
+then
+    __base_from_unit "$OPT_FROM_UNIT" || exit 1
 fi
 
 # ── fixed prompts (deterministic, ~1800 tokens each) ─────────────────────────
