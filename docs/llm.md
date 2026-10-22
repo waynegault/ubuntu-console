@@ -404,7 +404,7 @@ the budget it needs:
 | --- | --- | --- |
 | 512 MiB | 56,896 / 35,841 ms | processed +2,842 — re-prefill |
 | 640 MiB | 50,915 ms | processed +2,842 — re-prefill |
-| 768 MiB | 4,991 ms | processed +1, cached +2,872 — hit |
+| 768 MiB | 825 / 1,764 ms | processed +1, cached +2,872 — hit |
 | 1024 MiB | 1,652 / 626 / 1,211 / 1,957 ms | processed +1, cached +2,872 — hit |
 | 8192 (default) | 955 / 955 ms | processed +1, cached +2,872 — hit |
 
