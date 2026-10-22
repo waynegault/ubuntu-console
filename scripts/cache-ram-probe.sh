@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-22): sizing knobs for the per-lane `--cache-ram` budget. `--cache-ram-mb N`
+#   sets ARM B's value (default 0 = today's served argv), so the same probe can sweep
+#   intermediate budgets instead of only default-8192 vs 0; `--prompt-tokens N` sets the
+#   R1/R2 prefix size (default 1800), so a lane can be measured at a conversation length it
+#   actually serves rather than at one fixed size. Both are inert unless passed: the defaults
+#   reproduce v5 exactly. CARD: SWITCH-CONSOLE-AFFINITY-001 (per-lane budget sizing).
 #   v5 (2026-10-21): adds a `--axis reuse` arm pair (A = served argv with
 #   `--cache-ram 0`, B = A plus `--cache-reuse N`), an R4 prompt whose prefix
 #   diverges mid-way and re-aligns, per-request prompt_tokens counters, and a
@@ -113,6 +119,8 @@ OPT_DRY=0
 OPT_REUSE=256
 OPT_AXIS="cache-ram"
 REUSE_AXIS=0
+OPT_CACHE_MB=0
+OPT_PROMPT_TOKENS=1800
 
 # warn — the ONE place this script writes to stderr.  §18.3 item 10.7 counts each
 # ad-hoc `printf … >&2` site separately; routing them through here keeps the prefix
@@ -130,7 +138,8 @@ usage() {
     printf '%s\n' \
         "usage: cache-ram-probe.sh [--row N] [--port N] [--order SEQ]" \
         "           [--allow-noninterleaved] [--out DIR] [--dry-run]" \
-        "           [--axis cache-ram|reuse] [--cache-reuse N]"
+        "           [--axis cache-ram|reuse] [--cache-reuse N]" \
+        "           [--cache-ram-mb N] [--prompt-tokens N]"
 }
 
 # parse_args — the CLI.  Refuses an unknown flag rather than silently ignoring it.
@@ -145,11 +154,15 @@ parse_args() {
             --dry-run) OPT_DRY=1; shift ;;
             --axis) OPT_AXIS="${2:?--axis needs cache-ram or reuse}"; shift 2 ;;
             --cache-reuse) OPT_REUSE="${2:?--cache-reuse needs a number}"; shift 2 ;;
+            --cache-ram-mb) OPT_CACHE_MB="${2:?--cache-ram-mb needs a number}"; shift 2 ;;
+            --prompt-tokens) OPT_PROMPT_TOKENS="${2:?--prompt-tokens needs a number}"; shift 2 ;;
             -h|--help) usage; exit 0 ;;
             *) usage >&2; warn "FATAL: unknown argument $1"; exit 1 ;;
         esac
     done
     [[ "$OPT_REUSE" =~ ^[0-9]+$ ]] || { usage >&2; warn "FATAL: --cache-reuse must be a non-negative integer"; exit 1; }
+    [[ "$OPT_CACHE_MB" =~ ^[0-9]+$ ]] || { usage >&2; warn "FATAL: --cache-ram-mb must be a non-negative integer"; exit 1; }
+    [[ "$OPT_PROMPT_TOKENS" =~ ^[1-9][0-9]*$ ]] || { usage >&2; warn "FATAL: --prompt-tokens must be a positive integer"; exit 1; }
     case "$OPT_AXIS" in
         cache-ram) ;;
         reuse) REUSE_AXIS=1 ;;
@@ -350,7 +363,7 @@ dry_run() {
         printf '  PREFLIGHT OK (A/B): --cache-ram 0 on both; --cache-reuse %s only on B\n' "$OPT_REUSE"
         return 0
     fi
-    local -a da=("${BASE[@]}") db=("${BASE[@]}" --cache-ram 0)
+    local -a da=("${BASE[@]}") db=("${BASE[@]}" --cache-ram "$OPT_CACHE_MB")
     printf '  ARM A argv (%d words): %s\n' "${#da[@]}" "${da[*]}"
     printf '  ARM B argv (%d words): %s\n' "${#db[@]}" "${db[*]}"
     assert_argv A 0 "${da[@]}" || return 1
@@ -375,9 +388,9 @@ P1_TXT="The investigating officer reviewed the witness statements and the "
 P1_TXT+="disciplinary policy before reaching a conclusion on the balance of probabilities. "
 P2_TXT="The tribunal considered the respondent's justification for the provision, "
 P2_TXT+="criterion or practice and weighed proportionality against the claimant's disadvantage. "
-mk_payload "$WORKDIR/p1.json" "$P1_TXT" 1800 128
-mk_payload "$WORKDIR/p2.json" "$P2_TXT" 1800 128
-mk_diverged "$WORKDIR/p3.json" "$P1_TXT" 1800 128
+mk_payload "$WORKDIR/p1.json" "$P1_TXT" "$OPT_PROMPT_TOKENS" 128
+mk_payload "$WORKDIR/p2.json" "$P2_TXT" "$OPT_PROMPT_TOKENS" 128
+mk_diverged "$WORKDIR/p3.json" "$P1_TXT" "$OPT_PROMPT_TOKENS" 128
 mk_payload "$WORKDIR/warmup.json" "Warmup" 8 8
 
 # measure <payload.json> <out.json> — TTFT (wall) + the server's own timings from
@@ -670,7 +683,7 @@ for _arm in "${_arm_seq[@]}"; do
         # parse_order emits only A and B, so a `*)` arm here would be unreachable; the
         # argument defect it would catch is refused earlier, at the parse.
         A) run_arm A ""  "$_pos" || _fail=1 ;;
-        B) run_arm B "0" "$_pos" || _fail=1 ;;
+        B) run_arm B "$OPT_CACHE_MB" "$_pos" || _fail=1 ;;
     esac
 done
 
