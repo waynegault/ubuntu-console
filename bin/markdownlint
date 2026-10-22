@@ -155,10 +155,18 @@ then
     NODE=""
     for _candidate in \
         /home/linuxbrew/.linuxbrew/bin/node \
+        /home/linuxbrew/.linuxbrew/opt/node/bin/node \
+        /home/linuxbrew/.linuxbrew/opt/node@24/bin/node \
         /usr/local/bin/node \
         /usr/bin/node
     do
         [[ -x "$_candidate" ]] || continue
+        # An -x file can still be an interpreter that cannot start: measured 2026-10-22,
+        # brew's node here dies with "libsimdjson.so.33: cannot open shared object file",
+        # so probing beats trusting the mode bit.
+        # swallow-ok: a candidate that cannot start is not an interpreter — the probe's
+        # own message explains the skip, and the loop falls through to the next one.
+        "$_candidate" --version >/dev/null 2>&1 || continue
         NODE="$_candidate"
         break
     done
