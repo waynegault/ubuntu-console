@@ -356,7 +356,7 @@ either historical, the card-less CPU tier, or wrong.
 |---|---|---|---|---|---|
 | **Xe** | `llama-xe-minicpm5-1b-chat.service` | `llama-xe-server` | 18081 | `--metrics` → `:18081/metrics` | the fleet server |
 | **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | `--metrics` → `:18080/metrics` | embeddings (`--embedding`; endpoint needs the lane's `--api-key-file`) |
-| **Xe** | `llama-xe-qwen25-3b-chat.service` | `llama-xe-server` | 18085 | `--metrics` → `:18085/metrics` | second Xe lane (**Llama-3.2-3B** chat — the `qwen25-3b` in the unit name is a legacy lane key, see below). Its served ctx is **16384**, not the unit's 8192: a machine-local drop-in (`llama-xe-qwen25-3b-chat.service.d/ctx-size-16k.conf`, the 2026-10-21 headroom test) REPLACES `ExecStart`, so any flag added to the unit must be added there too — it carries `--metrics` for that reason |
+| **Xe** | `llama-xe-qwen25-3b-chat.service` | `llama-xe-server` | 18085 | `--metrics` → `:18085/metrics` | second Xe lane (**Llama-3.2-3B** chat — the `qwen25-3b` in the unit name is a legacy lane key, see below). Its served ctx is **16384**, carried by the unit itself since 2026-10-22 (the 16k drop-in was folded in and deleted), and measured on the iGPU — see the note under the table |
 | **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | `--metrics` → `:18083/metrics` | the enabled CUDA lane |
 | **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | not enabled (parked) | parked lane (disabled) |
 | **none (CPU)** | `llama-cpu-qwen25-3b-chat.service` | `llama-cpu-server` | 18084 | `--metrics` → `:18084/metrics` | CPU-only chain tier (no card) |
