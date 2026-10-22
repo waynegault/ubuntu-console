@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 12
+#   v12 (2026-10-22): HEALTH is rebuilt from the unit's port, and the env export uses
+#   `export "${_p?}"`.  Measured: the server loaded and listened on :18085 while the probe
+#   polled the row's :18082, so the arm never saw it healthy; and shellcheck SC2163 refused
+#   the bare `export "$_p"` in the whole-tree gate.
+#   v11 (2026-10-22): `--from-unit` now also sets LANE to that unit and applies its
+#   `Environment=`.  Measured on the first two runs: every arm died at load because the
+#   probe stopped the CUDA lane (its default) while its server tried to bind :18085,
+#   which the untouched Xe lane still held; and the wrapper needs the unit's
+#   LD_LIBRARY_PATH/GGML_OPENCL_* to find the OpenCL backend at all.
 #   v10 (2026-10-22): the 4.2.4 comment sits INSIDE the `case` body.  The counter only
 #   reads a comment while it is inside a case block, so one written above the `case`
 #   left the count at 21 and the second push was refused too.  Measured, not inferred:
@@ -367,6 +376,33 @@ function __base_from_unit() {
         _out+=("${_words[_i]}")
     done
     BASE=("${_out[@]}")
+    # The unit measured IS the lane the probe must stop: LANE defaults to the CUDA
+    # lane, so without this the probe stopped the wrong unit and its own server hit
+    # a port the untouched lane still held — "server exited during load" on every
+    # arm (measured 2026-10-22).
+    LANE="$_unit"
+    # HEALTH is built from PORT far above, before this function runs, so it still
+    # points at the row's port.  Measured 2026-10-22: the server loaded and listened
+    # on the unit's :18085 while the probe polled :18082 and never saw it healthy.
+    HEALTH="http://127.0.0.1:${PORT}"
+    # The argv is not the whole runtime: this lane's unit sets LD_LIBRARY_PATH to the
+    # OpenCL build and the GGML_OPENCL_* selectors.  Measured 2026-10-22 — without
+    # them every arm died at load ("server exited during load"), because the wrapper
+    # found no OpenCL backend.  A systemd unit never reads ~/.bashrc, so these must
+    # come from the unit itself.
+    local _env _p
+    local -a _pairs=()
+    _env=$(systemctl --user show "$_unit" -p Environment --value)
+    if [[ -n "$_env" ]]
+    then
+        read -ra _pairs <<< "$_env"
+        for _p in "${_pairs[@]}"
+        do
+            [[ "$_p" == *=* ]] || continue
+            _p="${_p#\"}"; _p="${_p%\"}"
+            export "${_p?}"
+        done
+    fi
     printf '  BASE from %s: %s\n' "$_unit" "${BASE[*]}"
 }
 
