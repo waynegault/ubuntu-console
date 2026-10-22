@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-10-22): the CUDA suspend AND the free-VRAM gate are now taken only for a
+#   CUDA-backed lane.  `--from-unit` sets NEEDS_CUDA_CARD from the unit's argv, so an iGPU
+#   lane no longer waits on a card it is not on.  Measured: the run parked at its suspend
+#   line while the CUDA lane held 3376 MiB, a wait that cannot end while that lane serves.
+#   Row-based runs keep the old behaviour (NEEDS_CUDA_CARD defaults to 1).
 #   v12 (2026-10-22): HEALTH is rebuilt from the unit's port, and the env export uses
 #   `export "${_p?}"`.  Measured: the server loaded and listened on :18085 while the probe
 #   polled the row's :18082, so the arm never saw it healthy; and shellcheck SC2163 refused
@@ -303,6 +308,9 @@ source "$REPO/bin/_tac-bin-lib.sh"
 
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+# Only a CUDA-backed lane needs the card.  Set from the unit's argv by
+# __base_from_unit; the default keeps the row-based runs unchanged.
+NEEDS_CUDA_CARD=1
 HEALTH="http://127.0.0.1:${PORT}"
 LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
 [[ -x "$LLAMA_BIN" ]] || { warn "FATAL: no llama-server at $LLAMA_BIN"; exit 1; }
@@ -381,6 +389,15 @@ function __base_from_unit() {
     # a port the untouched lane still held — "server exited during load" on every
     # arm (measured 2026-10-22).
     LANE="$_unit"
+    # Only a CUDA-backed lane needs the card.  Measured 2026-10-22: an iGPU lane's run
+    # parked at its suspend line because the gate waited for the CUDA card to fall below
+    # 800 MiB while the CUDA lane held 3376 MiB — a state that never resolves.
+    if [[ "${BASE[0]}" == *llama-cuda-server* ]]
+    then
+        NEEDS_CUDA_CARD=1
+    else
+        NEEDS_CUDA_CARD=0
+    fi
     # HEALTH is built from PORT far above, before this function runs, so it still
     # points at the row's port.  Measured 2026-10-22: the server loaded and listened
     # on the unit's :18085 while the probe polled :18082 and never saw it healthy.
@@ -754,11 +771,18 @@ summarise() {
 }
 
 # ── take the card: hold the watchdog off, stop the lane (bin/bench-rows.sh pattern)
-if ! _tac_suspend_acquire "$SUSPEND"; then
-    warn "FATAL: could not acquire the CUDA suspend hold ($SUSPEND)"
-    exit 1
+# A non-CUDA lane is not on the card, so neither the CUDA suspend nor the gate below
+# applies to it.  Measured 2026-10-22: an iGPU run parked at its suspend line because
+# the gate waited for the CUDA lane's 3376 MiB to fall below 800 — a wait that never ends.
+if (( NEEDS_CUDA_CARD )); then
+    if ! _tac_suspend_acquire "$SUSPEND"; then
+        warn "FATAL: could not acquire the CUDA suspend hold ($SUSPEND)"
+        exit 1
+    fi
+    trap '_tac_suspend_release "$SUSPEND"' EXIT
+else
+    printf '\nthis lane is not CUDA-backed — no CUDA suspend is taken\n'
 fi
-trap '_tac_suspend_release "$SUSPEND"' EXIT
 # swallow-ok: a lane already down is the state this seeks; the free-VRAM check below
 # is the check that the card was actually released.
 systemctl --user stop "$LANE" >/dev/null 2>&1
@@ -770,11 +794,15 @@ systemctl --user stop "$LANE" >/dev/null 2>&1
 # through — the fall-through that once launched a run onto a card holding 3.6 GiB.
 # The bound (800 MiB USED) is chosen so it is satisfiable once OUR lane is down; the
 # old free-VRAM test (> 3000 MiB free) said the same thing less directly.
-if ! _tac_gpu_wait_used_below 800 90; then
-    warn "FATAL: the card did not free for this run (see the gpu-wait line above) — refusing to start"
-    exit 1
+if (( NEEDS_CUDA_CARD )); then
+    if ! _tac_gpu_wait_used_below 800 90; then
+        warn "FATAL: the card did not free for this run (see the gpu-wait line above) — refusing to start"
+        exit 1
+    fi
+    printf '\ncard free before start: %s MiB used\n' "$(_tac_gpu_used_mib)"
+else
+    printf '\nthis lane is not on the CUDA card — the card gate does not apply\n'
 fi
-printf '\ncard free before start: %s MiB used\n' "$(_tac_gpu_used_mib)"
 
 _seq_out="$(parse_order "$OPT_ORDER" "$OPT_ALLOW_NI")"
 _prc=$?
