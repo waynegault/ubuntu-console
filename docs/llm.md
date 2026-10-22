@@ -383,8 +383,11 @@ each as a session, not as a pool:
   dedicated VRAM of its own, so the model weights, the KV cache and the prompt
   cache are all drawn from the same system RAM.  A `--cache-ram` raise on an
   iGPU lane therefore competes with the model it is caching for, not with a
-  separate GPU pool.  When a second lane does not fit, say so and swap; do not
-  pretend the swap is free.
+  separate GPU pool.  A GL probe does not measure it: `glxinfo -B` on this box
+  reports `llvmpipe` with `Accelerated: no` — Mesa's software path — so its
+  `Dedicated video memory` figure is an artifact, and the lanes themselves use
+  the OpenCL backend (`build-opencl`), which `glxinfo` does not cover.  When a
+  second lane does not fit, say so and swap; do not pretend the swap is free.
 
 **The per-lane `--cache-ram` budget is an OPEN decision, not a closed
 trade-off** (SWITCH-CONSOLE-AFFINITY-001 item 3, successor to
@@ -401,12 +404,13 @@ the budget it needs:
 | --- | --- | --- |
 | 512 MiB | 56,896 / 35,841 ms | processed +2,842 — re-prefill |
 | 640 MiB | 50,915 ms | processed +2,842 — re-prefill |
+| 768 MiB | 4,991 ms | processed +1, cached +2,872 — hit |
 | 1024 MiB | 1,652 / 626 / 1,211 / 1,957 ms | processed +1, cached +2,872 — hit |
 | 8192 (default) | 955 / 955 ms | processed +1, cached +2,872 — hit |
 
 R1 and R2 match across arms, so the whole **37-60x TTFT** gap is the returning
 conversation.  The per-lane minimum for a working 4,000-token conversation on
-this lane therefore sits **between 640 and 1024 MiB**; below it, every
+this lane therefore sits **between 640 and 768 MiB**; below it, every
 conversation switch pays a full re-prefill.  No budget number is set here.
 
 ### Reading the cache counters
