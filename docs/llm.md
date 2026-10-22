@@ -387,15 +387,22 @@ KVCACHE-PROMPT-CACHE-BUDGET-001).  `0` stays the current value because of the
 arithmetic above.  The measured cost of that choice is recorded, not guessed.
 The order-controlled BABA A/B (`scripts/cache-ram-probe.sh`, 2026-10-10)
 measured a clean switch re-prefilling at `0` — TTFT 5608 ms against 251 ms at
-8192.  The 2026-10-22 run, taken on the lane's **own argv** (`--from-unit`, so
+8192.  The 2026-10-22 runs, taken on the lane's **own argv** (`--from-unit`, so
 ctx 16384 / threads 8 / ngl 99 / flash-attn off) with a **4,000-token**
-conversation, measured the same effect an order of magnitude larger: R3 — the
-returning conversation — read **56,896 / 35,841 ms at 512 MiB** against
-**955 ms at 8192**, and the counters show the mechanism: 2,842 tokens
-re-processed at 512 MiB, 1 processed and 2,872 served from cache at 8192.
-So 512 MiB is far too small to hold a working conversation on this lane, 8192
-holds it, and the per-lane minimum lies between them; sizing it needs the
-intermediate sweep (1024 / 2048 / 4096).  No budget number is set here.
+conversation, measured the same effect an order of magnitude larger and located
+the budget it needs:
+
+| `--cache-ram` | R3 (the returning conversation) | counters |
+| --- | --- | --- |
+| 512 MiB | 56,896 / 35,841 ms | processed +2,842 — re-prefill |
+| 640 MiB | 50,915 ms | processed +2,842 — re-prefill |
+| 1024 MiB | 1,652 / 626 / 1,211 / 1,957 ms | processed +1, cached +2,872 — hit |
+| 8192 (default) | 955 / 955 ms | processed +1, cached +2,872 — hit |
+
+R1 and R2 match across arms, so the whole **37-60x TTFT** gap is the returning
+conversation.  The per-lane minimum for a working 4,000-token conversation on
+this lane therefore sits **between 640 and 1024 MiB**; below it, every
+conversation switch pays a full re-prefill.  No budget number is set here.
 
 ### Reading the cache counters
 
