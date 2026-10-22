@@ -506,6 +506,158 @@ def _check_jq() -> dict[str, object]:
     }
 
 
+# --- resolver probe ---------------------------------------------------------
+#
+# WHY A DNS ROW LIVES IN THE GATEWAY CHECKER.  Measured 2026-10-22 on this box:
+# `tailscaled` inside WSL answered SERVFAIL to every non-MagicDNS query for 5 h 16 m
+# ("dns: resolver: forward: no upstream resolvers set"), because the tailnet had no
+# global nameserver and its fallback read of the system resolver was denied.  Every
+# HTTPS call on the box failed — the Gateway's model calls and Qwen's alike — and the
+# only visible symptom was a generic connection error in an unrelated log.  Nothing
+# else on the box watches resolution, so the row belongs here, where `fail` reaches
+# `oc health`'s exit code and therefore a caller that can act on it.
+DNS_CANARY_HOST = "github.com"
+DNS_NO_UPSTREAM_SIGNATURE = "no upstream resolvers set"
+DNS_JOURNAL_LOOKBACK_MIN = 60
+
+
+def _is_wsl() -> bool:
+    """Whether this kernel is WSL, read from /proc/version rather than guessed.
+
+    The probe below is specific to the WSL resolver arrangement (a NAT DNS proxy and,
+    optionally, an in-distro tailscaled).  On a non-WSL host it must stay out of the
+    verdict rather than read a different resolver setup as a fault.
+    """
+    try:
+        with open("/proc/version", encoding="utf-8") as fh:
+            return "microsoft" in fh.read().lower()
+    except OSError as exc:
+        _note(f"/proc/version could not be read ({exc}); treating this as non-WSL")
+        return False
+
+
+def _resolv_nameservers(path: str = "/etc/resolv.conf") -> list[str]:
+    """The `nameserver` entries glibc would actually use, in file order."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        _note(f"{path} could not be read ({exc})")
+        return []
+    servers: list[str] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] == "nameserver":
+            servers.append(fields[1])
+    return servers
+
+
+def _dns_canary_error() -> str:
+    """Resolve the canary through the configured resolver; "" means it answered.
+
+    `getent` is used rather than `socket.getaddrinfo` because the stdlib call has no
+    timeout: during the measured outage it would have blocked the whole health run for
+    glibc's default 5 s x 2 attempts per name.
+    """
+    try:
+        result = _run(["getent", "ahostsv4", DNS_CANARY_HOST], timeout=3.0)
+    except subprocess.TimeoutExpired:
+        return "probe timed out"
+    except OSError as exc:
+        return str(exc)
+    if result.returncode == 0 and (result.stdout or "").strip():
+        return ""
+    return ((result.stderr or "").strip() or f"rc={result.returncode}")[:200]
+
+
+def _journal_no_upstream_hits() -> int | None:
+    """How many times tailscaled reported no upstream resolver, or None if unaskable.
+
+    Only meaningful where tailscaled is installed; absent, this returns None so the
+    row reports the current resolver state alone instead of inventing a verdict.
+    """
+    if shutil.which("journalctl") is None or shutil.which("tailscale") is None:
+        return None
+    try:
+        result = _run(
+            [
+                "journalctl",
+                "-u",
+                "tailscaled",
+                "--since",
+                f"-{DNS_JOURNAL_LOOKBACK_MIN} min",
+                "--no-pager",
+                "-o",
+                "cat",
+            ],
+            timeout=6.0,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        _note(f"tailscaled journal could not be read ({exc}); journal probe skipped")
+        return None
+    if result.returncode != 0:
+        _note(f"journalctl exited {result.returncode} for tailscaled; journal probe skipped")
+        return None
+    return (result.stdout or "").count(DNS_NO_UPSTREAM_SIGNATURE)
+
+
+def _check_wsl_dns() -> dict[str, object]:
+    """Whether name resolution actually works, and whether it recently did not.
+
+    The canary is the verdict, because it measures the current state a caller cares
+    about.  The journal count is a WARN, not a FAIL: a burst from the last hour can
+    predate a fix that is working now, and a row that stays red for an hour after the
+    repair is the kind of noise a health surface must not produce.
+    """
+    if not _is_wsl():
+        return {
+            "name": "dns",
+            "status": "info",
+            "message": "not WSL; resolver probe skipped",
+            "details": {},
+        }
+
+    servers = _resolv_nameservers()
+    details: dict[str, object] = {"nameservers": servers, "canary": DNS_CANARY_HOST}
+    if not servers:
+        return {
+            "name": "dns",
+            "status": "fail",
+            "message": "/etc/resolv.conf lists no nameserver",
+            "details": details,
+        }
+
+    error = _dns_canary_error()
+    if error:
+        details["error"] = error
+        return {
+            "name": "dns",
+            "status": "fail",
+            "message": f"cannot resolve {DNS_CANARY_HOST} ({error})",
+            "details": details,
+        }
+
+    hits = _journal_no_upstream_hits()
+    details["no_upstream_hits"] = hits
+    if hits:
+        return {
+            "name": "dns",
+            "status": "warn",
+            "message": (
+                f"tailscaled logged 'no upstream resolvers set' {hits} time(s) in the last "
+                f"{DNS_JOURNAL_LOOKBACK_MIN} min; resolution works now"
+            ),
+            "details": details,
+        }
+
+    return {
+        "name": "dns",
+        "status": "ok",
+        "message": f"resolves {DNS_CANARY_HOST} via {', '.join(servers)}",
+        "details": details,
+    }
+
+
 def build_report() -> dict[str, object]:
     oc_port = int(os.getenv("OC_PORT", "18789"))
     # Probe the PRODUCTION lane, not the scratch port.  LLM_PORT (8081) is where `so`
@@ -524,6 +676,7 @@ def build_report() -> dict[str, object]:
         _check_llm_port(llm_port),
         _check_systemd_gateway(),
         _check_jq(),
+        _check_wsl_dns(),
     ]
 
     summary = _summary_status(checks)

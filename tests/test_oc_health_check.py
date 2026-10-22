@@ -758,6 +758,7 @@ def test_build_report_shape_and_ports(monkeypatch: pytest.MonkeyPatch) -> None:
         "_check_llm_port",
         "_check_systemd_gateway",
         "_check_jq",
+        "_check_wsl_dns",
     ):
         monkeypatch.setattr(checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}})
 
@@ -779,6 +780,7 @@ def test_build_report_follows_the_production_llm_lane(monkeypatch: pytest.Monkey
         "_check_llm_port",
         "_check_systemd_gateway",
         "_check_jq",
+        "_check_wsl_dns",
     ):
         monkeypatch.setattr(checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}})
 
@@ -787,7 +789,7 @@ def test_build_report_follows_the_production_llm_lane(monkeypatch: pytest.Monkey
     assert report["ports"]["llm"] == 18081
     assert report["summary"] == "ok"
     assert isinstance(report["timestamp"], int)
-    assert len(report["checks"]) == 6
+    assert len(report["checks"]) == 7
     # The --json contract: a top-level checks list, each entry carrying name/status/message.
     assert {"timestamp", "summary", "ports", "checks"} <= set(report)
     for entry in report["checks"]:
@@ -801,7 +803,90 @@ def test_build_report_summary_is_worst_of_the_probes(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(checker, "_check_llm_port", lambda p: {"name": "d", "status": "ok", "message": "", "details": {}})
     monkeypatch.setattr(checker, "_check_systemd_gateway", lambda: {"name": "e", "status": "ok", "message": "", "details": {}})
     monkeypatch.setattr(checker, "_check_jq", lambda: {"name": "f", "status": "ok", "message": "", "details": {}})
+    monkeypatch.setattr(checker, "_check_wsl_dns", lambda: {"name": "g", "status": "ok", "message": "", "details": {}})
     assert checker.build_report()["summary"] == "fail"
+
+
+# --- resolver probe ---------------------------------------------------------
+#
+# Criterion (measured outage, 2026-10-22): a resolver failure must be visible and
+# must reach the exit code, and an outage that has since been repaired must not keep
+# the row red.  Each case names the wrong outcome it catches.
+
+
+def test_dns_probe_is_informational_off_wsl(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: a CI/Linux runner being reported as a DNS fault because its resolver
+    # arrangement differs from WSL's.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: False)
+    monkeypatch.setattr(
+        checker, "_resolv_nameservers", lambda *_a, **_k: pytest.fail("resolver read off WSL")
+    )
+    assert checker._check_wsl_dns()["status"] == "info"
+
+
+def test_dns_probe_fails_without_a_nameserver(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: an empty resolver list being read as healthy.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: [])
+    assert checker._check_wsl_dns()["status"] == "fail"
+
+
+def test_dns_probe_fails_when_the_canary_does_not_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: the measured outage shape — a configured nameserver that answers
+    # SERVFAIL or not at all — being reported as healthy.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: "probe timed out")
+    row = checker._check_wsl_dns()
+    assert row["status"] == "fail"
+    assert "probe timed out" in row["message"]
+
+
+def test_dns_probe_warns_on_a_recent_outage_that_has_recovered(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: staying FAIL for an hour after the repair (noise), while still losing
+    # the evidence that an outage happened.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: "")
+    monkeypatch.setattr(checker, "_journal_no_upstream_hits", lambda: 12)
+    row = checker._check_wsl_dns()
+    assert row["status"] == "warn"
+    assert "12" in row["message"]
+
+
+def test_dns_probe_is_ok_when_resolution_works_and_the_journal_is_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: "")
+    monkeypatch.setattr(checker, "_journal_no_upstream_hits", lambda: 0)
+    row = checker._check_wsl_dns()
+    assert row["status"] == "ok"
+    assert "10.255.255.254" in row["message"]
+
+
+def test_a_resolver_failure_reaches_the_exit_code(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The criterion end to end: with every other probe healthy, a resolver failure
+    # alone must make `oc health` exit 1 — the code a caller acts on. Catches: the row
+    # being wired into the report but not into the verdict (decoration).
+    for name in (
+        "_check_openclaw_cli",
+        "_check_gateway_port",
+        "_check_gateway_health",
+        "_check_llm_port",
+        "_check_systemd_gateway",
+        "_check_jq",
+    ):
+        monkeypatch.setattr(checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}})
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["100.100.100.100"])
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: "probe timed out")
+
+    assert checker.main(["--json"]) == 1
+    capsys.readouterr()
 
 
 # --- human output -----------------------------------------------------------
