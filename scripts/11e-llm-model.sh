@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 69
+# Module Version: 70
+#   v70 (2026-10-22): the switch notice's number now spans the LAUNCH, not just the health
+#   poll.  Observed in a real swap that day: `model use 17` on the Xe lane printed
+#   "Swap: loaded in 0s; …" because /health answers on the first probe while the model is
+#   still loading, so the health loop's counter never advanced and the line under-reported
+#   the cost it was describing.  `__model_use` now stamps $SECONDS before the launch and
+#   passes the elapsed time into `__model_use_wait_healthy`, which adds it to the loop's own
+#   count.  The notice text is unchanged; tests/unit/23 pins it by calling the helper.
 #   v67 (2026-10-20): __model_stop's fallback keeper reaper asks __tac_ppid_is_init instead
 #   of a bare `ppid == 1`.  On WSL the reparenting target is the relayed /init at pid 18459,
 #   so 27 `sleep 3600` keepers survived a completed 27-row bench and were reaped by hand.
@@ -1519,7 +1526,7 @@ function __model_use_switch_notice() {
 # @returns 0 when healthy, 1 on timeout/failure (after cleanup).
 # ---------------------------------------------------------------------------
 function __model_use_wait_healthy() {
-    local _model_swap="${1:-0}"
+    local _model_swap="${1:-0}" _elapsed_base="${2:-0}"
     local health_timeout
     health_timeout=$(__llm_health_timeout "$size" "$gpu_layers" "$name")
     local _health_elapsed=0
@@ -1527,6 +1534,11 @@ function __model_use_wait_healthy() {
     [[ -n "${__BENCH_MODE:-}" ]] || _health_progress="dots"
     if __llm_wait_for_health "$health_timeout" _health_elapsed "$_health_progress" "Loading LLM (health check)"
     then
+        # The notice reports what the LAUNCH cost, so the caller's pre-launch
+        # clock is added to the health loop's own count.  Measured 2026-10-22: a
+        # real swap printed "loaded in 0s" because /health answers on the first
+        # poll while the model is still loading, so the loop never advanced.
+        _health_elapsed=$(( _elapsed_base + _health_elapsed ))
         # swallow-ok: best-effort registry sync: the health wait reports its own result
         __llm_registry_sync_state >/dev/null 2>&1 || true
         # Bench mode: pre-flight a tiny completion to make sure the model slot is
@@ -1657,8 +1669,11 @@ function __model_use() {
     # launch must not continue into the health wait as if it had started something
     # (card CLAIMED-SUCCESS-WITNESS-001): the subshell is already torn down by then,
     # so the wait would report a timeout for a server that was deliberately stopped.
+    # Clock starts BEFORE the launch: the notice reports what the launch cost,
+    # and the health loop alone can read 0 s (see __model_use_wait_healthy).
+    local _launch_t0=$SECONDS
     __model_use_launch_server || return 1
-    __model_use_wait_healthy "$_model_swap"
+    __model_use_wait_healthy "$_model_swap" "$(( SECONDS - _launch_t0 ))"
     return $?
 }
 
