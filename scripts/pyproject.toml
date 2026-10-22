@@ -11,6 +11,12 @@ license = {text = "MIT"}
 requires-python = ">=3.12"
 dependencies = [
     "networkx>=3.0",
+    # community.py prefers nx.eigenvector_centrality_numpy, which networkx implements
+    # with numpy AND scipy; with either missing it raises ImportError. The except
+    # clause catches that and falls back to per-component power iteration, but the
+    # installed tool needs both to take the primary path.
+    "numpy>=1.26",
+    "scipy>=1.11",
     "pydantic>=2.0",
 ]
 

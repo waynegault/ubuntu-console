@@ -200,9 +200,12 @@ def compute_centrality(graph: Graph | dict) -> dict:
         warnings.simplefilter("always")
         try:
             eigenvector = nx.eigenvector_centrality_numpy(G, weight="weight")
-        except (nx.AmbiguousSolution, ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
+        except (ImportError, nx.AmbiguousSolution, ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
             # numpy eigenvector centrality is undefined for disconnected graphs
-            # (nx.AmbiguousSolution). Fall back to per-component power iteration:
+            # (nx.AmbiguousSolution), and ImportError means this environment has no
+            # numpy/scipy at all. Either way the fallback below is the answer — a
+            # missing optional accelerator must not kill the whole update.
+            # Fall back to per-component power iteration:
             # each connected component is scored on its own dominant-eigenvector
             # scale; isolated nodes stay at 0.0.
             logger.warning(
