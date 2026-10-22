@@ -2,7 +2,12 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 17
+# Module Version: 18
+#   v18 (2026-10-22): the loopback0 check now tells "not created yet" apart from
+#   "missing".  A shell can start before systemd finishes booting — measured
+#   2026-10-22: boot 22:51:58, tac-loopback0.service finished 22:52:23, and the
+#   interactive shells started 22:52:10 / 22:52:12 — so the old wording raised
+#   an alarm during a race that resolves itself within seconds.
 #   v17 (2026-10-11): the OpenClaw completion is now LAZY — a tiny
 #   __tac_oc_completion_stub is registered for `openclaw` and sources the real
 #   ~229 KB file on the first TAB, so its parse cost moves off every interactive
@@ -126,8 +131,29 @@ fi
 # Uses 'command ip' to call /usr/bin/ip directly, avoiding any function shadow.
 if ! command ip link show loopback0 >/dev/null 2>&1
 then
-    printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
-        "loopback0 missing — OpenClaw node-to-node traffic may fail; run 'up' or 'tac-exec __tac_fix_loopback' to create it"
+    # A shell can start BEFORE systemd finishes booting, and this box's
+    # tac-loopback0.service only runs once sysinit has been reached — measured
+    # 2026-10-22: boot 22:51:58, the unit finished 22:52:23, and a shell started
+    # at 22:52:10.  In that window the interface is not MISSING, it is not created
+    # YET, and saying which is the difference between a fault and a race that
+    # clears itself (WSL interop can spawn a shell ahead of sysinit, so unit
+    # ordering cannot close the window).
+    # `show -p SystemState` prints the same state `is-system-running` does but
+    # exits 0, so a non-zero status never reaches errexit (which bats enables).
+    # swallow-ok: systemctl's "not booted with systemd" stderr; an unreadable state still reaches the REAL alarm below
+    if ! _tac_system_state="$(systemctl show -p SystemState --value 2>/dev/null)"
+    then
+        _tac_system_state=""
+    fi
+    if [[ "$_tac_system_state" == starting || "$_tac_system_state" == initializing ]]
+    then
+        printf '%s\n' "${C_Info}[Tactical Profile]${C_Reset}" \
+            "loopback0 not created yet — systemd is still booting; it should appear within a few seconds"
+    else
+        printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
+            "loopback0 missing — OpenClaw node-to-node traffic may fail; run 'up' or 'tac-exec __tac_fix_loopback' to create it"
+    fi
+    unset _tac_system_state
 elif ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
 then
     # Interface exists but the address is missing (e.g. after a network reset)

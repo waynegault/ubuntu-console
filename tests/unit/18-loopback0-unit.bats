@@ -92,4 +92,101 @@ STUB
     [ "$status" -eq 0 ]
 }
 
+# ==============================================================================
+# 13-init's loopback0 notice — "not created yet" is not "missing"
+# ==============================================================================
+# Measured 2026-10-22: boot 22:51:58, tac-loopback0.service finished 22:52:23,
+# and the interactive shells started at 22:52:10 / 22:52:12 — inside the unit's
+# start window.  The absence was real at that instant, and the notice stayed on
+# screen long after the interface existed, which reads as a fault that never
+# cleared.  The split the fix draws:
+#
+#   boot still in progress  -> "not created yet"   (a race; nothing to repair)
+#   boot finished           -> the alarm           (a genuine absence)
+#   state unreadable        -> the alarm           (unknown must never read as fine)
+#
+# Each case drives the REAL scripts/13-init.sh with `ip` and `systemctl` stubs on
+# PATH and HOME in the sandbox, so the module's own state dirs are throwaway.
+# ==============================================================================
+
+# _write_stubs — `ip` answers the link question, `systemctl` reports the boot state.
+_write_stubs() {
+    cat > "$STUB_DIR/ip" <<'STUB'
+#!/usr/bin/env bash
+# Absent: every query fails.  Present: the link query succeeds AND the address
+# query prints the address — the module has two branches, so a stub that only
+# answers the first would make the "interface exists" control report the address
+# as missing instead of staying quiet.
+if [[ "${STUB_LINK_PRESENT:-0}" != "1" ]]; then
+    exit 1
+fi
+if [[ "${1:-}" == "addr" ]]; then
+    printf '    inet 127.0.0.2/8 scope host loopback0\n'
+fi
+exit 0
+STUB
+    cat > "$STUB_DIR/systemctl" <<'STUB'
+#!/usr/bin/env bash
+if [[ -n "${STUB_SYSTEM_STATE:-}" ]]; then
+    printf '%s\n' "$STUB_SYSTEM_STATE"
+fi
+exit "${STUB_SYSTEM_EXIT:-0}"
+STUB
+    chmod +x "$STUB_DIR/ip" "$STUB_DIR/systemctl"
+}
+
+# _run_init [NAME=VALUE...] — source the real module in a throwaway environment.
+# Errexit is enabled in this shell, and the module's own systemctl probe is
+# errexit-safe by construction (its `if` guard), so the child needs no -e/-u.
+_run_init() {
+    _write_stubs
+    mkdir -p "$BATS_TEST_TMPDIR/home" "$BATS_TEST_TMPDIR/oc" "$BATS_TEST_TMPDIR/oc-workspace"
+    env -u __TAC_INITIALIZED -u __TAC_DISPLAY_BANNER \
+        HOME="$BATS_TEST_TMPDIR/home" \
+        PATH="$STUB_DIR:$PATH" \
+        BASH_COMPLETION_SCRIPT= \
+        OC_ROOT="$BATS_TEST_TMPDIR/oc" \
+        OC_LOGS="$BATS_TEST_TMPDIR/oc/logs" \
+        OC_BACKUPS="$BATS_TEST_TMPDIR/oc/backups" \
+        OC_WORKSPACE="$BATS_TEST_TMPDIR/oc-workspace" \
+        __TAC_OPENCLAW_OK=0 \
+        C_Info= C_Warning= C_Reset= \
+        "$@" \
+        bash --noprofile --norc -c "cd '$BATS_TEST_TMPDIR' && source '$REPO_ROOT/scripts/13-init.sh'" 2>&1
+}
+
+@test "13-init loopback0: a shell that starts before systemd finishes says NOT CREATED YET" {
+    # Catches the pre-fix wording: it called this race "loopback0 missing" and
+    # told the reader to run a repair the boot unit was already performing.
+    run _run_init STUB_LINK_PRESENT=0 STUB_SYSTEM_STATE=starting
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"loopback0 not created yet"* ]]
+    [[ "$output" != *"loopback0 missing"* ]]
+}
+
+@test "13-init loopback0: once the boot has finished, a genuine absence keeps the ALARM" {
+    # Catches the over-correction: treating every absence as "not yet" would stop
+    # reporting a real fault on a box that has been up for hours.
+    run _run_init STUB_LINK_PRESENT=0 STUB_SYSTEM_STATE=running
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"loopback0 missing"* ]]
+    [[ "$output" != *"not created yet"* ]]
+}
+
+@test "13-init loopback0: an unreadable boot state is an ALARM, never 'fine'" {
+    # Catches the silent failure: with no systemd able to answer, "unknown" must
+    # not fold into "still booting" — that is the boot where only the repair works.
+    run _run_init STUB_LINK_PRESENT=0 STUB_SYSTEM_STATE= STUB_SYSTEM_EXIT=1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"loopback0 missing"* ]]
+}
+
+@test "13-init loopback0: an interface that exists says nothing at all" {
+    # Catches the opposite spam: a check that warns regardless of state would put
+    # a notice on every shell of a healthy box.
+    run _run_init STUB_LINK_PRESENT=1 STUB_SYSTEM_STATE=running
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"loopback0"* ]]
+}
+
 # end of file
