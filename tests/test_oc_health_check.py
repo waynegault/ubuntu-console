@@ -814,6 +814,14 @@ def test_build_report_summary_is_worst_of_the_probes(monkeypatch: pytest.MonkeyP
 # the row red.  Each case names the wrong outcome it catches.
 
 
+def _set_pairing(
+    monkeypatch: pytest.MonkeyPatch, generate_resolv: str | None, corp_dns: bool | None
+) -> None:
+    """Pin the writer pairing so a probe case never reads the live box."""
+    monkeypatch.setattr(checker, "_wsl_network_value", lambda *_a, **_k: generate_resolv)
+    monkeypatch.setattr(checker, "_tailscale_corp_dns", lambda: corp_dns)
+
+
 def test_dns_probe_is_informational_off_wsl(monkeypatch: pytest.MonkeyPatch) -> None:
     # Catches: a CI/Linux runner being reported as a DNS fault because its resolver
     # arrangement differs from WSL's.
@@ -827,6 +835,7 @@ def test_dns_probe_is_informational_off_wsl(monkeypatch: pytest.MonkeyPatch) -> 
 def test_dns_probe_fails_without_a_nameserver(monkeypatch: pytest.MonkeyPatch) -> None:
     # Catches: an empty resolver list being read as healthy.
     monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "true", False)
     monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: [])
     assert checker._check_wsl_dns()["status"] == "fail"
 
@@ -835,6 +844,7 @@ def test_dns_probe_fails_when_the_canary_does_not_resolve(monkeypatch: pytest.Mo
     # Catches: the measured outage shape — a configured nameserver that answers
     # SERVFAIL or not at all — being reported as healthy.
     monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "true", False)
     monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
     monkeypatch.setattr(checker, "_dns_canary_error", lambda: "probe timed out")
     row = checker._check_wsl_dns()
@@ -846,6 +856,7 @@ def test_dns_probe_warns_on_a_recent_outage_that_has_recovered(monkeypatch: pyte
     # Catches: staying FAIL for an hour after the repair (noise), while still losing
     # the evidence that an outage happened.
     monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "true", False)
     monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
     monkeypatch.setattr(checker, "_dns_canary_error", lambda: "")
     monkeypatch.setattr(checker, "_journal_no_upstream_hits", lambda: 12)
@@ -858,6 +869,7 @@ def test_dns_probe_is_ok_when_resolution_works_and_the_journal_is_clean(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "true", False)
     monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
     monkeypatch.setattr(checker, "_dns_canary_error", lambda: "")
     monkeypatch.setattr(checker, "_journal_no_upstream_hits", lambda: 0)
@@ -882,11 +894,81 @@ def test_a_resolver_failure_reaches_the_exit_code(
     ):
         monkeypatch.setattr(checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}})
     monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "true", False)
     monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["100.100.100.100"])
     monkeypatch.setattr(checker, "_dns_canary_error", lambda: "probe timed out")
 
     assert checker.main(["--json"]) == 1
     capsys.readouterr()
+
+
+def test_wsl_network_value_reads_only_the_network_section(tmp_path: Path) -> None:
+    # Catches: a parser that takes the first match, or ignores sections — [boot] also
+    # carries keys a naive grep would pick up.
+    conf = tmp_path / "wsl.conf"
+    conf.write_text(
+        "[boot]\ngenerateResolvConf = false\n[network]\ngenerateResolvConf = true\n",
+        encoding="utf-8",
+    )
+    assert checker._wsl_network_value("generateResolvConf", str(conf)) == "true"
+
+
+def test_dns_probe_fails_when_tailscale_owns_dns_with_no_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The measured 2026-10-22 outage shape: WSL is not writing the file, Tailscale is,
+    # and the tailnet supplies no nameserver. Catches: reporting this as healthy while
+    # the canary happens to be cached, or naming the symptom without the cause.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "false", True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["100.100.100.100"])
+    monkeypatch.setattr(checker, "_tailnet_has_global_resolvers", lambda: False)
+    monkeypatch.setattr(
+        checker, "_dns_canary_error", lambda: pytest.fail("canary ran before the config verdict")
+    )
+    row = checker._check_wsl_dns()
+    assert row["status"] == "fail"
+    assert "no tailnet global nameserver" in row["message"]
+
+
+def test_dns_probe_allows_tailscale_owned_dns_with_an_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Catches: a guard that refuses the legitimate Tailscale-owned model outright
+    # instead of only the no-upstream case.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "false", True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["100.100.100.100"])
+    monkeypatch.setattr(checker, "_tailnet_has_global_resolvers", lambda: True)
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: "")
+    monkeypatch.setattr(checker, "_journal_no_upstream_hits", lambda: 0)
+    assert checker._check_wsl_dns()["status"] == "ok"
+
+
+def test_dns_probe_warns_when_no_writer_is_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: silence when neither WSL nor Tailscale will refresh resolv.conf, so a
+    # stale file looks fine until the gateway address changes.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "false", False)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: "")
+    monkeypatch.setattr(checker, "_journal_no_upstream_hits", lambda: 0)
+    row = checker._check_wsl_dns()
+    assert row["status"] == "warn"
+    assert "operator-managed" in row["message"]
+
+
+def test_dns_probe_warns_when_both_writers_are_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: calling the trample fight healthy. It resolved, but each writer rewrote
+    # the file and restarted systemd-resolved 86 times across one boot.
+    monkeypatch.setattr(checker, "_is_wsl", lambda: True)
+    _set_pairing(monkeypatch, "true", True)
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["10.255.255.254"])
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: "")
+    monkeypatch.setattr(checker, "_journal_no_upstream_hits", lambda: 0)
+    row = checker._check_wsl_dns()
+    assert row["status"] == "warn"
+    assert "both write" in row["message"]
 
 
 # --- human output -----------------------------------------------------------

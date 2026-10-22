@@ -601,6 +601,75 @@ def _journal_no_upstream_hits() -> int | None:
     return (result.stdout or "").count(DNS_NO_UPSTREAM_SIGNATURE)
 
 
+def _wsl_network_value(key: str, path: str = "/etc/wsl.conf") -> str | None:
+    """Read KEY from /etc/wsl.conf's [network] section; the last assignment wins."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        _note(f"{path} could not be read ({exc})")
+        return None
+    section = ""
+    value: str | None = None
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            continue
+        if section != "network" or "=" not in line:
+            continue
+        name, _, val = line.partition("=")
+        if name.strip() == key:
+            value = val.strip()
+    return value
+
+
+def _tailscale_corp_dns() -> bool | None:
+    """Tailscale's accept-dns pref, or None when it cannot be read."""
+    if shutil.which("tailscale") is None:
+        return None
+    try:
+        result = _run(["tailscale", "debug", "prefs"], timeout=3.0)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        _note(f"tailscale debug prefs could not be read ({exc})")
+        return None
+    if result.returncode != 0:
+        _note(f"tailscale debug prefs exited {result.returncode}")
+        return None
+    try:
+        prefs = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        _note(f"tailscale debug prefs returned invalid JSON ({exc})")
+        return None
+    corp = prefs.get("CorpDNS")
+    return corp if isinstance(corp, bool) else None
+
+
+def _tailnet_has_global_resolvers() -> bool | None:
+    """Whether the tailnet supplies a global nameserver, or None if unaskable.
+
+    `tailscale dns status --json` does not expose the resolver list, so this reads the
+    human report's section.  A missing section returns None, so a format change
+    degrades to "unknown" rather than inventing a verdict.
+    """
+    if shutil.which("tailscale") is None:
+        return None
+    try:
+        result = _run(["tailscale", "dns", "status"], timeout=3.0)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        _note(f"tailscale dns status could not be read ({exc})")
+        return None
+    if result.returncode != 0:
+        _note(f"tailscale dns status exited {result.returncode}")
+        return None
+    text = result.stdout or ""
+    if "Resolvers (in preference order)" not in text:
+        return None
+    return "no resolvers configured" not in text
+
+
 def _check_wsl_dns() -> dict[str, object]:
     """Whether name resolution actually works, and whether it recently did not.
 
@@ -618,7 +687,14 @@ def _check_wsl_dns() -> dict[str, object]:
         }
 
     servers = _resolv_nameservers()
-    details: dict[str, object] = {"nameservers": servers, "canary": DNS_CANARY_HOST}
+    wsl_writes = (_wsl_network_value("generateResolvConf") or "").strip().lower() or None
+    corp_dns = _tailscale_corp_dns()
+    details: dict[str, object] = {
+        "nameservers": servers,
+        "canary": DNS_CANARY_HOST,
+        "generateResolvConf": wsl_writes,
+        "CorpDNS": corp_dns,
+    }
     if not servers:
         return {
             "name": "dns",
@@ -627,6 +703,26 @@ def _check_wsl_dns() -> dict[str, object]:
             "details": details,
         }
 
+    # The writer pairing, which is what actually produced the 2026-10-22 outage:
+    # `generateResolvConf = false` (WSL not writing the file) with Tailscale owning DNS
+    # and no tailnet global nameserver — the daemon reads its own 100.100.100.100 back
+    # as "the system resolver" and has nowhere to forward.  `accept-dns = true` alone is
+    # NOT the fault: measured the same day, it resolved 20/20 with generateResolvConf
+    # true.  A missing tailnet nameserver list is reported as unknown, never guessed.
+    if wsl_writes == "false" and corp_dns is True:
+        has_global = _tailnet_has_global_resolvers()
+        details["tailnet_global_resolvers"] = has_global
+        if has_global is False:
+            return {
+                "name": "dns",
+                "status": "fail",
+                "message": (
+                    "Tailscale owns /etc/resolv.conf (generateResolvConf=false) with no "
+                    "tailnet global nameserver: public names will SERVFAIL"
+                ),
+                "details": details,
+            }
+
     error = _dns_canary_error()
     if error:
         details["error"] = error
@@ -634,6 +730,27 @@ def _check_wsl_dns() -> dict[str, object]:
             "name": "dns",
             "status": "fail",
             "message": f"cannot resolve {DNS_CANARY_HOST} ({error})",
+            "details": details,
+        }
+
+    if wsl_writes == "false" and corp_dns is False:
+        return {
+            "name": "dns",
+            "status": "warn",
+            "message": (
+                "neither WSL (generateResolvConf=false) nor Tailscale (accept-dns=false) "
+                "writes /etc/resolv.conf; it is operator-managed and will not refresh"
+            ),
+            "details": details,
+        }
+    if wsl_writes == "true" and corp_dns is True:
+        return {
+            "name": "dns",
+            "status": "warn",
+            "message": (
+                "WSL and Tailscale both write /etc/resolv.conf; measured to work, but each "
+                "tramples the other and restarts systemd-resolved"
+            ),
             "details": details,
         }
 
