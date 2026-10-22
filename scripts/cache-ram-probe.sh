@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-10-22): the run now GIVES THE BOX BACK on every exit, including a signal.
+#   Measured: SIGTERMing a run left its child llama-server holding the lane port, so the
+#   unit failed to bind and systemd tripped its restart limit, and the lane stayed DOWN
+#   for a manual restore.  An EXIT trap kills this run's own arm server, releases the CUDA
+#   hold if one was taken, and restarts the lane only if it was serving before the run;
+#   INT/TERM are trapped so the EXIT trap runs on a kill (`timeout` is one).
 #   v13 (2026-10-22): the CUDA suspend AND the free-VRAM gate are now taken only for a
 #   CUDA-backed lane.  `--from-unit` sets NEEDS_CUDA_CARD from the unit's argv, so an iGPU
 #   lane no longer waits on a card it is not on.  Measured: the run parked at its suspend
@@ -589,6 +595,38 @@ term_server() {
     return 0
 }
 
+# __probe_exit_cleanup — give the box back, INCLUDING on a signal.
+# Measured 2026-10-22: SIGTERMing a run left its child llama-server on the lane port, so
+# the unit then failed to bind and systemd tripped its restart limit; the run also left
+# the lane DOWN, which made the operator restore it by hand.  The trap now kills THIS
+# run's own server, releases the CUDA hold if one was taken, and restarts the lane only
+# if it was serving before the run (a lane that was already down is left down).
+__probe_exit_cleanup() {
+    local _rc=$?
+    # Re-entrancy: an INT during the EXIT trap must not start the lane twice.
+    trap - EXIT INT TERM
+    (( _PROBE_CLEANED )) && return "$_rc"
+    _PROBE_CLEANED=1
+    if [[ -n "${_PROBE_ARM_PID:-}" ]]; then
+        term_server "$_PROBE_ARM_PID"
+        _PROBE_ARM_PID=""
+    fi
+    if (( NEEDS_CUDA_CARD )) && [[ -n "${SUSPEND:-}" ]]; then
+        # swallow-ok: a release failure is not silent — the lane restart below reports it.
+        _tac_suspend_release "$SUSPEND" >/dev/null 2>&1 || true
+    fi
+    if (( _PROBE_LANE_WAS_ACTIVE )); then
+        # swallow-ok: reset-failed is best-effort; the `start` below is the check.
+        systemctl --user reset-failed "$LANE" >/dev/null 2>&1 || true
+        if systemctl --user start "$LANE" >/dev/null 2>&1; then
+            printf '\nlane %s restarted on exit (it was serving before this run)\n' "$LANE"
+        else
+            warn "WARNING: lane $LANE did NOT restart on exit — check its unit"
+        fi
+    fi
+    return "$_rc"
+}
+
 # The pre-flight parse, kept as a variable so the pipeline stays inside the 120-col
 # house limit (tools/count-ratchet.sh item 8.1.8).
 _PF_PARSE="import sys,json;print(json.load(sys.stdin).get('usage',{}).get('completion_tokens',0))"
@@ -621,6 +659,9 @@ run_arm() {
     printf '    argv: %s\n' "${argv[*]}"
     "${argv[@]}" > "$out_dir/server.log" 2>&1 &
     pid=$!
+    # The exit trap needs this pid: a SIGTERM must not leave the arm's server holding
+    # the lane port (measured 2026-10-22 — the unit then failed to bind).
+    _PROBE_ARM_PID="$pid"
     while (( hw < 120 )); do
         sleep 1; hw=$(( hw + 1 ))
         # swallow-ok: kill -0's message is the ANSWER here; the FAIL row reports it.
@@ -680,6 +721,8 @@ run_arm() {
     m0=$(metrics_pair); measure "$WORKDIR/p3.json" "$out_dir/r4.json"; m1=$(metrics_pair)
     printf '%s\n%s\n' "$m0" "$m1" > "$out_dir/r4.metrics"; printf '    r4 counters: %s -> %s\n' "$m0" "$m1"
     term_server "$pid"
+    # This arm's server is gone; the exit trap has nothing left to reap for it.
+    _PROBE_ARM_PID=""
     return 0
 }
 
@@ -779,10 +822,22 @@ if (( NEEDS_CUDA_CARD )); then
         warn "FATAL: could not acquire the CUDA suspend hold ($SUSPEND)"
         exit 1
     fi
-    trap '_tac_suspend_release "$SUSPEND"' EXIT
 else
     printf '\nthis lane is not CUDA-backed — no CUDA suspend is taken\n'
 fi
+# What the cleanup restores, captured BEFORE the stop.  `is-active --quiet` is the test:
+# without --quiet it prints the state and exits non-zero, which reads as a failure here.
+_PROBE_ARM_PID=""
+_PROBE_CLEANED=0
+_PROBE_LANE_WAS_ACTIVE=0
+if systemctl --user is-active --quiet "$LANE"; then
+    _PROBE_LANE_WAS_ACTIVE=1
+fi
+trap '__probe_exit_cleanup' EXIT
+# A SIGTERM otherwise ends the shell WITHOUT running the EXIT trap — which is exactly how
+# a killed run left its child server holding the lane port (measured 2026-10-22).
+trap 'exit 130' INT   # 130 = 128+SIGINT, so the EXIT cleanup above still runs
+trap 'exit 143' TERM  # 143 = 128+SIGTERM — `timeout` sends exactly this
 # swallow-ok: a lane already down is the state this seeks; the free-VRAM check below
 # is the check that the card was actually released.
 systemctl --user stop "$LANE" >/dev/null 2>&1

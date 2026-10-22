@@ -765,3 +765,62 @@ rebench_run() {
     [[ ! -s "$R_PROBE_LOG" ]]                    # NO probe was ever launched
     [[ "$output" != *"gpu gate"* ]]              # it stopped before the card was even asked
 }
+
+# ── the EXIT path (v14, 2026-10-22) ──────────────────────────────────────────
+# The measured defect: SIGTERMing a run left its child llama-server holding the lane
+# port (so the unit failed to bind) and left the lane DOWN.  These pin the restore.
+
+_probe_cleanup_harness() {
+    local active="$1"
+    awk '/^term_server\(\) \{/,/^}/' "$PROBE" > "$SANDBOX/cleanup.sh"
+    awk '/^__probe_exit_cleanup\(\) \{/,/^}/' "$PROBE" >> "$SANDBOX/cleanup.sh"
+    grep -q '__probe_exit_cleanup' "$SANDBOX/cleanup.sh" \
+        || { echo "FAIL: cleanup not extracted from $PROBE"; return 1; }
+    cat > "$SANDBOX/run.sh" <<EOS
+set -uo pipefail
+source "$SANDBOX/cleanup.sh"
+SYSTEMCTL_LOG="$SANDBOX/calls"
+systemctl() { printf '%s\n' "\$*" >> "\$SYSTEMCTL_LOG"; return 0; }
+term_server() { printf 'TERM %s\n' "\$1" >> "\$SYSTEMCTL_LOG"; }
+NEEDS_CUDA_CARD=0
+LANE="llama-test.service"
+_PROBE_CLEANED=0
+_PROBE_LANE_WAS_ACTIVE=$active
+_PROBE_ARM_PID=999999
+__probe_exit_cleanup
+EOS
+    run bash "$SANDBOX/run.sh"
+}
+
+@test "probe exit: an ACTIVE lane is restarted and this run's server is killed" {
+    # Catches the measured failure: a killed run left the arm's server on the port and
+    # the lane down, so the unit then failed to bind and a human had to restore it.
+    _probe_cleanup_harness 1
+    [[ "$status" -eq 0 ]]
+    grep -q '^TERM 999999$' "$SANDBOX/calls" \
+        || { echo "FAIL: the arm server was not terminated:"; cat "$SANDBOX/calls"; return 1; }
+    grep -q '^--user reset-failed llama-test.service$' "$SANDBOX/calls" \
+        || { echo "FAIL: the restart counter was not cleared:"; cat "$SANDBOX/calls"; return 1; }
+    grep -q '^--user start llama-test.service$' "$SANDBOX/calls" \
+        || { echo "FAIL: the lane it stopped was not restarted:"; cat "$SANDBOX/calls"; return 1; }
+}
+
+@test "probe exit: a lane that was already DOWN is left down (control)" {
+    # The restore returns what it FOUND: a lane taken down on purpose stays down, so a
+    # probe cannot turn into an unrequested lane activation.
+    _probe_cleanup_harness 0
+    [[ "$status" -eq 0 ]]
+    grep -q '^TERM 999999$' "$SANDBOX/calls" \
+        || { echo "FAIL: the arm server was not terminated:"; cat "$SANDBOX/calls"; return 1; }
+    if grep -q 'start llama-test.service' "$SANDBOX/calls"; then
+        echo "FAIL: a lane that was already down was STARTED:"; cat "$SANDBOX/calls"; return 1
+    fi
+}
+
+@test "probe exit: INT and TERM are trapped, so the EXIT cleanup runs on a kill" {
+    # A SIGTERM otherwise ends the shell WITHOUT the EXIT trap — that is the mechanism
+    # behind the orphaned server, and `timeout` sends exactly that.
+    grep -q "trap '__probe_exit_cleanup' EXIT" "$PROBE"
+    grep -q "trap 'exit 130' INT" "$PROBE"
+    grep -q "trap 'exit 143' TERM" "$PROBE"
+}
