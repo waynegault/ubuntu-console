@@ -36,3 +36,9 @@ aiohttp
 tree-sitter
 tree-sitter-bash
 tree-sitter-python
+# Not a test-suite import: tools/lint.sh's contract drift guard parses the contract YAML and
+# REFUSES to run without PyYAML ("a partial contract check is a silent pass").  The two jobs
+# that run tools/lint.sh install this file, which is why it is pinned here rather than left to
+# whatever the host's python3 happens to carry (measured 2026-10-22: brew's python@3.15
+# upgrade left the runner's PATH python3 without it and red-ed both jobs with no repo change).
+pyyaml

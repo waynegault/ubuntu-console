@@ -38,6 +38,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # tools/lint.sh's contract drift guard parses YAML and REFUSES to run without PyYAML
+      # ("a partial contract check is a silent pass").  This job inherited whatever python3 the
+      # runner's PATH offered, so a HOST toolchain upgrade red-ed the gate with no repo change:
+      # measured 2026-10-22, brew installing python@3.15 repointed
+      # /home/linuxbrew/.linuxbrew/bin/python3 — earlier on this runner's PATH than /usr/bin —
+      # to an interpreter with no PyYAML, and both jobs that run lint.sh failed at the guard.
+      # Pin the interpreter and install the same pinned toolchain the Python jobs use.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Python toolchain
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r .github/ci-requirements.txt
+
       - name: Install shellcheck (pinned)
         run: sudo tools/install-shellcheck.sh
 
@@ -92,6 +109,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Same reason as the lint job above: this job runs tools/lint.sh, whose contract drift
+      # guard needs PyYAML, and it must not depend on whatever python3 the runner's PATH
+      # happens to resolve after a host toolchain upgrade.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Python toolchain
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r .github/ci-requirements.txt
 
       - name: Install bats (pinned)
         # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted

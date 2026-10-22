@@ -16,6 +16,7 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
+workflow=CI | owner=Wayne | card=CI-RED-2026-10-22-brew-python315-contract-guard | expiry=2026-10-25 | reason=Run 39805107287 (CI at tip 2f06fca5) is RED on TWO jobs, `Lint & Static Analysis` and `Fast Test Suite`, both at the Contract Drift Guard: "check-contracts: PyYAML is required to parse the contract, and is not importable". Cause is HOST, not repo — brew installed python@3.15 at 14:31 BST and repointed /home/linuxbrew/.linuxbrew/bin/python3, which sits earlier on this runner's PATH than /usr/bin, and the new cell carries no PyYAML; the first red run after it is 59d48c6b at 14:35. The guard fails CLOSED by design, so this is a refusal to parse, not a contract violation. The SAME change-set that adds this entry fixes the cause: setup-python 3.12 plus `pip install -r .github/ci-requirements.txt` in both jobs, with pyyaml added there, so the guard no longer depends on the host toolchain. CLOSING ACTION: DELETE this entry once a green CI run exists for the tip that carries the fix.
 # (none — the `CI` entry added 2026-10-15 (card CI-RED-2026-10-15-unit-venv-python) was deleted the
 #  same day, and deliberately NOT against a green run.  Its red (run 38762999750 at tip 70823378) is
 #  SUPERSEDED by tip 158729df, and the live probe (`--cache-ttl 0`) read "no red, but not every workflow
