@@ -23,12 +23,16 @@ Environment=GGML_OPENCL_DEVICE=0
 #
 # --jinja is required: the chat template is what advertises tools to the model, and
 # without it the 3B narrates instead of emitting a structured tool call.
-# --cache-ram 0 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
-# MiB of host RAM for the prompt cache, unbudgeted here and larger than this
-# unit's MemoryMax below; 0 is explicit-disable.  The number that should replace
-# it waits on investigator card KVCACHE-PROMPT-CACHE-BUDGET-001 item 1 and lives
-# in scripts/01-constants.sh (LLAMA_CACHE_RAM_MB).  Tests/unit/23-*.bats pins this
-# literal to that default, so a change must land in both.
+# --cache-ram 768 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
+# MiB of host RAM for the prompt cache, unbudgeted and larger than this unit's
+# MemoryMax below; 768 is the value MEASURED for this lane on 2026-10-22 by
+# scripts/cache-ram-probe.sh with its own argv and 4,000-token prompts.  640 MiB
+# re-prefilled the returning conversation (R3 50,915 ms, processed +2,842); 768 MiB
+# served it from cache at BOTH probe positions (825 / 1,764 ms, cached +2,872).
+# The number's single authority is LLAMA_CACHE_RAM_MB_BY_PORT in
+# scripts/01-constants.sh (the launcher reads it by port), and
+# tests/unit/23-*.bats pins this literal to that table, so a change must land in both.
+# The other four lanes stay at 0: they are NOT measured.
 # --flash-attn off (XE-LONGCTX-DEGEN-001, 2026-10-02): this OpenCL build's Flash Attention
 # is numerically broken beyond ~1.5k tokens of context. With FA left on 'auto', every
 # heartbeat-length prompt (~2090 tok) degenerated into '??????' garbage, which the
@@ -49,7 +53,7 @@ Environment=GGML_OPENCL_DEVICE=0
 # REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
 # (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
 # CARD: SWITCH-CONSOLE-METRICS-001
-ExecStart=%h/.local/bin/llama-xe-server -m /mnt/m/active/Llama-3.2-3B-Instruct-Q4_K_M.gguf --port 18085 --host 127.0.0.1 --ctx-size 16384 --batch-size 512 --ubatch-size 512 --threads 8 --n-gpu-layers 99 --parallel 1 --cache-ram 0 --fit off --jinja --reasoning off --flash-attn off --metrics
+ExecStart=%h/.local/bin/llama-xe-server -m /mnt/m/active/Llama-3.2-3B-Instruct-Q4_K_M.gguf --port 18085 --host 127.0.0.1 --ctx-size 16384 --batch-size 512 --ubatch-size 512 --threads 8 --n-gpu-layers 99 --parallel 1 --cache-ram 768 --fit off --jinja --reasoning off --flash-attn off --metrics
 # always, like the other serving lanes: a heartbeat lane that is down silently
 # turns into an empty model reply.
 Restart=always

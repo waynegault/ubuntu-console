@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 38
+# Module Version: 39
 #   v35 (2026-10-21): WSL GPU library resolution moves here from ~/.bashrc.  The two
 #   exports added there on 2026-10-19 (after the Windows driver reinstall) turned the
 #   loader gate red: ~/.bashrc must stay a thin loader.  PATH and LD_LIBRARY_PATH now
@@ -436,21 +436,29 @@ export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 # (llama.cpp's cache_ram_mib; `llama-server --help`: "set the maximum cache size
 # in MiB (default: 8192, -1 - no limit, 0 - disable)").
 #
-# 0 = explicit-disable, and 0 is what every lane launches with.  The problem this
-# records is the DEFAULT, not a behaviour we chose: 8192 MiB is 8 GiB of host RAM
-# advertised per server, and nothing in this repo budgets it.  The box it runs on
-# has 28 GiB (MemTotal 28,740,164 kB) with 7 GiB of swap, and the CUDA lane's own
-# cgroup is MemoryMax=7G (systemd/llama-cuda-llama32-3b-chat.service) — the
-# default alone is larger than the lane's memory cap, so the number has to be one
-# this box can pay for.
+# 0 = explicit-disable, and 0 is still the value for every lane that has NOT been
+# measured.  The problem this records is the DEFAULT, not a behaviour we chose:
+# 8192 MiB is 8 GiB of host RAM advertised per server, and nothing in this repo
+# budgets it.  The box it runs on has 28 GiB (MemTotal 28,740,164 kB) with 7 GiB of
+# swap, and the CUDA lane's own cgroup is MemoryMax=7G
+# (systemd/llama-cuda-llama32-3b-chat.service) — the default alone is larger than
+# the lane's memory cap, so the number has to be one this box can pay for.
 #
-# The number that should REPLACE 0 is not yet known: it waits on the investigator
-# card KVCACHE-PROMPT-CACHE-BUDGET-001 item 1 (measure the host-RAM budget a lane
-# may advertise).  Until that lands, 0 is the only defensible value — inventing a
-# figure here would be a second guess stacked on the unbudgeted default.  When it
-# lands, change this default and the lane units' literal `--cache-ram` argument in
-# the same commit: tests/unit/23-prompt-cache-and-gpu-classify.bats pins the units,
-# the launcher and this value to each other, so a one-sided change fails there.
+# THE Xe 3B LANE IS NOW MEASURED (2026-10-22, investigator card
+# KVCACHE-PROMPT-CACHE-BUDGET-001 item 1).  With that lane's own argv and
+# 4,000-token prompts: 640 MiB re-prefilled the returning conversation (R3
+# 50,915 ms, processed +2,842) and 768 MiB served it from cache at BOTH probe
+# positions (825 / 1,764 ms, cached +2,872).  So 768 MiB is the measured minimum
+# for a 4,000-token conversation on :18085 — see docs/llm.md for the table.
+#
+# The budget is therefore PER LANE, keyed by PORT (the stable identity: docs/llm.md
+# "the lane is identified by port 18085").  LLAMA_CACHE_RAM_MB stays the default
+# for a lane that is not in the table, which is 0 — the other four are unmeasured,
+# and a figure invented for them would be a second guess stacked on the unbudgeted
+# default.  A lane's entry must be repeated as the literal `--cache-ram` argument
+# in its unit (a lane start cannot assume a sourced shell), and
+# tests/unit/23-prompt-cache-and-gpu-classify.bats pins each unit's literal to THIS
+# table, so a one-sided change fails there.
 #
 # WHAT 0 COSTS (stated, not implied, and MEASURED 2026-09-23 on the CPU build —
 # ctx 2048, --parallel 1, two ~315-token prompts with disjoint prefixes):
@@ -477,6 +485,12 @@ export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 # REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
 #      (Ibrahim, TDS, 2026-09-16) — https://towardsdatascience.com/the-kv-cache-tax-why-inference-servers-run-out-of-memory-before-compute/
 export LLAMA_CACHE_RAM_MB="${LLAMA_CACHE_RAM_MB:-0}"
+# MEASURED per-lane budgets, MiB, keyed by the lane's port.  Only lanes with a
+# measurement appear; everything else uses LLAMA_CACHE_RAM_MB above.  The comment
+# block above carries the measurement, the bracket and why the others stay 0.
+declare -gA LLAMA_CACHE_RAM_MB_BY_PORT=(
+    [18085]=768   # Xe 3B — 640 re-prefills, 768 hits (both probe positions)
+)
 # --cache-reuse is NOT set on any lane (SWITCH-CONSOLE-REUSE-001, MEASURED 2026-10-21).
 # The engine ACCEPTS 256 on the CPU tier and the three q8_0 chat lanes — the refusal is
 # per-CONTEXT, not per-quant: llama_kv_cache::get_can_shift() tests LLM_ARCH_STEP35 and

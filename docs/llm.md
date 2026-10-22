@@ -377,8 +377,8 @@ each as a session, not as a pool:
   lane has no cached prefixes yet.` instead.
 - **Prefer a second lane over swapping a live one when host RAM allows.**  Five
   resident lanes at llama.cpp's default 8192 MiB prompt cache would reserve
-  ~40 GiB of this box's ~47 GiB, which is why every lane pins `--cache-ram 0`
-  — the number is a host-RAM budget, not a VRAM one.  On the Xe lanes that
+  ~40 GiB of this box's ~47 GiB, which is why every lane pins an explicit
+  `--cache-ram` — the number is a host-RAM budget, not a VRAM one.  On the Xe lanes that
   distinction collapses entirely: Iris Xe is an **integrated** GPU with no
   dedicated VRAM of its own, so the model weights, the KV cache and the prompt
   cache are all drawn from the same system RAM.  A `--cache-ram` raise on an
@@ -411,7 +411,17 @@ the budget it needs:
 R1 and R2 match across arms, so the whole **37-60x TTFT** gap is the returning
 conversation.  The per-lane minimum for a working 4,000-token conversation on
 this lane therefore sits **between 640 and 768 MiB**; below it, every
-conversation switch pays a full re-prefill.  No budget number is set here.
+conversation switch pays a full re-prefill.
+
+**What is APPLIED now** (2026-10-22): the Xe 3B lane (`:18085`, the only lane
+measured) runs `--cache-ram 768`, in both places a start can come from — the
+`ExecStart` literal in `systemd/llama-xe-qwen25-3b-chat.service` and the
+launcher's argv (`scripts/11e-llm-model.sh`, which reads the lane's budget by
+port).  The single authority for the number is `LLAMA_CACHE_RAM_MB_BY_PORT` in
+`scripts/01-constants.sh`; `tests/unit/23-*.bats` pins each unit's literal to
+that table.  The **other four lanes stay at 0**, because they are unmeasured —
+a budget invented for them would be a guess, and 0 is the only defensible value
+until each is probed the same way.
 
 ### Reading the cache counters
 

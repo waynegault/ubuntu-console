@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 70
+# Module Version: 71
 #   v70 (2026-10-22): the switch notice's number now spans the LAUNCH, not just the health
 #   poll.  Observed in a real swap that day: `model use 17` on the Xe lane printed
 #   "Swap: loaded in 0s; …" because /health answers on the first probe while the model is
@@ -1205,6 +1205,15 @@ function __model_use_build_command() {
         if [[ -z "${__BENCH_MODE:-}" ]]
         then
             local cache_ram_mb="${LLAMA_CACHE_RAM_MB:-0}"
+            # A lane with a MEASURED budget wins over the global default.  The table lives
+            # beside LLAMA_CACHE_RAM_MB in scripts/01-constants.sh, and the lane's unit
+            # repeats the same literal because a systemd start cannot assume a sourced shell.
+            # The declare -p guard is required: this builder is also extracted and run
+            # standalone by tests/unit/23-prompt-cache-and-gpu-classify.bats, which sources
+            # no constants and would die on set -u without it.
+            if declare -p LLAMA_CACHE_RAM_MB_BY_PORT >/dev/null 2>&1; then
+                cache_ram_mb="${LLAMA_CACHE_RAM_MB_BY_PORT[$LLM_PORT]:-$cache_ram_mb}"
+            fi
             if [[ ! "$cache_ram_mb" =~ ^([0-9]+|-1)$ ]]
             then
                 # The message is built in a variable so the line stays inside the

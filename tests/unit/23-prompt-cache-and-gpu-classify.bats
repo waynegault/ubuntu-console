@@ -166,7 +166,7 @@ setup() {
 # ("bench") sets __BENCH_MODE=1, so the bench-mode argv can be compared with the
 # autotune's in the "bench-mode build omits --cache-ram" case below.
 _build_argv() {
-    local _cache_ram="${1:-}" _bench="${2:-}"
+    local _cache_ram="${1:-}" _bench="${2:-}" _port="${3:-18083}"
     awk '/^function __model_use_build_command\(\)/,/^}/' "$LAUNCHER" > "$SANDBOX/builder.sh"
     grep -q -- '--cache-ram' "$SANDBOX/builder.sh" \
         || { echo "FAIL: builder not extracted"; return 1; }
@@ -177,10 +177,13 @@ __spec_launch_flags() { :; }
 __tac_info() { printf '%s\n' "$2"; }
 source "$1"
 [[ -n "${2:-}" ]] && export LLAMA_CACHE_RAM_MB="$2"
+# The MEASURED per-lane table is read from its shipped home rather than restated
+# here, so this harness exercises the real override path.
+[[ -n "${5:-}" ]] && eval "$(sed -n '/^declare -gA LLAMA_CACHE_RAM_MB_BY_PORT=(/,/^)/p' "$5")"
 llm_backend="native"
 LLAMA_SERVER_BIN="/stub/llama-server"
 model_path="/stub/model.gguf"
-LLM_PORT=18083
+LLM_PORT="${4:-18083}"
 ctx=8192
 batch_size=512
 ubatch_size=256
@@ -200,7 +203,7 @@ if [[ -n "${3:-}" ]]; then export __BENCH_MODE=1; else unset __BENCH_MODE; fi
 __model_use_build_command || { echo "FAIL: builder returned non-zero"; exit 1; }
 printf '%s\n' "${cmd[@]}"
 EOS
-    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench"
+    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench" "$_port" "$CONSTANTS"
 }
 
 # ── the prompt-cache reader ──────────────────────────────────────────────────
@@ -310,12 +313,12 @@ EOS
         || { echo "FAIL: the serve build no longer emits '--cache-ram 0':"; printf '%s\n' "$output"; return 1; }
 }
 
-@test "prompt-cache: every repo lane unit passes the same --cache-ram literal as 01-constants" {
-    local expected
-    expected=$(sed -nE 's/.*export LLAMA_CACHE_RAM_MB="\$\{LLAMA_CACHE_RAM_MB:-([-0-9]+)\}".*/\1/p' "$CONSTANTS")
-    [[ -n "$expected" ]] || { echo "FAIL: 01-constants declares no LLAMA_CACHE_RAM_MB default"; return 1; }
+@test "prompt-cache: every repo lane unit passes ITS OWN measured --cache-ram literal" {
+    local default
+    default=$(sed -nE 's/.*export LLAMA_CACHE_RAM_MB="\$\{LLAMA_CACHE_RAM_MB:-([-0-9]+)\}".*/\1/p' "$CONSTANTS")
+    [[ -n "$default" ]] || { echo "FAIL: 01-constants declares no LLAMA_CACHE_RAM_MB default"; return 1; }
 
-    local u exec_line status=0
+    local u exec_line port expected status=0
     for u in "$UNIT_DIR"/llama-*.service
     do
         [[ -f "$u" ]] || continue
@@ -326,12 +329,37 @@ EOS
         exec_line=$(sed -nE 's/^ExecStart=//p' "$u")
         [[ -n "$exec_line" ]] || continue
         [[ "$exec_line" == *"--port"* ]] || continue
+        port=$(sed -nE 's/.*--port ([0-9]+).*/\1/p' <<<"$exec_line")
+        # A MEASURED lane's budget comes from the per-port table; an unmeasured lane
+        # keeps the global default.  Reading the table rather than restating 768 keeps
+        # this case pointed at the one authority, and the case below proves the
+        # LAUNCHER uses that same table.
+        expected=$(sed -nE "s/^ *\[${port}\]=([0-9]+).*/\1/p" "$CONSTANTS" | head -1)
+        expected="${expected:-$default}"
         [[ "$exec_line" == *"--cache-ram ${expected}"* ]] \
-            || { echo "FAIL: ${u##*/} does not pass '--cache-ram ${expected}'"; status=1; }
+            || { echo "FAIL: ${u##*/} does not pass '--cache-ram ${expected}' (port ${port})"; status=1; }
         [[ "$exec_line" == *"--slot-save-path"* ]] \
             && { echo "FAIL: ${u##*/} sets --slot-save-path (the decision is never)"; status=1; }
     done
     [[ "$status" -eq 0 ]] || return 1
+}
+
+@test "prompt-cache: the launcher applies the MEASURED budget to the Xe lane only" {
+    # Criterion: the measured table in docs/llm.md — 768 MiB is the smallest budget
+    # that served a 4,000-token conversation from cache on :18085 (640 MiB
+    # re-prefilled it).  The expectation is that measurement, not a value read back
+    # from the code.
+    run _build_argv "" "" 18085
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *$'--cache-ram\n768'* ]] \
+        || { echo "FAIL: the Xe lane's serve argv does not carry the measured 768 MiB:"; printf '%s\n' "$output"; return 1; }
+
+    # Control: an UNMEASURED lane still follows the global default, so the table is a
+    # per-lane override rather than a silent change for every lane.
+    run _build_argv "" "" 18083
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *$'--cache-ram\n0'* ]] \
+        || { echo "FAIL: an unmeasured lane no longer follows the 0 default:"; printf '%s\n' "$output"; return 1; }
 }
 
 # ── --metrics and the prompt-cache reader (SWITCH-CONSOLE-METRICS-001) ───────
