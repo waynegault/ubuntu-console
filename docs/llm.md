@@ -526,8 +526,12 @@ lanes. An iGPU lane's window is never justified by a `models.conf` figure.
 certification taken on the **CUDA** card.  The Xe lanes hard-code their own `--ctx-size`
 per unit, and `:18085`'s machine-local 16k drop-in does the same, so a registry figure
 must never be used to justify an iGPU lane's window.  Measured 2026-10-21: the iGPU lane
-serves `n_ctx=16384`; that is a live observation of what loads, not a headroom
-measurement — the 16k value's original measurement was CUDA-side.
+serves `n_ctx=16384`, and the window was measured **on the iGPU** on 2026-10-22 with
+the drop-in's own flags: a 10,620-token prompt (which an 8192 window cannot hold) and a
+15,477-token prompt both completed, the latter leaving ~900 tokens of output headroom.
+Prefill was ~37 t/s and decode 1.4–5.2 t/s with the other Xe lanes resident — indicative,
+not certified, because the iGPU pool is shared. The original 16k decision was CUDA-side;
+this measurement is the iGPU evidence the rule requires.
 
 **Unit names are lane keys, not weight claims (drift fixed 2026-10-21).**  The
 :18085 unit is still called `llama-xe-qwen25-3b-chat` because the watchdog, two
