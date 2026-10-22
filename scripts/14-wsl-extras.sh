@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
 # 14. WSL EXTRAS & STARTUP HELPERS
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
@@ -82,32 +82,62 @@ EOF
 # is why this REPORTS loudly instead of writing quietly.  TAC_WSL_CONF overrides the path so a test
 # can drive the whole thing hermetically.
 function __tac_ensure_wsl_conf() {
-    local _conf="${TAC_WSL_CONF:-/etc/wsl.conf}" _key
+    local _conf="${TAC_WSL_CONF:-/etc/wsl.conf}" _key _line _resolv="true" _bakdir _bak
     local -a _missing=()
-    for _key in "generateResolvConf = false" "systemd=true" "appendWindowsPath = false"; do
+    # generateResolvConf's VALUE is a policy choice, so only its PRESENCE is required.
+    # `true` lets WSL write /etc/resolv.conf — what the 2026-10-22 `dnsTunneling=true`
+    # setup needs, and WSL's own default; `false` hands that file to the operator.
+    # Requiring one value made the guard fire on the other at every shell start, and
+    # because the repair aborted at its backup step the warning repeated forever
+    # (measured 2026-10-22: /etc/wsl.conf held `true`).  A truncation removes the whole
+    # [network] block, which is the failure this guard exists for, so absence still
+    # counts and the repair has to pick a value: `true`, WSL's default.
+    if _line=$(grep -m1 -E '^[[:space:]]*generateResolvConf[[:space:]]*=' "$_conf"); then
+        _resolv=${_line#*=}
+        _resolv=${_resolv//[[:space:]]/}
+        case "$_resolv" in
+            true|false) ;;
+            *)
+                __wsl_warn "[wsl-extras] WARNING: $_conf has an unparseable generateResolvConf value ('$_resolv')"
+                _missing+=("generateResolvConf=$_resolv")
+                _resolv=true
+                ;;
+        esac
+    else
+        _missing+=("generateResolvConf")
+    fi
+    for _key in "systemd=true" "appendWindowsPath = false"; do
         grep -qF "$_key" "$_conf" || _missing+=("$_key")
     done
     if (( ${#_missing[@]} == 0 )); then
         return 0
     fi
-    if [[ -e "$_conf" ]] && ! cp -p "$_conf" "$_conf.bak-$(date +%Y%m%d-%H%M%S)"; then
-        __wsl_warn "[wsl-extras] WARNING: cannot back up $_conf — leaving it alone"
-        return 1
+    # /etc is root-owned, so the old in-place backup ("$_conf.bak-<ts>") could never be
+    # created by a non-root shell: the guard then aborted before repairing anything and
+    # warned on EVERY shell start (measured 2026-10-22, every `bash -i` in this distro).
+    # Keep the before-copy in the state dir, which this user owns.
+    if [[ -e "$_conf" ]]; then
+        _bakdir="${TAC_STATE_DIR:-$HOME/.local/state/tactical-console}/backups"
+        _bak="$_bakdir/$(basename "$_conf").bak-$(date +%Y%m%d-%H%M%S)"
+        if ! { mkdir -p "$_bakdir" && cp -p "$_conf" "$_bak"; }; then
+            __wsl_warn "[wsl-extras] WARNING: cannot back up $_conf to $_bakdir — leaving it alone"
+            return 1
+        fi
     fi
-    if ! cat > "$_conf" <<'WSLCONF'
-[network]
-generateResolvConf = false
-[boot]
-systemd=true
-[interop]
-appendWindowsPath = false
-WSLCONF
+    if ! printf '%s\n' \
+        '[network]' \
+        "generateResolvConf = $_resolv" \
+        '[boot]' \
+        'systemd=true' \
+        '[interop]' \
+        'appendWindowsPath = false' > "$_conf"
     then
         __wsl_warn "[wsl-extras] WARNING: cannot write $_conf"
         return 1
     fi
     __wsl_warn \
         "[wsl-extras] RESTORED $_conf — it was missing: ${_missing[*]}" \
+        "  Before-copy: ${_bak:-none (the file did not exist)}" \
         "  With no [boot] systemd=true nothing supervises the fleet (Gateway, user units, CI runners)." \
         "  TAKES EFFECT AT BOOT: restart WSL (Windows side: wsl --shutdown, then reopen)."
     return 0
