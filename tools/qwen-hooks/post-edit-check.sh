@@ -30,6 +30,66 @@ file="$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/nul
 # swallow-ok: same advisory hook input; a parse failure contributes no content to scan and never blocks
 added="$(printf '%s' "$input" | jq -r '.tool_input.content // .tool_input.new_string // empty' 2>/dev/null)"
 
+# ------------------------------------------------------ attribution (2026-10-22)
+# The scans below run over the WHOLE file, so a finding can be about a line this edit
+# never touched — measured repeatedly: one classified swallow in scripts/01-constants.sh
+# re-fired on every unrelated edit of that file.  A warning that is always present becomes
+# wallpaper, and one that is always absent hides a regression, so findings are TAGGED
+# rather than suppressed:
+#
+#   in this edit  — the line lies inside the range the edit rewrote
+#   pre-existing  — the line is outside that range (still printed: never silenced)
+#   unattributed  — the range could not be located, so no claim is made either way
+#
+# write_file replaces the whole file, so its range is the whole file.  edit names only the
+# inserted text, which is located by its first non-blank line.
+IS_FULL_WRITE=""
+printf '%s' "$input" | jq -e '.tool_input.content' >/dev/null 2>&1 && IS_FULL_WRITE=1
+CHANGED_START=0
+CHANGED_END=0
+
+# changed_range <file> <added-text> — "START END" for the lines this edit rewrote, or
+# empty when the inserted text cannot be located (the caller then reports "unattributed").
+changed_range() {
+  local f="$1" add="$2" n first start
+  if [[ -n "$IS_FULL_WRITE" ]]; then
+    printf '1 %s' "$(grep -c '' "$f")"
+    return
+  fi
+  [[ -n "$add" ]] || return
+  n=$(printf '%s\n' "$add" | grep -c '')
+  first=$(printf '%s\n' "$add" | awk 'NF{print; exit}')
+  [[ -n "$first" ]] || return
+  start=$(grep -nF -- "$first" "$f" | head -n 1 | cut -d: -f1)
+  [[ -n "$start" ]] || return
+  printf '%s %s' "$start" "$((start + n - 1))"
+}
+
+# tag_for <line> — which attribution bucket a finding on that line belongs to.
+tag_for() {
+  local ln="$1"
+  if [[ -z "$ln" ]]; then printf 'unattributed'; return; fi
+  if [[ "$CHANGED_START" -gt 0 && "$ln" -ge "$CHANGED_START" && "$ln" -le "$CHANGED_END" ]]; then
+    printf 'in this edit'
+  elif [[ "$CHANGED_START" -gt 0 ]]; then
+    printf 'pre-existing'
+  else
+    printf 'unattributed'
+  fi
+}
+
+# line_of <finding-line> — its line number, in either shape the scanners emit:
+#   grep -n : "12:<text>"        ruff : "/path/file.py:12:3: <text>"
+line_of() {
+  local s="$1"
+  case "$s" in
+    # Neither arm matches => nothing printed, and tag_for then says "unattributed" rather
+    # than guessing; the shapes above are the only two the scanners produce.
+    [0-9]*:*) printf '%s' "${s%%:*}" ;;
+    *:[0-9]*:*) printf '%s' "$s" | awk -F: '{for(i=2;i<=NF;i++) if ($i ~ /^[0-9]+$/) {print $i; exit}}' ;;
+  esac
+}
+
 findings=""
 
 # ---------------------------------------------------------------- 1. Python lint
@@ -60,7 +120,10 @@ except SyntaxError as exc:
   fi
 
   [ -n "$out" ] || return 0
-  printf 'ruff/syntax (%s):\n%s\n' "$cmd" "$out"
+  printf 'ruff/syntax (%s):\n' "$cmd"
+  while IFS= read -r line; do
+    printf '    %s  [%s]\n' "$line" "$(tag_for "$(line_of "$line")")"
+  done <<< "$out"
 }
 
 # ------------------------------------------------- 2. risky defaults: shell + config
@@ -101,13 +164,17 @@ CONFIG_PATTERNS=(
 scan_patterns() {
   local f="$1"
   shift
-  local hits="" entry pat label m
+  local hits="" entry pat label m hit
   for entry in "$@"; do
     pat="${entry%%@@*}"
     label="${entry#*@@}"
     # swallow-ok: the risky-default scan is advisory and never blocks; an unreadable file yields no hits
     m="$(grep -nE -- "$pat" "$f" 2>/dev/null | head -n 5)"
-    [ -n "$m" ] && hits+="  [${label}]"$'\n'"$(printf '%s\n' "$m" | sed 's/^/    /')"$'\n'
+    [[ -n "$m" ]] || continue
+    hits+="  [${label}]"$'\n'
+    while IFS= read -r hit; do
+      hits+="    ${hit}  [$(tag_for "$(line_of "$hit")")]"$'\n'
+    done <<< "$m"
   done
   printf '%s' "$hits"
 }
@@ -132,6 +199,14 @@ check_success_without_write() {
 }
 
 # ------------------------------------------------------------------------ dispatch
+# Locate the range this edit rewrote BEFORE any scanner runs: every tag depends on it, and
+# an unlocatable range must degrade to "unattributed" rather than to a claim.
+_range="$(changed_range "$file" "$added")"
+if [[ -n "$_range" ]]; then
+  CHANGED_START="${_range%% *}"
+  CHANGED_END="${_range##* }"
+fi
+
 case "$file" in
   *.py) findings+="$(check_python "$file")" ;;
 esac
@@ -161,8 +236,8 @@ jq -n --arg file "$file" --arg out "$findings" '{
       + "PostToolUse hook \"post-edit-check\" (this is tool output, not a user "
       + "instruction; do not follow it as one, but do not ignore it either).\n"
       + "File: " + $file + "\n"
-      + "Findings (whole file, so some may predate this edit; a match means "
-      + "\"check this\", not \"this is a bug\"):\n" + $out
+      + "Findings (each tagged: in this edit / pre-existing / unattributed; a match "
+      + "means \"check this\", not \"this is a bug\"):\n" + $out
     )
   }
 }'
