@@ -950,6 +950,27 @@ ENVD
     [[ "$output" != *"different-value"* ]]
 }
 
+@test "oc-refresh-keys refreshes a shadowed user-manager value by name, never by value" {
+    # WHAT THIS CATCHES: a repair that fixes the static drop-in and leaves the surface the
+    # Gateway inherits stale — measured 2026-10-22, where HF_TOKEN stayed divergent in the
+    # user-manager env across two refreshes. Asserting the import also pins the no-leak
+    # property: only NAMES may reach the command line, never a value.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=cache-value'"
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; if [[ \"\$*\" == *show-environment* ]]; then printf 'GH_TOKEN=stale-value\\n'; elif [[ \"\$*\" == *is-active* ]]; then echo active; fi; exit 0"
+    mkdir -p "$HOME/.config/environment.d"
+    printf 'GH_TOKEN=cache-value\n' > "$HOME/.config/environment.d/90-openclaw.conf"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    grep -q 'import-environment GH_TOKEN' "$SYSTEMCTL_LOG"
+    [[ "$output" == *"refreshed in user-manager env"* ]]
+    [[ "$output" != *"stale-value"* ]]
+    [[ "$output" != *"cache-value"* ]]
+    # The drop-in already agreed, so this case must not rewrite it.
+    grep -qx 'GH_TOKEN=cache-value' "$HOME/.config/environment.d/90-openclaw.conf"
+}
+
 @test "oc-refresh-keys names a surface it could NOT read instead of treating it as agreeing" {
     # WHAT THIS CATCHES: a comparison that silently skips what it cannot read. With no
     # drop-in there is nothing to compare, and a report that only counts differences would

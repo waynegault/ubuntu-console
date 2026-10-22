@@ -121,7 +121,12 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 58
+# Module Version: 59
+#   v59 (2026-10-22): the repair also refreshes the systemd USER-MANAGER env for the names
+#   it found diverged there, via `systemctl --user import-environment` after exporting the
+#   canonical values in-process — only NAMES reach the command line, never a value. Measured
+#   that day: HF_TOKEN stayed divergent in the manager env across two refreshes while the
+#   drop-in had been repaired, so the Gateway kept inheriting the stale token.
 #   v58 (2026-10-22): the shadowing report now REPAIRS the environment.d drop-in for the
 #   names it found diverging, instead of reporting them forever. Measured that day: a
 #   rotated TAILSCALE_API_KEY authenticated from the bridge cache while the drop-in kept
@@ -2226,6 +2231,35 @@ function __oc_repair_shadowed_dropin() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_import_shadowed_env <name=value lines>
+#
+# Refresh the systemd USER-MANAGER environment for the names the shadowing report found
+# diverged there. `import-environment` reads each value from THIS process's environment,
+# so only NAMES reach the command line — a value never does. (Wayne, 2026-10-22, option A
+# extended to the manager surface, which the Gateway inherits.)
+# ---------------------------------------------------------------------------
+function __oc_import_shadowed_env() {
+    local _pairs="$1"
+    local -a _names=()
+    local _n _l
+    while IFS='=' read -r _n _l
+    do
+        [[ -n "$_n" ]] || continue
+        export "$_n=$_l"
+        _names+=("$_n")
+    done <<< "$_pairs"
+    (( ${#_names[@]} > 0 )) || return 0
+    # swallow-ok: the failure is named on the report line below, and the drop-in repair is independent
+    if systemctl --user import-environment "${_names[@]}" >/dev/null 2>&1
+    then
+        __tac_info "Shadowing repair" \
+            "[${#_names[@]} name(s) refreshed in user-manager env]" "$C_Success"
+    else
+        __tac_info "Shadowing repair" "[FAILED to refresh user-manager env]" "$C_Warning"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # __oc_report_key_shadowing — compare every env surface against the CANONICAL value.
 #
 # Wayne's ruling (2026-10-01): the Windows user environment is canonical. The bridge cache
@@ -2322,19 +2356,29 @@ function __oc_report_key_shadowing() {
             "$(printf '%s\n' "${_differs[@]}")" \
             "$(printf '%s\n' "${_unreadable[@]}")"
     fi
-    # Repair what the report just named — the helper keeps this function inside the
+    # Repair what the report just named — the helpers keep this function inside the
     # §18.3 "functions longer than 100 lines" ratchet, which tripped (51 -> 52) when the
     # rewrite was inlined here on 2026-10-22.
-    local _pairs=""
+    local _envd_pairs="" _mgr_pairs=""
     for _l in "${_differs[@]}"
     do
-        [[ "$_l" == "environment.d: "* ]] || continue
-        _n="${_l#environment.d: }"
-        _pairs+="${_n}=${_canon[$_n]}"$'\n'
+        if [[ "$_l" == "environment.d: "* ]]
+        then
+            _n="${_l#environment.d: }"
+            _envd_pairs+="${_n}=${_canon[$_n]}"$'\n'
+        elif [[ "$_l" == "user-manager env: "* ]]
+        then
+            _n="${_l#user-manager env: }"
+            _mgr_pairs+="${_n}=${_canon[$_n]}"$'\n'
+        fi
     done
-    if [[ -n "$_pairs" ]]
+    if [[ -n "$_envd_pairs" ]]
     then
-        __oc_repair_shadowed_dropin "$_envd" "$_pairs"
+        __oc_repair_shadowed_dropin "$_envd" "$_envd_pairs"
+    fi
+    if [[ -n "$_mgr_pairs" ]]
+    then
+        __oc_import_shadowed_env "$_mgr_pairs"
     fi
 }
 
