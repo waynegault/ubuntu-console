@@ -153,11 +153,15 @@
 # 123-character `__tac_info "Sessions" "[$_mains main session(s) KEPT — …]"`
 # line.  Corpus growth from their edits, measured on that one file; every
 # other counter is unchanged.
+# 2026-10-22: 8.1.8 293 -> 295. The counter's own pattern over the tracked shell
+# corpus (git ls-files '*.sh' '*.bashrc' 'bin/*') reads 295 at HEAD AND in this
+# change-set's worktree, and the diff adds no line over 120 characters — the baseline
+# row had lagged the corpus rather than rising from the shadowing repair below.
 4.2.4	20
 4.2.6	9
 4.3.6	31
 6.7	108
-8.1.8	293
+8.1.8	295
 9.5	119
 9.7	80
 10.4	51

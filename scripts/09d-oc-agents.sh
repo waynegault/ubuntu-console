@@ -121,7 +121,15 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 57
+# Module Version: 58
+#   v58 (2026-10-22): the shadowing report now REPAIRS the environment.d drop-in for the
+#   names it found diverging, instead of reporting them forever. Measured that day: a
+#   rotated TAILSCALE_API_KEY authenticated from the bridge cache while the drop-in kept
+#   the 60-char predecessor, so every consumer read the dead token and the API answered
+#   "API token invalid" — the report said "Key shadowing ... differ from the bridge" and
+#   nothing acted on it. Only names the drop-in ALREADY carries are rewritten (a bridged
+#   key on no surface stays off it), with a timestamped sibling backup and mode 600, and
+#   the line marks each repaired name so it cannot be read as still-broken.
 #   v57 (2026-10-21): the NAS "behind" report compared the WHOLE CACHE hash with a marker
 #   that `oc export-keys-nas` writes from the RENDERED SELECTION. Since the 2026-10-02
 #   narrowing those are different objects, so the pair could never agree: `oc refresh-keys`
@@ -2159,6 +2167,65 @@ function __oc_shadowing_line() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_repair_shadowed_dropin <path> <name=value lines>
+#
+# Rewrite the SHADOWED values in the static environment.d drop-in. Wayne's ruling
+# (2026-10-22, option A): a rotated key that sits in the bridge cache while the drop-in
+# keeps the old value is a silent-failure machine. Measured that day: a new
+# TAILSCALE_API_KEY authenticated from the cache while the drop-in still held the 60-char
+# predecessor, so every consumer read the dead token and the API answered "API token
+# invalid" — the report named the divergence and nothing acted on it.
+#
+# Only names the drop-in ALREADY carries are rewritten (a bridged key that is on no
+# surface stays off it, so this never ADDS a key). A timestamped sibling backup holds the
+# pre-repair bytes, mode 600 preserved. Split out of __oc_report_key_shadowing to keep
+# that function inside the §18.3 "functions longer than 100 lines" ratchet.
+# ---------------------------------------------------------------------------
+function __oc_repair_shadowed_dropin() {
+    local _envd="$1" _pairs="$2"
+    local -A _wanted=()
+    local _l _n _bak _tmp _count
+    while IFS='=' read -r _n _l
+    do
+        [[ -n "$_n" ]] && _wanted["$_n"]="$_l"
+    done <<< "$_pairs"
+    (( ${#_wanted[@]} > 0 )) || return 0
+    _count=${#_wanted[@]}
+    _bak="$_envd.bak-$(date +%Y%m%d-%H%M%S)"
+    _tmp="$_envd.tmp.$$"
+    # swallow-ok: both failures are named on the report line below, and the original stays in place
+    if cp -p "$_envd" "$_bak" 2>/dev/null && : > "$_tmp" 2>/dev/null
+    then
+        while IFS= read -r _l
+        do
+            if [[ "$_l" =~ ^(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]]
+            then
+                _n="${BASH_REMATCH[2]}"
+                if [[ -n "${_wanted[$_n]+set}" ]]
+                then
+                    printf '%s%q\n' "${BASH_REMATCH[1]}${_n}=" "${_wanted[$_n]}" >> "$_tmp"
+                    continue
+                fi
+            fi
+            printf '%s\n' "$_l" >> "$_tmp"
+        done < "$_envd"
+        # A secrets file must not be installed world-readable: if the mode cannot be set,
+        # abandon the rewrite and keep the original rather than widen access.
+        # swallow-ok: the failure is named on the report line below
+        if chmod 600 "$_tmp" 2>/dev/null && mv "$_tmp" "$_envd" 2>/dev/null
+        then
+            __tac_info "Shadowing repair" "[$_count name(s) repaired in environment.d]" "$C_Success"
+        else
+            rm -f "$_tmp"
+            __tac_info "Shadowing repair" "[FAILED to install the secure rewrite]" "$C_Warning"
+        fi
+    else
+        rm -f "$_tmp"
+        __tac_info "Shadowing repair" "[FAILED to back up environment.d]" "$C_Warning"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # __oc_report_key_shadowing — compare every env surface against the CANONICAL value.
 #
 # Wayne's ruling (2026-10-01): the Windows user environment is canonical. The bridge cache
@@ -2254,6 +2321,20 @@ function __oc_report_key_shadowing() {
         __oc_shadowing_line "Key shadowing" \
             "$(printf '%s\n' "${_differs[@]}")" \
             "$(printf '%s\n' "${_unreadable[@]}")"
+    fi
+    # Repair what the report just named — the helper keeps this function inside the
+    # §18.3 "functions longer than 100 lines" ratchet, which tripped (51 -> 52) when the
+    # rewrite was inlined here on 2026-10-22.
+    local _pairs=""
+    for _l in "${_differs[@]}"
+    do
+        [[ "$_l" == "environment.d: "* ]] || continue
+        _n="${_l#environment.d: }"
+        _pairs+="${_n}=${_canon[$_n]}"$'\n'
+    done
+    if [[ -n "$_pairs" ]]
+    then
+        __oc_repair_shadowed_dropin "$_envd" "$_pairs"
     fi
 }
 

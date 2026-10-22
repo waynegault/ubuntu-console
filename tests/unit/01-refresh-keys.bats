@@ -917,6 +917,39 @@ ENVD
     [[ "$output" != *"different-value"* ]]
 }
 
+@test "oc-refresh-keys repairs a shadowed drop-in value and keeps a backup" {
+    # WHAT THIS CATCHES: a report that never acts. Measured 2026-10-22 — a rotated
+    # TAILSCALE_API_KEY authenticated from the bridge cache while the drop-in held the
+    # 60-char predecessor, so every consumer read the dead token and the API answered
+    # "API token invalid"; the report named the divergence and nothing repaired it.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=cache-value'"
+    mkdir -p "$HOME/.config/environment.d"
+    local envd="$HOME/.config/environment.d/90-openclaw.conf"
+    printf 'GH_TOKEN=different-value\nUNBRIDGED_KEY=untouched\n' > "$envd"
+    chmod 600 "$envd"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # The bridged name takes the canonical value; an unbridged line survives verbatim.
+    grep -qx 'GH_TOKEN=cache-value' "$envd"
+    grep -qx 'UNBRIDGED_KEY=untouched' "$envd"
+    # A bridged key the drop-in did not name is never ADDED (consumer-gated placement).
+    ! grep -q '^OTHER_API_KEY=' "$envd"
+    # The pre-repair bytes survive in a timestamped sibling backup, still mode 600.
+    local bak
+    bak="$(find "$HOME/.config/environment.d" -name '90-openclaw.conf.bak-*' | head -1)"
+    [ -n "$bak" ]
+    grep -qx 'GH_TOKEN=different-value' "$bak"
+    [ "$(stat -c '%a' "$bak")" = "600" ]
+    [ "$(stat -c '%a' "$envd")" = "600" ]
+    # The line says it repaired; values never appear in the output.
+    [[ "$output" == *"Key shadowing"* ]]
+    [[ "$output" == *"repaired"* ]]
+    [[ "$output" != *"cache-value"* ]]
+    [[ "$output" != *"different-value"* ]]
+}
+
 @test "oc-refresh-keys names a surface it could NOT read instead of treating it as agreeing" {
     # WHAT THIS CATCHES: a comparison that silently skips what it cannot read. With no
     # drop-in there is nothing to compare, and a report that only counts differences would
