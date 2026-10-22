@@ -1493,13 +1493,14 @@ Disk:           build tree on the WSL2 ext4 VHD (/dev/sdd, 1 TB)
 ```
 
 > **Guest vs host — use the guest numbers.** The WSL2 guest is deliberately capped
-> by `C:\Users\<you>\.wslconfig` (`processors=12`, `memory=20GB`), so `nproc`
-> reports **12**, not the host's 20, and only ~20 GiB of the host's 63.7 GB is
-> visible. Every build-time decision — `-j`, and the memory available to parallel
-> CUDA translation units — must be sized against the *guest*, not the host CPU
-> name. `-j$(nproc)` (= 12) has completed a full CUDA-backend rebuild on this
-> guest (2026-09-13). If parallel CUDA translation units exhaust the 20 GiB you
-> will see `cc1plus: out of memory`; drop to `-j8` or `-j4` (see Troubleshooting).
+> by `C:\Users\<you>\.wslconfig` (`processors=16`, `memory=48GB`; the tracked copy is
+> `config/wslconfig`), so `nproc` reports **16**, not the host's 20, and only
+> ~47 GiB of the host's 63.7 GB is visible. Every build-time decision — `-j`, and
+> the memory available to parallel CUDA translation units — must be sized against
+> the *guest*, not the host CPU name. `-j$(nproc)` (= 12) completed a full
+> CUDA-backend rebuild on this guest (2026-09-13, when the cap was 12). If parallel
+> CUDA translation units exhaust the guest's memory you will see `cc1plus: out of
+> memory`; drop to `-j8` or `-j4` (see Troubleshooting).
 > That failure mode is environment-dependent, not a property of this setup.
 >
 > **Why SM 86?** The RTX 3050 Ti is an Ampere GA107 chip with compute capability
