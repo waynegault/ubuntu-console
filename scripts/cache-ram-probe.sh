@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-10-22): wraps the two new guard lines. They were one-liners of 124 and
+#   131 characters, which took §18.3 8.1.8 from 293 to 295 and refused the push —
+#   fixed at source rather than re-baselined. No behaviour change.
 #   v6 (2026-10-22): sizing knobs for the per-lane `--cache-ram` budget. `--cache-ram-mb N`
 #   sets ARM B's value (default 0 = today's served argv), so the same probe can sweep
 #   intermediate budgets instead of only default-8192 vs 0; `--prompt-tokens N` sets the
@@ -161,8 +164,18 @@ parse_args() {
         esac
     done
     [[ "$OPT_REUSE" =~ ^[0-9]+$ ]] || { usage >&2; warn "FATAL: --cache-reuse must be a non-negative integer"; exit 1; }
-    [[ "$OPT_CACHE_MB" =~ ^[0-9]+$ ]] || { usage >&2; warn "FATAL: --cache-ram-mb must be a non-negative integer"; exit 1; }
-    [[ "$OPT_PROMPT_TOKENS" =~ ^[1-9][0-9]*$ ]] || { usage >&2; warn "FATAL: --prompt-tokens must be a positive integer"; exit 1; }
+    if [[ ! "$OPT_CACHE_MB" =~ ^[0-9]+$ ]]
+    then
+        usage >&2
+        warn "FATAL: --cache-ram-mb must be a non-negative integer"
+        exit 1
+    fi
+    if [[ ! "$OPT_PROMPT_TOKENS" =~ ^[1-9][0-9]*$ ]]
+    then
+        usage >&2
+        warn "FATAL: --prompt-tokens must be a positive integer"
+        exit 1
+    fi
     case "$OPT_AXIS" in
         cache-ram) ;;
         reuse) REUSE_AXIS=1 ;;
