@@ -384,12 +384,18 @@ each as a session, not as a pool:
 **The per-lane `--cache-ram` budget is an OPEN decision, not a closed
 trade-off** (SWITCH-CONSOLE-AFFINITY-001 item 3, successor to
 KVCACHE-PROMPT-CACHE-BUDGET-001).  `0` stays the current value because of the
-arithmetic above.  The measured cost of that choice is recorded, not guessed:
-the order-controlled BABA A/B (`scripts/cache-ram-probe.sh`, 2026-10-10,
-`docs/llm.md` "Reading the cache counters" and the `LLAMA_CACHE_RAM_MB` block in
-`scripts/01-constants.sh`) measured a clean switch re-prefilling at `0` —
-TTFT 5608 ms against 251 ms at 8192 — so a per-lane raise would buy back that
-reuse, but sizing it needs a per-lane probe.  No number is sized here.
+arithmetic above.  The measured cost of that choice is recorded, not guessed.
+The order-controlled BABA A/B (`scripts/cache-ram-probe.sh`, 2026-10-10)
+measured a clean switch re-prefilling at `0` — TTFT 5608 ms against 251 ms at
+8192.  The 2026-10-22 run, taken on the lane's **own argv** (`--from-unit`, so
+ctx 16384 / threads 8 / ngl 99 / flash-attn off) with a **4,000-token**
+conversation, measured the same effect an order of magnitude larger: R3 — the
+returning conversation — read **56,896 / 35,841 ms at 512 MiB** against
+**955 ms at 8192**, and the counters show the mechanism: 2,842 tokens
+re-processed at 512 MiB, 1 processed and 2,872 served from cache at 8192.
+So 512 MiB is far too small to hold a working conversation on this lane, 8192
+holds it, and the per-lane minimum lies between them; sizing it needs the
+intermediate sweep (1024 / 2048 / 4096).  No budget number is set here.
 
 ### Reading the cache counters
 
