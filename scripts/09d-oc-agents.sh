@@ -121,7 +121,14 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 56
+# Module Version: 57
+#   v57 (2026-10-21): the NAS "behind" report compared the WHOLE CACHE hash with a marker
+#   that `oc export-keys-nas` writes from the RENDERED SELECTION. Since the 2026-10-02
+#   narrowing those are different objects, so the pair could never agree: `oc refresh-keys`
+#   said "behind" on every run while the export correctly reported "no changes — skipped".
+#   Both sides now render the same file and hash the same bytes, so a key outside the
+#   selection no longer reads as a stale mirror. tests/unit/01-refresh-keys.bats carries
+#   the discriminating case (unselected change must NOT warn; selected change must).
 #   v56 (2026-10-18): the active-but-not-running branch now says what it is NOT stacking —
 #   "a restart" — matching the activating/deactivating branch and
 #   tests/unit/01-refresh-keys.bats:697.  The branch already refused to stack; only the
@@ -2383,10 +2390,19 @@ function oc-refresh-keys() {
     # 6. The NAS mirror is its own command now (`oc export-keys-nas`): a backup job
     #    — one SSH connection, its own connect timeout, its own retry and marker —
     #    had no business inside a key refresh. It must not go stale unseen, so say
-    #    when it is BEHIND rather than silently doing nothing. The marker records the
-    #    CACHE hash, the same one compared here, so this is an exact question.
-    local _cache_hash _mirror_hash
-    _cache_hash=$(grep '^export ' "$cache" | sort | sha256sum | awk '{print $1}')
+    #    when it is BEHIND rather than silently doing nothing.
+    #
+    #    The marker hashes the RENDERED SELECTION — the names __oc_nas_export_names
+    #    picks, with their values — because that is the content the export uploads.
+    #    A key outside that selection changing does not make the mirror stale, and
+    #    hashing the WHOLE cache here (as this did until 2026-10-21) reported "behind"
+    #    for a change the export itself correctly skipped. Render the same file and
+    #    hash the same bytes.
+    local _cache_hash _mirror_hash _nas_tmp
+    _nas_tmp="$(mktemp)"
+    __oc_nas_export_render "$cache" > "$_nas_tmp"
+    _cache_hash=$(awk '/^export /' "$_nas_tmp" | sort | sha256sum | awk '{print $1}')
+    rm -f "$_nas_tmp"
     _mirror_hash=$(cat "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" 2>/dev/null || echo none)
     if [[ "$_cache_hash" != "$_mirror_hash" ]]
     then

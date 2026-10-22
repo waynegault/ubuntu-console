@@ -273,6 +273,45 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
+@test "oc-refresh-keys does not call the NAS mirror behind for a change it would not export" {
+    # WHAT THIS CATCHES: the status line hashing the WHOLE cache while the marker
+    # holds the hash of the RENDERED SELECTION (what the export actually uploads).
+    # Once the bridge carries any name outside the selection the two hashes can
+    # never agree, so `oc refresh-keys` said "behind" on every run while
+    # `oc export-keys-nas` correctly reported nothing to send.
+    local src="$TAC_TEST_TMPDIR/win_env.txt"
+    printf '%s\n' 'GLOWMARKT_PASSWORD=glow-value' 'UNREAD_API_KEY=unread-value' > "$src"
+    __mock_command_local pwsh.exe "cat \"$src\""
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    __mock_command_local ssh "cat > /dev/null; echo 600; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run oc-export-keys-nas
+    [ "$status" -eq 0 ]
+    [ -f "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" ]
+
+    # An UNSELECTED key changing is not a stale mirror.
+    printf '%s\n' 'GLOWMARKT_PASSWORD=glow-value' 'UNREAD_API_KEY=a-different-value' > "$src"
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"NAS mirror"* ]]
+
+    # ...and a SELECTED key changing must still be reported, or the assertion
+    # above would also pass with the check disabled entirely.
+    printf '%s\n' 'GLOWMARKT_PASSWORD=a-different-glow-value' 'UNREAD_API_KEY=a-different-value' > "$src"
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NAS mirror"* ]]
+    [[ "$output" == *"behind"* ]]
+}
+
 @test "oc-export-keys-nas reports an upload whose mode is NOT 600, and does not mark it synced" {
     # WHAT THIS CATCHES: the silent-success shape — the old code moved the file and
     # recorded the marker without ever looking at the mode, which is how 48
