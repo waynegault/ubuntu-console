@@ -673,9 +673,10 @@ Expected
 `grep -n "case \$- in" <file>`
 
 Non-interactive shells exit early in profiles — the loader (`tactical-console.bashrc:53`) and
-`scripts/14-wsl-extras.sh:72`. Expect **one known false positive**, not zero:
-`scripts/12-dashboard-help.sh:412` *echoes* the idiom (`$(case $- in (*i*) …)`) to print the
-interactive state, so three hits are two guards. Re-derived 2026-09-18: 2 guards across
+`scripts/14-wsl-extras.sh:158`. Expect **one known false positive**, not zero:
+`scripts/12-dashboard-help.sh:511` *echoes* the idiom (`$(case $- in (*i*) …)`) to print the
+interactive state, so three hits are two guards. Re-derived 2026-09-18 (line numbers
+2026-10-22): 2 guards across
 `*.sh`/`*.bashrc`. This item is about PROFILES, not every module — a reading that demanded a
 guard in each of the 16 numbered modules would report 14 false failures (they define
 functions and are sourced by the guarded loader).
@@ -1641,7 +1642,7 @@ grep -rnE '/mnt/[c-z]|wslpath|wsl\.exe|clip\.exe|pwsh\.exe' --include='*.sh' .
 
 Every interop call must fail predictably off-WSL. Two acceptable forms, in this
 order of preference: an explicit detection guard (`[[ -n "${WSL_DISTRO_NAME:-}" ]]`,
-or `grep -qi microsoft /proc/version` as `scripts/09f-oc-misc.sh:157` does), or an
+or `grep -qi microsoft /proc/version` as `scripts/09f-oc-misc.sh:172` does), or an
 availability probe on the binary itself (`command -v pwsh.exe`), which is what most
 call sites use because it answers the question that matters — can this call work at
 all. What is NOT acceptable is an unconditional `/mnt/c` path. Measured 2026-09-16:
@@ -3223,11 +3224,11 @@ is deliberately not worth fixing, and what was still open when this pass ended.
     file as its own entry, so a module's interface looks unused to itself, and `env.sh`'s
     module loop is `source "$_tac_lib_f"`, which shellcheck cannot follow.
 - Item 7.4: this line said "only one call site actually detects WSL (`09f-oc-misc.sh:157`)".
-    Re-derived 2026-09-18: there are **three** `/proc/version` greps — `09f-oc-misc.sh:157`,
-    `11e-llm-model.sh:1038`, `14-wsl-extras.sh:133` — plus `12-dashboard-help.sh:204` reading
-    `$WSL_DISTRO_NAME`. The item's corrected text already accepts env-var and
-    `command -v pwsh.exe` probes, so the conclusion ("no call site needs changing") stands,
-    but the count in this line was wrong.
+    Re-derived 2026-09-18 (line numbers 2026-10-22): there are **three** `/proc/version` greps —
+    `09f-oc-misc.sh:172`, `11e-llm-model.sh:1279`, `14-wsl-extras.sh:219` — plus
+    `12-dashboard-help.sh:228` reading `$WSL_DISTRO_NAME`. The item's corrected text already
+    accepts env-var and `command -v pwsh.exe` probes, so the conclusion ("no call site needs
+    changing") stands, but the count in this line was wrong.
 
 18.3 Migration backlog — count it, do not fix it during a correctness pass
 
