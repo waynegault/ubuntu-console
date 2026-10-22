@@ -378,8 +378,13 @@ each as a session, not as a pool:
 - **Prefer a second lane over swapping a live one when host RAM allows.**  Five
   resident lanes at llama.cpp's default 8192 MiB prompt cache would reserve
   ~40 GiB of this box's ~47 GiB, which is why every lane pins `--cache-ram 0`
-  — the number is a host-RAM budget, not a VRAM one.  When a second lane does
-  not fit, say so and swap; do not pretend the swap is free.
+  — the number is a host-RAM budget, not a VRAM one.  On the Xe lanes that
+  distinction collapses entirely: Iris Xe is an **integrated** GPU with no
+  dedicated VRAM of its own, so the model weights, the KV cache and the prompt
+  cache are all drawn from the same system RAM.  A `--cache-ram` raise on an
+  iGPU lane therefore competes with the model it is caching for, not with a
+  separate GPU pool.  When a second lane does not fit, say so and swap; do not
+  pretend the swap is free.
 
 **The per-lane `--cache-ram` budget is an OPEN decision, not a closed
 trade-off** (SWITCH-CONSOLE-AFFINITY-001 item 3, successor to
