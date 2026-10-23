@@ -290,7 +290,13 @@
 #      must not carry one).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-10-22): the interpreter now comes from the shared resolver
+#   (tools/python-runtime.sh) instead of an inline `.venv` probe.  The inline probe
+#   looked only beside THIS script, so the pre-push hook's materialised worktree (a
+#   linked worktree, which carries no .venv) fell back to PATH's Homebrew python3 and
+#   refused with "a partial contract check is a silent pass" — every push made with a
+#   dirty working tree.  No new mode or rule, so the tool VERSION does not move.
 #   v16 (2026-10-03, card 74051862): `swallows` now NAMES a configured corpus group whose
 #   directory is absent instead of skipping it silently.  A missing group used to be a
 #   `continue`, so its baseline rows read STALE (non-fatal) and a whole vanished group passed
@@ -384,14 +390,17 @@ fi
 # overridable with --repo so a throwaway fixture tree can be checked.
 _repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# The repo's python (see the project rules: system python lacks the deps in some
-# environments); fall back to PATH so a fixture tree with no venv still works.
-_python="python3"
-if [[ -x "$_repo_root/.venv/bin/python3" ]]; then
-    _python="$_repo_root/.venv/bin/python3"
-fi
-if ! command -v "$_python" >/dev/null 2>&1; then
-    printf '%s\n' "check-contracts: python3 not found (needed to parse the contract YAML)" >&2
+# The repo's python, via the SHARED resolver.  An inline probe here looked only
+# beside this script, so in the pre-push hook's materialised worktree it found no
+# venv, fell back to PATH's Homebrew python3 (no PyYAML) and refused with "a partial
+# contract check is a silent pass" on every push made with a dirty tree — measured
+# 2026-10-22 on two consecutive pushes.  The resolver also resolves a linked
+# worktree's primary checkout, and keeps PATH as the last fallback so a fixture tree
+# with no venv still works.
+# shellcheck source=tools/python-runtime.sh
+source "$_repo_root/tools/python-runtime.sh"
+if ! _python="$(_tac_python_path "$_repo_root")"; then
+    printf '%s\n' "check-contracts: no usable python3 (needed to parse the contract YAML)" >&2
     exit 2  # cannot run the check
 fi
 

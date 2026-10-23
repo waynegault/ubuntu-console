@@ -22,6 +22,10 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 PYTHON_RUNTIME="$REPO_ROOT/tools/python-runtime.sh"
 MODULE="$REPO_ROOT/scripts/09d-oc-agents.sh"
 
+# Flags on `run` need bats >= 1.5, so say so — this fails loudly on an older bats
+# instead of silently ignoring the flag (the `run -127` above declares its status).
+bats_require_minimum_version 1.5.0
+
 setup() {
     TAC_TEST_TMPDIR="$(mktemp -d)"
     export TAC_TEST_TMPDIR
@@ -94,7 +98,9 @@ teardown() {
     export TAC_PYTHON="$TAC_TEST_TMPDIR/missing-python"
     export PATH="$TAC_TEST_TMPDIR/empty-path"
     source "$PYTHON_RUNTIME"
-    run _tac_python_path "$sandbox"
+    # 127 is the CONTRACT of this case, so declare it to `run` — otherwise bats
+    # reports BW01 ("Command not found") on every run for an expected status.
+    run -127 _tac_python_path "$sandbox"
     export PATH="$saved_path"
     [ "$status" -eq 127 ]
     [[ "$output" == *"TAC_PYTHON is not executable or on PATH"* ]]
@@ -111,9 +117,56 @@ teardown() {
     [ "$output" = "python3" ]
 }
 
+@test "python runtime resolves the primary checkout's venv from a linked worktree" {
+    # The failure caught: the pre-push hook materialises HEAD with `git worktree add`,
+    # and a linked worktree has no .venv of its own — the probe fell through to PATH's
+    # Homebrew python3 (no PyYAML) and tools/check-contracts.sh refused the push with
+    # "a partial contract check is a silent pass" (measured 2026-10-22, twice).
+    local primary="$TAC_TEST_TMPDIR/primary"
+    local linked="$TAC_TEST_TMPDIR/linked"
+    mkdir -p "$primary/.venv/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$primary/.venv/bin/python3"
+    chmod +x "$primary/.venv/bin/python3"
+    git -C "$primary" init -q -b main
+    git -C "$primary" config user.email unit@example.invalid
+    git -C "$primary" config user.name unit
+    : > "$primary/marker"
+    git -C "$primary" add marker
+    git -C "$primary" commit -q -m init
+    git -C "$primary" worktree add -q --detach "$linked"
+
+    unset TAC_PYTHON
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$linked"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$primary/.venv/bin/python3" ]
+}
+
+@test "python runtime does not invent a venv for a worktree whose primary has none" {
+    # Control for the case above: without it, that test would also pass if the
+    # resolver returned some other path under the primary root.
+    local primary="$TAC_TEST_TMPDIR/primary-bare"
+    local linked="$TAC_TEST_TMPDIR/linked-bare"
+    mkdir -p "$primary"
+    git -C "$primary" init -q -b main
+    git -C "$primary" config user.email unit@example.invalid
+    git -C "$primary" config user.name unit
+    : > "$primary/marker"
+    git -C "$primary" add marker
+    git -C "$primary" commit -q -m init
+    git -C "$primary" worktree add -q --detach "$linked"
+
+    unset TAC_PYTHON
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$linked"
+    [ "$status" -eq 0 ]
+    [ "$output" = "python3" ]
+}
+
 @test "inline Python callers use the shared interpreter resolver" {
     for script in \
         "$REPO_ROOT/tools/import-windows-env.sh" \
+        "$REPO_ROOT/tools/check-contracts.sh" \
         "$REPO_ROOT/bin/qwen-memory-index-patch.sh" \
         "$REPO_ROOT/bin/qwen-guard-patch.sh" \
         "$REPO_ROOT/bin/qwen-memory-style-patch.sh" \
