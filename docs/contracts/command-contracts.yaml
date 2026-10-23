@@ -443,9 +443,9 @@ commands:
 
   - name: oc purge
     family: openclaw
-    summary: Reset every agent — delete every stored session (main included), clear the session directories and restart the gateway
-    version: 3
-    updated: 2026-10-18
+    summary: Reset every agent — delete every stored non-main, non-cron session, clear the session directories, reset the configured main to empty and repair a tombstoned main, then restart the gateway
+    version: 4
+    updated: 2026-10-23
     status: active
     scope: both
     effect: mutate
@@ -470,10 +470,22 @@ commands:
     # tombstoned session carrying status 'failed' in session_windows appears in NO roster row,
     # and the command still passes its key to `sessions delete` (read back from the DELETE
     # ARGV, so a helper that enumerates but is never wired in is caught).
+    # v4 (2026-10-23) — the owner settled the scope: CRON session rows are KEPT (automation
+    # state), and a MAIN is never deleted.  The configured main (OC_PURGE_RESET_MAIN, default
+    # hal) is emptied in place through the gateway: sessions.patch {archived:false} only when
+    # entry_json.archivedAt is set, then sessions.reset, each bounded by the store's
+    # current_session_id as expectedSessionId, and read back from the STORE (archivedAt and
+    # mainRestartRecovery both gone) rather than the RPC's own ok.  A main whose recovery
+    # tombstone names a successor the store no longer holds is repaired the same way — the
+    # delete removes rollover successors, so without that arm purge manufactures the tombstone
+    # it would otherwise leave behind.  The roster read-back excludes both kept classes, or
+    # every correct purge would report failure over rows it deliberately kept.
     verified_by:
       - "tests/unit/02-so-startup.bats::oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted"
       - "tests/unit/02-so-startup.bats::oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs"
       - "tests/unit/02-so-startup.bats::oc purge: a tombstoned session absent from the roster is still deleted"
+      - "tests/unit/02-so-startup.bats::oc purge: cron sessions are KEPT and the configured main is RESET, not deleted"
+      - "tests/unit/02-so-startup.bats::oc purge: a main whose tombstone names a missing successor is REPAIRED"
     read_back:
       - witness: __oc_purge_wait_gone
         file: scripts/09c-oc-core.sh
@@ -486,21 +498,33 @@ commands:
       - witness: __oc_purge_delete_sessions
         file: scripts/09c-oc-core.sh
         asserts: >-
-          every key from `sessions --all-agents` AND from each store's session_windows is
-          passed to `openclaw sessions delete`; a non-zero delete is reported rather than
-          claimed, and the roster is re-read afterwards so the summary cannot say "reset"
-          over a store that still holds rows.
+          every non-main, non-cron key from `sessions --all-agents` AND from each store's
+          session_windows is passed to `openclaw sessions delete`; mains and cron rows are
+          counted and never sent, a non-zero delete is reported rather than claimed, and the
+          roster is re-read afterwards with both kept classes excluded, so the summary cannot
+          say "reset" over a store that still holds rows nor fail over rows it kept.
+      - witness: __oc_purge_reset_main
+        file: scripts/09c-oc-core.sh
+        asserts: >-
+          a configured main is emptied only through `sessions.patch {archived:false}` (when
+          entry_json.archivedAt is set) and `sessions.reset`, both carrying the store's
+          current_session_id as expectedSessionId, and success is the STORE reading back with
+          archivedAt and mainRestartRecovery gone — a body with ok != true fails even when the
+          CLI exits 0.  `__oc_purge_broken_tombstones` feeds the same arm only for a tombstone
+          whose recovered successor is absent, so a recoverable cycle is left to the gateway.
     contract:
       args:
         - --dry-run
       side_effects:
         - stops the gateway
         - deletes ~/.openclaw/agents/*/sessions
-        - deletes every stored session through `openclaw sessions delete` (main included)
+        - deletes every stored non-main, non-cron session through `openclaw sessions delete`
+        - resets the configured main (`OC_PURGE_RESET_MAIN`, default `hal`) to empty through `sessions.patch` and `sessions.reset`
+        - repairs a main whose recovery tombstone names a successor the store no longer holds
         - starts the gateway again
       output_shape:
-        - per-session rows, a deleted-key count and a summary line
-      exit_code: non-zero when the gateway will not stop, will not restart, or a delete failed
+        - per-session rows (deleted, kept main, kept cron), a reset/repair row and a summary line
+      exit_code: non-zero when the gateway will not stop, will not restart, or a delete, reset or repair failed
 fixture_priority:
   - m
   - h

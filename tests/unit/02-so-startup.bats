@@ -724,6 +724,105 @@ MOCK
     [[ "$output" == *"FAILED to delete store rows"* ]]
 }
 
+@test "oc purge: cron sessions are KEPT and the configured main is RESET, not deleted" {
+    # Owner's call 2026-10-23: cron is automation state, so its session rows survive a
+    # purge; and the one main that must come back empty is reset through the gateway
+    # (sessions.patch then sessions.reset), because `sessions delete` refuses a main.
+    # The read-back must ignore the cron row it deliberately kept, or a correct purge
+    # reports failure.  Assertions are the DELETE argv and the RPC argv (what was asked),
+    # plus the store state the mock's reset leaves.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_PURGE_RESET_MAIN=hal
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/hal/sessions" "$OC_AGENTS/hal/agent"
+    sqlite3 "$OC_AGENTS/hal/agent/openclaw-agent.sqlite" \
+        "create table session_nodes(session_key text, current_session_id text, entry_json text);" \
+        "create table session_windows(session_key text, session_id text);" \
+        "insert into session_nodes values('agent:hal:main','sid-1','{\"sessionId\":\"sid-1\"}');" \
+        "insert into session_windows values('agent:hal:main','sid-1');"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }
+    __so_start_gateway() { return 0; }
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<MOCK
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+    "sessions --all-agents")
+        if [[ -f "$TAC_TEST_TMPDIR/deleted" ]]; then
+            printf '%s\n' '{"count":2,"sessions":[{"key":"agent:hal:main"},{"key":"agent:hal:cron:abc"}]}'
+        else
+            printf '%s\n' '{"count":3,"sessions":[{"key":"agent:hal:scratch"},{"key":"agent:hal:main"},{"key":"agent:hal:cron:abc"}]}'
+        fi ;;
+    "sessions delete")
+        : > "$TAC_TEST_TMPDIR/deleted"
+        printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/delete-argv"
+        printf '%s\n' '{"ok":true}' ;;
+    "gateway call")
+        printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/rpc-argv"
+        sqlite3 "$OC_AGENTS/hal/agent/openclaw-agent.sqlite" \
+            "update session_nodes set entry_json='{\"sessionId\":\"sid-2\"}' where session_key='agent:hal:main';"
+        printf '%s\n' '{"ok":true}' ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    run oc-purge
+
+    [ "$status" -eq 0 ]
+    grep -qF 'agent:hal:scratch' "$TAC_TEST_TMPDIR/delete-argv"
+    ! grep -qF 'agent:hal:cron:abc' "$TAC_TEST_TMPDIR/delete-argv"
+    ! grep -qF 'agent:hal:main' "$TAC_TEST_TMPDIR/delete-argv"
+    grep -qF 'sessions.reset' "$TAC_TEST_TMPDIR/rpc-argv"
+    grep -qF 'agent:hal:main' "$TAC_TEST_TMPDIR/rpc-argv"
+    [[ "$output" == *"[1 cron session(s) KEPT"* ]]
+    [[ "$output" == *"[agent:hal:main reset"* ]]
+}
+
+@test "oc purge: a main whose tombstone names a missing successor is REPAIRED" {
+    # The delete above can create this shape: a rollover successor is an ordinary
+    # non-main key, so purging it leaves the main's tombstone pointing at nothing, and
+    # recovery then refuses ("Session recovery state is incomplete").  The repair is the
+    # documented patch+reset pair; archivedAt forces the patch arm.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_PURGE_RESET_MAIN=""
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/finn/sessions" "$OC_AGENTS/finn/agent"
+    sqlite3 "$OC_AGENTS/finn/agent/openclaw-agent.sqlite" \
+        "create table session_nodes(session_key text, current_session_id text, entry_json text);" \
+        "create table session_windows(session_key text, session_id text);" \
+        "insert into session_nodes values('agent:finn:main','sid-1','{\"sessionId\":\"sid-1\",\"archivedAt\":1792745580110,\"mainRestartRecovery\":{\"tombstone\":{\"recoveredSessionKey\":\"agent:finn:dashboard:dead\",\"recoveredSessionId\":\"dead-id\"}}}');" \
+        "insert into session_windows values('agent:finn:main','sid-1');"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }
+    __so_start_gateway() { return 0; }
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<MOCK
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+    "sessions --all-agents") printf '%s\n' '{"count":1,"sessions":[{"key":"agent:finn:main"}]}' ;;
+    "gateway call")
+        printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/rpc-argv"
+        sqlite3 "$OC_AGENTS/finn/agent/openclaw-agent.sqlite" \
+            "update session_nodes set entry_json='{\"sessionId\":\"sid-2\"}' where session_key='agent:finn:main';"
+        printf '%s\n' '{"ok":true}' ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    run oc-purge
+
+    [ "$status" -eq 0 ]
+    grep -qF 'sessions.patch' "$TAC_TEST_TMPDIR/rpc-argv"
+    grep -qF '"archived":false' "$TAC_TEST_TMPDIR/rpc-argv"
+    grep -qF 'sessions.reset' "$TAC_TEST_TMPDIR/rpc-argv"
+    [[ "$output" == *"repaired - tombstone pointed at missing agent:finn:dashboard:dead"* ]]
+    [[ "$output" == *"1 tombstone(s) repaired"* ]]
+}
+
 @test "xo: a gateway stop that ignores TERM is KILLED, not waited out" {
     # Measured 2026-10-18: `openclaw gateway stop` ignores SIGTERM, so `timeout 30` sent
     # TERM, was ignored, and waited forever — the live purge hung inside it until the

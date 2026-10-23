@@ -1,6 +1,17 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 22
+#   v22 (2026-10-23): `oc purge` now names the three things it used to overstate.  CRON
+#   sessions are KEPT (Wayne, 2026-10-23) and counted, so the roster read-back ignores them
+#   or every purge would fail over rows it deliberately kept.  Each agent's MAIN is kept, and
+#   the configured one (OC_PURGE_RESET_MAIN, default hal) is RESET through the gateway RPC
+#   (`sessions.patch {archived:false}` then `sessions.reset`, both with expectedSessionId) so
+#   it comes back empty — `sessions delete` refuses a main.  A main whose recovery tombstone
+#   points at a successor the store no longer holds is REPAIRED the same way; purge deletes
+#   that successor class, so without this it would manufacture the tombstone it leaves behind.
+#   Read-backs are from the store (archivedAt and mainRestartRecovery gone), never the RPC's
+#   own ok.  Bounded CLI calls carry `-k` because the CLI ignores SIGTERM.
 # Module Version: 21
 #   v21 (2026-10-18): the purge's `timeout … openclaw` calls carry `-k` (10 s for a read,
 #   15 s for the delete).  The CLI ignores SIGTERM — measured on `gateway stop` — so a
@@ -158,7 +169,7 @@ function oc() {
         printf '  %-20s %s\n' "agent-turn"   "Alias for start"
         printf '  %-20s %s\n' "mem-index"    "Rebuild OpenClaw vector memory index"
         printf '  %-20s %s\n' "memory-search" "Semantic search over stored memories"
-        printf '  %-20s %s\n' "purge"        "Reset every agent: delete all sessions and restart"
+        printf '  %-20s %s\n' "purge"        "Reset sessions (mains/cron kept); empty hal main"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Config & Logs${C_Reset}"
         printf '  %-20s %s\n' "conf"         "Open openclaw.json in VS Code"
@@ -343,8 +354,9 @@ function ocstop() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-purge — Reset every agent: delete every stored session (including each agent's
-# `main`), clear the session directories, and restart the gateway.
+# oc-purge — Reset every agent: delete every stored non-main, non-cron session, clear the
+# session directories, reset the configured main to empty, repair any tombstoned main, and
+# leave the gateway serving.  Agent mains and cron sessions are KEPT and reported.
 # Usage: oc purge [--dry-run]
 #
 # WHY THIS IS NOT "DELETE FILES" (measured 2026-10-18).  The gateway's sessions live in
@@ -403,30 +415,181 @@ function __oc_purge_session_keys() {
 # with the CLI's own output on stderr rather than discarded.
 function __oc_purge_delete_sessions() {
     local -a _keys=()
-    local _key _out="" _mains=0
+    local _key _out="" _mains=0 _cron=0
     while IFS= read -r _key
     do
         [[ -n "$_key" ]] || continue
         # The CLI REFUSES to delete a main session ("Cannot delete the main session"),
         # and one refused key fails the whole batch.  So mains are counted and reported
-        # rather than sent: the supported reset for a main is /reset in that chat.
+        # rather than sent; the configured one is reset instead (see oc-purge step 5b).
         if [[ "$_key" == *":main" ]]
         then
             _mains=$(( _mains + 1 ))
             continue
         fi
+        # Cron sessions are automation state and are KEPT (owner's call 2026-10-23);
+        # deleting them here would also make the roster read-back fail over rows this
+        # command deliberately left.
+        if [[ "$_key" == *":cron:"* ]]
+        then
+            _cron=$(( _cron + 1 ))
+            continue
+        fi
         _keys+=("$_key")
     done < <(__oc_purge_session_keys)
 
-    printf '%s %s\n' "${#_keys[@]}" "$_mains"
+    printf '%s %s %s\n' "${#_keys[@]}" "$_mains" "$_cron"
     (( ${#_keys[@]} > 0 )) || return 0
 
     if ! _out=$(timeout -k 15 300 openclaw sessions delete "${_keys[@]}" --yes --json 2>&1)
     then
-        printf '%s\n' "$_out" >&2
+        __oc_purge_stderr "$_out"
         return 1
     fi
     return 0
+}
+
+# __oc_purge_stderr — the one place this command writes a diagnostic to stderr, so a
+# scan whose stdout is the RESULT list cannot be corrupted by its own warnings.
+function __oc_purge_stderr() {
+    printf '%s\n' "$1" >&2
+}
+
+# __oc_purge_agent_store — the store path owning a session key; empty when the key is not
+# agent-qualified (nothing to read) or the store is absent.
+function __oc_purge_agent_store() {
+    local _key="$1"
+    local _agent
+    [[ "$_key" == agent:*:* ]] || return 0
+    _agent="${_key#agent:}"
+    _agent="${_agent%%:*}"
+    printf '%s\n' "$OC_AGENTS/$_agent/agent/openclaw-agent.sqlite"
+}
+
+# __oc_purge_store_read — one value from an agent store, read-only.
+function __oc_purge_store_read() {
+    local _db="$1"
+    local _sql="$2"
+    [[ -f "$_db" ]] || return 1
+    timeout -k 10 30 sqlite3 "file:$_db?mode=ro" "$_sql"
+}
+
+# __oc_purge_store_has_nodes — 0 when the store carries session_nodes, 2 when it does not
+# (an older fixture or an agent that never stored a session), 1 when the store cannot be
+# read at all.  The three are kept apart so an unreadable store is a FAILURE, not a skip.
+function __oc_purge_store_has_nodes() {
+    local _db="$1"
+    local _n
+    _n=$(__oc_purge_store_read "$_db" \
+        "select count(*) from sqlite_master where type='table' and name='session_nodes';") || return 1
+    [[ "$_n" == "1" ]] || return 2   # 2 = store has no session_nodes
+    return 0
+}
+
+# __oc_purge_rpc — one gateway method call, bounded.  A JSON body with ok != true is a
+# failure even when the CLI exits 0 (measured: sessions delete --dry-run did exactly that).
+function __oc_purge_rpc() {
+    local _method="$1"
+    local _params="$2"
+    local _out
+    if ! _out=$(timeout -k 15 120 openclaw gateway call "$_method" \
+        --params "$_params" --json 2>&1)
+    then
+        __oc_purge_stderr "$_out"
+        return 1
+    fi
+    if ! printf '%s\n' "$_out" | jq -e '.ok == true' >/dev/null 2>&1
+    then
+        __oc_purge_stderr "$_out"
+        return 1
+    fi
+    return 0
+}
+
+# __oc_purge_reset_main — reset one main session in place.  0 = reset and read back clean,
+# 3 = nothing to reset, 1 = failed.  `sessions delete` refuses a main, so the supported
+# path is patch (only when archived) then reset, each bounded by the store's session id.
+# The read-back is the STORE: archivedAt and mainRestartRecovery both gone.
+function __oc_purge_reset_main() {
+    local _key="$1"
+    local _db
+    local _sid
+    local _archived
+    local _state
+    local _agent
+    local _params
+    _db=$(__oc_purge_agent_store "$_key")
+    [[ -n "$_db" ]] || return 3   # 3 = nothing to reset
+    [[ -f "$_db" ]] || return 3   # 3 = nothing to reset
+    __oc_purge_store_has_nodes "$_db"
+    case $? in
+        0) ;;
+        2) return 3 ;;   # 3 = nothing to reset
+        *) return 1 ;;
+    esac
+    _sid=$(__oc_purge_store_read "$_db" \
+        "select current_session_id from session_nodes where session_key='$_key';") || return 1
+    [[ -n "$_sid" ]] || return 3   # 3 = nothing to reset
+    _agent="${_key#agent:}"
+    _agent="${_agent%%:*}"
+    _archived=$(__oc_purge_store_read "$_db" "
+        select coalesce(json_extract(entry_json,'\$.archivedAt'),'')
+        from session_nodes where session_key='$_key';") || return 1
+    if [[ -n "$_archived" ]]
+    then
+        _params=$(jq -cn --arg k "$_key" --arg a "$_agent" --arg s "$_sid" \
+            '{sessionKey:$k,agentId:$a,expectedSessionId:$s,archived:false}') || return 1
+        __oc_purge_rpc "sessions.patch" "$_params" || return 1
+        _sid=$(__oc_purge_store_read "$_db" \
+            "select current_session_id from session_nodes where session_key='$_key';") || return 1
+        [[ -n "$_sid" ]] || return 1
+    fi
+    _params=$(jq -cn --arg k "$_key" --arg a "$_agent" --arg s "$_sid" \
+        '{sessionKey:$k,agentId:$a,expectedSessionId:$s}') || return 1
+    __oc_purge_rpc "sessions.reset" "$_params" || return 1
+    _state=$(__oc_purge_store_read "$_db" "
+        select case when json_extract(entry_json,'\$.mainRestartRecovery') is null
+            and json_extract(entry_json,'\$.archivedAt') is null
+            then 'clean' else 'dirty' end
+        from session_nodes where session_key='$_key';") || return 1
+    [[ "$_state" == "clean" ]]
+}
+
+# __oc_purge_broken_tombstones — "<key>\t<missing successor>" for every main whose recovery
+# tombstone names a successor the store no longer holds.  That is the shape that refuses
+# recovery; a tombstone whose successor IS present is left to the gateway's own recovery.
+function __oc_purge_broken_tombstones() {
+    local _db
+    local _key
+    local _recovered
+    local _exists
+    for _db in "$OC_AGENTS"/*/agent/openclaw-agent.sqlite
+    do
+        [[ -f "$_db" ]] || continue
+        __oc_purge_store_has_nodes "$_db"
+        case $? in
+            0) ;;
+            2) continue ;;
+            *) __oc_purge_stderr "(unreadable tombstone state: $_db)"; continue ;;
+        esac
+        while IFS='|' read -r _key _recovered
+        do
+            [[ -n "$_key" && -n "$_recovered" ]] || continue
+            _exists=$(__oc_purge_store_read "$_db" "
+                select (select count(*) from session_nodes where session_key='$_recovered')
+                     + (select count(*) from session_windows where session_key='$_recovered');") \
+                || { __oc_purge_stderr "(unreadable successor state: $_db)"; continue; }
+            if [[ "$_exists" == "0" ]]
+            then
+                printf '%s\t%s\n' "$_key" "$_recovered"
+            fi
+        done < <(__oc_purge_store_read "$_db" "
+            select session_key,
+                   json_extract(entry_json,'\$.mainRestartRecovery.tombstone.recoveredSessionKey')
+            from session_nodes
+            where session_key like '%:main'
+              and json_extract(entry_json,'\$.mainRestartRecovery.tombstone') is not null;")
+    done
 }
 
 # oc-purge — see the header above for the order and what is no longer out of scope.
@@ -450,9 +613,26 @@ function oc-purge() {
     # dry run, which is a side effect the name denies.
     if (( _dry_run == 1 ))
     then
-        __tac_info "Sessions" "[WOULD DELETE every stored session, main included]" "$C_Dim"
-        __oc_purge_session_keys | sed 's/^/    /'
-        local _agent_dir
+        local _agent_dir _key _tb_recovered
+        __tac_info "Sessions" "[WOULD DELETE every stored session except agent mains and cron]" "$C_Dim"
+        __oc_purge_session_keys | grep -vE '(:main$|:cron:)' | sed 's/^/    /'
+        while IFS= read -r _key
+        do
+            case "$_key" in
+                *:main)     __tac_info "Session" "[WOULD KEEP - agent main] $_key" "$C_Dim" ;;
+                *":cron:"*) __tac_info "Session" "[WOULD KEEP - cron] $_key" "$C_Dim" ;;
+                *)          : ;;
+            esac
+        done < <(__oc_purge_session_keys)
+        if [[ -n "${OC_PURGE_RESET_MAIN-hal}" ]]
+        then
+            __tac_info "Sessions" "[WOULD RESET - main left empty] agent:${OC_PURGE_RESET_MAIN-hal}:main" "$C_Dim"
+        fi
+        while IFS=$'\t' read -r _key _tb_recovered
+        do
+            [[ -n "$_key" ]] || continue
+            __tac_info "Sessions" "[WOULD REPAIR - tombstoned main] $_key -> $_tb_recovered (missing)" "$C_Dim"
+        done < <(__oc_purge_broken_tombstones)
         for _agent_dir in "$OC_AGENTS"/*/
         do
             [[ -d "${_agent_dir%/}/sessions" ]] \
@@ -462,7 +642,8 @@ function oc-purge() {
         return 0
     fi
 
-    local _purge_count=0 _failed=0 _deleted=0 _mains=0 _purge_left="" _counts=""
+    local _purge_count=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0
+    local _purge_left="" _counts=""
 
     # 1. Stop the gateway with DB-safe sequencing, then WAIT for it to be gone.  A stop
     #    that does not land is a refusal: everything below deletes state.
@@ -530,29 +711,68 @@ function oc-purge() {
         return 1
     fi
 
-    # 5. Delete every stored session EXCEPT each agent's main.  The CLI refuses to
-    #    delete a main ("Cannot delete the main session", measured 2026-10-18), and one
-    #    refused key fails the whole batch — so mains are counted, named, and left to
-    #    /reset in their chat instead of failing the purge.
+    # 5. Delete every stored session EXCEPT each agent's main and cron sessions.  The CLI
+    #    refuses to delete a main ("Cannot delete the main session", measured 2026-10-18),
+    #    and one refused key fails the whole batch; cron is automation state this command
+    #    keeps (owner's call 2026-10-23), so neither may reach the batch.
     if ! _counts=$(__oc_purge_delete_sessions)
     then
         __tac_info "Sessions" "[FAILED to delete store rows - reported, not claimed]" "$C_Error"
         _failed=$(( _failed + 1 ))
     else
-        _deleted="${_counts%% *}"
-        _mains="${_counts##* }"
+        read -r _deleted _mains _cron <<< "$_counts"
         __tac_info "Sessions" "[$_deleted session key(s) deleted]" "$C_Dim"
         if (( _mains > 0 ))
         then
-            __tac_info "Sessions" "[$_mains main session(s) KEPT - the CLI refuses to delete main; use /reset in that chat]" "$C_Dim"
+            __tac_info "Sessions" "[$_mains main session(s) KEPT - the CLI refuses to delete main]" "$C_Dim"
+        fi
+        if (( _cron > 0 ))
+        then
+            __tac_info "Sessions" "[$_cron cron session(s) KEPT - automation state is not purge's]" "$C_Dim"
         fi
     fi
 
-    # 6. Read the NON-MAIN roster back.  Mains are kept by design, so counting them would
-    #    turn every correct purge into a failure.  "Purge complete" is a claim about the
-    #    store, so it is made from a fresh read, never from the delete's return code.
+    # 5b. Reset the configured main so it comes back EMPTY.  `sessions delete` refuses a
+    #     main, so the supported path is patch (only when archived) then reset, each bounded
+    #     by the store's current session id.  Read back from the store, never the RPC's ok.
+    local _reset_main="${OC_PURGE_RESET_MAIN-hal}" _reset_key="" _tb_key="" _tb_recovered=""
+    local _rc=0
+    if [[ -n "$_reset_main" ]]
+    then
+        _reset_key="agent:$_reset_main:main"
+        __oc_purge_reset_main "$_reset_key"
+        _rc=$?
+        case "$_rc" in
+            0) _resets=$(( _resets + 1 ))
+               __tac_info "Sessions" "[$_reset_key reset - main kept, transcript empty]" "$C_Dim" ;;
+            3) : ;;
+            *) _failed=$(( _failed + 1 ))
+               __tac_info "Sessions" "[FAILED to reset $_reset_key]" "$C_Error" ;;
+        esac
+    fi
+
+    # 5c. Repair a main whose recovery tombstone names a successor the store no longer
+    #     holds.  The delete above can create exactly that row, because a rollover
+    #     successor is an ordinary non-main key.
+    while IFS=$'\t' read -r _tb_key _tb_recovered
+    do
+        [[ -n "$_tb_key" ]] || continue
+        __oc_purge_reset_main "$_tb_key"
+        _rc=$?
+        case "$_rc" in
+            0) _repairs=$(( _repairs + 1 ))
+               __tac_info "Sessions" "[$_tb_key repaired - tombstone pointed at missing $_tb_recovered]" "$C_Dim" ;;
+            3) : ;;
+            *) _failed=$(( _failed + 1 ))
+               __tac_info "Sessions" "[FAILED to repair $_tb_key]" "$C_Error" ;;
+        esac
+    done < <(__oc_purge_broken_tombstones)
+
+    # 6. Read the NON-MAIN roster back, excluding the cron rows kept above: counting either
+    #    class would turn every correct purge into a failure.  "Purge complete" is a claim
+    #    about the store, so it is made from a fresh read, never from the delete's rc.
     if ! _purge_left=$(timeout -k 10 60 openclaw sessions --all-agents --json \
-        | jq -r '[.sessions[].key | select(endswith(":main")|not)] | length')
+        | jq -r '[.sessions[].key | select((endswith(":main") or contains(":cron:"))|not)] | length')
     then
         _failed=$(( _failed + 1 ))
         __tac_info "Sessions" "[could not read the roster back after delete]" "$C_Error"
@@ -563,6 +783,15 @@ function oc-purge() {
     fi
 
     # Report result
+    local _extra=""
+    if (( _resets > 0 ))
+    then
+        _extra+=", $_resets main(s) reset"
+    fi
+    if (( _repairs > 0 ))
+    then
+        _extra+=", $_repairs tombstone(s) repaired"
+    fi
     if (( _failed > 0 ))
     then
         __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, $_failed FAILED]" "$C_Error"
@@ -572,9 +801,9 @@ function oc-purge() {
         return 1
     elif (( _purge_count > 0 ))
     then
-        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, store reset]" "$C_Success"
+        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, store reset${_extra}]" "$C_Success"
     else
-        __tac_info "Purge Complete" "[No session dirs found, store reset]" "$C_Dim"
+        __tac_info "Purge Complete" "[No session dirs found, store reset${_extra}]" "$C_Dim"
     fi
 }
 
