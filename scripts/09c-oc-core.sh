@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 35
+#   v35 (2026-10-24): the purge resets EVERY agent's main, not only the configured one
+#   (owner's call: "both"), and it narrates its three slow phases — enumeration+delete,
+#   reset, prune — because ~2-3 minutes of silence read as a freeze.  `OC_PURGE_RESET_MAIN`
+#   still narrows the reset to one agent when set; unset/`all` means every main.
 # Module Version: 34
 #   v34 (2026-10-23): `xo` names the fleet lanes still running after it stops the owned LLM.
 #   `model stop` protects lanes by design, so "[STOPPED]" was true of one server and read as
@@ -834,6 +839,7 @@ function oc-purge() {
     #    refuses to delete a main ("Cannot delete the main session", measured 2026-10-18),
     #    and one refused key fails the whole batch; cron is automation state this command
     #    keeps (owner's call 2026-10-23), so neither may reach the batch.
+    __tac_info "Sessions" "[reading keys and deleting non-main, non-cron sessions]" "$C_Dim"
     if ! _counts=$(__oc_purge_delete_sessions)
     then
         __tac_info "Sessions" "[FAILED to delete store rows - reported, not claimed]" "$C_Error"
@@ -851,23 +857,35 @@ function oc-purge() {
         fi
     fi
 
-    # 3b. Reset the configured main so it comes back EMPTY.  `sessions delete` refuses a
-    #     main, so the supported path is patch (only when archived) then reset, each bounded
-    #     by the store's current session id.  Read back from the store, never the RPC's ok.
-    local _reset_main="${OC_PURGE_RESET_MAIN-hal}" _reset_key="" _tb_key="" _tb_recovered=""
+    # 3b. Reset EVERY agent's main so each comes back EMPTY (owner's call 2026-10-24).
+    #     `sessions delete` refuses a main, so the supported path is patch (only when
+    #     archived) then reset, each bounded by the store's current session id and read
+    #     back from the STORE.  `OC_PURGE_RESET_MAIN` narrows the scope to one agent when
+    #     it names one; unset or `all` means every main.
+    local _reset_scope="${OC_PURGE_RESET_MAIN-all}" _reset_key="" _tb_key="" _tb_recovered=""
     local _rc=0
-    if [[ -n "$_reset_main" ]]
+    # Unset = every main; an explicit EMPTY value disables the reset (the repair case uses
+    # that to exercise the tombstone arm alone); any other value names one agent.
+    if [[ -n "$_reset_scope" ]]
     then
-        _reset_key="agent:$_reset_main:main"
-        __oc_purge_reset_main "$_reset_key"
-        _rc=$?
-        case "$_rc" in
-            0) _resets=$(( _resets + 1 ))
-               __tac_info "Sessions" "[$_reset_key reset - main kept, transcript empty]" "$C_Dim" ;;
-            3) : ;;
-            *) _failed=$(( _failed + 1 ))
-               __tac_info "Sessions" "[FAILED to reset $_reset_key]" "$C_Error" ;;
-        esac
+        __tac_info "Sessions" "[resetting every agent main to empty]" "$C_Dim"
+        while IFS= read -r _reset_key
+        do
+            [[ "$_reset_key" == *:main ]] || continue
+            if [[ "$_reset_scope" != "all" && "$_reset_key" != "agent:$_reset_scope:main" ]]
+            then
+                continue
+            fi
+            __oc_purge_reset_main "$_reset_key"
+            _rc=$?
+            case "$_rc" in
+                0) _resets=$(( _resets + 1 ))
+                   __tac_info "Sessions" "[$_reset_key reset - main kept, transcript empty]" "$C_Dim" ;;
+                3) : ;;
+                *) _failed=$(( _failed + 1 ))
+                   __tac_info "Sessions" "[FAILED to reset $_reset_key]" "$C_Error" ;;
+            esac
+        done < <(__oc_purge_session_keys | grep -E ':main$' | sort -u)
     fi
 
     # 3c. Repair a main whose recovery tombstone names a successor the store no longer
@@ -892,6 +910,7 @@ function oc-purge() {
     #    clear orphaned rows (measured 2026-10-23: `del` had one row and no file).  A
     #    file is removed only when neither archive table names it; cold/ is never walked;
     #    a file whose store cannot be read is kept.
+    __tac_info "Sessions" "[pruning session files no store row names]" "$C_Dim"
     if ! _pruned=$(__oc_purge_prune_orphans)
     then
         _failed=$(( _failed + 1 ))
