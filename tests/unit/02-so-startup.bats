@@ -652,6 +652,7 @@ case "\$1 \${2:-}" in
         : > "$TAC_TEST_TMPDIR/deleted"
         printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/delete-argv"
         printf '%s\n' '{"ok":true}' ;;
+    "gateway call") printf '%s\n' '{"ok":true}' ;;
 esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
@@ -715,6 +716,7 @@ MOCK
 case "\$1 \${2:-}" in
     "sessions --all-agents") printf '%s\n' '{"count":0,"sessions":[]}' ;;
     "sessions delete") printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/delete-argv" ;;
+    "gateway call") printf '%s\n' '{"ok":true}' ;;
 esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
@@ -743,6 +745,7 @@ MOCK
 case "$1 ${2:-}" in
     "sessions --all-agents") printf '%s\n' '{"count":0,"sessions":[{"key":"agent:hal:scratch"}]}' ;;
     "sessions delete") printf '%s\n' '{"ok":false}' >&2; exit 1 ;;
+    "gateway call") printf '%s\n' '{"ok":true}' ;;
 esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
@@ -835,8 +838,11 @@ case "\$1 \${2:-}" in
     "sessions --all-agents") printf '%s\n' '{"count":1,"sessions":[{"key":"agent:finn:main"}]}' ;;
     "gateway call")
         printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/rpc-argv"
-        sqlite3 "$OC_AGENTS/finn/agent/openclaw-agent.sqlite" \
-            "update session_nodes set entry_json='{\"sessionId\":\"sid-2\"}' where session_key='agent:finn:main';"
+        case "\${3:-}" in
+            sessions.patch|sessions.reset)
+                sqlite3 "$OC_AGENTS/finn/agent/openclaw-agent.sqlite" \
+                    "update session_nodes set entry_json='{\"sessionId\":\"sid-2\"}' where session_key='agent:finn:main';" ;;
+        esac
         printf '%s\n' '{"ok":true}' ;;
 esac
 MOCK
@@ -851,6 +857,38 @@ MOCK
     grep -qF 'sessions.reset' "$TAC_TEST_TMPDIR/rpc-argv"
     [[ "$output" == *"repaired - tombstone pointed at missing agent:finn:dashboard:dead"* ]]
     [[ "$output" == *"1 tombstone(s) repaired"* ]]
+}
+
+@test "oc purge: ONLINE on the port is not proof the RPC answers — nothing is deleted" {
+    # Measured live 2026-10-23: __so_start_gateway printed ONLINE (port 18789, 38s) and
+    # every openclaw call then timed out at 30 s, so `sessions delete` failed and the purge
+    # reported a FAILED store with the rows still there.  The start's port claim is not a
+    # serving claim; the delete runs over RPC, so a dead RPC must be refused first.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/alpha/sessions"
+    : > "$OC_AGENTS/alpha/sessions/a.json"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }
+    __so_start_gateway() { return 0; }      # the PORT claim succeeds
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+    "sessions --all-agents") printf '%s\n' '{"count":1,"sessions":[{"key":"agent:alpha:scratch"}]}' ;;
+    "sessions delete") : > "$TAC_TEST_TMPDIR/delete-asked"; printf '%s\n' '{"ok":true}' ;;
+    "gateway call") printf '%s\n' '{"ok":false,"error":{"message":"gateway timeout after 30000ms"}}'; exit 0 ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    run oc-purge
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NOT answering RPC"* ]]
+    [ ! -e "$TAC_TEST_TMPDIR/delete-asked" ] || { echo "a dead RPC must not reach sessions delete"; return 1; }
 }
 
 @test "xo: a gateway stop that ignores TERM is KILLED, not waited out" {

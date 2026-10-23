@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 24
+#   v24 (2026-10-23): purge proves the gateway ANSWERS RPC before touching the store.
+#   Measured live: __so_start_gateway printed ONLINE (port 18789) and every openclaw call
+#   then timed out at 30 s, so `sessions delete` could not land and the purge reported a
+#   FAILED store with the rows still there.  A port is not a server.
 # Module Version: 23
 #   v23 (2026-10-23): the purge's gone-wait bound is 360 s, not 120 — the unit's own
 #   TimeoutStopUSec is 5min 30s, and a normal drain (queueSize=6, agentRuns=3) was
@@ -715,6 +720,20 @@ function oc-purge() {
     if ! __so_start_gateway "openclaw-gateway.service"
     then
         __tac_info "Purge" "[sessions dirs cleared; the gateway did NOT start - store rows remain]" "$C_Error"
+        return 1
+    fi
+
+    # 4b. A PORT IS NOT A SERVER.  `__so_start_gateway` claims ONLINE from the listener;
+    #     the delete runs over RPC.  Measured 2026-10-23: it printed ONLINE (port 18789,
+    #     38s) and every openclaw call then timed out at 30 s, so the delete could not
+    #     land and the purge reported a FAILED store with the rows still there.  Refuse
+    #     before touching the store.
+    local _probe=""
+    if ! _probe=$(timeout -k 10 45 openclaw gateway call health --json 2>&1) \
+        || ! printf '%s\n' "$_probe" | jq -e '.ok == true' >/dev/null 2>&1
+    then
+        __tac_info "Purge" "[gateway is up but NOT answering RPC — nothing deleted, store rows remain]" "$C_Error"
+        __oc_purge_stderr "$_probe"
         return 1
     fi
 

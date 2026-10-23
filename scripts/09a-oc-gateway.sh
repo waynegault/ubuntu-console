@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 36
+#   v36 (2026-10-23): the CLI-stop FALLBACK is skipped when a stop job is already queued
+#   or running — the unit reads `active` during a long drain, so the fallback fired and
+#   spent its whole 30 s budget for nothing (measured live).
 # Module Version: 35
 #   v35 (2026-10-23): the shutdown stops through SYSTEMD FIRST and only falls back to the
 #   CLI for a unit that still reads `active`.  Measured: CLI-first killed the process
@@ -1219,11 +1223,12 @@ function __oc_safe_gateway_shutdown() {
         fi
         sleep 1
     done
-    # The CLI stop is now only a FALLBACK, for a unit that still reads active, or whose
-    # state could not be read at all (an empty read is not proof that systemd owns the
-    # stop).  `-k` is load-bearing: the CLI IGNORES SIGTERM, so a plain timeout sent TERM,
-    # was ignored, and waited forever (measured 2026-10-18).
-    if [[ "$_state" == "active" || -z "$_state" ]]
+    # The CLI stop is now only a FALLBACK, for a unit that still reads active or whose
+    # state could not be read — and NOT when a stop job is already queued/running, which
+    # is the stop underway (measured 2026-10-23: the unit read `active` during a long
+    # drain, so the fallback fired and cost its full 30 s budget for nothing).  `-k` is
+    # load-bearing: the CLI IGNORES SIGTERM.
+    if [[ "$_job_type" != "stop" ]] && [[ "$_state" == "active" || -z "$_state" ]]
     then
         if ! timeout -k 5 "$_stop_budget" openclaw gateway stop >/dev/null 2>&1
         then
