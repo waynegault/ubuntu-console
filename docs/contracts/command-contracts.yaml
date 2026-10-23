@@ -444,7 +444,7 @@ commands:
   - name: oc purge
     family: openclaw
     summary: Reset every agent — delete every stored non-main, non-cron session, clear the session directories, reset the configured main to empty and repair a tombstoned main, then restart the gateway
-    version: 4
+    version: 5
     updated: 2026-10-23
     status: active
     scope: both
@@ -480,13 +480,37 @@ commands:
     # delete removes rollover successors, so without that arm purge manufactures the tombstone
     # it would otherwise leave behind.  The roster read-back excludes both kept classes, or
     # every correct purge would report failure over rows it deliberately kept.
+    # v5 (2026-10-23) — the DECISION moved before the outage.  Four shutdowns in one day
+    # settled the work drain in <=20 s and then sat in `shutdown.gateway-close` with close
+    # steps still pending until TimeoutStopUSec expired; systemd SIGKILLed each one, the
+    # state DB's owner record still named a live pid, and the next start was refused as
+    # "undergoing offline maintenance" until that owner exited.  Because step 2 clears the
+    # session dirs BEFORE the start, a stop like that leaves the gateway DOWN with state
+    # already deleted.  The purge therefore reads the unit's own journal and REFUSES before
+    # stopping when its most recent shutdown reached that deadline (override:
+    # OC_PURGE_IGNORE_HUNG_SHUTDOWN=1).  The self-kill bound is now derived from the unit's
+    # TimeoutStopUSec (+10 s) rather than a flat 120 s, which fired 210 s inside a budget
+    # the unit was given; a killed stop is also named at the start failure, with the
+    # partial state and the gateway being down, instead of reading as "still up".
     verified_by:
       - "tests/unit/02-so-startup.bats::oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted"
+      - "tests/unit/02-so-startup.bats::oc purge: a gateway whose last shutdown did not complete is REFUSED before it is stopped"
+      - "tests/unit/02-so-startup.bats::oc purge: a completed shutdown is NOT refused, and the kill bound follows TimeoutStopUSec"
+      - "tests/unit/02-so-startup.bats::oc purge: a shutdown killed after the stop is NAMED, not reported as still up"
       - "tests/unit/02-so-startup.bats::oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs"
       - "tests/unit/02-so-startup.bats::oc purge: a tombstoned session absent from the roster is still deleted"
       - "tests/unit/02-so-startup.bats::oc purge: cron sessions are KEPT and the configured main is RESET, not deleted"
       - "tests/unit/02-so-startup.bats::oc purge: a main whose tombstone names a missing successor is REPAIRED"
     read_back:
+      - witness: __oc_purge_shutdown_hangs
+        file: scripts/09c-oc-core.sh
+        asserts: >-
+          the unit's OWN journal is read (through __oc_purge_journal, a seam so a case
+          supplies a recorded log instead of this box's live one): a settled drain followed
+          by a `shutdown deadline reached` line is a REFUSAL taken BEFORE the stop, so a
+          stop that cannot complete is never taken, nothing is deleted and the gateway stays
+          serving.  A later drain line with no deadline after it is NOT a refusal, and an
+          unreadable journal is no evidence rather than a verdict.
       - witness: __oc_purge_wait_gone
         file: scripts/09c-oc-core.sh
         asserts: >-

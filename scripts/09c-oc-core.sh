@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 31
+#   v32 (2026-10-23): the purge REFUSES before it stops a gateway whose own last shutdown
+#   did not complete.  Read from the journal: every one of today's four stops settled its
+#   work drain in <=20 s and then sat in `shutdown.gateway-close` past TimeoutStopUSec with
+#   close steps still pending, so systemd SIGKILLed it, the state DB stayed in offline
+#   maintenance and the next start was refused — a purge would have left the gateway DOWN
+#   with the session dirs already cleared (step 2 runs before the start).  The self-kill
+#   bound is also derived from the unit's TimeoutStopUSec (+10 s), not a flat 120 s, which
+#   fired 210 s INSIDE the budget the unit was given for a drain doing real work.
 # Module Version: 30
 #   v30 (2026-10-23): a shutdown that overruns is KILLED and held down instead of being
 #   fought poll-by-poll: live, the drain hung ~5 min, systemd SIGKILLed it, Restart=always
@@ -441,6 +450,109 @@ function __oc_purge_force_kill() {
     __oc_purge_stop_replace
 }
 
+# __oc_purge_journal — the shutdown evidence the pre-flight reads, oldest first.
+#
+# A seam of its own because the USER JOURNAL on this box carries the live gateway's real
+# hung stops: a case that read it would pass in CI (no user journal) and fail here.  The
+# window is bounded only to keep the scan finite; journald's own retention is shorter
+# (~2.5 h measured), so this never claims a window and no message quotes one.
+function __oc_purge_journal() {
+    local _since="${1:-}"
+    if [[ -n "$_since" ]]
+    then
+        # swallow-ok: an unreadable journal is no evidence of a hang, never a verdict
+        journalctl --user -u openclaw-gateway.service --since "@${_since}" \
+            --no-pager -o cat 2>/dev/null
+        return
+    fi
+    # swallow-ok: the same read, bounded; the caller treats failure as no evidence
+    journalctl --user -u openclaw-gateway.service --since "-6h" --no-pager -o cat 2>/dev/null
+}
+
+# __oc_purge_shutdown_hangs — 0 when the unit's MOST RECENT shutdown reached its deadline.
+#
+# Measured 2026-10-23, four stops in one day: each settled its work drain in <=20 s, then
+# sat in `shutdown.gateway-close` with close steps still pending until TimeoutStopUSec
+# (5min 30s) expired and systemd SIGKILLed it.  The state DB's owner record then still
+# named a live pid (a `MainThread` survived the kill), so the next start was refused as
+# "undergoing offline maintenance" until that owner exited — measured 12:33 refused,
+# 12:42 accepted.  `oc purge` clears the session dirs BEFORE it starts the gateway, so a
+# stop like that leaves it DOWN with state already deleted.  The refusal therefore belongs
+# before the stop: evidence, not prediction.  A completed shutdown has no deadline line
+# after its drain line, and an unreadable journal is not evidence of a hang.
+function __oc_purge_shutdown_hangs() {
+    [[ "${OC_PURGE_IGNORE_HUNG_SHUTDOWN:-0}" == "1" ]] && return 1
+    local _log=""
+    _log=$(__oc_purge_journal) || return 1
+    [[ -n "$_log" ]] || return 1
+    printf '%s\n' "$_log" | awk '
+        /active-work drain settled|received SIGTERM; shutting down/ { drain = 1; hung = 0; next }
+        /shutdown deadline reached/ { if (drain) hung = 1; next }
+        END { exit(hung ? 0 : 1) }
+    '
+}
+
+# __oc_purge_stop_was_killed — 0 when THIS run's stop reached its deadline (was killed).
+# The same evidence as the pre-flight, scoped to the stop the purge just asked for, so a
+# failure after it can name the cause instead of guessing at one.
+function __oc_purge_stop_was_killed() {
+    __oc_purge_journal "${1:-0}" | grep -qF 'shutdown deadline reached'
+}
+
+# __oc_purge_timespan_s — systemd's timespan spelling ("5min 30s") as whole seconds.
+# Returns 1 on anything it cannot read, so a caller never invents a duration.
+function __oc_purge_timespan_s() {
+    printf '%s\n' "${1:-}" | awk '
+        NF == 0 { exit 1 }
+        {
+            total = 0
+            for (i = 1; i <= NF; i++) {
+                token = $i
+                if (token == "infinity") { print 0; exit 0 }
+                if (token !~ /^[0-9]+(\.[0-9]+)?(us|ms|s|min|h|d|w)?$/) { exit 1 }
+                value = token + 0
+                unit = token
+                sub(/^[0-9]+(\.[0-9]+)?/, "", unit)
+                if (unit == "us") value = value / 1000000
+                else if (unit == "ms") value = value / 1000
+                else if (unit == "min") value = value * 60
+                else if (unit == "h") value = value * 3600
+                else if (unit == "d") value = value * 86400
+                else if (unit == "w") value = value * 604800
+                total += value
+            }
+            printf "%d\n", total
+        }
+    '
+}
+
+# __oc_purge_kill_after — when to end a shutdown the unit itself was granted longer for.
+#
+# The shipped default was a flat 120 s, which fires 210 s INSIDE this unit's own
+# TimeoutStopUSec (5min 30s): a drain doing real work is allowed that whole budget, so a
+# fixed 120 s can kill a shutdown that would have finished — the opposite of what the
+# escalation was for.  The default is therefore the unit's own budget plus 10 s, so it can
+# only fire after systemd's deadline; OC_PURGE_KILL_AFTER_S still overrides it and 0
+# disables the escalation.
+function __oc_purge_kill_after() {
+    if [[ -n "${OC_PURGE_KILL_AFTER_S:-}" ]]
+    then
+        printf '%s\n' "$OC_PURGE_KILL_AFTER_S"
+        return 0
+    fi
+    local _raw="" _secs=0
+    # swallow-ok: a budget that cannot be read cannot justify a kill; 0 disables it
+    _raw=$(systemctl --user show -p TimeoutStopUSec --value openclaw-gateway.service 2>/dev/null)
+    [[ -n "$_raw" ]] || { printf '0\n'; return 0; }
+    _secs=$(__oc_purge_timespan_s "$_raw") || _secs=0
+    if (( _secs > 0 ))
+    then
+        printf '%s\n' "$(( _secs + 10 ))"
+    else
+        printf '0\n'
+    fi
+}
+
 # __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
 # Bounded on purpose: `oc purge` is destructive, so a gateway that will not stop is a
 # refusal, not a licence to delete under it.  The bound must cover the unit's OWN stop
@@ -450,7 +562,8 @@ function __oc_purge_force_kill() {
 function __oc_purge_wait_gone() {
     local _bound="${OC_PURGE_WAIT_S:-360}" _waited=0 _state="" _job=""
     local _progress="${OC_PURGE_PROGRESS_S:-15}"
-    local _kill_after="${OC_PURGE_KILL_AFTER_S:-120}"
+    local _kill_after=""
+    _kill_after=$(__oc_purge_kill_after)
     while (( _waited < _bound ))
     do
         __oc_gateway_gone && return 0
@@ -476,9 +589,11 @@ function __oc_purge_wait_gone() {
                 : # the helper already printed systemctl's own reason
             fi
         fi
-        # The graceful shutdown can hang past the unit's own budget (measured: ~5 minutes
-        # after the 20 s work-drain).  Fighting Restart=always poll-by-poll until the bound
-        # expires loses; end it decisively and hold the unit down.
+        # A shutdown that overruns even the budget the unit was granted is ended, so the
+        # wait cannot be fought to its own expiry.  The bound comes from the unit's own
+        # TimeoutStopUSec (+10 s), never a fixed number: a kill inside that budget would end
+        # a drain the unit was explicitly allowed to finish.  A kill leaves the state DB in
+        # offline maintenance (measured 2026-10-23), which the start path then names.
         if (( _kill_after > 0 && _waited == _kill_after )) \
             && [[ "$_state" != "inactive" && "$_state" != "failed" ]]
         then
@@ -751,8 +866,28 @@ function oc-purge() {
     local _purge_count=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0
     local _purge_left="" _counts=""
 
+    # 0. BEFORE anything is stopped: the decision to stop belongs before the outage, not
+    #    after it.  A gateway whose own last shutdown never completed cannot be stopped
+    #    cleanly here — systemd will SIGKILL it, the state DB stays in offline maintenance
+    #    and the start below is refused — and step 2 clears the session dirs BEFORE that
+    #    start, so a stop like that would leave the gateway DOWN with state already gone.
+    if __oc_purge_shutdown_hangs
+    then
+        __tac_info "Purge" "[REFUSED - the gateway's last shutdown did not complete]" "$C_Error"
+        printf '%s\n' "  ${C_Dim}Its close steps were still pending when the unit's own${C_Reset}"
+        printf '%s\n' "  ${C_Dim}TimeoutStopUSec ran out, so systemd SIGKILLed it and the state DB${C_Reset}"
+        printf '%s\n' "  ${C_Dim}stayed in offline maintenance until its owner exited. Rolling that${C_Reset}"
+        printf '%s\n' "  ${C_Dim}dice again would leave the gateway DOWN with the dirs cleared.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Nothing was stopped and nothing was deleted.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Override once the cause is fixed:${C_Reset}"
+        printf '%s\n' "  ${C_Dim}OC_PURGE_IGNORE_HUNG_SHUTDOWN=1 oc purge${C_Reset}"
+        return 1
+    fi
+
     # 1. Stop the gateway with DB-safe sequencing, then WAIT for it to be gone.  A stop
     #    that does not land is a refusal: everything below deletes state.
+    local _stop_since
+    _stop_since=$(date +%s)
     __tac_info "Gateway" "[STOPPING]" "$C_Warning"
     __oc_safe_gateway_shutdown
     if ! __oc_purge_wait_gone
@@ -813,7 +948,21 @@ function oc-purge() {
     #    on a serving gateway (the reset is not a stop).
     if ! __so_start_gateway "openclaw-gateway.service"
     then
-        __tac_info "Purge" "[sessions dirs cleared; the gateway did NOT start - store rows remain]" "$C_Error"
+        if __oc_purge_stop_was_killed "$_stop_since"
+        then
+            # Measured 2026-10-23: a killed shutdown leaves the state DB's owner record
+            # naming a live pid, so the start is refused "undergoing offline maintenance"
+            # until that owner exits.  Name that, the partial state, and what to do —
+            # "still up" and "did not start" both read as our own fault and neither says
+            # the gateway is DOWN.
+            __tac_info "Purge" "[REFUSED - shutdown was killed; state DB in offline maintenance]" "$C_Error"
+            printf '%s\n' "  ${C_Dim}Its close steps never finished, so systemd SIGKILLed it and the${C_Reset}"
+            printf '%s\n' "  ${C_Dim}state's owner record still names a live process. The gateway is DOWN;${C_Reset}"
+            printf '%s\n' "  ${C_Dim}the session dirs are cleared and the store rows remain.${C_Reset}"
+            printf '%s\n' "  ${C_Dim}Re-run 'so' once that owner exits — a start before then is refused.${C_Reset}"
+        else
+            __tac_info "Purge" "[sessions dirs cleared; the gateway did NOT start - store rows remain]" "$C_Error"
+        fi
         return 1
     fi
 

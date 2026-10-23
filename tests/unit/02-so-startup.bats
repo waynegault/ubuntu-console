@@ -39,6 +39,12 @@ setup() {
     pgrep() { return 1; }
     wake() { return 0; }
 
+    # `oc purge` refuses when the unit's last shutdown reached its deadline.  That evidence
+    # comes from the USER JOURNAL, which on THIS box carries the live gateway's real hung
+    # stops: a case that read it would pass in CI (no user journal) and refuse here.  The
+    # neutral default is "no evidence"; the pre-flight case below supplies a fixture.
+    __oc_purge_journal() { return 1; }
+
     # Mock the systemd boundary — the runner has no user session bus
     # (ci-behavioral-bats-red-2026-09-21: a real `systemctl --user` there answers
     # nothing while it answers fine on a workstation, so such a test passes locally and
@@ -1119,6 +1125,102 @@ __so_healthy_prelude() {
     [ "$_status" -eq 1 ] || { echo "a journal refusal must fail the start"; return 1; }
     (( _elapsed < 30 )) || { echo "waited ${_elapsed}s past a journal refusal"; return 1; }
     grep -q "REFUSED" "$TAC_TEST_TMPDIR/journal.out"
+}
+
+@test "oc purge: a gateway whose last shutdown did not complete is REFUSED before it is stopped" {
+    # Measured 2026-10-23: four shutdowns in one day settled the work drain in <=20 s and
+    # then sat in shutdown.gateway-close past TimeoutStopUSec with close steps still
+    # pending; systemd SIGKILLed each one, the state DB stayed in offline maintenance and
+    # the next start was refused.  `oc purge` clears the session dirs BEFORE it starts the
+    # gateway, so a stop like that ends with the gateway DOWN and the dirs already gone.
+    # The decision therefore belongs before the stop, and this pins that it is taken there.
+    export __TAC_OPENCLAW_OK=1
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/alpha/sessions"
+    : > "$OC_AGENTS/alpha/sessions/keep.json"
+    __oc_purge_journal() {
+        cat <<'LOG'
+[gateway] received SIGTERM; shutting down
+[gateway] active-work drain settled; beginning server close
+[shutdown] plugin-services runtime disposal exceeded 5000ms; continuing shutdown
+[gateway] shutdown deadline reached; pending close steps: shutdown.gateway-close=322411ms
+LOG
+    }
+    __oc_safe_gateway_shutdown() { : > "$TAC_TEST_TMPDIR/stopped"; }
+    __oc_gateway_gone() { return 0; }
+    # The start must never be reached either.  Without this stub the MUTANT (a disabled
+    # pre-flight) fell through to the real `openclaw gateway start` and hung the run —
+    # a test that depends on the code under test to avoid a live CLI call is not hermetic.
+    __so_start_gateway() { : > "$TAC_TEST_TMPDIR/started"; return 1; }
+
+    run oc-purge
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"last shutdown did not complete"* ]]
+    [[ "$output" == *"OC_PURGE_IGNORE_HUNG_SHUTDOWN=1"* ]]
+    [ ! -e "$TAC_TEST_TMPDIR/stopped" ] || { echo "the gateway must not be stopped"; return 1; }
+    [ ! -e "$TAC_TEST_TMPDIR/started" ] || { echo "the start must not be reached"; return 1; }
+    [ -f "$OC_AGENTS/alpha/sessions/keep.json" ] || { echo "nothing may be deleted"; return 1; }
+}
+
+@test "oc purge: a completed shutdown is NOT refused, and the kill bound follows TimeoutStopUSec" {
+    # The control for the case above: the refusal is evidence, not a blanket refusal.  A
+    # clean stop has a drain line with NO deadline line after it.  And the self-kill bound
+    # must come from the unit's own budget — a flat 120 s fired 210 s INSIDE this unit's
+    # TimeoutStopUSec (5min 30s) and could end a drain the unit was allowed to finish, so
+    # 330 s + 10 s is the expected default and an explicit setting still wins.
+    __oc_purge_journal() {
+        cat <<'LOG'
+[gateway] active-work drain settled; beginning server close
+[gateway] shutdown deadline reached; pending close steps: shutdown.gateway-close=294453ms
+[gateway] received SIGTERM; shutting down
+[gateway] active-work drain settled; beginning server close
+LOG
+    }
+    run __oc_purge_shutdown_hangs
+    [ "$status" -eq 1 ] || { echo "a clean last shutdown must not be refused"; return 1; }
+
+    systemctl() {
+        while [[ "${1:-}" == --* ]]; do shift; done
+        if [[ "${1:-}" == "show" && "$*" == *TimeoutStopUSec* ]]
+        then
+            printf '5min 30s\n'
+        fi
+        return 0
+    }
+    unset OC_PURGE_KILL_AFTER_S
+    run __oc_purge_kill_after
+    [ "$status" -eq 0 ]
+    [ "$output" = "340" ] || { echo "bound must follow the unit's own budget: $output"; return 1; }
+
+    export OC_PURGE_KILL_AFTER_S=120
+    run __oc_purge_kill_after
+    [ "$output" = "120" ] || { echo "the explicit override must win: $output"; return 1; }
+}
+
+@test "oc purge: a shutdown killed after the stop is NAMED, not reported as still up" {
+    # The other half of the same evidence: when the pre-flight had no history and the stop
+    # still overran, the start is refused.  The message must name the killed shutdown and
+    # the partial state (dirs cleared, rows intact, gateway DOWN); "still up" and "did not
+    # start" both read as our own fault and neither says the gateway is down.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/alpha/sessions"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }
+    __oc_purge_shutdown_hangs() { return 1; }        # the pre-flight saw no evidence
+    __oc_purge_journal() {
+        printf '%s\n' '[gateway] shutdown deadline reached; cleanup incomplete'
+    }
+    __so_start_gateway() { return 1; }               # the start was refused
+
+    run oc-purge
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"shutdown was killed"* ]]
+    [[ "$output" == *"offline maintenance"* ]]
+    [[ "$output" == *"gateway is DOWN"* ]]
 }
 
 # end of file
