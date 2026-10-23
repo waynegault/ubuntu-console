@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-10-23): a `--from-unit` run NAMES the unit and model it measured.
+#   Measured: `--from-unit llama-xe-minicpm5-1b-chat` measured MiniCPM5-1B but its
+#   RESULT block read "row 21 Qwen2.5 Coder 3B Instruct", because --from-unit replaces
+#   the argv while ROW/name stay at the --row default — so the printed result AND its
+#   JSON named the wrong model.  The probe does not switch rows here (its registry
+#   safety proof snapshots one row before and after, so re-pointing ROW after the
+#   snapshot would compare two different rows); it states which subject it measured.
 #   v15 (2026-10-23): the exit path REPORTS through a pinned fd.  Measured: a signal
 #   trap is deferred to the end of the running foreground command, and when that
 #   command is a FUNCTION carrying a redirect — `measure … >/dev/null` in run_arm —
@@ -402,6 +409,7 @@ function __base_from_unit() {
             --cache-ram) _i=$(( _i + 1 )); continue ;;
             --port) PORT="${_words[_i+1]:-$PORT}" ;;
             --ctx-size) ctx="${_words[_i+1]:-$ctx}" ;;
+            -m|--model) PROBE_MODEL="${_words[_i+1]:-}"; PROBE_MODEL="${PROBE_MODEL##*/}" ;;
         esac
         _out+=("${_words[_i]}")
     done
@@ -411,6 +419,10 @@ function __base_from_unit() {
     # a port the untouched lane still held — "server exited during load" on every
     # arm (measured 2026-10-22).
     LANE="$_unit"
+    # What the RESULT block and its JSON must NAME: the row default is not it (v16).
+    # Exported because _summarise_py writes the JSON from a child process.
+    export PROBE_UNIT="$_unit"
+    export PROBE_MODEL
     # Only a CUDA-backed lane needs the card.  Measured 2026-10-22: an iGPU lane's run
     # parked at its suspend line because the gate waited for the CUDA card to fall below
     # 800 MiB while the CUDA lane held 3376 MiB — a state that never resolves.
@@ -814,6 +826,14 @@ interleaved = len(seq) > 0 and len(seq) % 2 == 0 and all(seq[i] != seq[i + 1] fo
 result = {"row": row, "order": seq, "interleaved": interleaved,
           "drift_pct": drift, "drift_warn_pct": drift_pct,
           "positions": rows, "delta": delta}
+# v16: a --from-unit run's subject is the UNIT, not the --row default.  Record it so
+# the artefact cannot be read later as evidence about whichever model row 21 holds.
+# Read from the environment: the shell exports both from __base_from_unit.
+unit = os.environ.get("PROBE_UNIT", "")
+model = os.environ.get("PROBE_MODEL", "")
+if unit:
+    result["unit"] = unit
+    result["model"] = model
 try:
     with open(result_path, "w") as f:
         json.dump(result, f, indent=2)
@@ -898,7 +918,7 @@ for _arm in "${_arm_seq[@]}"; do
     esac
 done
 
-printf '\n=== RESULT (row %s %s)\n' "$ROW" "$name"
+printf '\n=== RESULT (%s)\n' "${PROBE_UNIT:-row $ROW $name}"
 summarise "$WORKDIR" "${_arm_seq[*]// /}" "$RESULT_JSON" "$ROW"
 
 # ── registry-SAFETY proof, part 2 ────────────────────────────────────────────
