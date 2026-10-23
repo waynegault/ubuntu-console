@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 34
+#   v34 (2026-10-23): `xo` names the fleet lanes still running after it stops the owned LLM.
+#   `model stop` protects lanes by design, so "[STOPPED]" was true of one server and read as
+#   the whole box; the lanes are now reported, never stopped here.
 # Module Version: 33
 #   v33 (2026-10-23): `oc purge` NEVER stops or restarts the gateway.  Its sessions/ holds
 #   only the archives `sessions delete` wrote, each named by an `archive_name` row, so the
@@ -162,6 +166,22 @@ function xo() {
         if ! halt 2>/dev/null; then
             printf '%s\n' "${C_Dim}LLM stop did not land; it may still hold VRAM${C_Reset}"
         fi
+    fi
+
+    # The fleet lanes are PROTECTED from `model stop` by design (the watchdog owns them), so
+    # name the ones still serving: otherwise "Llama Server [STOPPED]" reads as a whole-box
+    # stop while four lanes keep their ports.  Reporting only; stopping them needs the
+    # suspend marker and is the operator's call.
+    local _lane _lane_state _lanes_up=0
+    while read -r _lane _lane_state
+    do
+        [[ -n "$_lane" ]] || continue
+        _lanes_up=$(( _lanes_up + 1 ))
+        __tac_info "Llama lane" "[RUNNING — $_lane ($_lane_state)]" "$C_Warning"
+    done < <(__llm_lane_rows)
+    if (( _lanes_up == 0 ))
+    then
+        __tac_info "Llama lane" "[none running]" "$C_Dim"
     fi
 
     if (( _was_running ))

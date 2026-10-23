@@ -491,6 +491,16 @@ __so_test_prelude() {
     __test_port() { return 1; }   # port released
     run __oc_gateway_gone
     [ "$status" -eq 0 ] || { echo "a stop job with the port released IS gone"; return 1; }
+
+    # The fleet lanes are PROTECTED from `model stop`, so a stop must NAME the ones still
+    # serving rather than imply the box is clear (measured 2026-10-23: xo printed STOPPED
+    # while llama-xe-minicpm5-1b-chat.service kept port 18081).
+    __llm_lane_rows() { printf 'llama-xe-test.service running\n'; }
+    __llm_server_running() { return 1; }
+    run xo
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"llama-xe-test.service"* ]] \
+        || { echo "xo must name the lanes still running"; return 1; }
 }
 
 @test "so: __oc_gateway_started needs BOTH the unit active and the port answering" {

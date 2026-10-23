@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 38
+#   v38 (2026-10-23): `so` prints one row per active fleet lane (`__llm_lane_rows`) instead
+#   of one hardcoded lane standing for "Local LLM"; `xo` names the lanes it deliberately
+#   leaves running.  Reporting only — no lane is stopped here.
 # Module Version: 37
 #   v37 (2026-10-23): the shutdown queues a non-blocking stop and then signals the WHOLE
 #   cgroup.  KillMode=mixed signals only the main process, so a `MainThread` child survived
@@ -328,6 +332,23 @@ function __so_push_api_keys() {
 }
 
 # ---------------------------------------------------------------------------
+# __llm_lane_rows — one "<unit> <substate>" line per active fleet lane.  Reporting only:
+# `model stop` PROTECTS these lanes by design (the watchdog owns them), so a stop that
+# names one server must say which lanes are still serving rather than imply all stopped.
+function __llm_lane_rows() {
+    local _units _unit _state
+    # swallow-ok: an unreadable unit list is reported as no rows rather than failing the status row it decorates
+    _units=$(systemctl --user list-units --type=service --state=active \
+                 --no-legend --plain 'llama-*.service' 2>/dev/null | awk '{print $1}')
+    while IFS= read -r _unit
+    do
+        [[ -n "$_unit" ]] || continue
+        # swallow-ok: an unreadable substate prints as unknown; the unit itself is still named
+        _state=$(systemctl --user show -p SubState --value "$_unit" 2>/dev/null | tr -d ' \n')
+        printf '%s %s\n' "$_unit" "${_state:-unknown}"
+    done <<< "$_units"
+}
+
 # __so_ensure_llm_running — Ensure local LLM is running.
 # Starts default model if needed, shows spinner during startup.
 # Returns 0 if LLM is running and healthy, 1 on failure.
@@ -349,6 +370,14 @@ function __so_ensure_llm_running() {
         else
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — production server detected]" "$C_Success"
         fi
+        # One row per lane: the single row above names only the lane that owns the
+        # gateway's port, which read as "the local LLM" while four other lanes ran.
+        local _lane _lane_state
+        while read -r _lane _lane_state
+        do
+            [[ -n "$_lane" ]] || continue
+            __tac_info "Llama lane" "[RUNNING — $_lane ($_lane_state)]" "$C_Dim"
+        done < <(__llm_lane_rows)
         return 0
     fi
 
