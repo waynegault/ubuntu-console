@@ -861,8 +861,9 @@ MOCK
     export OC_GATEWAY_STOP_BUDGET_S=1
     export OC_ROOT="$TAC_TEST_TMPDIR/oc"
     mkdir -p "$OC_ROOT" "$TAC_TEST_TMPDIR/bin"
-    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<MOCK
 #!/usr/bin/env bash
+printf '%s\n' "openclaw \$*" >> "$TAC_TEST_TMPDIR/order"
 trap '' TERM
 exec sleep 60
 MOCK
@@ -870,8 +871,14 @@ MOCK
     # `systemctl` must be a PATH stub too: the function calls it as `timeout 60
     # systemctl …`, and `timeout` execs a binary — a shell-function stub is invisible
     # there, so the first version of this case ran the REAL stop against the live gateway.
-    cat > "$TAC_TEST_TMPDIR/bin/systemctl" <<'MOCK'
+    # It answers `show -p ActiveState` with `active`, which is what makes the CLI stop a
+    # FALLBACK rather than the first move (systemd owns the stop in the normal path).
+    cat > "$TAC_TEST_TMPDIR/bin/systemctl" <<MOCK
 #!/usr/bin/env bash
+printf '%s\n' "systemctl \$*" >> "$TAC_TEST_TMPDIR/order"
+case "\$*" in
+    *"show -p ActiveState"*) printf 'active\n' ;;
+esac
 exit 0
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/systemctl"
@@ -885,6 +892,10 @@ MOCK
 
     (( _elapsed < 20 )) || { echo "waited ${_elapsed}s past a TERM-ignoring stop"; return 1; }
     [[ "$output" == *"past its 1s budget"* ]]
+    # Order matters: systemd is asked first, because an explicit systemd stop is what
+    # suppresses Restart=always.  A CLI-first stop kills the process outside a stop job
+    # and the unit comes straight back (measured 2026-10-23).
+    head -1 "$TAC_TEST_TMPDIR/order" | grep -qF 'systemctl --user stop'
 }
 
 # ---------------------------------------------------------------------------

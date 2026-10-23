@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 35
+#   v35 (2026-10-23): the shutdown stops through SYSTEMD FIRST and only falls back to the
+#   CLI for a unit that still reads `active`.  Measured: CLI-first killed the process
+#   outside a stop job, so `Restart=always` started it again ("Stopped"/"Started" in the
+#   same second, then "Scheduled restart job"), undoing the purge's own stop.  A restart
+#   that still slips in is REPLACED with `--job-mode=replace` instead of waited behind.
 # Module Version: 34
 #   v34 (2026-10-23): `__oc_gateway_gone` reads ActiveState instead of `is-active`'s exit
 #   status (which is 3 while `deactivating`), and treats only a start/restart job as a
@@ -1186,13 +1192,43 @@ function __oc_safe_gateway_shutdown() {
     # so a plain `timeout 30` sent TERM, was ignored, and waited forever — the purge hung
     # inside it until the child was killed by hand.  TERM at the budget, KILL 5 s later.
     local _stop_budget="${OC_GATEWAY_STOP_BUDGET_S:-30}"
-    if ! timeout -k 5 "$_stop_budget" openclaw gateway stop >/dev/null 2>&1
-    then
-        __tac_info "Gateway" "['gateway stop' past its ${_stop_budget}s budget — request stands]" "$C_Dim"
-    fi
+    local _state="" _job_type="" _deadline
+    # STOP THROUGH SYSTEMD FIRST (2026-10-23).  An explicitly requested systemd stop is
+    # what suppresses Restart=always (the unit's own drop-in says so); the CLI stop kills
+    # the process OUTSIDE a stop job, which is how a restart gets queued.  Measured: the
+    # old CLI-first order printed "Stopped" and "Started" in the same second, then
+    # "Scheduled restart job", so the stop was undone by the restart itself.
     if ! timeout 60 systemctl --user stop "$_svc" 2>/dev/null
     then
         __tac_info "Gateway" "[stop still running past 60s (unit budget 330s) — checking DB handles]" "$C_Dim"
+    fi
+    # A restart that still slipped in (auto-restart-queued, or a queued start) is
+    # REPLACED, not waited behind: --job-mode=replace cancels the pending start.
+    _deadline=$(( SECONDS + 30 ))
+    while (( SECONDS < _deadline ))
+    do
+        # swallow-ok: an unreadable state cannot prove a restart; the loop breaks and the DB-handle check decides
+        _state=$(systemctl --user show -p ActiveState --value "$_svc" 2>/dev/null | tr -d ' \n')
+        # swallow-ok: an unreadable job list cannot prove a queued start; the state and DB-handle checks decide
+        _job_type=$(systemctl --user list-jobs --no-legend --plain "$_svc" 2>/dev/null \
+            | awk 'NR==1 {print $3}')
+        [[ "$_state" == "activating" || "$_job_type" == "start" || "$_job_type" == "restart" ]] || break
+        if ! timeout 30 systemctl --user stop --job-mode=replace "$_svc" >/dev/null 2>&1
+        then
+            __tac_info "Gateway" "[stop --job-mode=replace refused — a restart may still be queued]" "$C_Warning"
+        fi
+        sleep 1
+    done
+    # The CLI stop is now only a FALLBACK, for a unit that still reads active, or whose
+    # state could not be read at all (an empty read is not proof that systemd owns the
+    # stop).  `-k` is load-bearing: the CLI IGNORES SIGTERM, so a plain timeout sent TERM,
+    # was ignored, and waited forever (measured 2026-10-18).
+    if [[ "$_state" == "active" || -z "$_state" ]]
+    then
+        if ! timeout -k 5 "$_stop_budget" openclaw gateway stop >/dev/null 2>&1
+        then
+            __tac_info "Gateway" "['gateway stop' past its ${_stop_budget}s budget — request stands]" "$C_Dim"
+        fi
     fi
 
     if ! __oc_gateway_databases_closed; then
