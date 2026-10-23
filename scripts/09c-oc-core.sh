@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 30
+#   v30 (2026-10-23): a shutdown that overruns is KILLED and held down instead of being
+#   fought poll-by-poll: live, the drain hung ~5 min, systemd SIGKILLed it, Restart=always
+#   brought it back, and the loop spent the rest of the bound replacing starts.  The
+#   replacement line is also throttled — unthrottled it printed every second and buried the
+#   progress rows.
 # Module Version: 29
 #   v29 (2026-10-23): the reset/patch params use `key`, not `sessionKey`.  Measured live:
 #   sessions.reset rejected {"sessionKey":...} with "must have required property 'key'".
@@ -424,6 +430,17 @@ function __oc_purge_stop_replace() {
     return 0
 }
 
+# __oc_purge_force_kill — the graceful shutdown has overrun its budget; end it and hold the
+# unit down, rather than fighting a Restart=always loop until the wait expires.
+function __oc_purge_force_kill() {
+    local _out=""
+    if ! _out=$(timeout 10 systemctl --user kill -s SIGKILL openclaw-gateway.service 2>&1)
+    then
+        __oc_purge_stderr "${_out:-kill -s SIGKILL failed with no output}"
+    fi
+    __oc_purge_stop_replace
+}
+
 # __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
 # Bounded on purpose: `oc purge` is destructive, so a gateway that will not stop is a
 # refusal, not a licence to delete under it.  The bound must cover the unit's OWN stop
@@ -433,6 +450,7 @@ function __oc_purge_stop_replace() {
 function __oc_purge_wait_gone() {
     local _bound="${OC_PURGE_WAIT_S:-360}" _waited=0 _state="" _job=""
     local _progress="${OC_PURGE_PROGRESS_S:-15}"
+    local _kill_after="${OC_PURGE_KILL_AFTER_S:-120}"
     while (( _waited < _bound ))
     do
         __oc_gateway_gone && return 0
@@ -447,11 +465,25 @@ function __oc_purge_wait_gone() {
             | awk 'NR==1 {print $3}')
         if [[ "$_state" == "activating" || "$_job" == "start" || "$_job" == "restart" ]]
         then
-            __tac_info "Gateway" "[restart queued while stopping — replaced with a stop]" "$C_Warning"
+            # Throttled: measured 2026-10-23, an unthrottled version printed this line
+            # every second while a restart loop ran, burying the progress rows.
+            if (( _progress > 0 && _waited % _progress == 0 ))
+            then
+                __tac_info "Gateway" "[restart queued while stopping — replaced with a stop]" "$C_Warning"
+            fi
             if ! __oc_purge_stop_replace
             then
                 : # the helper already printed systemctl's own reason
             fi
+        fi
+        # The graceful shutdown can hang past the unit's own budget (measured: ~5 minutes
+        # after the 20 s work-drain).  Fighting Restart=always poll-by-poll until the bound
+        # expires loses; end it decisively and hold the unit down.
+        if (( _kill_after > 0 && _waited == _kill_after )) \
+            && [[ "$_state" != "inactive" && "$_state" != "failed" ]]
+        then
+            __tac_info "Gateway" "[shutdown overran ${_kill_after}s — killing and holding it down]" "$C_Warning"
+            __oc_purge_force_kill
         fi
         sleep 1
         _waited=$(( _waited + 1 ))

@@ -633,11 +633,15 @@ __so_test_prelude() {
         || { echo "a queued restart must be replaced while waiting"; return 1; }
 
     # Silence read as "frozen" on a live run: the wait must name its state and time left.
+    # A shutdown that overruns must also be KILLED, not fought until the bound expires.
+    __oc_purge_force_kill() { : > "$TAC_TEST_TMPDIR/killed"; }
     export OC_PURGE_WAIT_S=3
     export OC_PURGE_PROGRESS_S=1
+    export OC_PURGE_KILL_AFTER_S=1
     run oc-purge
     [ "$status" -eq 1 ]
     [[ "$output" == *"s left"* ]] || { echo "the wait must report progress"; return 1; }
+    [ -e "$TAC_TEST_TMPDIR/killed" ] || { echo "an overrun shutdown must be killed"; return 1; }
 }
 
 @test "oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs" {
