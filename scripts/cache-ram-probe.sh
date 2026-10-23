@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-10-23): the exit path REPORTS through a pinned fd.  Measured: a signal
+#   trap is deferred to the end of the running foreground command, and when that
+#   command is a FUNCTION carrying a redirect — `measure … >/dev/null` in run_arm —
+#   bash installs the redirect in THIS shell, so the cleanup printed into /dev/null.
+#   `strace -y` named it exactly: write(1</dev/null>, "    teardown: SIGTERM honoured
+#   in 1s", 37) = 37 on three SIGTERM runs.  The restore itself always worked; its
+#   confirmation did not, which is why the lane came back and the log said nothing.
+#   fd 9 is a duplicate of the real stdout taken before any such redirect exists.
 #   v14 (2026-10-22): the run now GIVES THE BOX BACK on every exit, including a signal.
 #   Measured: SIGTERMing a run left its child llama-server holding the lane port, so the
 #   unit failed to bind and systemd tripped its restart limit, and the lane stayed DOWN
@@ -133,6 +141,14 @@
 #   WITHOUT touching the card — nothing is started, no lane stopped.
 # ==============================================================================
 set -uo pipefail
+
+# The exit path must be able to SPEAK.  A signal trap is deferred to the end of the
+# running foreground command, and when that command is a FUNCTION carrying a redirect
+# (`measure … >/dev/null` in run_arm) bash installs the redirect in THIS shell, so the
+# cleanup's stdout is /dev/null by the time it runs.  fd 9 duplicates the real stdout
+# now, before any such redirect can exist; §18.3's swallow counter reads `>&9` as a
+# redirect like any other, and the writes below are the check that it worked.
+exec 9>&1
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SELF_DIR/.." && pwd)"
@@ -584,7 +600,7 @@ term_server() {
     while (( w < 25 )); do
         # swallow-ok: kill -0's "No such process" IS the answer here, not an error.
         if ! kill -0 "$pid" 2>/dev/null; then
-            printf '    teardown: SIGTERM honoured in %ss\n' "$w"
+            printf '    teardown: SIGTERM honoured in %ss\n' "$w" >&9
             return 0
         fi
         sleep 1; w=$(( w + 1 ))
@@ -619,7 +635,7 @@ __probe_exit_cleanup() {
         # swallow-ok: reset-failed is best-effort; the `start` below is the check.
         systemctl --user reset-failed "$LANE" >/dev/null 2>&1 || true
         if systemctl --user start "$LANE" >/dev/null 2>&1; then
-            printf '\nlane %s restarted on exit (it was serving before this run)\n' "$LANE"
+            printf '\nlane %s restarted on exit (it was serving before this run)\n' "$LANE" >&9
         else
             warn "WARNING: lane $LANE did NOT restart on exit — check its unit"
         fi
