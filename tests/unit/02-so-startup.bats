@@ -444,10 +444,11 @@ __so_test_prelude() {
     # genuinely read back as taken.
     export __TAC_OPENCLAW_OK=1
     systemctl() {
-        if [[ -f "$TAC_TEST_TMPDIR/witness-asked" ]]; then
-            return 1
-        fi
-        : > "$TAC_TEST_TMPDIR/witness-asked"
+        case "$*" in
+            *"show -p ActiveState"*) printf 'inactive\n' ;;
+            *"list-jobs"*) : ;;        # no job: the stop has completed
+            *is-active*) return 0 ;;   # xo's pre-stop probe: it WAS running
+        esac
         return 0
     }
     __oc_safe_gateway_shutdown() { return 0; }
@@ -456,6 +457,35 @@ __so_test_prelude() {
     run xo
     [ "$status" -eq 0 ]
     [[ "$output" == *"TERMINATED"* ]]
+
+    # ...and the witness itself must not read a STOP as a return, nor a drain as gone.
+    # Measured 2026-10-23: `oc purge` refused because Job=52372 was 'stop running' while
+    # is-active printed 'deactivating' and exited 3.  A stop job is the stop we asked for;
+    # only a start/restart job, or a still-deactivating unit, keeps the gateway not-gone.
+    _oc_state=""
+    _oc_job=""
+    systemctl() {
+        case "$*" in
+            *"show -p ActiveState"*) printf '%s\n' "$_oc_state" ;;
+            *"list-jobs"*) [[ -n "$_oc_job" ]] && printf '1 openclaw-gateway.service %s running\n' "$_oc_job" ;;
+        esac
+        return 0
+    }
+    _oc_state=deactivating
+    _oc_job=stop
+    run __oc_gateway_gone
+    [ "$status" -eq 1 ] || { echo "a deactivating unit must not read as gone"; return 1; }
+
+    _oc_state=inactive
+    _oc_job=start
+    run __oc_gateway_gone
+    [ "$status" -eq 1 ] || { echo "a queued start must block the gone claim"; return 1; }
+
+    _oc_state=inactive
+    _oc_job=stop
+    __test_port() { return 1; }   # port released
+    run __oc_gateway_gone
+    [ "$status" -eq 0 ] || { echo "a stop job with the port released IS gone"; return 1; }
 }
 
 @test "so: __oc_gateway_started needs BOTH the unit active and the port answering" {

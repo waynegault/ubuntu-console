@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 34
+#   v34 (2026-10-23): `__oc_gateway_gone` reads ActiveState instead of `is-active`'s exit
+#   status (which is 3 while `deactivating`), and treats only a start/restart job as a
+#   return — a `stop` job is the stop we asked for.  Measured live: `oc purge` refused
+#   with Job=52372 'stop running' during a normal 330 s drain.
 # Module Version: 33
 #   v33 (2026-10-18): every `timeout … openclaw` call carries `-k 5` (or `-k 10/15` in
 #   09c).  Measured: `openclaw gateway stop` IGNORES SIGTERM, so `timeout 30` sent TERM,
@@ -1206,22 +1211,24 @@ function __oc_safe_gateway_shutdown() {
 # (see the 2026-09-23 restart race), so the port is the second, independent witness.
 # ---------------------------------------------------------------------------
 function __oc_gateway_gone() {
-    # swallow-ok: a unit that cannot be queried is not "active", which is the answer this witness wants; a real query failure still leaves the port check below to fail the claim
-    if systemctl --user is-active --quiet "openclaw-gateway.service" 2>/dev/null; then
+    local _state _job_type
+    # Read the STATE, not `is-active`'s exit status: measured 2026-10-23, `is-active`
+    # printed 'deactivating' and exited 3, so the old gate passed while the unit was
+    # still draining.  An empty/unreadable state is NOT proof of absence.
+    # swallow-ok: a unit that cannot be queried reads empty and the case below treats it as NOT gone, so a query failure fails closed
+    _state=$(systemctl --user show -p ActiveState --value "openclaw-gateway.service" 2>/dev/null | tr -d ' \n')
+    case "$_state" in
+        inactive|failed) ;;
+        *) return 1 ;;
+    esac
+    # A DOWN unit carrying a START/RESTART job is on its way back.  A STOP job is not a
+    # return: measured 2026-10-23, Job=52372 'stop running' made `oc purge` refuse the
+    # very stop it had requested.  Only a starting job blocks the claim.
+    # swallow-ok: an unreadable job list is not assumed to hold a start; the state and port checks still have to pass
+    _job_type=$(systemctl --user list-jobs --no-legend --plain "openclaw-gateway.service" 2>/dev/null | awk 'NR==1 {print $3}')
+    if [[ "$_job_type" == "start" || "$_job_type" == "restart" ]]; then
         return 1
     fi
-    # A unit that is down NOW but has a start/restart job QUEUED is on its way back.
-    # `openclaw gateway restart` and `xo` both stop for minutes before starting (the
-    # unit's own stop budget is 330s, drain ~315s), so a point-in-time check reports
-    # "gone" for a gateway that will be running again — measured 2026-09-30: xo
-    # printed TERMINATED while the journal shows SIGTERM 23:59:50, the unit inactive
-    # until 00:04:16 and `ready` only at 00:07:23.  A pending job is readable: on a
-    # probe unit, `systemctl --user show -p Job --value <unit>` returned the live job
-    # id (`Job=[43187]`, `activating/start-pre`) and `list-jobs` named it.
-    local _job
-    # swallow-ok: a unit whose job state cannot be read is not assumed to have one; the is-active check above and the port check below still have to pass for the claim
-    _job=$(systemctl --user show -p Job --value "openclaw-gateway.service" 2>/dev/null | tr -d ' \n')
-    [[ -z "$_job" ]] || return 1
     __test_port "$OC_PORT" && return 1
     return 0
 }

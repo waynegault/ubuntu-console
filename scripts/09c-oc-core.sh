@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 23
+#   v23 (2026-10-23): the purge's gone-wait bound is 360 s, not 120 — the unit's own
+#   TimeoutStopUSec is 5min 30s, and a normal drain (queueSize=6, agentRuns=3) was
+#   refused at 120 s.  `__oc_gateway_gone` no longer reads our own stop job as a return.
 # Module Version: 22
 #   v22 (2026-10-23): `oc purge` now names the three things it used to overstate.  CRON
 #   sessions are KEPT (Wayne, 2026-10-23) and counted, so the roster read-back ignores them
@@ -379,9 +383,12 @@ function ocstop() {
 # ---------------------------------------------------------------------------
 # __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
 # Bounded on purpose: `oc purge` is destructive, so a gateway that will not stop is a
-# refusal, not a licence to delete under it.  OC_PURGE_WAIT_S keeps a test from sleeping.
+# refusal, not a licence to delete under it.  The bound must cover the unit's OWN stop
+# budget, TimeoutStopUSec=5min 30s (measured 2026-10-23), plus a margin: the old 120 s
+# refused a purge whose drain was still running normally (queueSize=6 agentRuns=3) while
+# systemd would have allowed it 330 s.  OC_PURGE_WAIT_S keeps a test from sleeping.
 function __oc_purge_wait_gone() {
-    local _bound="${OC_PURGE_WAIT_S:-120}" _waited=0
+    local _bound="${OC_PURGE_WAIT_S:-360}" _waited=0
     while (( _waited < _bound ))
     do
         __oc_gateway_gone && return 0
