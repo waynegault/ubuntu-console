@@ -1200,4 +1200,50 @@ MOCK
         || { echo "the wait must say it is waiting"; return 1; }
 }
 
+@test "oc purge: resets EVERY agent main by default, and leaves cron alone" {
+    # The v35 default is every main, not the configured one.  Every other reset case sets
+    # OC_PURGE_RESET_MAIN explicitly, so reverting the loop to a single agent would still
+    # pass them; this one runs with the variable UNSET and two agents' mains plus a cron.
+    export __TAC_OPENCLAW_OK=1
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    unset OC_PURGE_RESET_MAIN
+    for _a in alpha beta
+    do
+        mkdir -p "$OC_AGENTS/$_a/agent" "$OC_AGENTS/$_a/sessions"
+        sqlite3 "$OC_AGENTS/$_a/agent/openclaw-agent.sqlite" \
+            "create table session_nodes(session_key text, current_session_id text, entry_json text);" \
+            "create table session_windows(session_key text, session_id text);" \
+            "insert into session_nodes values('agent:$_a:main','sid-$_a','{\"sessionId\":\"sid-$_a\"}');" \
+            "insert into session_windows values('agent:$_a:main','sid-$_a');"
+    done
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<MOCK
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+    "sessions --all-agents") printf '%s\n' '{"count":3,"sessions":[{"key":"agent:alpha:main"},{"key":"agent:beta:main"},{"key":"agent:alpha:cron:job1"}]}' ;;
+    "gateway call")
+        printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/rpc-argv"
+        case "\${3:-}" in
+            sessions.patch|sessions.reset)
+                _k=\$(printf '%s\n' "\${5:-}" | jq -r .key)
+                _agent=\${_k#agent:}; _agent=\${_agent%%:*}
+                sqlite3 "$OC_AGENTS/\$_agent/agent/openclaw-agent.sqlite" \
+                    "update session_nodes set entry_json='{\"sessionId\":\"sid-2\"}' where session_key='\$_k';" ;;
+        esac
+        printf '%s\n' '{"ok":true}' ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    run oc-purge
+
+    [ "$status" -eq 0 ]
+    grep -qF 'agent:alpha:main' "$TAC_TEST_TMPDIR/rpc-argv" || { echo "alpha main not reset"; return 1; }
+    grep -qF 'agent:beta:main' "$TAC_TEST_TMPDIR/rpc-argv" || { echo "beta main not reset"; return 1; }
+    ! grep -qF 'agent:alpha:cron:job1' "$TAC_TEST_TMPDIR/rpc-argv" \
+        || { echo "cron must never be reset"; return 1; }
+    [[ "$output" == *"2 main(s) reset"* ]] || { echo "summary must count both"; return 1; }
+}
+
 # end of file
