@@ -934,6 +934,7 @@ MOCK
     __oc_safe_gateway_shutdown() { return 0; }
     __oc_gateway_gone() { return 0; }
     __so_start_gateway() { return 0; }      # the PORT claim succeeds
+    export OC_PURGE_HEALTH_S=0              # one sample, no wait: this case is about the refusal
     mkdir -p "$TAC_TEST_TMPDIR/bin"
     cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
 #!/usr/bin/env bash
@@ -949,7 +950,9 @@ MOCK
     run oc-purge
 
     [ "$status" -eq 1 ]
-    [[ "$output" == *"NOT answering RPC"* ]]
+    [[ "$output" == *"has not answered RPC in 0s"* ]]
+    [[ "$output" == *"session dirs are already cleared"* ]] \
+        || { echo "the refusal must name the dirs step 2 already cleared"; return 1; }
     [ ! -e "$TAC_TEST_TMPDIR/delete-asked" ] || { echo "a dead RPC must not reach sessions delete"; return 1; }
 }
 
@@ -1221,6 +1224,51 @@ LOG
     [[ "$output" == *"shutdown was killed"* ]]
     [[ "$output" == *"offline maintenance"* ]]
     [[ "$output" == *"gateway is DOWN"* ]]
+}
+
+@test "oc purge: a gateway that answers RPC only after a cold start is WAITED for, not refused" {
+    # Measured live 2026-10-23: the purge restarted the gateway and probed health ONCE with
+    # the CLI's 10 s default; the restart took 38.1 s to log `http server listening`, so the
+    # purge refused a healthy-but-starting gateway — after step 2 had cleared the dirs.  A
+    # port claim is not a serving claim, and one sample is not a wait: the delete must run
+    # as soon as RPC answers, with the wait visible while it happens.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/alpha/sessions"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }
+    __so_start_gateway() { return 0; }      # the PORT claim succeeds before RPC answers
+    export OC_PURGE_HEALTH_S=30
+    export OC_PURGE_HEALTH_STEP_S=1
+    export OC_PURGE_PROGRESS_S=1
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+    "gateway call")
+        n=$(cat "$TAC_TEST_TMPDIR/health-calls" 2>/dev/null || echo 0)
+        n=$(( n + 1 )); printf '%s\n' "$n" > "$TAC_TEST_TMPDIR/health-calls"
+        if (( n < 3 )); then printf '%s\n' '{"ok":false,"error":{"message":"gateway timeout after 10000ms"}}'
+        else printf '%s\n' '{"ok":true}'; fi
+        exit 0 ;;
+    "sessions --all-agents")
+        if [[ -f "$TAC_TEST_TMPDIR/delete-asked" ]]; then printf '%s\n' '{"count":0,"sessions":[]}'
+        else printf '%s\n' '{"count":1,"sessions":[{"key":"agent:alpha:scratch"}]}'; fi ;;
+    "sessions delete") : > "$TAC_TEST_TMPDIR/delete-asked"; printf '%s\n' '{"ok":true}' ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    run oc-purge
+
+    [ "$status" -eq 0 ] || { echo "a gateway that answers late must not be refused"; return 1; }
+    [ -e "$TAC_TEST_TMPDIR/delete-asked" ] || { echo "the delete must run once RPC answers"; return 1; }
+    [ "$(cat "$TAC_TEST_TMPDIR/health-calls")" -ge 3 ] \
+        || { echo "health must be polled, not sampled once"; return 1; }
+    [[ "$output" == *"not answering RPC yet"* ]] \
+        || { echo "the wait must say it is waiting"; return 1; }
 }
 
 # end of file

@@ -444,7 +444,7 @@ commands:
   - name: oc purge
     family: openclaw
     summary: Reset every agent — delete every stored non-main, non-cron session, clear the session directories, reset the configured main to empty and repair a tombstoned main, then restart the gateway
-    version: 5
+    version: 6
     updated: 2026-10-23
     status: active
     scope: both
@@ -492,7 +492,15 @@ commands:
     # TimeoutStopUSec (+10 s) rather than a flat 120 s, which fired 210 s inside a budget
     # the unit was given; a killed stop is also named at the start failure, with the
     # partial state and the gateway being down, instead of reading as "still up".
+    # v6 (2026-10-23) — the restart is WAITED for, not sampled.  Measured live: the purge
+    # restarted the gateway and step 4b probed `health` once with the CLI's own 10 s default,
+    # while the restart took 38.1 s to log `http server listening`; a healthy-but-starting
+    # gateway was refused AFTER step 2 had cleared the dirs, and the refusal said "nothing
+    # deleted".  `__oc_purge_wait_rpc` now polls until `ok:true` (OC_PURGE_HEALTH_S, default
+    # 300 s; OC_PURGE_HEALTH_STEP_S, default 5 s), prints its state and time left, surfaces
+    # the LAST probe, and the refusal names the dirs as already cleared.
     verified_by:
+      - "tests/unit/02-so-startup.bats::oc purge: a gateway that answers RPC only after a cold start is WAITED for, not refused"
       - "tests/unit/02-so-startup.bats::oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted"
       - "tests/unit/02-so-startup.bats::oc purge: a gateway whose last shutdown did not complete is REFUSED before it is stopped"
       - "tests/unit/02-so-startup.bats::oc purge: a completed shutdown is NOT refused, and the kill bound follows TimeoutStopUSec"
@@ -511,6 +519,14 @@ commands:
           stop that cannot complete is never taken, nothing is deleted and the gateway stays
           serving.  A later drain line with no deadline after it is NOT a refusal, and an
           unreadable journal is no evidence rather than a verdict.
+      - witness: __oc_purge_wait_rpc
+        file: scripts/09c-oc-core.sh
+        asserts: >-
+          after the restart, `gateway call health` is POLLED until it answers ok:true rather
+          than sampled once; the wait is bounded (OC_PURGE_HEALTH_S), prints its state and
+          the time left on the progress cadence, and on exhaustion surfaces the LAST probe
+          and returns 1 so the caller refuses before touching the store.  A late answer is a
+          wait, not a failure: the delete runs as soon as RPC answers.
       - witness: __oc_purge_wait_gone
         file: scripts/09c-oc-core.sh
         asserts: >-

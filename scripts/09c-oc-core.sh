@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 32
+#   v32 (2026-10-23): the purge WAITS for the restarted gateway to answer RPC instead of
+#   sampling it once.  Measured live: a restart took 38.1 s to log `http server listening`,
+#   but step 4b probed once with the CLI's 10 s default and refused a gateway that was
+#   still starting ("gateway timeout after 10000ms") — after the session dirs had already
+#   been cleared.  The wait is bounded (OC_PURGE_HEALTH_S, default 300 s, polled every
+#   OC_PURGE_HEALTH_STEP_S) and prints progress; its refusal names the partial state.
 # Module Version: 31
 #   v32 (2026-10-23): the purge REFUSES before it stops a gateway whose own last shutdown
 #   did not complete.  Read from the journal: every one of today's four stops settled its
@@ -612,6 +619,42 @@ function __oc_purge_wait_gone() {
     __oc_gateway_gone
 }
 
+# __oc_purge_wait_rpc — 0 once the gateway answers `health` with ok:true, 1 at the bound.
+#
+# A PORT IS NOT A SERVER (measured 2026-10-23) and ONE SAMPLE IS NOT A WAIT (measured the
+# same day): the purge restarts the gateway, and a restart took 38.1 s to log `http server
+# listening` while step 4b probed once with the CLI's own 10 s default and refused a
+# gateway that was still starting — after the session dirs had already been cleared.  So
+# this waits, bounded by OC_PURGE_HEALTH_S (default 300 s), polling every
+# OC_PURGE_HEALTH_STEP_S (default 5 s), and prints its state and the time left on the same
+# cadence as the stop wait.  On exhaustion it surfaces the LAST probe, not a summary.
+function __oc_purge_wait_rpc() {
+    local _bound="${OC_PURGE_HEALTH_S:-300}" _step="${OC_PURGE_HEALTH_STEP_S:-5}"
+    local _progress="${OC_PURGE_PROGRESS_S:-15}"
+    local _unit="openclaw-gateway.service"
+    local _waited=0 _probe="" _state=""
+    (( _step > 0 )) || _step=1
+    while (( _waited < _bound ))
+    do
+        if _probe=$(timeout -k 10 45 openclaw gateway call health --json 2>&1) \
+            && printf '%s\n' "$_probe" | jq -e '.ok == true' >/dev/null 2>&1
+        then
+            return 0
+        fi
+        sleep "$_step"
+        _waited=$(( _waited + _step ))
+        if (( _progress > 0 && _waited % _progress == 0 && _waited < _bound ))
+        then
+            # swallow-ok: an unreadable unit state is named unknown and does not decide
+            _state=$(systemctl --user show -p ActiveState --value "$_unit" 2>/dev/null | tr -d ' \n')
+            __tac_info "Gateway" \
+                "[up, not answering RPC yet — ${_state:-unknown}, $(( _bound - _waited ))s left]" "$C_Dim"
+        fi
+    done
+    __oc_purge_stderr "$_probe"
+    return 1
+}
+
 # __oc_purge_session_keys — every session key the stores hold, one per line.
 # The roster omits FAILED sessions, so each agent's store is read as well (measured
 # 2026-10-18: Hal's tombstoned WhatsApp session was in session_windows with status
@@ -966,17 +1009,17 @@ function oc-purge() {
         return 1
     fi
 
-    # 4b. A PORT IS NOT A SERVER.  `__so_start_gateway` claims ONLINE from the listener;
-    #     the delete runs over RPC.  Measured 2026-10-23: it printed ONLINE (port 18789,
-    #     38s) and every openclaw call then timed out at 30 s, so the delete could not
-    #     land and the purge reported a FAILED store with the rows still there.  Refuse
-    #     before touching the store.
-    local _probe=""
-    if ! _probe=$(timeout -k 10 45 openclaw gateway call health --json 2>&1) \
-        || ! printf '%s\n' "$_probe" | jq -e '.ok == true' >/dev/null 2>&1
+    # 4b. A PORT IS NOT A SERVER, and ONE SAMPLE IS NOT A WAIT.  `__so_start_gateway`
+    #     claims ONLINE from the listener; the delete runs over RPC.  Measured 2026-10-23:
+    #     every openclaw call timed out at 30 s after an ONLINE claim.  The mirror error was
+    #     measured the same day: a restart took 38.1 s to log `http server listening` while
+    #     this step probed once with the CLI's 10 s default, so a healthy-but-starting
+    #     gateway was refused after the dirs had already been cleared.  Wait, bounded.
+    if ! __oc_purge_wait_rpc
     then
-        __tac_info "Purge" "[gateway is up but NOT answering RPC — nothing deleted, store rows remain]" "$C_Error"
-        __oc_purge_stderr "$_probe"
+        __tac_info "Purge" "[gateway has not answered RPC in ${OC_PURGE_HEALTH_S:-300}s - store rows remain]" "$C_Error"
+        printf '%s\n' "  ${C_Dim}The session dirs are already cleared; the gateway is still starting.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Wait for it with 'so', then re-run 'oc purge' to reset the store.${C_Reset}"
         return 1
     fi
 
