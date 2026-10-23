@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 37
+#   v37 (2026-10-23): the shutdown queues a non-blocking stop and then signals the WHOLE
+#   cgroup.  KillMode=mixed signals only the main process, so a `MainThread` child survived
+#   and the main's shutdown waited on it for ~5 minutes (then SIGKILL, then the state DB's
+#   offline-maintenance marker).  Wayne's 2026-09-27 `KillMode=process` request stays intact:
+#   this signals the group only on a deliberate stop, never on a crash.
 # Module Version: 36
 #   v36 (2026-10-23): the CLI-stop FALLBACK is skipped when a stop job is already queued
 #   or running — the unit reads `active` during a long drain, so the fallback fired and
@@ -1202,9 +1208,23 @@ function __oc_safe_gateway_shutdown() {
     # the process OUTSIDE a stop job, which is how a restart gets queued.  Measured: the
     # old CLI-first order printed "Stopped" and "Started" in the same second, then
     # "Scheduled restart job", so the stop was undone by the restart itself.
-    if ! timeout 60 systemctl --user stop "$_svc" 2>/dev/null
+    # The stop is requested WITHOUT blocking, then the WHOLE cgroup is signalled.  This is
+    # the WSL lesson applied to the gateway: the thing that hangs cannot be asked nicely on
+    # its own, so an outside actor signals every process and a bound decides.  KillMode is
+    # `mixed` (and `process` was chosen by Wayne on 2026-09-27 so a CRASH does not kill cron
+    # jobs / MCP siblings), so systemd's stop signals only the main process; measured, a
+    # `MainThread` child then survived until SIGKILL five minutes later and the main's
+    # shutdown waited on it.  `kill --kill-whom=all` signals the children too, for THIS
+    # deliberate stop only — the unit's crash policy is untouched.
+    # swallow-ok: a refused stop request is reported on the next line; this hides only systemd's own noise
+    if ! timeout 10 systemctl --user stop --no-block "$_svc" 2>/dev/null
     then
-        __tac_info "Gateway" "[stop still running past 60s (unit budget 330s) — checking DB handles]" "$C_Dim"
+        __tac_info "Gateway" "[stop request refused — reported]" "$C_Warning"
+    fi
+    # swallow-ok: a refused cgroup signal is reported on the next line; this hides only systemd's own noise
+    if ! timeout 10 systemctl --user kill --kill-whom=all -s SIGTERM "$_svc" 2>/dev/null
+    then
+        __tac_info "Gateway" "[cgroup SIGTERM refused — reported]" "$C_Warning"
     fi
     # A restart that still slipped in (auto-restart-queued, or a queued start) is
     # REPLACED, not waited behind: --job-mode=replace cancels the pending start.
