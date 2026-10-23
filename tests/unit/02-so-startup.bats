@@ -838,6 +838,13 @@ MOCK
     ! grep -qF 'agent:hal:main' "$TAC_TEST_TMPDIR/delete-argv"
     grep -qF 'sessions.reset' "$TAC_TEST_TMPDIR/rpc-argv"
     grep -qF 'agent:hal:main' "$TAC_TEST_TMPDIR/rpc-argv"
+    # The RPC's own contract, not ours: measured live 2026-10-23, sessions.reset rejected
+    # {"sessionKey":...} with "must have required property 'key'".  A mock that accepts any
+    # shape cannot catch that, so the param NAME is asserted here.
+    grep -qF '"key":"agent:hal:main"' "$TAC_TEST_TMPDIR/rpc-argv" \
+        || { echo "sessions.reset needs the param named 'key'"; return 1; }
+    ! grep -qF 'sessionKey' "$TAC_TEST_TMPDIR/rpc-argv" \
+        || { echo "sessions.reset rejects 'sessionKey'"; return 1; }
     [[ "$output" == *"[1 cron session(s) KEPT"* ]]
     [[ "$output" == *"[agent:hal:main reset"* ]]
 }

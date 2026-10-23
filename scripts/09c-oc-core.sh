@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 29
+#   v29 (2026-10-23): the reset/patch params use `key`, not `sessionKey`.  Measured live:
+#   sessions.reset rejected {"sessionKey":...} with "must have required property 'key'".
+#   The witness asserts the param NAME, because a mock that accepts any shape proves nothing.
 # Module Version: 28
 #   v28 (2026-10-23): the restart replacement uses `systemctl stop --no-block`, not
 #   `--job-mode=replace`.  Measured: the latter blocked 30 s (rc=124) behind the pending
@@ -608,14 +612,14 @@ function __oc_purge_reset_main() {
     if [[ -n "$_archived" ]]
     then
         _params=$(jq -cn --arg k "$_key" --arg a "$_agent" --arg s "$_sid" \
-            '{sessionKey:$k,agentId:$a,expectedSessionId:$s,archived:false}') || return 1
+            '{key:$k,agentId:$a,expectedSessionId:$s,archived:false}') || return 1
         __oc_purge_rpc "sessions.patch" "$_params" || return 1
         _sid=$(__oc_purge_store_read "$_db" \
             "select current_session_id from session_nodes where session_key='$_key';") || return 1
         [[ -n "$_sid" ]] || return 1
     fi
     _params=$(jq -cn --arg k "$_key" --arg a "$_agent" --arg s "$_sid" \
-        '{sessionKey:$k,agentId:$a,expectedSessionId:$s}') || return 1
+        '{key:$k,agentId:$a,expectedSessionId:$s}') || return 1
     __oc_purge_rpc "sessions.reset" "$_params" || return 1
     _state=$(__oc_purge_store_read "$_db" "
         select case when json_extract(entry_json,'\$.mainRestartRecovery') is null
