@@ -9,7 +9,14 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
+#   v28 (2026-10-23): `oc-env` names a PINNED agent root instead of showing it as if it were the
+#   live one.  `scripts/01-constants.sh` v41 honours a caller's pre-set OC_AGENTS, so a non-canonical
+#   root is now possible in a shell that used to be impossible to divert; an invisible diversion is
+#   the same failure one layer up, so the pin is displayed with `OC_AGENTS_CANONICAL` beside it.
+#   (T-JARVIS-018: a probe's OC_AGENTS was silently re-pointed at the live tree and its cleanup line
+#   then ran `rm -rf "$OC_AGENTS"` over 303 tracked files.)  The value is kept SHORT deliberately —
+#   __tac_line truncates the LABEL, not the value, when the pair exceeds the box.
 #   v27 (2026-10-07): `oc-doctor-local` stops flattening a stall into a generic issue —
 #   it now returns the SAME three values as `oc health` (0 clean, 5 stalled: alert, do
 #   NOT restart, 1 any other issue: repair or restart is legitimate).  Before this the
@@ -1130,7 +1137,15 @@ function oc-env() {
     __tac_line "OC_ROOT" "[$OC_ROOT]" "$C_Highlight"
     __tac_line "OPENCLAW_ROOT" "[$OPENCLAW_ROOT] (deprecated → OC_ROOT)" "$C_Dim"
     __tac_line "OC_WORKSPACE" "[$OC_WORKSPACE]" "$C_Dim"
-    __tac_line "OC_AGENTS" "[$OC_AGENTS]" "$C_Dim"
+    # A pinned, non-canonical agents root is never silent: it is how a probe that meant to run in a
+    # fixture ends up deleting the real tree (T-JARVIS-018, 2026-10-23). Keep this short — __tac_line
+    # truncates the LABEL when label+value exceed the box, so a long value here renders as "O...".
+    if [[ -n "${OC_AGENTS_SANDBOXED:-}" ]]; then
+        __tac_line "OC_AGENTS" "[$OC_AGENTS] (pinned)" "$C_Warning"
+        __tac_line "OC_AGENTS_CANONICAL" "[$OC_AGENTS_CANONICAL]" "$C_Dim"
+    else
+        __tac_line "OC_AGENTS" "[$OC_AGENTS]" "$C_Dim"
+    fi
     __tac_line "OC_LOGS" "[$OC_LOGS]" "$C_Dim"
     __tac_line "OC_PORT" "[$OC_PORT]" "$C_Highlight"
     __tac_divider

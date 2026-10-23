@@ -2,7 +2,16 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 40
+# Module Version: 41
+#   v41 (2026-10-23): OC_AGENTS no longer clobbers a caller's isolation override.  It was an
+#   unconditional `export OC_AGENTS="$OC_ROOT/agents"`, so `OC_AGENTS=/tmp/fixture; source env.sh`
+#   silently re-pointed the variable at the LIVE tree — and a probe's own cleanup line then ran
+#   `rm -rf "$OC_AGENTS"` against it: 579 deletes across all 14 lanes on 2026-10-23 (~/.openclaw
+#   agents tree, 303 tracked files, restored from git — T-JARVIS-018).  A sandbox set before a
+#   `source` was not a sandbox.  A pre-set value is now honoured and flagged in OC_AGENTS_SANDBOXED;
+#   OC_AGENTS_CANONICAL always holds the real root so no caller has to guess which one it is holding.
+#   Trade-off, deliberate: the library no longer guarantees OC_AGENTS is canonical — read
+#   OC_AGENTS_CANONICAL where that matters.  Pinned by tests/unit/70-agents-root-override.bats.
 #   v40 (2026-10-22): __tac_probe_ok's atomic cache replace no longer ends in a bare
 #   swallow.  A failed rename only costs a RE-PROBE (the caller still gets `rc`), so the
 #   failure stays non-fatal — but the temp file is now removed instead of being left in
@@ -97,7 +106,16 @@ export OC_ROOT="$AI_STORAGE_ROOT/.openclaw"
 # Used by: oc-env display (§9).
 export OPENCLAW_ROOT="$OC_ROOT"
 export OC_WORKSPACE="$OC_ROOT/workspace"
-export OC_AGENTS="$OC_ROOT/agents"
+# A caller may PIN the agent root for isolation (a probe, a fixture, a test).  This line used to be an
+# unconditional export, so a sandbox set before `source env.sh` was silently re-pointed at the live
+# tree — see the v41 note above.  Honour the pin, and keep the canonical path in its own variable.
+export OC_AGENTS_CANONICAL="$OC_ROOT/agents"
+if [[ -n "${OC_AGENTS:-}" && "${OC_AGENTS%/}" != "$OC_AGENTS_CANONICAL" ]]; then
+    export OC_AGENTS_SANDBOXED=1
+else
+    export OC_AGENTS="$OC_AGENTS_CANONICAL"
+    unset OC_AGENTS_SANDBOXED
+fi
 export OC_LOGS="$OC_ROOT/logs"
 export OC_BACKUPS="$OC_ROOT/backups"
 export CooldownDB="$OC_ROOT/maintenance_cooldowns.txt"
