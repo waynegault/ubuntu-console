@@ -9,8 +9,10 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
-#   v28 (2026-10-23): `oc-env` names a PINNED agent root instead of showing it as if it were the
+# Module Version: 30
+#   v30 (2026-10-23): the v29 entry below was labelled `v28`, so the marker and its note
+#   disagreed; corrected, no behaviour change.
+#   v29 (2026-10-23): `oc-env` names a PINNED agent root instead of showing it as if it were the
 #   live one.  `scripts/01-constants.sh` v41 honours a caller's pre-set OC_AGENTS, so a non-canonical
 #   root is now possible in a shell that used to be impossible to divert; an invisible diversion is
 #   the same failure one layer up, so the pin is displayed with `OC_AGENTS_CANONICAL` beside it.
