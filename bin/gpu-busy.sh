@@ -9,6 +9,15 @@
 #          declared workload and the watchdog stopped a serving CUDA lane on a free
 #          card — the third variant of the same command-line-mention defect, after
 #          1.4.0 (signal 2) and 1.3.0 (the patterns themselves))
+# Version: 1.5.0 (2026-10-23: utilisation no longer counts when EVERY compute-app
+#          resident is a sanctioned server binary. A serving llama-server pins the
+#          card far past UTIL_THRESHOLD, so the probe answered BUSY about the CUDA
+#          lane's OWN generation and the watchdog stopped a healthy lane mid-request
+#          (02:34 and 08:18 that day, each time after the lane had just been
+#          restarted). Signal order also changed: definitive ownership evidence
+#          (training, lock, cuda owner, foreign app, declared workload) is now asked
+#          BEFORE the utilisation heuristic, because the OR-chain short-circuits and
+#          util-first used to mask the answer that explained the busy correctly)
 # Version: 1.4.0 (2026-09-16: signal 2 identifies a resident by its /proc/PID/exe
 #          resolved against the sanctioned CUDA/Xe binaries, instead of by the
 #          NAME "llama-server" — which any process that merely MENTIONS the string
@@ -25,7 +34,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 8
+# Module Version: 10
 # Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
 #          SCRIPT the interpreter was GIVEN — the argv element immediately after an
 #          interpreter — not any element that merely names it.  A CI lint job's file list
@@ -44,7 +53,9 @@
 # alone is NOT reliable either (llama-server always holds ~3.8GB of the 4GB
 # card). So we combine five signals; ANY true => CUDA card BUSY:
 #
-#   1. Utilization samples — max over N samples exceeds threshold (actually computing)
+#   1. Utilization samples — max over N samples exceeds threshold (actually computing).
+#      Asked LAST, and only when the card's compute apps are not exclusively the two
+#      sanctioned servers: see sanctioned_residents_only().
 #   2. Foreign compute-app PIDs — a resident whose /proc/PID/exe is not one of the
 #      two sanctioned llama-server binaries holds a CUDA context (someone else is
 #      loaded on the GPU).  Both are allowed: the Xe binary is ours, and the Xe
@@ -114,6 +125,57 @@ util_busy() {
     return 1
 }
 
+# The sanctioned server binaries, resolved to real paths.  One definition for the
+# foreign-app probe and the utilisation gate, so the two can never disagree about
+# which residents are OURS.
+_sanctioned_exes() {
+    local _a
+    for _a in "${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}" \
+              "${LLAMA_XE_SERVER_BIN:-$HOME/llama.cpp/build-opencl/bin/llama-server}"
+    do
+        # An absent build (the Xe tree is not on every host) must yield an empty
+        # entry, not abort the probe.
+        readlink -f "$_a" 2>/dev/null || true  # swallow-ok: absent build -> empty
+    done
+}
+
+# 0 (TRUE) when this resolved exe is one of the sanctioned server binaries.
+_is_sanctioned_exe() {
+    local _exe="$1" _a
+    [[ -n "$_exe" ]] || return 1
+    while IFS= read -r _a; do
+        [[ -n "$_a" && "$_exe" == "$_a" ]] && return 0
+    done < <(_sanctioned_exes)
+    return 1
+}
+
+# 0 (TRUE) when nvidia-smi lists at least one compute app and EVERY one of them is a
+# sanctioned server binary; 1 otherwise (an unsanctioned resident, an unreadable
+# /proc, or no listing at all).
+#
+# This is the gate that keeps utilisation from accusing the lane of being foreign to
+# itself.  A llama-server generating tokens sits at 80-100% util against a 15%
+# threshold, so util said BUSY about our own lane's work and the watchdog stopped it
+# mid-request — twice, on 2026-10-23.  Anything we cannot prove is ours leaves this
+# false, so utilisation still counts: the fail-closed direction is preserved.
+sanctioned_residents_only() {
+    local smi_out pid exe seen=0
+    # stderr is dropped because a driver fault is answered by the explicit
+    # "|| return 1" (not-busy-only), never by reading the error text as a pid.
+    smi_out=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null)  # swallow-ok: see above
+    [[ -n "$smi_out" ]] || return 1
+    while IFS= read -r pid; do
+        pid="${pid%$'\r'}"
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        seen=1
+        # A resident that exits mid-probe leaves an unreadable exe; empty is "not
+        # proven ours", which this caller treats as foreign (fail-closed).
+        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)  # swallow-ok: race -> foreign
+        _is_sanctioned_exe "$exe" || return 1
+    done <<< "${smi_out:-}"
+    (( seen ))
+}
+
 foreign_apps_busy() {
     local pid comm cmdline exe smi_out smi_rc _a
     # When the driver/NVML blocks GPU access, nvidia-smi exits non-zero AND prints
@@ -135,11 +197,7 @@ foreign_apps_busy() {
     # LLAMA_XE_SERVER_BIN); this probe is standalone and does not source the
     # console, so they are repeated here rather than imported.
     local -a _allowed=()
-    for _a in "${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}" \
-              "${LLAMA_XE_SERVER_BIN:-$HOME/llama.cpp/build-opencl/bin/llama-server}"
-    do
-        _allowed+=("$(readlink -f "$_a" 2>/dev/null || true)")
-    done
+    mapfile -t _allowed < <(_sanctioned_exes)
     while IFS= read -r pid; do
         pid="${pid%$'\r'}"
         [[ -z "$pid" ]] && continue
@@ -151,11 +209,7 @@ foreign_apps_busy() {
         # RESOLVED binary is one of the two above, so a same-named server from any
         # other build path stays foreign and still reports busy.
         exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-        if [[ -n "$exe" ]]; then
-            for _a in "${_allowed[@]}"; do
-                [[ -n "$_a" && "$exe" == "$_a" ]] && continue 2
-            done
-        fi
+        _is_sanctioned_exe "$exe" && continue
         # OpenClaw embedding workers are a node/python process, so their exe is an
         # interpreter rather than the worker itself: they are identified by the
         # name in the command line that launched them.
@@ -360,9 +414,22 @@ training_tenant_busy() {
 }
 
 busy() {
+    # Order is the fix, not a style choice. This is a short-circuiting OR: whichever
+    # signal answers first is the ONLY reason recorded, and the rest never run. Asking
+    # utilisation first meant a serving lane always answered "util=95%>=15%" and the
+    # lock/owner/foreign answers that would have said "this is the lane's own work"
+    # were never consulted.
+    #
+    #   1. training tenant   — registered, declared, holds the shared bench lock
+    #   2. bench lock        — another run has claimed the card
+    #   3. cuda owner        — the investigator's flock is held elsewhere
+    #   4. foreign app       — an unsanctioned resident holds a CUDA context
+    #   5. declared workload — a bench/autotune artefact is EXECUTING
+    #   6. utilisation       — heuristic, and only when the residents are not ours
     training_tenant_busy \
-        || util_busy || foreign_apps_busy || declared_workload_busy \
-        || lock_busy || cuda_owner_busy
+        || lock_busy || cuda_owner_busy \
+        || foreign_apps_busy || declared_workload_busy \
+        || { ! sanctioned_residents_only && util_busy; }
 }
 
 emit() {

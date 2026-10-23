@@ -513,7 +513,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2242 total tests: 1440 BATS + 802 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2247 total tests: 1445 BATS + 802 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
 
 ### Running Tests
 
@@ -565,10 +565,10 @@ Counts are enforced by `tools/docs-sync-check.sh`; the suite list and its per-ca
 | Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 67 | 300s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 836 | 300s | 600s |
+| Unit | `tests/unit/*.bats` | 841 | 300s | 600s |
 | Integration | `tests/integration/*.bats` | 148 | 300s | 1200s |
 | Python | `tests/test_*.py` | 802 | 1000s (`pytest.ini`) | — |
-| **Total** | | **2242** | | |
+| **Total** | | **2247** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and every marker the BATS bridge applies dynamically (`bats`, `bats_unit`, `bats_fast`, `bats_full`, `bats_integration`, `slow`) is registered there. There is deliberately no `bats_default`: each suite's marker now comes by name from `tests/bats-suites.tsv`, so a name the table gets wrong fails collection instead of quietly filing the suite under a marker no `-m` selection asks for. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -1222,7 +1222,7 @@ where it was last present.)
 │   ├── test_report.py                 # Tests for kgraph.report
 │   ├── test_update.py                 # Tests for kgraph.update
 │   ├── test_validate.py               # Tests for kgraph.validate
-│   ├── unit/                          # BATS unit tests (836 tests: 33+34+8+5+5+6+44+4+10+7+42+19+16+6+1+5+8+2+3+3+20+36+41+31+6+8+8+3+15+6+13+24+29+16+9+17+9+6+4+4+6+3+3+4+5+4+13+2+10+10+1+8+5+4+28+34+4+7+35+24+11+8+8+10+6+5+7+5)
+│   ├── unit/                          # BATS unit tests (841 tests: 33+34+8+5+5+6+44+4+10+7+42+19+16+6+1+5+8+2+3+3+20+36+41+31+6+8+8+3+15+6+13+24+29+16+9+17+9+6+4+4+6+3+3+4+5+4+13+2+10+10+1+8+5+4+28+34+5+4+7+35+24+11+8+8+10+6+5+7+5)
 │   └── integration/                   # BATS integration tests (148 tests: 14+47+10+45+3+29)
 ├── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)

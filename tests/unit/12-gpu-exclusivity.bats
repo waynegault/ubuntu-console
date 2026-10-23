@@ -733,8 +733,15 @@ EOS
     chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
 
     printf 'REASONS=()\n' > "$TAC_TEST_TMPDIR/fab.sh"
-    awk '/^foreign_apps_busy\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
+    # foreign_apps_busy() resolves the two sanctioned binaries through _sanctioned_exes()
+    # / _is_sanctioned_exe() — ONE definition shared with the utilisation gate, so the
+    # two can never disagree about which residents are ours (2026-10-23). The extraction
+    # therefore carries both helpers, in the order the real file defines them.
+    awk '/^_sanctioned_exes\(\)/,/^}/'      "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
+    awk '/^_is_sanctioned_exe\(\)/,/^}/'    "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
+    awk '/^foreign_apps_busy\(\)/,/^}/'     "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
     grep -q 'foreign_apps_busy' "$TAC_TEST_TMPDIR/fab.sh"
+    grep -q '_is_sanctioned_exe' "$TAC_TEST_TMPDIR/fab.sh"
 
     cat > "$TAC_TEST_TMPDIR/fab-probe.sh" <<'EOS'
 set -uo pipefail

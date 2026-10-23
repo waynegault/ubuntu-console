@@ -49,7 +49,7 @@ unclassified	scripts/run-autotune-batch.sh	10
 unclassified	scripts/spec-decode-bench.sh	6
 unclassified	scripts/spec_dec_crossover.sh	11
 unclassified	bin/bench-timeout-runner.sh	11
-unclassified	bin/gpu-busy.sh	19
+unclassified	bin/gpu-busy.sh	17
 unclassified	bin/gpu-watch-selfcheck.sh	1
 unclassified	bin/interview-benchmark.sh	1
 unclassified	bin/llama-gpu-clear.sh	10
