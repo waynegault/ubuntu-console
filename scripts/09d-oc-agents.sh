@@ -121,7 +121,15 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 59
+# Module Version: 60
+#   v60 (2026-10-23): the SecretRef table no longer OVERWRITES a provider apiKey that names a
+#   declared auth profile (auth.profiles). Measured that evening: a run with DEEPSEEK_API_KEY
+#   exported rewrote models.providers.deepseek.apiKey from "deepseek:manual" to the env ref,
+#   after which the gateway logged SECRETS_OWNER_UNAVAILABLE for provider:deepseek ("secret
+#   reference was not found"), every agent turn fell over to the local lanes on context
+#   overflow, and the same box had served DeepSeek HTTP 200s minutes earlier under the profile
+#   ref. Restoring the profile ref recovered resolution ([SECRETS_RELOADER_RECOVERED]). The
+#   table still fills in every provider that declares nothing.
 #   v59 (2026-10-22): the repair also refreshes the systemd USER-MANAGER env for the names
 #   it found diverged there, via `systemctl --user import-environment` after exporting the
 #   canonical values in-process — only NAMES reach the command line, never a value. Measured
@@ -1138,13 +1146,26 @@ except Exception as exc:
     print(f"[tac] warning: could not read openclaw.json ({exc}); patching from an empty config", file=sys.stderr)
 
 patch, changed, skipped = {}, 0, 0
+profiles = ((cfg.get("auth") or {}).get("profiles") or {}) if isinstance(cfg, dict) else {}
+
 for path, var in entries:
     if not os.environ.get(var):
         skipped += 1
         continue
     ref = {"source": "env", "provider": "default", "id": var}
-    if get_path(cfg, path) == ref:
+    current = get_path(cfg, path)
+    if current == ref:
         continue  # already correct — no write needed
+    # A provider pinned to a DECLARED auth profile keeps that ref. An env ref on the same
+    # path overrides the profile, and on this gateway build it did not resolve: 2026-10-23
+    # rewriting models.providers.deepseek.apiKey from "deepseek:manual" to the env ref made
+    # the gateway log SECRETS_OWNER_UNAVAILABLE for provider:deepseek ("secret reference was
+    # not found") and every agent turn failed over to the local lanes, while the profile ref
+    # had been serving. The author's declared channel wins; this table fills in only where
+    # nothing was declared.
+    if isinstance(current, str) and current in profiles:
+        skipped += 1
+        continue
     set_path(patch, path, ref)
     changed += 1
 

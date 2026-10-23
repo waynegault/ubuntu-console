@@ -141,6 +141,28 @@ teardown() {
     export GEMINI_API_KEY="test-gemini-key"
     unset QWEN_TOKEN_PLAN_API_KEY
 
+    # 2026-10-23: a provider PINNED to a declared auth profile keeps that ref. The
+    # refresh used to overwrite models.providers.deepseek.apiKey with the env ref even
+    # though the config declares auth.profiles."deepseek:manual"; on this gateway the
+    # env ref did not resolve ("secret reference was not found"), deepseek-flash
+    # stopped serving and every agent turn fell over to the local lanes. The patch
+    # payload must not carry the deepseek path while "deepseek:manual" stands.
+    cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
+{
+  "auth": {
+    "profiles": {
+      "deepseek:manual": {"provider": "deepseek", "mode": "api_key"}
+    }
+  },
+  "models": {
+    "providers": {
+      "deepseek": {"apiKey": "deepseek:manual"}
+    }
+  }
+}
+CFG
+    export DEEPSEEK_API_KEY="test-deepseek-key"
+
     run oc-refresh-keys
     [ "$status" -eq 0 ]
 
@@ -150,6 +172,11 @@ teardown() {
     [ "$status" -eq 0 ]
     run grep -F '"google": {"config": {"webSearch": {"apiKey": {"source": "env", "provider": "default", "id": "GEMINI_API_KEY"' "$OC_MOCK_PATCH_FILE"
     [ "$status" -eq 0 ]
+
+    # The declared auth-profile ref is left alone, even though DEEPSEEK_API_KEY is
+    # exported: the patch must not carry the deepseek path at all.
+    run grep -F 'deepseek' "$OC_MOCK_PATCH_FILE"
+    [ "$status" -ne 0 ]
 
     # Absent (no longer mapped) credential -> no ref written for that path.
     run grep -F 'qwen-token-plan' "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
