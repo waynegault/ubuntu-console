@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-10-23): the RESULT summary names arm B's ACTUAL budget.  Measured: a
+#   `--cache-ram-mb 768` sizing run printed "ARM B (--cache-ram 0)" and a 512 run
+#   printed the same, because the label was a literal in _summarise_py while the value
+#   lives in the shell's OPT_CACHE_MB — so every sized run's verdict read as the
+#   zero-budget run it was meant to be compared against.  The per-position lines were
+#   always correct (they use run_arm's axis_label); only the summary lied.
 #   v16 (2026-10-23): a `--from-unit` run NAMES the unit and model it measured.
 #   Measured: `--from-unit llama-xe-minicpm5-1b-chat` measured MiniCPM5-1B but its
 #   RESULT block read "row 21 Qwen2.5 Coder 3B Instruct", because --from-unit replaces
@@ -759,10 +765,12 @@ run_arm() {
 #   DELTA and the position-drift verdict, and writes the result JSON.  Extracted from
 #   `summarise` so each function stays under the §18.3 item 10.4 100-line bound.
 _summarise_py() {
-    "$TAC_PYTHON" - "$1" "$2" "$3" "$4" "$DRIFT_WARN_PCT" "$REUSE_AXIS" "$OPT_REUSE" <<'PYEOF'
+    "$TAC_PYTHON" - "$1" "$2" "$3" "$4" "$DRIFT_WARN_PCT" "$REUSE_AXIS" "$OPT_REUSE" "$OPT_CACHE_MB" <<'PYEOF'
 import glob, json, os, re, sys
 wd, seq, result_path, row, drift_pct = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5])
 reuse_axis = int(sys.argv[6]); reuse_tokens = sys.argv[7]
+# v17: arm B's ACTUAL budget, so a sized run cannot read as the zero-budget baseline.
+cache_mb = sys.argv[8]
 rows = []
 for d in sorted(glob.glob(os.path.join(wd, "pos*")), key=lambda p: int(re.search(r"pos(\d+)", p).group(1))):
     m = re.search(r"pos(\d+)_([AB])$", d)
@@ -793,7 +801,7 @@ for a in ("A", "B"):
     if reuse_axis:
         lbl = "A (no --cache-reuse)" if a == "A" else f"B (--cache-reuse {reuse_tokens})"
     else:
-        lbl = "A (no --cache-ram, default 8192)" if a == "A" else "B (--cache-ram 0)"
+        lbl = "A (no --cache-ram, default 8192)" if a == "A" else f"B (--cache-ram {cache_mb})"
     print(f"  ARM {lbl}: n={len(rs)}  mean decode_cold={mean([r['r1']['server_decode_tps'] for r in rs]):.2f}"
           f"  mean decode_reuse={mean([r['r3']['server_decode_tps'] for r in rs]):.2f}"
           f"  mean ttft_reuse={mean([r['r3']['ttft_ms'] for r in rs]):.0f} ms")
