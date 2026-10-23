@@ -57,6 +57,17 @@ case "$*" in
 esac
 EOS
     chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+    # The process table is LIVE state on this shared box: declared_workload_busy() runs
+    # `pgrep -f model_selection_bench.py` (and `pgrep -x llama-bench`), so a bench running
+    # while the suite executes makes it answer BUSY and flips the free-card cases.
+    # Measured 2026-10-23 in CI: `reasons=declared:model_selection_bench` on cases that
+    # assert "free".  Pin the probe, as the nvidia-smi stub already pins the device.
+    cat > "$TAC_TEST_TMPDIR/bin/pgrep" <<'EOS'
+#!/usr/bin/env bash
+# Stub: no process matches in this sandbox, whatever the pattern.
+exit 1
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/pgrep"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
     # Extract the real definitions, stopping before the script's own main block.
