@@ -443,8 +443,8 @@ commands:
 
   - name: oc purge
     family: openclaw
-    summary: Reset every agent — delete every stored non-main, non-cron session, clear the session directories, reset the configured main to empty and repair a tombstoned main, then restart the gateway
-    version: 6
+    summary: Reset every agent — delete every stored non-main, non-cron session, reset the configured main to empty, repair a tombstoned main and prune only the session files no store row names; the gateway is started only when it is not already serving and is never stopped
+    version: 7
     updated: 2026-10-23
     status: active
     scope: both
@@ -452,17 +452,14 @@ commands:
     disposition: consequence
     # VERIFIED (2026-10-08, owner's call).  The 2026-10-06 note that sat here said a BATS node
     # "would have to stop the live gateway and delete real session dirs" -- that premise is
-    # false, and the two nodes below are its refutation: a test CAN exercise this command
+    # false, and the nodes below are its refutation: a test CAN exercise this command
     # hermetically.  setup() points OC_AGENTS at a TAC_TEST_TMPDIR fixture (which still has to
     # pass this command's own `^(/home|/dev/shm|/tmp)` safety guard, so the guard is exercised
-    # rather than dodged), points TAC_CACHE_DIR there too, and OC_PURGE_WAIT_S=0 skips the wait;
-    # the two gateway functions the stop goes through are stubbed, so no live gateway is
-    # stopped.  The first node holds the SAFETY half (a stop that does not land is a REFUSAL and
-    # nothing is deleted); the second holds the MUTATION half (--dry-run deletes nothing, and a
-    # real run removes exactly the session dirs it names) -- both read back from the filesystem
-    # rather than believed from the summary.  The read_back witness below remains the runtime
-    # guard: it proves the gateway is gone BEFORE any deletion, and that a failed `rm` is
-    # reported and not counted.
+    # rather than dodged) and points TAC_CACHE_DIR there too.  The SAFETY half is now
+    # `ensure_serving`: an unserving gateway refuses with nothing deleted, a serving one is
+    # left alone, and an unserving one is STARTED (never stopped) -- the stop-based nodes this
+    # note used to describe went with v7.  The MUTATION half is --dry-run plus the real run,
+    # read back from the filesystem rather than believed from the summary.
     #
     # v3 (2026-10-18) — the SCOPE changed: the directories were never the store.  The roster
     # read 47 sessions across 14 agents from agent/openclaw-agent.sqlite while the deleted
@@ -499,42 +496,53 @@ commands:
     # deleted".  `__oc_purge_wait_rpc` now polls until `ok:true` (OC_PURGE_HEALTH_S, default
     # 300 s; OC_PURGE_HEALTH_STEP_S, default 5 s), prints its state and time left, surfaces
     # the LAST probe, and the refusal names the dirs as already cleared.
+    # v7 (2026-10-23) — the STOP/START is GONE (owner's option (a)).  sessions/ holds only
+    # the `<uuid>.jsonl.deleted.<ts>.<hash>.zst` archives `sessions delete` wrote, and each is
+    # named by an `archive_name` row in the agent's store; the live transcripts are
+    # transcript_events.  Measured: hal/finn/juno each held one file matching one row, while
+    # `del` held zero files and one row — an orphan the old blanket clear had already made.
+    # So the stop existed only to clear a directory, and clearing it was the defect.  The
+    # delete and the reset already run over RPC, so a SERVING gateway is now the precondition:
+    # `__oc_purge_ensure_serving` probes briefly, starts the unit only when it does not answer,
+    # and never stops or restarts one that does; `__oc_purge_prune_orphans` removes a session
+    # file only when neither archive table names it, never walks cold/, and keeps a file whose
+    # store cannot be read.  All journal/stop/kill helpers were deleted with the stop.
     verified_by:
       - "tests/unit/02-so-startup.bats::oc purge: a gateway that answers RPC only after a cold start is WAITED for, not refused"
-      - "tests/unit/02-so-startup.bats::oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted"
-      - "tests/unit/02-so-startup.bats::oc purge: a gateway whose last shutdown did not complete is REFUSED before it is stopped"
-      - "tests/unit/02-so-startup.bats::oc purge: a completed shutdown is NOT refused, and the kill bound follows TimeoutStopUSec"
-      - "tests/unit/02-so-startup.bats::oc purge: a shutdown killed after the stop is NAMED, not reported as still up"
-      - "tests/unit/02-so-startup.bats::oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs"
+      - "tests/unit/02-so-startup.bats::oc purge: ONLINE on the port is not proof the RPC answers — nothing is deleted"
+      - "tests/unit/02-so-startup.bats::oc purge: a serving gateway is never stopped or restarted"
+      - "tests/unit/02-so-startup.bats::oc purge: a gateway that is not serving is STARTED, never stopped"
+      - "tests/unit/02-so-startup.bats::oc purge: only session files no store row names are pruned"
+      - "tests/unit/02-so-startup.bats::oc purge: --dry-run names what it would prune and deletes nothing, and the real run prunes exactly those orphan files"
       - "tests/unit/02-so-startup.bats::oc purge: a tombstoned session absent from the roster is still deleted"
+      - "tests/unit/02-so-startup.bats::oc purge: a failed step is a NON-ZERO exit, not a zero with a FAILED row"
       - "tests/unit/02-so-startup.bats::oc purge: cron sessions are KEPT and the configured main is RESET, not deleted"
       - "tests/unit/02-so-startup.bats::oc purge: a main whose tombstone names a missing successor is REPAIRED"
     read_back:
-      - witness: __oc_purge_shutdown_hangs
+      - witness: __oc_purge_ensure_serving
         file: scripts/09c-oc-core.sh
         asserts: >-
-          the unit's OWN journal is read (through __oc_purge_journal, a seam so a case
-          supplies a recorded log instead of this box's live one): a settled drain followed
-          by a `shutdown deadline reached` line is a REFUSAL taken BEFORE the stop, so a
-          stop that cannot complete is never taken, nothing is deleted and the gateway stays
-          serving.  A later drain line with no deadline after it is NOT a refusal, and an
-          unreadable journal is no evidence rather than a verdict.
+          a SERVING gateway is the precondition for every deletion: a short probe of
+          `gateway call health` decides, a gateway that answers is left alone (never
+          stopped, never restarted), and one that does not answer is STARTED and then
+          waited for.  Success is the RPC answering, never the port being bound; a failure
+          to serve REFUSES the command before any store row or session file is touched.
       - witness: __oc_purge_wait_rpc
         file: scripts/09c-oc-core.sh
         asserts: >-
-          after the restart, `gateway call health` is POLLED until it answers ok:true rather
-          than sampled once; the wait is bounded (OC_PURGE_HEALTH_S), prints its state and
-          the time left on the progress cadence, and on exhaustion surfaces the LAST probe
-          and returns 1 so the caller refuses before touching the store.  A late answer is a
-          wait, not a failure: the delete runs as soon as RPC answers.
-      - witness: __oc_purge_wait_gone
+          `gateway call health` is POLLED until it answers ok:true rather than sampled
+          once; the wait is bounded (OC_PURGE_HEALTH_S, default 300 s), prints its state
+          and the time left on the progress cadence, and on exhaustion surfaces the LAST
+          probe unless the caller asked for a quiet probe.  A late answer is a wait, not a
+          failure: the delete runs as soon as RPC answers.
+      - witness: __oc_purge_prune_orphans
         file: scripts/09c-oc-core.sh
         asserts: >-
-          the gateway's unit is no longer active, no start/restart job is queued for it
-          and its port is released BEFORE any session directory is deleted; a stop that
-          does not land within the bound is a REFUSAL and nothing is deleted.  Scoped on
-          purpose: the deletion itself is checked per directory, so a failed `rm` is
-          reported and NOT counted and the summary cannot claim a directory still there.
+          a file under an agent's sessions/ is removed ONLY when neither
+          `session_transcript_archives` nor `session_transcript_cold_archives` names it in
+          that agent's own store; the walk is top-level only, so `cold/` is never touched,
+          and a file whose store cannot be READ is KEPT — "could not tell" is not
+          "unreferenced".  A row with no file is never a reason to clear the rest.
       - witness: __oc_purge_delete_sessions
         file: scripts/09c-oc-core.sh
         asserts: >-
@@ -556,15 +564,14 @@ commands:
       args:
         - --dry-run
       side_effects:
-        - stops the gateway
-        - deletes ~/.openclaw/agents/*/sessions
+        - starts the gateway when it is not already serving (never stops or restarts one that is)
+        - prunes only ~/.openclaw/agents/*/sessions files that no store row names, keeping cold/
         - deletes every stored non-main, non-cron session through `openclaw sessions delete`
         - resets the configured main (`OC_PURGE_RESET_MAIN`, default `hal`) to empty through `sessions.patch` and `sessions.reset`
         - repairs a main whose recovery tombstone names a successor the store no longer holds
-        - starts the gateway again
       output_shape:
-        - per-session rows (deleted, kept main, kept cron), a reset/repair row and a summary line
-      exit_code: non-zero when the gateway will not stop, will not restart, or a delete, reset or repair failed
+        - per-session rows (deleted, kept main, kept cron), a reset/repair row, an orphan-prune row and a summary line
+      exit_code: non-zero when the gateway cannot be made to serve, or a delete, reset, repair or prune failed
 fixture_priority:
   - m
   - h

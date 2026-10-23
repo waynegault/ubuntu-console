@@ -39,11 +39,10 @@ setup() {
     pgrep() { return 1; }
     wake() { return 0; }
 
-    # `oc purge` refuses when the unit's last shutdown reached its deadline.  That evidence
-    # comes from the USER JOURNAL, which on THIS box carries the live gateway's real hung
-    # stops: a case that read it would pass in CI (no user journal) and refuse here.  The
-    # neutral default is "no evidence"; the pre-flight case below supplies a fixture.
-    __oc_purge_journal() { return 1; }
+    # `oc purge` requires a SERVING gateway, and on this box that is the LIVE one: a case
+    # that let the real helper probe it would reach the real CLI.  The neutral default is
+    # "the gateway already serves"; the refusal case below supplies its own stub.
+    __oc_purge_ensure_serving() { return 0; }
 
     # Mock the systemd boundary — the runner has no user session bus
     # (ci-behavioral-bats-red-2026-09-21: a real `systemctl --user` there answers
@@ -597,83 +596,31 @@ __so_test_prelude() {
     [ "$status" -eq 1 ]
 }
 
-@test "oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted" {
-    # `oc purge` deletes state, so a stop that does not land must REFUSE rather than
-    # delete under a live gateway.  __oc_safe_gateway_shutdown is fire-and-forget (its
-    # last statement is an `rm`, so its status says nothing) and the unit's stop budget
-    # is 330s — measured 2026-09-30, the old code purged 0.5s after asking it to stop.
-    export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0                 # do not sleep; __oc_gateway_gone decides
-    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
-    mkdir -p "$OC_AGENTS/alpha/sessions"
-    : > "$OC_AGENTS/alpha/sessions/s.json"
-    __oc_safe_gateway_shutdown() { return 0; }
-    __oc_gateway_gone() { return 1; }        # still up
-
-    run oc-purge
-
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"REFUSED - the gateway is still up"* ]]
-    [ -f "$OC_AGENTS/alpha/sessions/s.json" ]  # the point: nothing was deleted
-
-    # A restart that lands WHILE waiting must be REPLACED, not waited behind:
-    # Restart=always queues one when systemd SIGKILLs a unit that overran
-    # TimeoutStopUSec, so an observing loop can never win (measured 2026-10-23).
-    # The gone witness stays false here; only the replacement call is under test.
-    # Function stubs, not PATH binaries: the two reads are direct `systemctl` calls, and
-    # the replacement now goes through its own helper so the assertion cannot depend on
-    # how a stub resolves — and must never reach the real `systemctl stop`.
-    systemctl() {
-        case "$*" in
-            *"show -p ActiveState"*) printf 'activating\n' ;;
-            *"list-jobs"*) printf '1 openclaw-gateway.service start waiting\n' ;;
-        esac
-        return 0
-    }
-    __oc_purge_stop_replace() { : > "$TAC_TEST_TMPDIR/replaced"; }
-    export OC_PURGE_WAIT_S=2
-    run oc-purge
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"restart queued while stopping"* ]]
-    [ -e "$TAC_TEST_TMPDIR/replaced" ] \
-        || { echo "a queued restart must be replaced while waiting"; return 1; }
-
-    # Silence read as "frozen" on a live run: the wait must name its state and time left.
-    # A shutdown that overruns must also be KILLED, not fought until the bound expires.
-    __oc_purge_force_kill() { : > "$TAC_TEST_TMPDIR/killed"; }
-    export OC_PURGE_WAIT_S=3
-    export OC_PURGE_PROGRESS_S=1
-    export OC_PURGE_KILL_AFTER_S=1
-    run oc-purge
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"s left"* ]] || { echo "the wait must report progress"; return 1; }
-    [ -e "$TAC_TEST_TMPDIR/killed" ] || { echo "an overrun shutdown must be killed"; return 1; }
-}
-
-@test "oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs" {
-    # The MUTATION half.  The refusal node above proves the direction "a stop that does not
-    # land deletes nothing"; this proves the other one -- that a purge which DOES land removes
-    # exactly the session dirs it names, and that --dry-run removes none.  Both halves are read
-    # back from the FILESYSTEM, not from the command's summary: a `[PURGED]` row is the claim,
-    # an absent directory is the fact.  That distinction is the point of the per-directory `rm`
-    # in oc-purge (a failed delete is reported and NOT counted), so asserting the counter alone
-    # would let a summary disagree with the disk.
+@test "oc purge: --dry-run names what it would prune and deletes nothing, and the real run prunes exactly those orphan files" {
+    # The MUTATION half.  The refusal node above proves "unserving deletes nothing"; this
+    # proves the other one — that a purge which DOES land removes exactly the session files
+    # no store row names, and that --dry-run removes none.  Both halves are read back from
+    # the FILESYSTEM, not from the summary: `[WOULD PRUNE]` and a pruned count are claims,
+    # an absent file is the fact.  The fixture stores carry both archive tables and name
+    # nothing, so every file here IS an orphan — and the directories themselves survive,
+    # because a purge empties sessions/ of unreferenced archives rather than removing it.
     #
-    # Hermetic, same as the node above: the stop goes through __oc_safe_gateway_shutdown and
-    # __oc_gateway_gone (both stubbed), OC_AGENTS and TAC_CACHE_DIR are fixtures under
-    # TAC_TEST_TMPDIR (OC_AGENTS from this test, TAC_CACHE_DIR from setup()), and
-    # OC_PURGE_WAIT_S=0 makes __oc_purge_wait_gone skip its loop.  No live gateway is stopped
-    # and no real session directory is touched -- the fixture path is only legal because it is
-    # under /tmp, i.e. through the command's own safety guard rather than around it.
+    # Hermetic: OC_AGENTS and TAC_CACHE_DIR are fixtures under TAC_TEST_TMPDIR (OC_AGENTS
+    # from this test, TAC_CACHE_DIR from setup()), so the path passes the command's own
+    # `^(/home|/dev/shm|/tmp)` guard rather than dodging it, and nothing real is touched.
     export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
     export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
-    mkdir -p "$OC_AGENTS/alpha/sessions" "$OC_AGENTS/beta/sessions"
-    : > "$OC_AGENTS/alpha/sessions/a.json"
-    : > "$OC_AGENTS/beta/sessions/b.json"
+    mkdir -p "$OC_AGENTS/alpha/agent" "$OC_AGENTS/beta/agent" \
+        "$OC_AGENTS/alpha/sessions" "$OC_AGENTS/beta/sessions"
+    : > "$OC_AGENTS/alpha/sessions/a.jsonl.deleted.1.abcd.zst"
+    : > "$OC_AGENTS/beta/sessions/b.jsonl.deleted.1.abcd.zst"
+    for _agent in alpha beta
+    do
+        sqlite3 "$OC_AGENTS/$_agent/agent/openclaw-agent.sqlite" \
+            "create table session_transcript_archives(archive_name text);" \
+            "create table session_transcript_cold_archives(archive_name text);"
+    done
     __oc_safe_gateway_shutdown() { : > "$TAC_TEST_TMPDIR/stopped"; }
-    __oc_gateway_gone() { return 0; }        # gone, so the purge is allowed through
-    __so_start_gateway() { return 0; }       # the reset ends on a serving gateway
     # A PATH stub, not a shell function: the command calls it as `timeout 60 openclaw`,
     # and `timeout` execs a binary, so a function stub would be invisible and the REAL
     # CLI would answer (measured: that is what made this case hang on first run).
@@ -697,39 +644,40 @@ MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
-    # 1. --dry-run names both session dirs and the keys it would delete, deletes NEITHER,
-    #    and does not stop the gateway: the old code stopped it before deciding it was a
+    # 1. --dry-run names both directories and the keys it would delete, deletes NEITHER,
+    #    and never stops the gateway: the old code stopped it before deciding it was a
     #    dry run, a side effect the name denies.
     run oc-purge --dry-run
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"[WOULD PURGE] $OC_AGENTS/alpha/sessions"* ]]
-    [[ "$output" == *"[WOULD PURGE] $OC_AGENTS/beta/sessions"* ]]
+    [[ "$output" == *"[WOULD PRUNE] $OC_AGENTS/alpha/sessions (files no store row names)"* ]]
+    [[ "$output" == *"[WOULD PRUNE] $OC_AGENTS/beta/sessions (files no store row names)"* ]]
     [[ "$output" == *"agent:alpha:main"* ]]
     [[ "$output" == *"[DRY RUN - nothing deleted, gateway untouched]"* ]]
-    [ -f "$OC_AGENTS/alpha/sessions/a.json" ]
-    [ -f "$OC_AGENTS/beta/sessions/b.json" ]
+    [ -f "$OC_AGENTS/alpha/sessions/a.jsonl.deleted.1.abcd.zst" ]
+    [ -f "$OC_AGENTS/beta/sessions/b.jsonl.deleted.1.abcd.zst" ]
     [ ! -e "$TAC_TEST_TMPDIR/stopped" ]
 
-    # 2. The real run: both session dirs are gone, the store delete is issued, and the
-    #    command ends on a start (not a stop).
+    # 2. The real run: both unreferenced files are pruned, the store delete is issued, and
+    #    the gateway is neither stopped nor started.
     run oc-purge
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"[PURGED] $OC_AGENTS/alpha/sessions"* ]]
-    [[ "$output" == *"[PURGED] $OC_AGENTS/beta/sessions"* ]]
+    [[ "$output" == *"[2 orphan session file(s) pruned]"* ]]
     [[ "$output" == *"[1 session key(s) deleted]"* ]]
     [[ "$output" == *"[1 main session(s) KEPT"* ]]
-    [[ "$output" == *"[2 agent dir(s) cleared, store reset]"* ]]
+    [[ "$output" == *"[store reset, 2 orphan(s) pruned]"* ]]
     # The CLI refuses to delete a main, and one refused key fails the whole batch, so a
     # main must never be SENT: scratch goes, main stays, and the argv proves both.
     grep -qF 'agent:alpha:scratch' "$TAC_TEST_TMPDIR/delete-argv"
     ! grep -qF 'agent:alpha:main' "$TAC_TEST_TMPDIR/delete-argv"
-    [ -e "$TAC_TEST_TMPDIR/stopped" ]
-    [ ! -d "$OC_AGENTS/alpha/sessions" ]
-    [ ! -d "$OC_AGENTS/beta/sessions" ]
-    # ...and it did not reach past what it named: the agent dirs themselves stay, so "purge"
-    # clears sessions rather than the agents that own them.
+    [ ! -e "$TAC_TEST_TMPDIR/stopped" ]
+    [ ! -e "$OC_AGENTS/alpha/sessions/a.jsonl.deleted.1.abcd.zst" ]
+    [ ! -e "$OC_AGENTS/beta/sessions/b.jsonl.deleted.1.abcd.zst" ]
+    # ...and it did not reach past what it pruned: the session dirs and the agents that
+    # own them stay.
+    [ -d "$OC_AGENTS/alpha/sessions" ]
+    [ -d "$OC_AGENTS/beta/sessions" ]
     [ -d "$OC_AGENTS/alpha" ]
     [ -d "$OC_AGENTS/beta" ]
 }
@@ -740,7 +688,6 @@ MOCK
     # poison retry loop running.  This drives the real command and reads the DELETE ARGV
     # back, so it catches a helper that enumerates correctly but is never wired in.
     export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
     export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
     mkdir -p "$OC_AGENTS/hal/agent" "$OC_AGENTS/hal/sessions"
     sqlite3 "$OC_AGENTS/hal/agent/openclaw-agent.sqlite" \
@@ -772,7 +719,6 @@ MOCK
     # (and the background task's rc) read it as success.  The failure here is the CLI's
     # own non-zero delete; the command must propagate it.
     export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
     export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
     mkdir -p "$OC_AGENTS/hal/sessions"
     __oc_safe_gateway_shutdown() { return 0; }
@@ -804,7 +750,6 @@ MOCK
     # reports failure.  Assertions are the DELETE argv and the RPC argv (what was asked),
     # plus the store state the mock's reset leaves.
     export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
     export OC_PURGE_RESET_MAIN=hal
     export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
     mkdir -p "$OC_AGENTS/hal/sessions" "$OC_AGENTS/hal/agent"
@@ -874,7 +819,6 @@ MOCK
     # recovery then refuses ("Session recovery state is incomplete").  The repair is the
     # documented patch+reset pair; archivedAt forces the patch arm.
     export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
     export OC_PURGE_RESET_MAIN=""
     export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
     mkdir -p "$OC_AGENTS/finn/sessions" "$OC_AGENTS/finn/agent"
@@ -922,26 +866,23 @@ MOCK
 }
 
 @test "oc purge: ONLINE on the port is not proof the RPC answers — nothing is deleted" {
-    # Measured live 2026-10-23: __so_start_gateway printed ONLINE (port 18789, 38s) and
-    # every openclaw call then timed out at 30 s, so `sessions delete` failed and the purge
-    # reported a FAILED store with the rows still there.  The start's port claim is not a
-    # serving claim; the delete runs over RPC, so a dead RPC must be refused first.
+    # A purge deletes state and the delete runs over RPC, so an unserving gateway must
+    # REFUSE rather than delete into a store nothing answers for.  `ensure_serving` is the
+    # seam: the refusal is taken before any store read, so `sessions delete` must never be
+    # reached.  (That the port alone is not the serving witness is pinned by the two
+    # ensure_serving cases below.)
     export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
     export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
     mkdir -p "$OC_AGENTS/alpha/sessions"
     : > "$OC_AGENTS/alpha/sessions/a.json"
-    __oc_safe_gateway_shutdown() { return 0; }
-    __oc_gateway_gone() { return 0; }
-    __so_start_gateway() { return 0; }      # the PORT claim succeeds
-    export OC_PURGE_HEALTH_S=0              # one sample, no wait: this case is about the refusal
+    __oc_purge_ensure_serving() { return 1; }
     mkdir -p "$TAC_TEST_TMPDIR/bin"
     cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
 #!/usr/bin/env bash
 case "$1 ${2:-}" in
     "sessions --all-agents") printf '%s\n' '{"count":1,"sessions":[{"key":"agent:alpha:scratch"}]}' ;;
     "sessions delete") : > "$TAC_TEST_TMPDIR/delete-asked"; printf '%s\n' '{"ok":true}' ;;
-    "gateway call") printf '%s\n' '{"ok":false,"error":{"message":"gateway timeout after 30000ms"}}'; exit 0 ;;
+    "gateway call") printf '%s\n' '{"ok":true}' ;;
 esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
@@ -950,10 +891,9 @@ MOCK
     run oc-purge
 
     [ "$status" -eq 1 ]
-    [[ "$output" == *"has not answered RPC in 0s"* ]]
-    [[ "$output" == *"session dirs are already cleared"* ]] \
-        || { echo "the refusal must name the dirs step 2 already cleared"; return 1; }
-    [ ! -e "$TAC_TEST_TMPDIR/delete-asked" ] || { echo "a dead RPC must not reach sessions delete"; return 1; }
+    [[ "$output" == *"REFUSED - the gateway is not serving"* ]]
+    [ ! -e "$TAC_TEST_TMPDIR/delete-asked" ] \
+        || { echo "a gateway that is not serving must not reach sessions delete"; return 1; }
 }
 
 @test "xo: a gateway stop that ignores TERM is KILLED, not waited out" {
@@ -1130,115 +1070,99 @@ __so_healthy_prelude() {
     grep -q "REFUSED" "$TAC_TEST_TMPDIR/journal.out"
 }
 
-@test "oc purge: a gateway whose last shutdown did not complete is REFUSED before it is stopped" {
-    # Measured 2026-10-23: four shutdowns in one day settled the work drain in <=20 s and
-    # then sat in shutdown.gateway-close past TimeoutStopUSec with close steps still
-    # pending; systemd SIGKILLed each one, the state DB stayed in offline maintenance and
-    # the next start was refused.  `oc purge` clears the session dirs BEFORE it starts the
-    # gateway, so a stop like that ends with the gateway DOWN and the dirs already gone.
-    # The decision therefore belongs before the stop, and this pins that it is taken there.
+@test "oc purge: a serving gateway is never stopped or restarted" {
+    # The whole point of option (a): the delete and the reset run over RPC through a
+    # SERVING gateway, and the old stop/start bought nothing but an outage.  A gateway
+    # that already answers must be left alone — asserted by the absence of BOTH calls,
+    # because a stop followed by a start would also end "serving".
     export __TAC_OPENCLAW_OK=1
     export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
     mkdir -p "$OC_AGENTS/alpha/sessions"
-    : > "$OC_AGENTS/alpha/sessions/keep.json"
-    __oc_purge_journal() {
-        cat <<'LOG'
-[gateway] received SIGTERM; shutting down
-[gateway] active-work drain settled; beginning server close
-[shutdown] plugin-services runtime disposal exceeded 5000ms; continuing shutdown
-[gateway] shutdown deadline reached; pending close steps: shutdown.gateway-close=322411ms
-LOG
-    }
+    __oc_purge_ensure_serving() { return 0; }      # it already serves
     __oc_safe_gateway_shutdown() { : > "$TAC_TEST_TMPDIR/stopped"; }
-    __oc_gateway_gone() { return 0; }
-    # The start must never be reached either.  Without this stub the MUTANT (a disabled
-    # pre-flight) fell through to the real `openclaw gateway start` and hung the run —
-    # a test that depends on the code under test to avoid a live CLI call is not hermetic.
-    __so_start_gateway() { : > "$TAC_TEST_TMPDIR/started"; return 1; }
+    __so_start_gateway() { : > "$TAC_TEST_TMPDIR/started"; return 0; }
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+    "sessions --all-agents") printf '%s\n' '{"count":0,"sessions":[]}' ;;
+    "gateway call") printf '%s\n' '{"ok":true}' ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
     run oc-purge
 
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"last shutdown did not complete"* ]]
-    [[ "$output" == *"OC_PURGE_IGNORE_HUNG_SHUTDOWN=1"* ]]
-    [ ! -e "$TAC_TEST_TMPDIR/stopped" ] || { echo "the gateway must not be stopped"; return 1; }
-    [ ! -e "$TAC_TEST_TMPDIR/started" ] || { echo "the start must not be reached"; return 1; }
-    [ -f "$OC_AGENTS/alpha/sessions/keep.json" ] || { echo "nothing may be deleted"; return 1; }
-}
-
-@test "oc purge: a completed shutdown is NOT refused, and the kill bound follows TimeoutStopUSec" {
-    # The control for the case above: the refusal is evidence, not a blanket refusal.  A
-    # clean stop has a drain line with NO deadline line after it.  And the self-kill bound
-    # must come from the unit's own budget — a flat 120 s fired 210 s INSIDE this unit's
-    # TimeoutStopUSec (5min 30s) and could end a drain the unit was allowed to finish, so
-    # 330 s + 10 s is the expected default and an explicit setting still wins.
-    __oc_purge_journal() {
-        cat <<'LOG'
-[gateway] active-work drain settled; beginning server close
-[gateway] shutdown deadline reached; pending close steps: shutdown.gateway-close=294453ms
-[gateway] received SIGTERM; shutting down
-[gateway] active-work drain settled; beginning server close
-LOG
-    }
-    run __oc_purge_shutdown_hangs
-    [ "$status" -eq 1 ] || { echo "a clean last shutdown must not be refused"; return 1; }
-
-    systemctl() {
-        while [[ "${1:-}" == --* ]]; do shift; done
-        if [[ "${1:-}" == "show" && "$*" == *TimeoutStopUSec* ]]
-        then
-            printf '5min 30s\n'
-        fi
-        return 0
-    }
-    unset OC_PURGE_KILL_AFTER_S
-    run __oc_purge_kill_after
     [ "$status" -eq 0 ]
-    [ "$output" = "340" ] || { echo "bound must follow the unit's own budget: $output"; return 1; }
-
-    export OC_PURGE_KILL_AFTER_S=120
-    run __oc_purge_kill_after
-    [ "$output" = "120" ] || { echo "the explicit override must win: $output"; return 1; }
+    [ ! -e "$TAC_TEST_TMPDIR/stopped" ] || { echo "a serving gateway must never be stopped"; return 1; }
+    [ ! -e "$TAC_TEST_TMPDIR/started" ] || { echo "a serving gateway must never be restarted"; return 1; }
+    [[ "$output" == *"[store reset, 0 orphan(s) pruned]"* ]]
 }
 
-@test "oc purge: a shutdown killed after the stop is NAMED, not reported as still up" {
-    # The other half of the same evidence: when the pre-flight had no history and the stop
-    # still overran, the start is refused.  The message must name the killed shutdown and
-    # the partial state (dirs cleared, rows intact, gateway DOWN); "still up" and "did not
-    # start" both read as our own fault and neither says the gateway is down.
-    export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
-    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
-    mkdir -p "$OC_AGENTS/alpha/sessions"
-    __oc_safe_gateway_shutdown() { return 0; }
-    __oc_gateway_gone() { return 0; }
-    __oc_purge_shutdown_hangs() { return 1; }        # the pre-flight saw no evidence
-    __oc_purge_journal() {
-        printf '%s\n' '[gateway] shutdown deadline reached; cleanup incomplete'
+@test "oc purge: a gateway that is not serving is STARTED, never stopped" {
+    # The other side of the same rule: when the short probe gets no answer, the purge
+    # STARTS the unit (the delete runs over RPC) and must not stop it first.  The wait is
+    # stateful on purpose — call 1 is the probe, call 2 is the post-start wait — so a
+    # helper that ignores the start and reuses its own failure is caught.
+    #
+    # This case is about the REAL helper, which setup() replaces with a "serving" stub, so
+    # both halves of that stub have to be cleared — the function AND 09c's include guard,
+    # without which re-sourcing is a no-op that leaves the stub in place.
+    unset -f __oc_purge_ensure_serving
+    unset __TAC_MOD_09C_OC_CORE_LOADED
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __oc_safe_gateway_shutdown() { : > "$TAC_TEST_TMPDIR/stopped"; }
+    __so_start_gateway() { : > "$TAC_TEST_TMPDIR/started"; return 0; }
+    local _probes=0
+    __oc_purge_wait_rpc() {
+        _probes=$(( _probes + 1 ))
+        (( _probes >= 2 ))
     }
-    __so_start_gateway() { return 1; }               # the start was refused
 
-    run oc-purge
+    run __oc_purge_ensure_serving
 
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"shutdown was killed"* ]]
-    [[ "$output" == *"offline maintenance"* ]]
-    [[ "$output" == *"gateway is DOWN"* ]]
+    [ "$status" -eq 0 ]
+    [ -e "$TAC_TEST_TMPDIR/started" ] || { echo "an unserving gateway must be started"; return 1; }
+    [ ! -e "$TAC_TEST_TMPDIR/stopped" ] || { echo "an unserving gateway must never be stopped"; return 1; }
+    [[ "$output" == *"STARTING - the store delete runs over RPC"* ]]
+}
+
+@test "oc purge: only session files no store row names are pruned" {
+    # sessions/ holds the archives `sessions delete` wrote, and each is named by an
+    # archive_name row in the agent's own store.  A blanket clear ORPHANS those rows
+    # (measured 2026-10-23: `del` had one row and no file), so the prune must keep every
+    # file a row names — and never walk cold/, whose rows are why that directory exists.
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/alpha/agent" "$OC_AGENTS/alpha/sessions/cold"
+    : > "$OC_AGENTS/alpha/agent/openclaw-agent.sqlite"
+    : > "$OC_AGENTS/alpha/sessions/kept.zst"
+    : > "$OC_AGENTS/alpha/sessions/orphan.zst"
+    : > "$OC_AGENTS/alpha/sessions/cold/deep.zst"
+    __oc_purge_store_read() {
+        case "$2" in
+            *"archive_name='kept.zst'"*) printf 'kept.zst\n' ;;
+            *) : ;;
+        esac
+    }
+
+    run __oc_purge_prune_orphans
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "1" ] || { echo "expected exactly one prune, got: $output"; return 1; }
+    [ -f "$OC_AGENTS/alpha/sessions/kept.zst" ] \
+        || { echo "a file a store row names must survive"; return 1; }
+    [ ! -e "$OC_AGENTS/alpha/sessions/orphan.zst" ] \
+        || { echo "a file no store row names must be pruned"; return 1; }
+    [ -f "$OC_AGENTS/alpha/sessions/cold/deep.zst" ] \
+        || { echo "cold/ must never be walked"; return 1; }
 }
 
 @test "oc purge: a gateway that answers RPC only after a cold start is WAITED for, not refused" {
-    # Measured live 2026-10-23: the purge restarted the gateway and probed health ONCE with
-    # the CLI's 10 s default; the restart took 38.1 s to log `http server listening`, so the
-    # purge refused a healthy-but-starting gateway — after step 2 had cleared the dirs.  A
-    # port claim is not a serving claim, and one sample is not a wait: the delete must run
-    # as soon as RPC answers, with the wait visible while it happens.
-    export __TAC_OPENCLAW_OK=1
-    export OC_PURGE_WAIT_S=0
-    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
-    mkdir -p "$OC_AGENTS/alpha/sessions"
-    __oc_safe_gateway_shutdown() { return 0; }
-    __oc_gateway_gone() { return 0; }
-    __so_start_gateway() { return 0; }      # the PORT claim succeeds before RPC answers
+    # Measured live 2026-10-23: a restart took 38.1 s to log `http server listening`, while
+    # one probe with the CLI's 10 s default refused a healthy-but-starting gateway.  One
+    # sample is not a wait: the serving witness must poll until `ok:true`, say that it is
+    # waiting, and succeed on the ANSWER rather than on the first attempt.
     export OC_PURGE_HEALTH_S=30
     export OC_PURGE_HEALTH_STEP_S=1
     export OC_PURGE_PROGRESS_S=1
@@ -1252,19 +1176,14 @@ case "$1 ${2:-}" in
         if (( n < 3 )); then printf '%s\n' '{"ok":false,"error":{"message":"gateway timeout after 10000ms"}}'
         else printf '%s\n' '{"ok":true}'; fi
         exit 0 ;;
-    "sessions --all-agents")
-        if [[ -f "$TAC_TEST_TMPDIR/delete-asked" ]]; then printf '%s\n' '{"count":0,"sessions":[]}'
-        else printf '%s\n' '{"count":1,"sessions":[{"key":"agent:alpha:scratch"}]}'; fi ;;
-    "sessions delete") : > "$TAC_TEST_TMPDIR/delete-asked"; printf '%s\n' '{"ok":true}' ;;
 esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
-    run oc-purge
+    run __oc_purge_wait_rpc
 
     [ "$status" -eq 0 ] || { echo "a gateway that answers late must not be refused"; return 1; }
-    [ -e "$TAC_TEST_TMPDIR/delete-asked" ] || { echo "the delete must run once RPC answers"; return 1; }
     [ "$(cat "$TAC_TEST_TMPDIR/health-calls")" -ge 3 ] \
         || { echo "health must be polled, not sampled once"; return 1; }
     [[ "$output" == *"not answering RPC yet"* ]] \

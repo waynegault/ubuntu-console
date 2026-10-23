@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 33
+#   v33 (2026-10-23): `oc purge` NEVER stops or restarts the gateway.  Its sessions/ holds
+#   only the archives `sessions delete` wrote, each named by an `archive_name` row, so the
+#   blanket clear ORPHANED those rows — measured: hal/finn/juno each held one file matching
+#   one row, while `del` held zero files and one row.  The stop/start is gone (the delete
+#   and the reset run over RPC), a SERVING gateway is required before anything is deleted
+#   and started only when it does not answer, and the clear is an ORPHAN-ONLY prune that
+#   keeps cold/ and keeps any file whose store cannot be read.
 # Module Version: 32
 #   v32 (2026-10-23): the purge WAITS for the restarted gateway to answer RPC instead of
 #   sampling it once.  Measured live: a restart took 38.1 s to log `http server listening`,
@@ -407,10 +415,16 @@ function ocstop() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-purge — Reset every agent: delete every stored non-main, non-cron session, clear the
-# session directories, reset the configured main to empty, repair any tombstoned main, and
-# leave the gateway serving.  Agent mains and cron sessions are KEPT and reported.
+# oc-purge — Reset every agent: delete every stored non-main, non-cron session, reset the
+# configured main to empty, repair any tombstoned main, prune the session files no store
+# row names, and read the roster back.  Agent mains and cron sessions are KEPT and
+# reported.
 # Usage: oc purge [--dry-run]
+#
+# NEVER STOPS OR RESTARTS THE GATEWAY.  The store delete and the main reset run over RPC,
+# so a SERVING gateway is the precondition: it is started only when it does not already
+# answer, and a gateway that answers is left alone.  The outage the old version took
+# bought nothing — its only purpose was clearing sessions/, and that clear was the defect.
 #
 # WHY THIS IS NOT "DELETE FILES" (measured 2026-10-18).  The gateway's sessions live in
 # each agent's agent/openclaw-agent.sqlite, not in sessions/: the roster read 47 sessions
@@ -423,213 +437,31 @@ function ocstop() {
 # through the CLI's own `sessions delete`, which removes the store rows and their live
 # artifacts, and the roster is read back afterwards.
 #
-# ORDER, and why.  The stop comes FIRST and a stop that does not land is a REFUSAL with
-# nothing deleted (the property the original command had): everything after it deletes
-# state.  The delete itself must run while the gateway serves, so the unit is started
-# again after the directories are cleared, and the command ends on that serving gateway.
-# A start the state-DB guard refuses is named by __so_start_gateway (09a v31), never
-# retried here.
+# WHAT sessions/ HOLDS (measured 2026-10-23).  Only `<uuid>.jsonl.deleted.<ts>.<hash>.zst`
+# archives written by `sessions delete`; the live transcripts are `transcript_events` in
+# the store.  Each file is named by an `archive_name` row in `session_transcript_archives`
+# (and, for cold archives, `session_transcript_cold_archives`), so a blanket
+# `rm -rf sessions/` ORPHANS those rows — measured: hal, finn and juno each held one file
+# matching one row, while `del` held zero files and one row.  The prune is ORPHAN-ONLY: a
+# file goes only when neither table names it, `cold/` is never walked, and a file whose
+# store cannot be read is KEPT.
+#
+# ORDER: ensure serving -> delete store rows -> reset main -> repair tombstone -> prune
+# orphans -> read the roster back.  Nothing here stops the gateway, so a gateway that is
+# not serving is STARTED, never restarted, and a refusal names that nothing was deleted.
 # ---------------------------------------------------------------------------
-# __oc_purge_stop_replace — cancel a restart that would undo the stop.  Its own helper so
-# the wait's behaviour is testable without depending on a PATH binary for `systemctl`.
-function __oc_purge_stop_replace() {
-    local _out=""
-    # --no-block, and NO --job-mode: measured 2026-10-23, `stop --job-mode=replace` BLOCKED
-    # for 30 s behind the pending auto-restart (rc=124) and left the unit unchanged
-    # (Job=59078 before and after).  Queuing the stop and re-asserting it each poll is what
-    # actually cancels the restart; blocking here is what looked like a freeze.
-    if ! _out=$(timeout 10 systemctl --user stop --no-block openclaw-gateway.service 2>&1)
-    then
-        __oc_purge_stderr "${_out:-stop --no-block failed with no output}"
-        return 1
-    fi
-    return 0
-}
-
-# __oc_purge_force_kill — the graceful shutdown has overrun its budget; end it and hold the
-# unit down, rather than fighting a Restart=always loop until the wait expires.
-function __oc_purge_force_kill() {
-    local _out=""
-    if ! _out=$(timeout 10 systemctl --user kill -s SIGKILL openclaw-gateway.service 2>&1)
-    then
-        __oc_purge_stderr "${_out:-kill -s SIGKILL failed with no output}"
-    fi
-    __oc_purge_stop_replace
-}
-
-# __oc_purge_journal — the shutdown evidence the pre-flight reads, oldest first.
-#
-# A seam of its own because the USER JOURNAL on this box carries the live gateway's real
-# hung stops: a case that read it would pass in CI (no user journal) and fail here.  The
-# window is bounded only to keep the scan finite; journald's own retention is shorter
-# (~2.5 h measured), so this never claims a window and no message quotes one.
-function __oc_purge_journal() {
-    local _since="${1:-}"
-    if [[ -n "$_since" ]]
-    then
-        # swallow-ok: an unreadable journal is no evidence of a hang, never a verdict
-        journalctl --user -u openclaw-gateway.service --since "@${_since}" \
-            --no-pager -o cat 2>/dev/null
-        return
-    fi
-    # swallow-ok: the same read, bounded; the caller treats failure as no evidence
-    journalctl --user -u openclaw-gateway.service --since "-6h" --no-pager -o cat 2>/dev/null
-}
-
-# __oc_purge_shutdown_hangs — 0 when the unit's MOST RECENT shutdown reached its deadline.
-#
-# Measured 2026-10-23, four stops in one day: each settled its work drain in <=20 s, then
-# sat in `shutdown.gateway-close` with close steps still pending until TimeoutStopUSec
-# (5min 30s) expired and systemd SIGKILLed it.  The state DB's owner record then still
-# named a live pid (a `MainThread` survived the kill), so the next start was refused as
-# "undergoing offline maintenance" until that owner exited — measured 12:33 refused,
-# 12:42 accepted.  `oc purge` clears the session dirs BEFORE it starts the gateway, so a
-# stop like that leaves it DOWN with state already deleted.  The refusal therefore belongs
-# before the stop: evidence, not prediction.  A completed shutdown has no deadline line
-# after its drain line, and an unreadable journal is not evidence of a hang.
-function __oc_purge_shutdown_hangs() {
-    [[ "${OC_PURGE_IGNORE_HUNG_SHUTDOWN:-0}" == "1" ]] && return 1
-    local _log=""
-    _log=$(__oc_purge_journal) || return 1
-    [[ -n "$_log" ]] || return 1
-    printf '%s\n' "$_log" | awk '
-        /active-work drain settled|received SIGTERM; shutting down/ { drain = 1; hung = 0; next }
-        /shutdown deadline reached/ { if (drain) hung = 1; next }
-        END { exit(hung ? 0 : 1) }
-    '
-}
-
-# __oc_purge_stop_was_killed — 0 when THIS run's stop reached its deadline (was killed).
-# The same evidence as the pre-flight, scoped to the stop the purge just asked for, so a
-# failure after it can name the cause instead of guessing at one.
-function __oc_purge_stop_was_killed() {
-    __oc_purge_journal "${1:-0}" | grep -qF 'shutdown deadline reached'
-}
-
-# __oc_purge_timespan_s — systemd's timespan spelling ("5min 30s") as whole seconds.
-# Returns 1 on anything it cannot read, so a caller never invents a duration.
-function __oc_purge_timespan_s() {
-    printf '%s\n' "${1:-}" | awk '
-        NF == 0 { exit 1 }
-        {
-            total = 0
-            for (i = 1; i <= NF; i++) {
-                token = $i
-                if (token == "infinity") { print 0; exit 0 }
-                if (token !~ /^[0-9]+(\.[0-9]+)?(us|ms|s|min|h|d|w)?$/) { exit 1 }
-                value = token + 0
-                unit = token
-                sub(/^[0-9]+(\.[0-9]+)?/, "", unit)
-                if (unit == "us") value = value / 1000000
-                else if (unit == "ms") value = value / 1000
-                else if (unit == "min") value = value * 60
-                else if (unit == "h") value = value * 3600
-                else if (unit == "d") value = value * 86400
-                else if (unit == "w") value = value * 604800
-                total += value
-            }
-            printf "%d\n", total
-        }
-    '
-}
-
-# __oc_purge_kill_after — when to end a shutdown the unit itself was granted longer for.
-#
-# The shipped default was a flat 120 s, which fires 210 s INSIDE this unit's own
-# TimeoutStopUSec (5min 30s): a drain doing real work is allowed that whole budget, so a
-# fixed 120 s can kill a shutdown that would have finished — the opposite of what the
-# escalation was for.  The default is therefore the unit's own budget plus 10 s, so it can
-# only fire after systemd's deadline; OC_PURGE_KILL_AFTER_S still overrides it and 0
-# disables the escalation.
-function __oc_purge_kill_after() {
-    if [[ -n "${OC_PURGE_KILL_AFTER_S:-}" ]]
-    then
-        printf '%s\n' "$OC_PURGE_KILL_AFTER_S"
-        return 0
-    fi
-    local _raw="" _secs=0
-    # swallow-ok: a budget that cannot be read cannot justify a kill; 0 disables it
-    _raw=$(systemctl --user show -p TimeoutStopUSec --value openclaw-gateway.service 2>/dev/null)
-    [[ -n "$_raw" ]] || { printf '0\n'; return 0; }
-    _secs=$(__oc_purge_timespan_s "$_raw") || _secs=0
-    if (( _secs > 0 ))
-    then
-        printf '%s\n' "$(( _secs + 10 ))"
-    else
-        printf '0\n'
-    fi
-}
-
-# __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
-# Bounded on purpose: `oc purge` is destructive, so a gateway that will not stop is a
-# refusal, not a licence to delete under it.  The bound must cover the unit's OWN stop
-# budget, TimeoutStopUSec=5min 30s (measured 2026-10-23), plus a margin: the old 120 s
-# refused a purge whose drain was still running normally (queueSize=6 agentRuns=3) while
-# systemd would have allowed it 330 s.  OC_PURGE_WAIT_S keeps a test from sleeping.
-function __oc_purge_wait_gone() {
-    local _bound="${OC_PURGE_WAIT_S:-360}" _waited=0 _state="" _job=""
-    local _progress="${OC_PURGE_PROGRESS_S:-15}"
-    local _kill_after=""
-    _kill_after=$(__oc_purge_kill_after)
-    while (( _waited < _bound ))
-    do
-        __oc_gateway_gone && return 0
-        # Restart=always fires when systemd SIGKILLs a unit that overran TimeoutStopUSec,
-        # so a stop that HAS landed can be undone while we wait.  Replace a queued
-        # start/restart instead of waiting behind it (measured 2026-10-23: the old loop
-        # only observed, so the restart always won and the purge always refused).
-        # swallow-ok: an unreadable state cannot prove a restart; the gone witness above decides
-        _state=$(systemctl --user show -p ActiveState --value openclaw-gateway.service 2>/dev/null | tr -d ' \n')
-        # swallow-ok: an unreadable job list cannot prove a queued start; the gone witness above decides
-        _job=$(systemctl --user list-jobs --no-legend --plain openclaw-gateway.service 2>/dev/null \
-            | awk 'NR==1 {print $3}')
-        if [[ "$_state" == "activating" || "$_job" == "start" || "$_job" == "restart" ]]
-        then
-            # Throttled: measured 2026-10-23, an unthrottled version printed this line
-            # every second while a restart loop ran, burying the progress rows.
-            if (( _progress > 0 && _waited % _progress == 0 ))
-            then
-                __tac_info "Gateway" "[restart queued while stopping — replaced with a stop]" "$C_Warning"
-            fi
-            if ! __oc_purge_stop_replace
-            then
-                : # the helper already printed systemctl's own reason
-            fi
-        fi
-        # A shutdown that overruns even the budget the unit was granted is ended, so the
-        # wait cannot be fought to its own expiry.  The bound comes from the unit's own
-        # TimeoutStopUSec (+10 s), never a fixed number: a kill inside that budget would end
-        # a drain the unit was explicitly allowed to finish.  A kill leaves the state DB in
-        # offline maintenance (measured 2026-10-23), which the start path then names.
-        if (( _kill_after > 0 && _waited == _kill_after )) \
-            && [[ "$_state" != "inactive" && "$_state" != "failed" ]]
-        then
-            __tac_info "Gateway" "[shutdown overran ${_kill_after}s — killing and holding it down]" "$C_Warning"
-            __oc_purge_force_kill
-        fi
-        sleep 1
-        _waited=$(( _waited + 1 ))
-        # Silence is indistinguishable from a hang (measured 2026-10-23: a 6-minute wait
-        # looked "frozen").  Name the state and the time left, not just the failure.
-        if (( _progress > 0 && _waited % _progress == 0 && _waited < _bound ))
-        then
-            __tac_info "Gateway" "[${_state:-unknown}${_job:+, job $_job} — $(( _bound - _waited ))s left]" "$C_Dim"
-        fi
-    done
-    __oc_gateway_gone
-}
-
 # __oc_purge_wait_rpc — 0 once the gateway answers `health` with ok:true, 1 at the bound.
 #
 # A PORT IS NOT A SERVER (measured 2026-10-23) and ONE SAMPLE IS NOT A WAIT (measured the
-# same day): the purge restarts the gateway, and a restart took 38.1 s to log `http server
-# listening` while step 4b probed once with the CLI's own 10 s default and refused a
-# gateway that was still starting — after the session dirs had already been cleared.  So
+# same day): a restart took 38.1 s to log `http server listening` while the old step probed
+# once with the CLI's own 10 s default and refused a gateway that was still starting.  So
 # this waits, bounded by OC_PURGE_HEALTH_S (default 300 s), polling every
 # OC_PURGE_HEALTH_STEP_S (default 5 s), and prints its state and the time left on the same
-# cadence as the stop wait.  On exhaustion it surfaces the LAST probe, not a summary.
+# cadence.  [$1] overrides the bound (a short probe asks "is it serving NOW?") and [$2] = 1
+# silences the final probe dump, for a caller that only needs the yes/no.
 function __oc_purge_wait_rpc() {
-    local _bound="${OC_PURGE_HEALTH_S:-300}" _step="${OC_PURGE_HEALTH_STEP_S:-5}"
+    local _bound="${1:-${OC_PURGE_HEALTH_S:-300}}" _quiet="${2:-0}"
+    local _step="${OC_PURGE_HEALTH_STEP_S:-5}"
     local _progress="${OC_PURGE_PROGRESS_S:-15}"
     local _unit="openclaw-gateway.service"
     local _waited=0 _probe="" _state=""
@@ -651,8 +483,20 @@ function __oc_purge_wait_rpc() {
                 "[up, not answering RPC yet — ${_state:-unknown}, $(( _bound - _waited ))s left]" "$C_Dim"
         fi
     done
-    __oc_purge_stderr "$_probe"
+    (( _quiet )) || __oc_purge_stderr "$_probe"
     return 1
+}
+
+# __oc_purge_ensure_serving — 0 once the gateway is SERVING; START it only when it is not.
+#
+# The store delete and the reset run over RPC, so a serving gateway is the precondition.
+# A gateway that already answers is never touched: no stop, no restart.  The short probe
+# asks "is it serving now?" without spending the full cold-start budget on it.
+function __oc_purge_ensure_serving() {
+    __oc_purge_wait_rpc "${OC_PURGE_PROBE_S:-5}" 1 && return 0
+    __tac_info "Gateway" "[STARTING - the store delete runs over RPC]" "$C_Warning"
+    __so_start_gateway "openclaw-gateway.service" || return 1
+    __oc_purge_wait_rpc
 }
 
 # __oc_purge_session_keys — every session key the stores hold, one per line.
@@ -736,6 +580,46 @@ function __oc_purge_store_read() {
     local _sql="$2"
     [[ -f "$_db" ]] || return 1
     timeout -k 10 30 sqlite3 "file:$_db?mode=ro" "$_sql"
+}
+
+# __oc_purge_prune_orphans — delete only the session files NO store row names.
+#
+# sessions/ holds `<uuid>.jsonl.deleted.<ts>.<hash>.zst` archives, and each one is named by
+# an `archive_name` row in the same agent's store (`session_transcript_archives`, or
+# `session_transcript_cold_archives` for cold/).  A blanket clear ORPHANS those rows
+# (measured 2026-10-23: `del` held zero files and one row), so a file goes only when
+# neither table names it.  `cold/` is never walked — its rows are the reason the directory
+# is kept — and a file whose store cannot be READ is kept too: "could not tell" is not
+# "unreferenced".  Prints the number pruned.
+function __oc_purge_prune_orphans() {
+    local _db _dir _file _base _named _cold _cold_sql
+    local _pruned=0
+    for _db in "$OC_AGENTS"/*/agent/openclaw-agent.sqlite
+    do
+        [[ -f "$_db" ]] || continue
+        _dir="$(dirname "$(dirname "$_db")")/sessions"
+        [[ -d "$_dir" ]] || continue
+        while IFS= read -r _file
+        do
+            _base=$(basename "$_file")
+            _base=${_base//\'/\'\'}
+            _named=$(__oc_purge_store_read "$_db" \
+                "select archive_name from session_transcript_archives where archive_name='$_base';") \
+                || continue   # an unreadable store keeps the file
+            [[ -z "$_named" ]] || continue
+            _cold_sql="select archive_name from session_transcript_cold_archives where archive_name='$_base';"
+            # swallow-ok: a store without the cold table names no file, so the file is kept
+            _cold=$(__oc_purge_store_read "$_db" "$_cold_sql" 2>/dev/null) || _cold=""
+            [[ -z "$_cold" ]] || continue
+            if rm -f "$_file"
+            then
+                _pruned=$(( _pruned + 1 ))
+            else
+                __oc_purge_stderr "(could not prune $_file)"
+            fi
+        done < <(find "$_dir" -mindepth 1 -maxdepth 1 -type f)
+    done
+    printf '%s\n' "$_pruned"
 }
 
 # __oc_purge_store_has_nodes — 0 when the store carries session_nodes, 2 when it does not
@@ -900,130 +784,33 @@ function oc-purge() {
         for _agent_dir in "$OC_AGENTS"/*/
         do
             [[ -d "${_agent_dir%/}/sessions" ]] \
-                && __tac_info "Session" "[WOULD PURGE] ${_agent_dir%/}/sessions" "$C_Dim"
+                && __tac_info "Session" "[WOULD PRUNE] ${_agent_dir%/}/sessions (files no store row names)" "$C_Dim"
         done
         __tac_info "Purge Complete" "[DRY RUN - nothing deleted, gateway untouched]" "$C_Dim"
         return 0
     fi
 
-    local _purge_count=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0
+    local _pruned=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0
     local _purge_left="" _counts=""
 
-    # 0. BEFORE anything is stopped: the decision to stop belongs before the outage, not
-    #    after it.  A gateway whose own last shutdown never completed cannot be stopped
-    #    cleanly here — systemd will SIGKILL it, the state DB stays in offline maintenance
-    #    and the start below is refused — and step 2 clears the session dirs BEFORE that
-    #    start, so a stop like that would leave the gateway DOWN with state already gone.
-    if __oc_purge_shutdown_hangs
+    # 1. A SERVING gateway is the precondition, not a stop.  The delete and the reset run
+    #    over RPC, so the gateway is STARTED only when it does not already answer: a
+    #    serving gateway is never stopped or restarted, and nothing below deletes state
+    #    under one that is down.
+    if ! __oc_purge_ensure_serving
     then
-        __tac_info "Purge" "[REFUSED - the gateway's last shutdown did not complete]" "$C_Error"
-        printf '%s\n' "  ${C_Dim}Its close steps were still pending when the unit's own${C_Reset}"
-        printf '%s\n' "  ${C_Dim}TimeoutStopUSec ran out, so systemd SIGKILLed it and the state DB${C_Reset}"
-        printf '%s\n' "  ${C_Dim}stayed in offline maintenance until its owner exited. Rolling that${C_Reset}"
-        printf '%s\n' "  ${C_Dim}dice again would leave the gateway DOWN with the dirs cleared.${C_Reset}"
-        printf '%s\n' "  ${C_Dim}Nothing was stopped and nothing was deleted.${C_Reset}"
-        printf '%s\n' "  ${C_Dim}Override once the cause is fixed:${C_Reset}"
-        printf '%s\n' "  ${C_Dim}OC_PURGE_IGNORE_HUNG_SHUTDOWN=1 oc purge${C_Reset}"
+        __tac_info "Purge" "[REFUSED - the gateway is not serving; nothing was deleted]" "$C_Error"
+        printf '%s\n' "  ${C_Dim}The gateway was stopped and nothing was deleted. Check 'so' and 'le'.${C_Reset}"
         return 1
     fi
 
-    # 1. Stop the gateway with DB-safe sequencing, then WAIT for it to be gone.  A stop
-    #    that does not land is a refusal: everything below deletes state.
-    local _stop_since
-    _stop_since=$(date +%s)
-    __tac_info "Gateway" "[STOPPING]" "$C_Warning"
-    __oc_safe_gateway_shutdown
-    if ! __oc_purge_wait_gone
-    then
-        __tac_info "Purge" "[REFUSED - the gateway is still up; nothing was deleted]" "$C_Error"
-        printf '%s\n' "  ${C_Dim}Waited ${OC_PURGE_WAIT_S:-360}s for it to stop. Watch it with 'le',${C_Reset}"
-        printf '%s\n' "  ${C_Dim}then re-run 'oc purge'. Deleting under a live gateway is the${C_Reset}"
-        printf '%s\n' "  ${C_Dim}failure this wait exists to prevent.${C_Reset}"
-        return 1
-    fi
-
-    # 2. Clear all agent session directories
-    if [[ -d "$OC_AGENTS" ]]
-    then
-        for _agent_dir in "$OC_AGENTS"/*/
-        do
-            if [[ -d "$_agent_dir" ]]
-            then
-                local _session_dir="${_agent_dir%/}/sessions"
-                if [[ -d "$_session_dir" ]]
-                then
-                    # Keep cold/ : the store holds a session_transcript_cold_archives row
-                    # per file, so removing the FILE while the row survives is exactly the
-                    # orphan that breaks the usage-cost refresh (measured 2026-10-18: 110
-                    # rows pointing at absent files).  The rows are deleted through the
-                    # CLI; the files they name must outlive this pass.  With no cold/ there
-                    # is nothing to preserve, so the directory itself goes.
-                    local _kept=""
-                    if [[ -d "$_session_dir/cold" ]]
-                    then
-                        _kept=" (cold/ kept)"
-                        find "$_session_dir" -mindepth 1 -maxdepth 1 ! -name cold \
-                            -exec rm -rf {} + || _failed=$(( _failed + 1 ))
-                    else
-                        rm -rf "$_session_dir" || _failed=$(( _failed + 1 ))
-                    fi
-                    if (( _failed == 0 ))
-                    then
-                        _purge_count=$(( _purge_count + 1 ))
-                        __tac_info "Session" "[PURGED] $_session_dir${_kept}" "$C_Dim"
-                    else
-                        # A delete that did not land is NOT a purge: reported, and not
-                        # counted, so the summary cannot claim a directory that is there.
-                        __tac_info "Session" "[FAILED to purge] $_session_dir" "$C_Error"
-                    fi
-                fi
-            fi
-        done
-    fi
-
-    # 3. Clear session state caches
+    # 2. Clear session state caches
     rm -f "$TAC_CACHE_DIR/oc_sessions.json" 2>/dev/null
     rm -f "$TAC_CACHE_DIR/oc_agents.json" 2>/dev/null
     rm -f "$TAC_CACHE_DIR/oc_agent_use.txt" 2>/dev/null
     rm -f "$TAC_CACHE_DIR/oc_agent_stats.tsv" 2>/dev/null
 
-    # 4. Start the gateway: `sessions delete` runs through it, and the command must end
-    #    on a serving gateway (the reset is not a stop).
-    if ! __so_start_gateway "openclaw-gateway.service"
-    then
-        if __oc_purge_stop_was_killed "$_stop_since"
-        then
-            # Measured 2026-10-23: a killed shutdown leaves the state DB's owner record
-            # naming a live pid, so the start is refused "undergoing offline maintenance"
-            # until that owner exits.  Name that, the partial state, and what to do —
-            # "still up" and "did not start" both read as our own fault and neither says
-            # the gateway is DOWN.
-            __tac_info "Purge" "[REFUSED - shutdown was killed; state DB in offline maintenance]" "$C_Error"
-            printf '%s\n' "  ${C_Dim}Its close steps never finished, so systemd SIGKILLed it and the${C_Reset}"
-            printf '%s\n' "  ${C_Dim}state's owner record still names a live process. The gateway is DOWN;${C_Reset}"
-            printf '%s\n' "  ${C_Dim}the session dirs are cleared and the store rows remain.${C_Reset}"
-            printf '%s\n' "  ${C_Dim}Re-run 'so' once that owner exits — a start before then is refused.${C_Reset}"
-        else
-            __tac_info "Purge" "[sessions dirs cleared; the gateway did NOT start - store rows remain]" "$C_Error"
-        fi
-        return 1
-    fi
-
-    # 4b. A PORT IS NOT A SERVER, and ONE SAMPLE IS NOT A WAIT.  `__so_start_gateway`
-    #     claims ONLINE from the listener; the delete runs over RPC.  Measured 2026-10-23:
-    #     every openclaw call timed out at 30 s after an ONLINE claim.  The mirror error was
-    #     measured the same day: a restart took 38.1 s to log `http server listening` while
-    #     this step probed once with the CLI's 10 s default, so a healthy-but-starting
-    #     gateway was refused after the dirs had already been cleared.  Wait, bounded.
-    if ! __oc_purge_wait_rpc
-    then
-        __tac_info "Purge" "[gateway has not answered RPC in ${OC_PURGE_HEALTH_S:-300}s - store rows remain]" "$C_Error"
-        printf '%s\n' "  ${C_Dim}The session dirs are already cleared; the gateway is still starting.${C_Reset}"
-        printf '%s\n' "  ${C_Dim}Wait for it with 'so', then re-run 'oc purge' to reset the store.${C_Reset}"
-        return 1
-    fi
-
-    # 5. Delete every stored session EXCEPT each agent's main and cron sessions.  The CLI
+    # 3. Delete every stored session EXCEPT each agent's main and cron sessions.  The CLI
     #    refuses to delete a main ("Cannot delete the main session", measured 2026-10-18),
     #    and one refused key fails the whole batch; cron is automation state this command
     #    keeps (owner's call 2026-10-23), so neither may reach the batch.
@@ -1044,7 +831,7 @@ function oc-purge() {
         fi
     fi
 
-    # 5b. Reset the configured main so it comes back EMPTY.  `sessions delete` refuses a
+    # 3b. Reset the configured main so it comes back EMPTY.  `sessions delete` refuses a
     #     main, so the supported path is patch (only when archived) then reset, each bounded
     #     by the store's current session id.  Read back from the store, never the RPC's ok.
     local _reset_main="${OC_PURGE_RESET_MAIN-hal}" _reset_key="" _tb_key="" _tb_recovered=""
@@ -1063,7 +850,7 @@ function oc-purge() {
         esac
     fi
 
-    # 5c. Repair a main whose recovery tombstone names a successor the store no longer
+    # 3c. Repair a main whose recovery tombstone names a successor the store no longer
     #     holds.  The delete above can create exactly that row, because a rollover
     #     successor is an ordinary non-main key.
     while IFS=$'\t' read -r _tb_key _tb_recovered
@@ -1080,7 +867,21 @@ function oc-purge() {
         esac
     done < <(__oc_purge_broken_tombstones)
 
-    # 6. Read the NON-MAIN roster back, excluding the cron rows kept above: counting either
+    # 4. Prune ONLY the session files no store row names.  sessions/ holds the deleted
+    #    transcripts themselves, each named by an archive_name row, so the old blanket
+    #    clear orphaned rows (measured 2026-10-23: `del` had one row and no file).  A
+    #    file is removed only when neither archive table names it; cold/ is never walked;
+    #    a file whose store cannot be read is kept.
+    if ! _pruned=$(__oc_purge_prune_orphans)
+    then
+        _failed=$(( _failed + 1 ))
+        __tac_info "Sessions" "[FAILED to prune orphan session files]" "$C_Error"
+    elif (( _pruned > 0 ))
+    then
+        __tac_info "Sessions" "[$_pruned orphan session file(s) pruned]" "$C_Dim"
+    fi
+
+    # 5. Read the NON-MAIN roster back, excluding the cron rows kept above: counting either
     #    class would turn every correct purge into a failure.  "Purge complete" is a claim
     #    about the store, so it is made from a fresh read, never from the delete's rc.
     if ! _purge_left=$(timeout -k 10 60 openclaw sessions --all-agents --json \
@@ -1106,17 +907,13 @@ function oc-purge() {
     fi
     if (( _failed > 0 ))
     then
-        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, $_failed FAILED]" "$C_Error"
+        __tac_info "Purge Complete" "[store reset, $_pruned orphan(s) pruned, $_failed FAILED]" "$C_Error"
         # A summary that says FAILED must not exit 0.  Measured live 2026-10-19: the run
         # printed "2 FAILED" and returned 0, so a caller (and the background task's
         # rc=0) read it as success — the exit code is what a caller actually sees.
         return 1
-    elif (( _purge_count > 0 ))
-    then
-        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, store reset${_extra}]" "$C_Success"
-    else
-        __tac_info "Purge Complete" "[No session dirs found, store reset${_extra}]" "$C_Dim"
     fi
+    __tac_info "Purge Complete" "[store reset, $_pruned orphan(s) pruned${_extra}]" "$C_Success"
 }
 
 # ---------------------------------------------------------------------------
