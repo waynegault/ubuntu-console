@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 25
+#   v25 (2026-10-23): the purge's wait now REPLACES a queued restart while it waits.  The
+#   loop used to only observe, so a `Restart=always` start (queued when systemd SIGKILLs a
+#   unit that overran TimeoutStopUSec) always won and the purge always refused.  The
+#   refusal message also names the real bound (it still said 120 after the bound became 360).
 # Module Version: 24
 #   v24 (2026-10-23): purge proves the gateway ANSWERS RPC before touching the store.
 #   Measured live: __so_start_gateway printed ONLINE (port 18789) and every openclaw call
@@ -386,6 +391,12 @@ function ocstop() {
 # A start the state-DB guard refuses is named by __so_start_gateway (09a v31), never
 # retried here.
 # ---------------------------------------------------------------------------
+# __oc_purge_stop_replace — cancel a restart that would undo the stop.  Its own helper so
+# the wait's behaviour is testable without depending on a PATH binary for `systemctl`.
+function __oc_purge_stop_replace() {
+    timeout 30 systemctl --user stop --job-mode=replace openclaw-gateway.service >/dev/null 2>&1
+}
+
 # __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
 # Bounded on purpose: `oc purge` is destructive, so a gateway that will not stop is a
 # refusal, not a licence to delete under it.  The bound must cover the unit's OWN stop
@@ -393,10 +404,25 @@ function ocstop() {
 # refused a purge whose drain was still running normally (queueSize=6 agentRuns=3) while
 # systemd would have allowed it 330 s.  OC_PURGE_WAIT_S keeps a test from sleeping.
 function __oc_purge_wait_gone() {
-    local _bound="${OC_PURGE_WAIT_S:-360}" _waited=0
+    local _bound="${OC_PURGE_WAIT_S:-360}" _waited=0 _state="" _job=""
     while (( _waited < _bound ))
     do
         __oc_gateway_gone && return 0
+        # Restart=always fires when systemd SIGKILLs a unit that overran TimeoutStopUSec,
+        # so a stop that HAS landed can be undone while we wait.  Replace a queued
+        # start/restart instead of waiting behind it (measured 2026-10-23: the old loop
+        # only observed, so the restart always won and the purge always refused).
+        # swallow-ok: an unreadable state cannot prove a restart; the gone witness above decides
+        _state=$(systemctl --user show -p ActiveState --value openclaw-gateway.service 2>/dev/null | tr -d ' \n')
+        # swallow-ok: an unreadable job list cannot prove a queued start; the gone witness above decides
+        _job=$(systemctl --user list-jobs --no-legend --plain openclaw-gateway.service 2>/dev/null \
+            | awk 'NR==1 {print $3}')
+        if [[ "$_state" == "activating" || "$_job" == "start" || "$_job" == "restart" ]]
+        then
+            __tac_info "Gateway" "[restart queued while stopping — replaced with a stop]" "$C_Warning"
+            __oc_purge_stop_replace \
+                || __oc_purge_stderr "stop --job-mode=replace refused while waiting for the gateway to stop"
+        fi
         sleep 1
         _waited=$(( _waited + 1 ))
     done
@@ -664,7 +690,7 @@ function oc-purge() {
     if ! __oc_purge_wait_gone
     then
         __tac_info "Purge" "[REFUSED - the gateway is still up; nothing was deleted]" "$C_Error"
-        printf '%s\n' "  ${C_Dim}Waited ${OC_PURGE_WAIT_S:-120}s for it to stop. Watch it with 'le',${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Waited ${OC_PURGE_WAIT_S:-360}s for it to stop. Watch it with 'le',${C_Reset}"
         printf '%s\n' "  ${C_Dim}then re-run 'oc purge'. Deleting under a live gateway is the${C_Reset}"
         printf '%s\n' "  ${C_Dim}failure this wait exists to prevent.${C_Reset}"
         return 1

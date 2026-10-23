@@ -609,6 +609,28 @@ __so_test_prelude() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"REFUSED - the gateway is still up"* ]]
     [ -f "$OC_AGENTS/alpha/sessions/s.json" ]  # the point: nothing was deleted
+
+    # A restart that lands WHILE waiting must be REPLACED, not waited behind:
+    # Restart=always queues one when systemd SIGKILLs a unit that overran
+    # TimeoutStopUSec, so an observing loop can never win (measured 2026-10-23).
+    # The gone witness stays false here; only the replacement call is under test.
+    # Function stubs, not PATH binaries: the two reads are direct `systemctl` calls, and
+    # the replacement now goes through its own helper so the assertion cannot depend on
+    # how a stub resolves — and must never reach the real `systemctl stop`.
+    systemctl() {
+        case "$*" in
+            *"show -p ActiveState"*) printf 'activating\n' ;;
+            *"list-jobs"*) printf '1 openclaw-gateway.service start waiting\n' ;;
+        esac
+        return 0
+    }
+    __oc_purge_stop_replace() { : > "$TAC_TEST_TMPDIR/replaced"; }
+    export OC_PURGE_WAIT_S=2
+    run oc-purge
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"restart queued while stopping"* ]]
+    [ -e "$TAC_TEST_TMPDIR/replaced" ] \
+        || { echo "a queued restart must be replaced while waiting"; return 1; }
 }
 
 @test "oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs" {
