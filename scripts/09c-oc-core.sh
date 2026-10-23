@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 26
+#   v26 (2026-10-23): the gone-wait prints its state and time left every 15 s.  A live run
+#   sat silent for minutes and read as "frozen"; silence is not progress.  The interval is
+#   a seam (OC_PURGE_PROGRESS_S) so the witness does not sleep.
 # Module Version: 25
 #   v25 (2026-10-23): the purge's wait now REPLACES a queued restart while it waits.  The
 #   loop used to only observe, so a `Restart=always` start (queued when systemd SIGKILLs a
@@ -405,6 +409,7 @@ function __oc_purge_stop_replace() {
 # systemd would have allowed it 330 s.  OC_PURGE_WAIT_S keeps a test from sleeping.
 function __oc_purge_wait_gone() {
     local _bound="${OC_PURGE_WAIT_S:-360}" _waited=0 _state="" _job=""
+    local _progress="${OC_PURGE_PROGRESS_S:-15}"
     while (( _waited < _bound ))
     do
         __oc_gateway_gone && return 0
@@ -425,6 +430,12 @@ function __oc_purge_wait_gone() {
         fi
         sleep 1
         _waited=$(( _waited + 1 ))
+        # Silence is indistinguishable from a hang (measured 2026-10-23: a 6-minute wait
+        # looked "frozen").  Name the state and the time left, not just the failure.
+        if (( _progress > 0 && _waited % _progress == 0 && _waited < _bound ))
+        then
+            __tac_info "Gateway" "[${_state:-unknown}${_job:+, job $_job} — $(( _bound - _waited ))s left]" "$C_Dim"
+        fi
     done
     __oc_gateway_gone
 }

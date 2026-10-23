@@ -631,6 +631,13 @@ __so_test_prelude() {
     [[ "$output" == *"restart queued while stopping"* ]]
     [ -e "$TAC_TEST_TMPDIR/replaced" ] \
         || { echo "a queued restart must be replaced while waiting"; return 1; }
+
+    # Silence read as "frozen" on a live run: the wait must name its state and time left.
+    export OC_PURGE_WAIT_S=3
+    export OC_PURGE_PROGRESS_S=1
+    run oc-purge
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"s left"* ]] || { echo "the wait must report progress"; return 1; }
 }
 
 @test "oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs" {
