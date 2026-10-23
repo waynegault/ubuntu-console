@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 28
+#   v28 (2026-10-23): the restart replacement uses `systemctl stop --no-block`, not
+#   `--job-mode=replace`.  Measured: the latter blocked 30 s (rc=124) behind the pending
+#   auto-restart and changed nothing, so every poll stalled and the purge looked frozen.
+# Module Version: 27
+#   v27 (2026-10-23): the replacement prints systemctl's OWN refusal.  Live, the loop
+#   printed only "refused" every poll, which is undiagnosable; a discarded diagnostic
+#   stream is the defect, so the helper captures it and the caller no longer prints a
+#   second generic line.
 # Module Version: 26
 #   v26 (2026-10-23): the gone-wait prints its state and time left every 15 s.  A live run
 #   sat silent for minutes and read as "frozen"; silence is not progress.  The interval is
@@ -398,7 +407,17 @@ function ocstop() {
 # __oc_purge_stop_replace — cancel a restart that would undo the stop.  Its own helper so
 # the wait's behaviour is testable without depending on a PATH binary for `systemctl`.
 function __oc_purge_stop_replace() {
-    timeout 30 systemctl --user stop --job-mode=replace openclaw-gateway.service >/dev/null 2>&1
+    local _out=""
+    # --no-block, and NO --job-mode: measured 2026-10-23, `stop --job-mode=replace` BLOCKED
+    # for 30 s behind the pending auto-restart (rc=124) and left the unit unchanged
+    # (Job=59078 before and after).  Queuing the stop and re-asserting it each poll is what
+    # actually cancels the restart; blocking here is what looked like a freeze.
+    if ! _out=$(timeout 10 systemctl --user stop --no-block openclaw-gateway.service 2>&1)
+    then
+        __oc_purge_stderr "${_out:-stop --no-block failed with no output}"
+        return 1
+    fi
+    return 0
 }
 
 # __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
@@ -425,8 +444,10 @@ function __oc_purge_wait_gone() {
         if [[ "$_state" == "activating" || "$_job" == "start" || "$_job" == "restart" ]]
         then
             __tac_info "Gateway" "[restart queued while stopping — replaced with a stop]" "$C_Warning"
-            __oc_purge_stop_replace \
-                || __oc_purge_stderr "stop --job-mode=replace refused while waiting for the gateway to stop"
+            if ! __oc_purge_stop_replace
+            then
+                : # the helper already printed systemctl's own reason
+            fi
         fi
         sleep 1
         _waited=$(( _waited + 1 ))
