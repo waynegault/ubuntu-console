@@ -822,6 +822,15 @@ case "\$1 \${2:-}" in
         printf '%s\n' '{"ok":true}' ;;
     "gateway call")
         printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/rpc-argv"
+        # Enforce the RPC's own schema, not a permissive one: measured live 2026-10-23,
+        # sessions.reset rejects {"sessionKey":...} with "must have required property
+        # 'key'".  A double that accepts any shape cannot fail on a wrong param name.
+        if [[ "\${3:-}" == sessions.reset || "\${3:-}" == sessions.patch ]]
+        then
+            jq -e 'has("key") and (has("sessionKey")|not) and has("expectedSessionId")' \
+                <<<"\${5:-}" >/dev/null 2>&1 \
+                || { printf '%s\n' '{"ok":false,"error":{"message":"invalid params"}}'; exit 1; }
+        fi
         sqlite3 "$OC_AGENTS/hal/agent/openclaw-agent.sqlite" \
             "update session_nodes set entry_json='{\"sessionId\":\"sid-2\"}' where session_key='agent:hal:main';"
         printf '%s\n' '{"ok":true}' ;;
@@ -874,6 +883,13 @@ case "\$1 \${2:-}" in
     "sessions --all-agents") printf '%s\n' '{"count":1,"sessions":[{"key":"agent:finn:main"}]}' ;;
     "gateway call")
         printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/rpc-argv"
+        # Same schema check as the cron/reset double: the repair pair must send `key`.
+        if [[ "\${3:-}" == sessions.reset || "\${3:-}" == sessions.patch ]]
+        then
+            jq -e 'has("key") and (has("sessionKey")|not) and has("expectedSessionId")' \
+                <<<"\${5:-}" >/dev/null 2>&1 \
+                || { printf '%s\n' '{"ok":false,"error":{"message":"invalid params"}}'; exit 1; }
+        fi
         case "\${3:-}" in
             sessions.patch|sessions.reset)
                 sqlite3 "$OC_AGENTS/finn/agent/openclaw-agent.sqlite" \
