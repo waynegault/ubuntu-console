@@ -436,8 +436,20 @@ fi
 nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
 pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
 sleep 1
-VRAM_TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+# BOUNDED RETRY (2026-10-24): the run above forces kills and a cache drop, and a
+# single nvidia-smi immediately after a kill can return an EMPTY total while free
+# still answers - measured on the nightly runner, 03:36:59Z, run 40058960951:
+# `cannot read VRAM (total='' free='3965')`, which failed the below-floor selftest
+# case. That reading is transient, not absence: the same box reads both fields a
+# second later. Three attempts, one second apart, keep the fail-closed contract -
+# an unreadable card still refuses - without turning a lost race into a refusal.
+for _vram_attempt in 1 2 3; do
+    VRAM_TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    [[ "$VRAM_TOTAL" =~ ^[0-9]+$ && "$FREE_VRAM" =~ ^[0-9]+$ ]] && break
+    if (( _vram_attempt < 3 )); then sleep 1; fi
+done
+unset _vram_attempt
 # FAIL CLOSED (v85): these used to default to 4096/3965, so an unreadable card produced a
 # 131 MiB "gap" that passed the 800 MiB bound below and every later number — BUDGET,
 # START_CTX, the KV math — derived from a figure the card never reported.  A reading that
