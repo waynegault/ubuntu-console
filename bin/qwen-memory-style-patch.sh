@@ -75,7 +75,12 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-24): the injected rule gains clause (5) — NEVER begin a wrapped line with an
+#   operator — after a memory note wrapped a formula so a continuation line began `+ 0 + …`,
+#   which markdown reads as a list marker (MD004 on prose).  Payload v3 -> v4, and a v3 copy is
+#   upgraded IN PLACE.  ACTIVATION: the extractor prompt is loaded into each daemon, so this is
+#   live only after a window reload — a --check reading "applied" is not evidence it is loaded.
 #   v4 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 #   v2 (2026-10-05, card 59f47689): the rule element extended to the five measured classes
 #   (MD049 + MD032 as before, plus MD041 / MD022 / MD046+MD040), and the patch made
@@ -104,12 +109,12 @@ PYTHON_BIN="$(_tac_python_path "$REPO_ROOT")"
 MARKER="LOCAL PATCH 2026-10-02 (qwen-memory-extractor-style)"
 EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
 # A copy carrying an OLDER payload is recognised by the marker; a CURRENT one by this phrase,
-# which only v3 carries.  The rule text is the patch's PAYLOAD — the marker only records that
+# which only v4 carries.  The rule text is the patch's PAYLOAD — the marker only records that
 # some version of this patch ran here — so the state must be decided by content, never by the
 # marker (card 59f47689: without that, an already-patched copy is skipped by its marker and the
-# new clauses never land).  v3 carries a phrase no earlier payload had, so this separates v3
-# from BOTH v2 and v1, and the python below upgrades in place from either.
-RULE_NEWEST_CLAUSE="The asterisk must NEVER delimit emphasis"
+# new clauses never land).  Each payload carries a phrase no earlier one had, so this separates
+# v4 from v3/v2/v1, and the python below upgrades in place from any of them.
+RULE_NEWEST_CLAUSE="NEVER begin a wrapped line"
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -187,10 +192,13 @@ p = pathlib.Path(os.environ["PATCH_FILE"])
 marker = os.environ["PATCH_MARKER"]
 EXTRACTOR = "You are now acting as the managed memory extraction subagent"
 
-# The v3 rule element, as a JS string literal: one line, in the prompt's own voice (the
+# The v4 rule element, as a JS string literal: one line, in the prompt's own voice (the
 # elements around it begin "- ").  v2 stated the style plainly and was still ignored WITH the
-# payload live and correctly placed (see the v3 note in the header), so v3 is written as a
-# directive that asks for a self-check, and it names the conversion that must NOT happen.
+# payload live and correctly placed (see the v3 note in the header), so v3 was written as a
+# directive that asks for a self-check.  v4 adds clause (5) for a class measured on 2026-10-24:
+# a note's formula was wrapped so a continuation line began `+ 0 + ...`, which markdown reads as
+# a list marker, so the lint fired on prose and the obvious "fix" would have rewritten the
+# arithmetic.  The wrap is the writer's, so the instruction belongs here.
 # ASCII only, like the elements it sits among.
 rule_text = (
     "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
@@ -199,7 +207,9 @@ rule_text = (
     "*like this* to _like this_. STRONG text keeps its asterisks (**bold**); never convert "
     "those to underscores. (2) A blank line before and after every list and heading. (3) The "
     "single H1 repeats the frontmatter name value. (4) Every code block is fenced with a "
-    "language tag, never indented."
+    "language tag, never indented. (5) NEVER begin a wrapped line with +, -, * or #, and never "
+    "begin one with a number followed by a full stop: markdown reads a line-initial marker as a "
+    "list or heading, so keep a formula or a code span on ONE line even when it is long."
 )
 rule_literal = '"' + rule_text + '"'
 
@@ -215,12 +225,24 @@ V2_RULE_TEXT = (
     "language tag, never indented."
 )
 v2_literal = '"' + V2_RULE_TEXT + '"'
+# v3's payload, superseded on 2026-10-24 by clause (5).  Kept so a copy already carrying it is
+# UPGRADED in place rather than skipped: the marker cannot distinguish v3 from v4.
+V3_RULE_TEXT = (
+    "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
+    "lints every note it holds, so: (1) EMPHASIS uses underscores ONLY, _like this_. The "
+    "asterisk must NEVER delimit emphasis -- re-read every span you emit and convert "
+    "*like this* to _like this_. STRONG text keeps its asterisks (**bold**); never convert "
+    "those to underscores. (2) A blank line before and after every list and heading. (3) The "
+    "single H1 repeats the frontmatter name value. (4) Every code block is fenced with a "
+    "language tag, never indented."
+)
+v3_literal = '"' + V3_RULE_TEXT + '"'
 V1_RULE_TEXT = (
     "- Match the store's Markdown style: emphasis with underscores (_like this_), never "
     "asterisks (*like this*), and a blank line before and after every list."
 )
 v1_literal = '"' + V1_RULE_TEXT + '"'
-SUPERSEDED = (v2_literal, v1_literal)
+SUPERSEDED = (v3_literal, v2_literal, v1_literal)
 
 MIN_ANCHOR = '"Memory file format reference:",...MEMORY_FRONTMATTER_EXAMPLE]'
 SPACED_ANCHOR = '"Memory file format reference:",\n  ...MEMORY_FRONTMATTER_EXAMPLE\n]'
@@ -281,7 +303,7 @@ if src.index(marker) > src.index(MIN_ANCHOR if min_hits == 1 else SPACED_ANCHOR)
     raise SystemExit("refusing to patch: the rule landed after the format reference, not before it")
 
 p.write_text(src, encoding="utf-8")
-print("  upgraded extractor-style (superseded payload -> v3)" if upgraded else "  patched  extractor-style")
+print("  upgraded extractor-style (superseded payload -> v4)" if upgraded else "  patched  extractor-style")
 PY
     then
         echo "  MISMATCH $name — an anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
