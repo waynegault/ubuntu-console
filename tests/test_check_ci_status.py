@@ -451,6 +451,74 @@ class TestCachedReplay:
         ]
         assert payload["green"] is False
 
+    def test_a_cached_probe_does_not_replay_a_stale_awaiting_push(
+        self, monkeypatch, tmp_path, capsys
+    ) -> None:
+        # Criterion: card CI-STATUS-CACHE-001 (measured 2026-10-24) — after a successful
+        # push the cached probe still printed "local HEAD … is not the pushed tip …",
+        # while `git rev-list --left-right --count origin/main...HEAD` was `0 0`.  The
+        # payload cannot tell whether the push landed after it was written, so the
+        # conclusion must not be replayed as a current fact.
+        cache = tmp_path / "ci.json"
+        stale_reason = (
+            f"local HEAD {TIP[:12]} is not the pushed tip {OTHER[:12]} — commits "
+            "are awaiting push, so no run for them is expected yet"
+        )
+        cache.write_text(
+            json.dumps(
+                {
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "branch": "main",
+                    "tip_sha": OTHER,
+                    "red": [],
+                    "exempted": [],
+                    "pending": [],
+                    "superseded": [],
+                    "dark": False,
+                    "dark_reason": "",
+                    "newest_push_run_at": NOW.isoformat(),
+                    "local_sha": TIP,
+                    "awaiting_push_reason": stale_reason,
+                }
+            )
+        )
+        monkeypatch.setattr(mod, "CACHE_FILE", cache)
+        assert mod.main([]) == 0
+        out = capsys.readouterr().out
+        assert stale_reason not in out
+        assert "awaiting push   : not re-checked" in out
+
+    def test_a_cached_replay_reports_awaiting_push_as_unverified_in_json(
+        self, monkeypatch, tmp_path, capsys
+    ) -> None:
+        cache = tmp_path / "ci.json"
+        cache.write_text(
+            json.dumps(
+                {
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "branch": "main",
+                    "tip_sha": OTHER,
+                    "red": [],
+                    "exempted": [],
+                    "pending": [],
+                    "superseded": [],
+                    "dark": False,
+                    "dark_reason": "",
+                    "newest_push_run_at": NOW.isoformat(),
+                    "local_sha": TIP,
+                    "awaiting_push_reason": (
+                        f"local HEAD {TIP[:12]} is not the pushed tip {OTHER[:12]}"
+                    ),
+                }
+            )
+        )
+        monkeypatch.setattr(mod, "CACHE_FILE", cache)
+        assert mod.main(["--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["awaiting_push"] is False
+        assert payload["awaiting_push_reason"] == ""
+        assert payload["awaiting_push_unverified"] is True
+
 
 class TestMainMutationProof:
     """The card's acceptance: the gate must be provably red-able by mutation."""

@@ -189,6 +189,11 @@ class Report:
     local_sha: str = ""
     awaiting_push: bool = False
     awaiting_push_reason: str = ""
+    #: A replayed payload carried an awaiting-push conclusion that cannot be
+    #: re-derived from it: the pushed tip stored alongside predates any push that
+    #: landed after the probe, so the pair is not a statement about the checkout
+    #: now.  Reported as unverified instead of replayed.
+    awaiting_push_unverified: bool = False
 
     @property
     def unknown(self) -> bool:
@@ -694,11 +699,21 @@ def _print_report(report: Report) -> None:
         print(f"  DARK            : {report.dark_reason}")
     if report.awaiting_push:
         print(f"  awaiting push   : {report.awaiting_push_reason}")
+    elif report.awaiting_push_unverified:
+        print(
+            "  awaiting push   : not re-checked — the cached probe saw commits ahead of "
+            "the pushed tip; re-run with --cache-ttl 0 to judge them now"
+        )
     if report.unknown:
         print(f"  UNKNOWN         : {report.unknown_reason}")
     if report.green:
         if report.awaiting_push:
             print("  OK              : no unexempted red; local HEAD awaits a push")
+        elif report.awaiting_push_unverified:
+            print(
+                "  OK              : no unexempted red in the cached probe; "
+                "push state not re-checked"
+            )
         else:
             print("  OK              : every workflow has a verdict for the pushed tip")
     elif not report.red and not report.expired_entries and not report.unknown:
@@ -736,6 +751,7 @@ def _to_json(report: Report) -> str:
             "dark_reason": report.dark_reason,
             "awaiting_push": report.awaiting_push,
             "awaiting_push_reason": report.awaiting_push_reason,
+            "awaiting_push_unverified": report.awaiting_push_unverified,
             "unknown": report.unknown,
             "unknown_reason": report.unknown_reason,
             "failing": report.failing,
@@ -797,13 +813,22 @@ def main(argv: list[str] | None = None) -> int:
     cached_payload = _read_cache_payload()
     cached = _read_cache(args.cache_ttl, cached_payload)
     if cached is not None:
-        awaiting_push_reason = cached.get("awaiting_push_reason", "")
+        # Awaiting-push is a claim about NOW — the checkout's HEAD against the PUSHED
+        # tip — and only one half of it is in the payload: the tip is a reading taken
+        # up to a TTL ago.  Replaying the pair stated a stale half as a current
+        # conclusion: measured 2026-10-24 (card CI-STATUS-CACHE-001), after a
+        # successful push the disk cache still printed "local HEAD … is not the
+        # pushed tip" while `git rev-list --left-right --count origin/main...HEAD`
+        # was `0 0`.  Re-deriving it needs the remote tip from GitHub, which is the
+        # call this cache exists to avoid and is unreachable offline, so a replay
+        # makes no awaiting-push claim; it reports the cached reason as UNVERIFIED
+        # instead, which is what the line saw and cannot now confirm.
+        cached_awaiting_push_reason = cached.get("awaiting_push_reason", "")
         report = Report(
             branch=cached.get("branch", args.branch),
             tip_sha=cached.get("tip_sha", ""),
             local_sha=cached.get("local_sha", ""),
-            awaiting_push=bool(awaiting_push_reason),
-            awaiting_push_reason=awaiting_push_reason,
+            awaiting_push_unverified=bool(cached_awaiting_push_reason),
             dark=bool(cached.get("dark")),
             dark_reason=cached.get("dark_reason", ""),
             checked_at=_parse_ts(cached.get("checked_at", "")),
