@@ -10,7 +10,15 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-24): names the WRAPPED-OPERATOR trap in the hand-fix advice.  Measured: a note whose
+#   writer wrapped a formula left a continuation line beginning `+ 0 + 0.2·1.0 = 0.635`, and markdown
+#   (correctly) reads a line-initial `+` as a list marker, so MD004 fired on prose.  The danger is the
+#   generic advice "one list marker style per note": applying it rewrites `+` to `-` and changes the
+#   arithmetic while the note still lints clean.  Auto-fixing the shape was REJECTED on measurement —
+#   the narrow rule (operator-led line after a line whose code span is still open) matches 0 of 964
+#   notes, while the wider rule that would catch it matches 96 legitimate headings and bullets, so any
+#   joiner would corrupt structure.  The advice now says to REFLOW instead.  No lint-behaviour change.
 #   v1 (2026-10-08): the hook FIXES the emphasis class (MD049) itself — by cited position, refusing a
 #   stale report — and re-lints what it touched, instead of prescribing a chore.  The marker is new;
 #   this file carried none, which left it outside tools/check-module-versions.sh entirely.
@@ -280,5 +288,8 @@ echo "position; the classes below have no safe fixer — a bare URL becomes <htt
 echo "emphasis or a code span goes outside it, one list marker style per note (by hand — the fixer"
 echo "gets it wrong), a fenced block names its language, and a note starts with an H1 taken from its"
 echo "frontmatter 'name:'."
+echo "ONE MD004 IS A TRAP FOR THAT LAST RULE: if a line BEGINS with + - or * because the writer wrapped a"
+echo "formula or a code span, that marker is TEXT, not a list marker. REFLOW it onto the previous line —"
+echo "rewriting it to the note's list style changes the arithmetic while the note still lints clean."
 echo "Always re-read every line a fixer touched: a clean exit code is not evidence the text survived."
 exit 0
