@@ -70,3 +70,5 @@
 #    (39169729074 at d44297b5 and 39166891603 at 90fe45ad, every job success), so the fix is in.
 #  Re-entry condition: if the next nightly is red, that is a NEW red and needs its own card —
 #  it is NOT covered here.
+
+workflow=Nightly Full Suite | owner=finn | card=CI-RED-001 | expiry=2026-10-26 | transient VRAM read in the autotune baseline (run 40058960951, cannot read VRAM total='' free=3965) is fixed in 37f08d81; this entry exists only until the next scheduled nightly (2026-10-25T03:37Z) confirms it green, and DELETING it is part of closing CI-RED-001
