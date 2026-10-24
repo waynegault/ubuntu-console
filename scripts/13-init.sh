@@ -2,7 +2,16 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-10-24): the loopback0 check no longer reports an UNREADABLE boot
+#   state as "loopback0 missing".  Measured 2026-10-24: boot 19:02:56, the unit
+#   ran 19:03:43, "Startup finished in 53.181s" at 19:03:49, and the shell started
+#   19:03:06 — so the manager could only have been starting, yet the banner
+#   claimed "missing": the probe had returned nothing usable and the else branch
+#   turned "could not ask" into a measurement.  The probe is now capped at 2 s and
+#   its answer validated; an unknown is classified by PID 1 — systemd present is
+#   the race, WSL's own init (no systemd) keeps the alarm — and the probe's own
+#   words, rc, state and PID 1 are written to the error log.
 #   v18 (2026-10-22): the loopback0 check now tells "not created yet" apart from
 #   "missing".  A shell can start before systemd finishes booting — measured
 #   2026-10-22: boot 22:51:58, tac-loopback0.service finished 22:52:23, and the
@@ -140,20 +149,58 @@ then
     # ordering cannot close the window).
     # `show -p SystemState` prints the same state `is-system-running` does but
     # exits 0, so a non-zero status never reaches errexit (which bats enables).
-    # swallow-ok: systemctl's "not booted with systemd" stderr; an unreadable state still reaches the REAL alarm below
-    if ! _tac_system_state="$(systemctl show -p SystemState --value 2>/dev/null)"
-    then
-        _tac_system_state=""
-    fi
+    #
+    # The probe is BOUNDED and its answer VALIDATED, and "no answer" is never
+    # reported as a measurement.  Measured 2026-10-24: boot 19:02:56, the unit ran
+    # 19:03:43, systemd logged "Startup finished in 53.181s" at 19:03:49, and the
+    # shell started 19:03:06 — so the manager could only be starting/initializing,
+    # i.e. the info line, yet the banner claimed "loopback0 missing".  The only
+    # branch that prints that claim is an unreadable state, so the probe had
+    # returned nothing usable: turning "could not ask" into "it is not there" is a
+    # claim this check never measured.  A manager busy with sysinit can leave the
+    # call unanswered, so it is capped, and any answer that is not a known systemd
+    # state is carried as unknown — the probe's own words are kept for the log.
+    _tac_system_state=""
+    _tac_system_probe=""
+    _tac_system_rc=0
+    _tac_system_probe="$(timeout 2 systemctl show -p SystemState --value 2>&1)" \
+        || _tac_system_rc=$?
+    case "$_tac_system_probe" in
+        initializing|starting|running|degraded|maintenance|stopping)
+            _tac_system_state="$_tac_system_probe" ;;
+        # Anything else (an error message, a timeout, a state systemd stops
+        # printing) is carried as unknown, never coerced into a known state.
+        *) ;; esac
+    # An unknown is classified by PID 1 — the one boot fact readable without the
+    # bus.  systemd as PID 1 means the enabled unit still owes us the interface,
+    # so this is the race; WSL's own init (the truncated-/etc/wsl.conf boot) means
+    # nothing will ever run that unit, so that keeps the alarm.
+    # swallow-ok: ps's own "no such process" stderr; an unreadable PID 1 keeps the alarm
+    _tac_pid1="$(command ps -p 1 -o comm= 2>/dev/null)"
     if [[ "$_tac_system_state" == starting || "$_tac_system_state" == initializing ]]
     then
         printf '%s\n' "${C_Info}[Tactical Profile]${C_Reset}" \
             "loopback0 not created yet — systemd is still booting; it should appear within a few seconds"
+    elif [[ -z "$_tac_system_state" && "$_tac_pid1" == systemd ]]
+    then
+        printf '%s\n' "${C_Info}[Tactical Profile]${C_Reset}" \
+            "loopback0 not created yet — systemd has not answered yet; run 'up' if it does not appear"
     else
         printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
             "loopback0 missing — OpenClaw node-to-node traffic may fail; run 'up' or 'tac-exec __tac_fix_loopback' to create it"
     fi
-    unset _tac_system_state
+    # Keep the probe's own words: the 2026-10-24 occurrence could not be explained
+    # afterwards because stderr was discarded and no rc/state/PID 1 was recorded.
+    # No `2>/dev/null` here: the write is guarded instead, so it cannot fail for a
+    # missing log directory and nothing is being silenced.
+    if [[ -d "${OC_LOGS:-}" ]]
+    then
+        printf '%s [LOOPBACK] absent state=%s rc=%s pid1=%s probe=%s\n' \
+            "$(date +"%Y-%m-%d %H:%M:%S")" "${_tac_system_state:-unreadable}" \
+            "$_tac_system_rc" "${_tac_pid1:-unknown}" "${_tac_system_probe:-empty}" \
+            >>"${ErrorLogPath:-/dev/null}"
+    fi
+    unset _tac_system_state _tac_system_probe _tac_system_rc _tac_pid1
 elif ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
 then
     # Interface exists but the address is missing (e.g. after a network reset)

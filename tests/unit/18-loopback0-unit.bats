@@ -103,13 +103,22 @@ STUB
 #
 #   boot still in progress  -> "not created yet"   (a race; nothing to repair)
 #   boot finished           -> the alarm           (a genuine absence)
-#   state unreadable        -> the alarm           (unknown must never read as fine)
+#   state unreadable, PID 1 systemd -> "not created yet"  (still the race)
+#   state unreadable, no systemd    -> the alarm           (nothing will create it)
 #
-# Each case drives the REAL scripts/13-init.sh with `ip` and `systemctl` stubs on
-# PATH and HOME in the sandbox, so the module's own state dirs are throwaway.
+# The third line is the 2026-10-24 defect: boot 19:02:56, the unit ran 19:03:43,
+# "Startup finished in 53.181s" at 19:03:49, and a shell started 19:03:06 — the
+# manager was starting, yet the banner claimed "missing", because the probe had
+# returned nothing usable and `else` turned "could not ask" into a measurement.
+#
+# Each case drives the REAL scripts/13-init.sh with `ip`, `systemctl` and `ps`
+# stubs on PATH and HOME in the sandbox, so the module's own state dirs are
+# throwaway.
 # ==============================================================================
 
-# _write_stubs — `ip` answers the link question, `systemctl` reports the boot state.
+# _write_stubs — `ip` answers the link question, `systemctl` reports the boot
+# state, `ps` reports PID 1 (13-init reads it only to classify an unreadable
+# state, and the stub is what lets a case pin which init was booted).
 _write_stubs() {
     cat > "$STUB_DIR/ip" <<'STUB'
 #!/usr/bin/env bash
@@ -132,7 +141,11 @@ if [[ -n "${STUB_SYSTEM_STATE:-}" ]]; then
 fi
 exit "${STUB_SYSTEM_EXIT:-0}"
 STUB
-    chmod +x "$STUB_DIR/ip" "$STUB_DIR/systemctl"
+    cat > "$STUB_DIR/ps" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${STUB_PID1_COMM:-systemd}"
+STUB
+    chmod +x "$STUB_DIR/ip" "$STUB_DIR/systemctl" "$STUB_DIR/ps"
 }
 
 # _run_init [NAME=VALUE...] — source the real module in a throwaway environment.
@@ -173,12 +186,37 @@ _run_init() {
     [[ "$output" != *"not created yet"* ]]
 }
 
-@test "13-init loopback0: an unreadable boot state is an ALARM, never 'fine'" {
-    # Catches the silent failure: with no systemd able to answer, "unknown" must
-    # not fold into "still booting" — that is the boot where only the repair works.
-    run _run_init STUB_LINK_PRESENT=0 STUB_SYSTEM_STATE= STUB_SYSTEM_EXIT=1
+@test "13-init loopback0: an unreadable state with NO systemd is an ALARM, never 'fine'" {
+    # Catches the silent failure the 2026-10-22 fix protected: on the truncated
+    # /etc/wsl.conf boot, WSL's own init is PID 1 and nothing will ever run the
+    # unit, so "unknown" must not fold into "still booting".
+    run _run_init STUB_LINK_PRESENT=0 STUB_SYSTEM_STATE= STUB_SYSTEM_EXIT=1 \
+        STUB_PID1_COMM=init
     [ "$status" -eq 0 ]
     [[ "$output" == *"loopback0 missing"* ]]
+}
+
+@test "13-init loopback0: an unreadable state on a systemd box is the RACE, not the alarm" {
+    # The 2026-10-24 defect, measured: boot 19:02:56, the unit ran 19:03:43,
+    # "Startup finished in 53.181s" at 19:03:49, and the shell started 19:03:06 —
+    # systemd was mid-start, the probe answered nothing usable, and the banner
+    # claimed "loopback0 missing".  Catches that: "could not ask" must not be
+    # reported as a measured absence while systemd is the init.
+    run _run_init STUB_LINK_PRESENT=0 STUB_SYSTEM_STATE= STUB_SYSTEM_EXIT=1 \
+        STUB_PID1_COMM=systemd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"loopback0 not created yet"* ]]
+    [[ "$output" != *"loopback0 missing"* ]]
+}
+
+@test "13-init loopback0: an unreadable state is never reported as FINE" {
+    # The first two unreadable-state cases differ only in the verdict, so this one
+    # pins the invariant they share: a state that could not be read still says so —
+    # it must not fall silent (0.1: silence is the one answer that hides a fault).
+    run _run_init STUB_LINK_PRESENT=0 STUB_SYSTEM_STATE= STUB_SYSTEM_EXIT=1 \
+        STUB_PID1_COMM=systemd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"loopback0"* ]]
 }
 
 @test "13-init loopback0: an interface that exists says nothing at all" {
