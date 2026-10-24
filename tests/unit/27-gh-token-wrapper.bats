@@ -135,6 +135,11 @@ run_shim() {
     # this case never touches the session's live systemd.
     printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_dir/systemctl"
     chmod +x "$stub_dir/systemctl"
+    # `sudo -n true` SUCCEEDS on this box (measured 2026-10-24), so without this stub the
+    # installer's privileged block would really copy system units into /etc and enable
+    # them — from a unit test. Stub it to fail, which takes the skip branch.
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$stub_dir/sudo"
+    chmod +x "$stub_dir/sudo"
 
     run env HOME="$home_dir" PATH="$stub_dir:$PATH" bash "$REPO_ROOT/install.sh"
     [ "$status" -eq 0 ]

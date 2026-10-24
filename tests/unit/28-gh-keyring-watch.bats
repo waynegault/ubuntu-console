@@ -157,10 +157,13 @@ PYSTUB
         "$REPO_ROOT/scripts/09c-oc-core.sh"
 }
 
-@test "boot unit: install.sh installs every file in systemd/ (so the unit ships)" {
+@test "boot unit: install.sh links every UNIT in systemd/ (so the unit ships)" {
     # The unit is only present after an install because install.sh links systemd/*;
     # this pins that contract rather than the file list, so a new unit needs no
-    # second edit here.
+    # second edit here. A `*.conf` is NOT a unit — it is a drop-in source, skipped by
+    # this loop and installed at its own declared destinations; that rule is pinned
+    # end-to-end by tests/unit/71-systemd-dropin-install.bats.
     grep -q 'for f in "$REPO"/systemd/\*' "$REPO_ROOT/install.sh"
     grep -q 'link "systemd/\$_bn" "\$HOME/.config/systemd/user/\$_bn"' "$REPO_ROOT/install.sh"
+    grep -qF 'if [[ "$_bn" == *.conf ]]' "$REPO_ROOT/install.sh"
 }

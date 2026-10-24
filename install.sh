@@ -3,6 +3,15 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.12 (2026-10-24, card SYSTEMD-DROPIN-INSTALL-001): a `systemd/*.conf` is a DROP-IN
+#   source, not a unit. The user-unit loop skipped only directories, so every .conf was
+#   linked into ~/.config/systemd/user/ as a non-unit stray that systemd ignored silently —
+#   while the drop-in destination each file documents was never created, leaving a fresh box
+#   with the strays and none of the settings. Each .conf now declares its own destinations on
+#   `# install-dropin: <unit> <name>` lines (`system/<unit>` for the root-owned set); this
+#   installer reads them, links the user ones into <unit>.d/, copies the root-owned ones under
+#   the existing `sudo -n` gate, removes a stray an older install left behind, and WARNS on a
+#   .conf that declares no destination rather than installing nothing.
 # v1.11 (2026-10-08, card c0c6df3d): the VS Code Testing results-logger's two halves are
 #   now delivered from this repo — tools/vscode-pytest-log/vscode-pytest-log-patch.py and
 #   tools/vscode-pytest-log/vscode_pytest_log.py — so the patch bin/qwen-guard-selfheal.sh
@@ -317,12 +326,81 @@ fi
 # `systemd/*` is the USER unit set (symlinked into ~/.config/systemd/user/).
 # The subdirectory `systemd/system` is a separate, root-owned set and is skipped
 # here by the -f test below — do not turn that test into a glob that recurses.
+# A `*.conf` is NOT a unit: it is a drop-in, and it names its own destinations on
+# `# install-dropin:` lines, which the block after this loop installs. Linking one
+# here put a stray in the unit dir that systemd ignored silently (card
+# SYSTEMD-DROPIN-INSTALL-001), so .conf files are skipped rather than linked.
 for f in "$REPO"/systemd/*
 do
     [[ -f "$f" ]] || continue
     _bn="${f##*/}"
+    if [[ "$_bn" == *.conf ]]
+    then
+        continue
+    fi
     link "systemd/$_bn" "$HOME/.config/systemd/user/$_bn"
 done
+
+# ── Drop-in sources (systemd/*.conf) ─────────────────────────────────────────
+# A .conf here is a drop-in for one or more units, and it declares every destination
+# itself on `# install-dropin: <unit> <name>` lines (`system/<unit> <name>` for the
+# root-owned set). Reading the mapping FROM THE FILE keeps it beside the setting it
+# applies: a map inside this installer drifts the moment a .conf is added and the map
+# is not, which is the defect this block closes (card SYSTEMD-DROPIN-INSTALL-001).
+_dropin_user=()
+_dropin_sys=()
+for f in "$REPO"/systemd/*.conf
+do
+    [[ -f "$f" ]] || continue
+    _src="${f##*/}"
+    _declared=0
+    while read -r _target _name _extra
+    do
+        _declared=1
+        if [[ -z "$_target" || -z "$_name" || -n "$_extra" ]]
+        then
+            # Named rather than skipped: the destination a malformed line meant to give
+            # would otherwise be installed nowhere.
+            warn "  WARNING: systemd/$_src has a malformed '# install-dropin:' line — skipped"
+            continue
+        fi
+        if [[ "$_target" == system/* ]]
+        then
+            _dropin_sys+=("${_target#system/}|$_name|$_src")
+        else
+            _dropin_user+=("$_target|$_name|$_src")
+        fi
+    done < <(sed -n 's/^# install-dropin:[[:space:]]*//p' "$f")
+    if (( _declared == 0 ))
+    then
+        # Not silence: a .conf with no declaration would otherwise be installed
+        # nowhere, and the setting it carries would simply be absent from the machine.
+        warn "  WARNING: systemd/$_src declares no '# install-dropin:' line — NOT installed" \
+             "           add one per destination: # install-dropin: <unit> <name>"
+    fi
+done
+
+# An older install linked every systemd/* file here, so a .conf could be sitting in the
+# unit dir as a non-unit symlink that systemd ignores without a word. Remove only the
+# symlinks that point into this repo's systemd/ — anything else here is the operator's.
+for _stray in "$HOME"/.config/systemd/user/*.conf
+do
+    [[ -L "$_stray" ]] || continue
+    _stray_tgt=$(readlink -f "$_stray") || continue
+    if [[ "$_stray_tgt" == "$REPO"/systemd/* ]]
+    then
+        rm -f "$_stray"
+        echo "  removed stray $_stray (a drop-in source, not a unit)"
+    fi
+done
+unset _stray _stray_tgt
+
+for _row in "${_dropin_user[@]}"
+do
+    IFS='|' read -r _unit _name _src <<< "$_row"
+    link "systemd/$_src" "$HOME/.config/systemd/user/$_unit.d/$_name"
+done
+unset _row _unit _name _src
 
 # Legacy UNIT names, as RELATIVE alias symlinks — deliberately not systemd's
 # [Install] Alias=.  Because the unit files are themselves symlinks into this repo,
@@ -438,6 +516,48 @@ else
          "           and: sudo systemctl enable --now ${_sys_units[*]}"
 fi
 unset _sys_units
+
+# ── System drop-ins (/etc/systemd/system/<unit>.service.d) ───────────────────
+# The same declarations, at the root-owned destinations: `system/<unit> <name>`.
+# `sudo -n` only, as above — an unattended install must never hang on a prompt, and
+# with no passwordless sudo the commands are printed instead of silently skipped.
+if (( ${#_dropin_sys[@]} ))
+then
+    if sudo -n true 2>/dev/null
+    then
+        _sysd_changed=0
+        for _row in "${_dropin_sys[@]}"
+        do
+            IFS='|' read -r _unit _name _src <<< "$_row"
+            # The declaration carries the FULL unit name (`….service`), and a drop-in
+            # directory is `<unit>.d` — appending `.service.d` here produced
+            # `….service.service.d`, which systemd would never read.
+            _dest="/etc/systemd/system/$_unit.d/$_name"
+            if cmp -s "$REPO/systemd/$_src" "$_dest" 2>/dev/null
+            then
+                echo "  $_dest - already current (skipped)"
+            else
+                sudo install -Dm644 "$REPO/systemd/$_src" "$_dest"
+                echo "  $_dest - installed"
+                _sysd_changed=1
+            fi
+        done
+        if (( _sysd_changed ))
+        then
+            sudo systemctl daemon-reload
+        fi
+        unset _sysd_changed
+    else
+        warn "  WARNING: passwordless sudo unavailable — system drop-ins NOT installed"
+        for _row in "${_dropin_sys[@]}"
+        do
+            IFS='|' read -r _unit _name _src <<< "$_row"
+            _dest="/etc/systemd/system/$_unit.d/$_name"
+            warn "           run: sudo install -Dm644 $REPO/systemd/$_src $_dest"
+        done
+    fi
+fi
+unset _dropin_sys _dropin_user _row _unit _name _src
 
 # Git hooks — tracked in tools/hooks/ and activated through core.hooksPath, so
 # the hooks are version-controlled and reviewable.  They used to live untracked
