@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 39
+#   v39 (2026-10-24): `__oc_wait_gateway_gone` replaces the single-sample read-back.  Live,
+#   `xo` read the unit as `activating` while its own stop sat queued behind an auto-restart,
+#   printed "the stop did not take" and exited 1, and the unit was `inactive` 30 s later.
+#   The bound is the unit's own TimeoutStopUSec + 30 s, the wait prints its state and the
+#   time left every OC_XO_PROGRESS_S seconds, and a caller with nothing to drain passes a
+#   short settle instead.
 # Module Version: 38
 #   v38 (2026-10-23): `so` prints one row per active fleet lane (`__llm_lane_rows`) instead
 #   of one hardcoded lane standing for "Local LLM"; `xo` names the lanes it deliberately
@@ -1321,6 +1328,52 @@ function __oc_gateway_gone() {
     fi
     __test_port "$OC_PORT" && return 1
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# __oc_wait_gateway_gone — 0 once `__oc_gateway_gone` holds, 1 at the bound.
+#
+# ONE SAMPLE IS NOT A READ-BACK (measured 2026-10-24, 19:05 BST): `xo` read the unit while
+# it was `activating` — its own stop was queued behind an auto-restart job — printed "the
+# stop did not take" and exited 1, and the unit reached `inactive` 30 s later (the journal's
+# `Stopping`/`Stopped` pair).  The stop is queued with `--no-block`, so the only instant at
+# which a single read is honest is "nothing was holding it in the first place".
+# The bound is the unit's OWN TimeoutStopUSec (5min 30s here) plus 30 s of slack, so a drain
+# doing real work is not called a wedge, and every OC_XO_PROGRESS_S seconds the wait prints
+# the state and the time left — a silent wait reads as a hang.
+# [$1] overrides the bound; a caller with nothing to drain asks for a short settle instead.
+# ---------------------------------------------------------------------------
+function __oc_wait_gateway_gone() {
+    local _unit="openclaw-gateway.service"
+    local _bound="${1:-${OC_XO_GONE_S:-}}" _step="${OC_XO_GONE_STEP_S:-2}"
+    local _progress="${OC_XO_PROGRESS_S:-15}"
+    local _waited=0 _budget="" _state=""
+    if [[ -z "$_bound" ]]
+    then
+        _bound=360   # measured default: 330 s budget + 30 s slack
+        _budget=$(systemctl --user show -p TimeoutStopUSec --value "$_unit" | tr -d ' \n')
+        if [[ "$_budget" =~ ^([0-9]+)min([0-9]+)s$ ]]
+        then
+            _bound=$(( BASH_REMATCH[1] * 60 + BASH_REMATCH[2] + 30 ))
+        elif [[ "$_budget" =~ ^([0-9]+)s$ ]]
+        then
+            _bound=$(( BASH_REMATCH[1] + 30 ))
+        fi
+    fi
+    (( _step > 0 )) || _step=1
+    while :
+    do
+        __oc_gateway_gone && return 0
+        (( _waited < _bound )) || return 1
+        sleep "$_step"
+        _waited=$(( _waited + _step ))
+        if (( _progress > 0 && _waited % _progress == 0 && _waited < _bound ))
+        then
+            # An unreadable state is named unknown and does not decide the verdict.
+            _state=$(systemctl --user show -p ActiveState --value "$_unit" | tr -d ' \n')
+            __tac_info "Gateway" "[stopping — ${_state:-unknown}, $(( _bound - _waited ))s left]" "$C_Dim"
+        fi
+    done
 }
 
 # ---------------------------------------------------------------------------

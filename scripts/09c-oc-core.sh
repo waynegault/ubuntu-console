@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 36
+#   v36 (2026-10-24): `xo` WAITS for the stop instead of sampling it once — measured live,
+#   it read the unit as `activating` while its own stop sat queued behind an auto-restart,
+#   printed "the stop did not take" and exited 1, and the unit was `inactive` 30 s later.
+#   `__oc_wait_gateway_gone` (09a) is bounded by the unit's own TimeoutStopUSec and prints
+#   its progress; the [NOT RUNNING] row is now a read-back too, not an echo of the pre-stop
+#   probe (a start job can land between the two).
 # Module Version: 35
 #   v35 (2026-10-24): the purge resets EVERY agent's main, not only the configured one
 #   (owner's call: "both"), and it narrates its three slow phases — enumeration+delete,
@@ -191,17 +198,36 @@ function xo() {
 
     if (( _was_running ))
     then
-        # The stop is claimed only after it is read back: the unit is no longer
-        # active and the port is released (__oc_gateway_gone, 09a).  Without this the
-        # line was a claim about a process nobody had re-checked.
-        if __oc_gateway_gone; then
+        # The stop is claimed only after it is read back — and the read-back is WAITED for,
+        # not sampled once: the stop is queued with --no-block and the unit's own drain
+        # budget is TimeoutStopUSec, so a single early read calls an ordinary stop a failure
+        # (measured 2026-10-24 19:05 BST: "[STILL RUNNING — the stop did not take]" while the
+        # stop sat queued behind an auto-restart; the unit was `inactive` 30 s later and the
+        # next run found nothing running).  __oc_wait_gateway_gone is in 09a.
+        local _settle=""
+        # Nothing was up when xo started, so there is no drain to wait out — only the stop
+        # just signalled needs to settle.  A port held by an UNMANAGED process is never
+        # going to clear, so it must not cost the drain-sized bound.
+        (( _was_running )) || _settle="${OC_XO_SETTLE_S:-30}"
+        if __oc_wait_gateway_gone "$_settle"
+        then
             __tac_info "Gateway Processes" "[TERMINATED]" "$C_Error"
         else
             __tac_info "Gateway Processes" "[STILL RUNNING — the stop did not take]" "$C_Error"
             return 1
         fi
     else
-        __tac_info "Gateway" "[NOT RUNNING]" "$C_Dim"
+        # The [NOT RUNNING] row is a READ-BACK too, not an echo of the probe above: a start
+        # job can land between that probe and the stop (measured 2026-10-24 19:06:57 BST,
+        # openclaw-gateway-guard started the unit a moment after xo's own probe), and the
+        # shutdown then signals it — so what is true afterwards is what must be printed.
+        if __oc_wait_gateway_gone "${OC_XO_SETTLE_S:-30}"
+        then
+            __tac_info "Gateway" "[NOT RUNNING]" "$C_Dim"
+        else
+            __tac_info "Gateway Processes" "[STILL RUNNING — the stop did not take]" "$C_Error"
+            return 1
+        fi
     fi
 }
 

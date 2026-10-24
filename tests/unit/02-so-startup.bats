@@ -432,6 +432,10 @@ __so_test_prelude() {
     # this printed "[TERMINATED]" and exited 0 — a success message with no read-back behind
     # it.  __oc_safe_gateway_shutdown is stubbed so nothing here can touch the live gateway.
     export __TAC_OPENCLAW_OK=1
+    # The read-back WAITS for the stop (measured 2026-10-24: xo read `activating` while its
+    # own stop sat queued behind an auto-restart and called an ordinary stop a failure).  This
+    # half asks about a stop that never takes, so the bound is collapsed to one probe.
+    export OC_XO_GONE_S=0
     systemctl() { return 0; }
     __oc_safe_gateway_shutdown() { return 0; }
     __llm_server_running() { return 1; }
@@ -462,6 +466,45 @@ __so_test_prelude() {
     run xo
     [ "$status" -eq 0 ]
     [[ "$output" == *"TERMINATED"* ]]
+
+    # A stop still IN PROGRESS is WAITED for, then read back as taken.  Measured
+    # 2026-10-24 19:05 BST: the unit was `activating` because xo's own stop sat queued
+    # behind an auto-restart, so the single early sample printed "the stop did not take"
+    # and exited 1 — while the journal shows `Stopped` 35 s later and the next xo found
+    # nothing running.  Two probes answer `deactivating` and the third `inactive`: a
+    # single-sample read cannot pass this, and the progress row proves the wait is not
+    # silent (Wayne's 2026-10-23 rule: a silent wait reads as a hang).
+    export OC_XO_GONE_S=10
+    export OC_XO_GONE_STEP_S=1
+    export OC_XO_PROGRESS_S=1
+    : > "$TAC_TEST_TMPDIR/state-probes"
+    systemctl() {
+        case "$*" in
+            *"show -p ActiveState"*)
+                printf 'x\n' >> "$TAC_TEST_TMPDIR/state-probes"
+                if (( $(wc -l < "$TAC_TEST_TMPDIR/state-probes") >= 3 ))
+                then
+                    printf 'inactive\n'
+                else
+                    printf 'deactivating\n'
+                fi ;;
+            *"list-jobs"*) : ;;       # no job: the stop has completed
+            *is-active*) return 0 ;;   # xo's pre-stop probe: it WAS running
+            *) : ;;                    # nothing else is asked here
+        esac
+        return 0
+    }
+    __oc_safe_gateway_shutdown() { return 0; }
+    __llm_server_running() { return 1; }
+
+    run xo
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"TERMINATED"* ]] \
+        || { echo "a draining stop must be waited for, not called a failure"; return 1; }
+    [[ "$output" == *"s left"* ]] \
+        || { echo "the wait must say it is still going, with the time left"; return 1; }
+    [[ "$(wc -l < "$TAC_TEST_TMPDIR/state-probes")" -ge 3 ]] \
+        || { echo "TERMINATED was claimed before the unit was re-read"; return 1; }
 
     # ...and the witness itself must not read a STOP as a return, nor a drain as gone.
     # Measured 2026-10-23: `oc purge` refused because Job=52372 was 'stop running' while
