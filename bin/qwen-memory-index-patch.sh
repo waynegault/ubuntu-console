@@ -102,7 +102,7 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 6
+# Module Version: 7
 #   v6 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 #   v5 (2026-10-14): recognise CLI 0.25.1, which RENAMED the byte cap `MAX_INDEX_BYTES` ->
 #   `MAX_INDEX_CHARS` and SPLIT assembleIndex: the kept-Set budget moved into trimIndexToBudget
@@ -189,7 +189,13 @@ LINES_STOCK_MIN='var MAX_INDEX_LINES=200;'
 # reported as a broken bundle.  Both spellings are required, so a chunk that merely happens
 # to define a helper named truncateIndexField is not mistaken for the fixed builder.
 UPSTREAM_FIELD_TRUNC='function truncateIndexField('
-UPSTREAM_ROOM_CALC='room=MAX_INDEX_LINE_CHARS-link2.length'
+# The room calculation is the PROPERTY; the minifier's variable index is not. 0.26.1
+# renamed link2 -> link4 (measured 2026-10-25: 0.26.0 has `-link2.length`, 0.26.1 has
+# `-link4.length`, same builder) and that rename alone made a correctly-fixed upstream
+# bundle report `truncator: UNKNOWN` -> the guard red every tick. An anchor spelled with a
+# build-specific index turns a re-minified-but-correct bundle into a defect report, which is
+# a fixture standing in for its subject. Match the shape, wildcard the index.
+UPSTREAM_ROOM_CALC='room=MAX_INDEX_LINE_CHARS-link[0-9]*\.length'
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -237,7 +243,7 @@ for f in "${files[@]}"; do
     st_trunc="UNKNOWN"
     if grep -qF "$MARKER_TRUNC" "$f"; then st_trunc="applied"
     elif grep -qF "$FUNC_TRUNC_STOCK" "$f"; then st_trunc="stock"
-    elif grep -qF "$UPSTREAM_FIELD_TRUNC" "$f" && grep -qF "$UPSTREAM_ROOM_CALC" "$f"; then st_trunc="upstream"; fi
+    elif grep -qF "$UPSTREAM_FIELD_TRUNC" "$f" && grep -qE "$UPSTREAM_ROOM_CALC" "$f"; then st_trunc="upstream"; fi
 
     st_path="applied"
     if grep -qF "$PATHCAP_STOCK_SPACED" "$f" || grep -qF "$PATHCAP_STOCK_MIN" "$f"; then st_path="stock"; fi
