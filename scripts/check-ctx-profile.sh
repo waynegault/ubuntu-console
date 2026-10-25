@@ -35,7 +35,7 @@
 #      registry, or a usage error
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 
 set -uo pipefail
@@ -199,3 +199,5 @@ if (( _over > 0 && _fail_over == 1 )); then
     exit 1
 fi
 exit 0
+
+# end of file

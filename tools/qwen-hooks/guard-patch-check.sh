@@ -37,3 +37,5 @@ echo "reloads anything, and the bundled CLI has no --reload-window)."
 echo "The check said:"
 printf '  %s\n' "$out" | head -5
 exit 0
+
+# end of file

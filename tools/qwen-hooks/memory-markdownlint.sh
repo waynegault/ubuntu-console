@@ -10,7 +10,7 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 #   v2 (2026-10-24): names the WRAPPED-OPERATOR trap in the hand-fix advice.  Measured: a note whose
 #   writer wrapped a formula left a continuation line beginning `+ 0 + 0.2·1.0 = 0.635`, and markdown
 #   (correctly) reads a line-initial `+` as a list marker, so MD004 fired on prose.  The danger is the
@@ -293,3 +293,5 @@ echo "formula or a code span, that marker is TEXT, not a list marker. REFLOW it 
 echo "rewriting it to the note's list style changes the arithmetic while the note still lints clean."
 echo "Always re-read every line a fixer touched: a clean exit code is not evidence the text survived."
 exit 0
+
+# end of file

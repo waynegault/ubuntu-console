@@ -242,3 +242,5 @@ jq -n --arg file "$file" --arg out "$findings" '{
   }
 }'
 exit 0
+
+# end of file

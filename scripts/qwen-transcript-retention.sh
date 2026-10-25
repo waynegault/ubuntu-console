@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 #   v3 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 # ==============================================================================
 # qwen-transcript-retention.sh — age out chat transcripts that nothing else owns.
@@ -527,3 +527,5 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 PY
+
+# end of file

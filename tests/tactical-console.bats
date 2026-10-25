@@ -1136,7 +1136,7 @@ EOF
 
 @test "hygiene: all scripts end with # end of file marker" {
     for f in "$PROFILE_PATH" \
-             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/scripts/*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/tools/lint.sh \
@@ -1149,7 +1149,7 @@ EOF
 }
 
 @test "hygiene: tools/*.sh scripts end with # end of file marker" {
-    for f in "$REPO_ROOT"/tools/*.sh; do
+    for f in "$REPO_ROOT"/tools/*.sh "$REPO_ROOT"/tools/qwen-hooks/*.sh; do
         [[ -f "$f" ]] || continue
         local last
         last=$(grep -v '^[[:space:]]*$' "$f" | tail -1)
