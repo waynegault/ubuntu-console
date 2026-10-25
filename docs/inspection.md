@@ -15,12 +15,18 @@ The following file classes are in-scope for every audit pass:
 - `scripts/[0-9][0-9]-*.sh` — the 15 numbered profile modules (01-constants
   through 15-model-recommender) plus the `18-lint.sh` utility
 - `scripts/09b-gog.sh` — the 16th profile module (non-numeric name)
-- `tools/*.sh` — 15 utility scripts (capture-golden-fixtures, check-agent-use,
-  check-contracts, check-module-versions, check-repo-boundaries, clean-orphans,
-  count-ratchet, docs-sync-check, import-windows-env, install-shellcheck, lint,
-  mirror-vault, normalize-fixture, run-tests, sync-openclaw-completion)
-- `tools/hooks/*` — the repo's git hooks. Tracked here, NOT in `.git/hooks/`
+- `tools/*.sh` — 21 utility scripts (capture-golden-fixtures, check-agent-use,
+  check-contracts, check-module-versions, check-repo-boundaries,
+  check-swallows-staged, clean-orphans, count-ratchet, docs-sync-check,
+  import-windows-env, install-bats, install-gitleaks, install-shellcheck, lint,
+  llama-cpp-inventory, mirror-vault, normalize-fixture, python-runtime, run-tests,
+  secret-scan, sync-openclaw-completion)
+- `tools/hooks/*` — the repo's git hooks (`pre-commit`, `pre-push`, `post-commit`,
+  `post-merge`, `_kgraph-auto-rebuild`). Tracked here, NOT in `.git/hooks/`
   (which holds only git's own samples); activated via `core.hooksPath`
+- `tools/qwen-hooks/*` — the Qwen agent hooks, installed by absolute path into
+  `~/.qwen/hooks/` (`guard-patch-check.sh`, `memory-markdownlint.sh`,
+  `post-edit-check.sh`, plus `shell-command-scan.py`)
 - `bin/*.sh` — standalone helper scripts
 - `bin/tac-exec` — non-interactive function runner (symlinked to `~/.local/bin/`)
 - `nas/butler/**` — the versioned mirror of the NAS (butler) shell / Python / conf / php
@@ -41,6 +47,12 @@ The following file classes are in-scope for every audit pass:
 - `tests/test_models.py` — Pydantic model tests (GraphNode, GraphEdge, Graph, GraphBuilder)
 - `tests/test_<module>.py` — per-module kgraph tests (call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate, server, report, cli, memory_import, projection, ast_extractor, source_import), split out of the former `test_untested_modules.py` (card 842f2b93); `tests/_kgraph_fixtures.py` holds the shared graph fixtures
 - `tests/conftest.py` — Pytest fixtures (BATS serialization via flock)
+
+Inventory re-derived 2026-10-25: 41 `tests/*.py` files, 3 root `.bats`,
+71 `tests/unit/*.bats` and 6 `tests/integration/*.bats`. The per-file list
+above is illustrative, not exhaustive — a new suite in any of those directories
+joins the audit even when it is not named here.
+
 - `pytest.ini` — Pytest configuration (markers, testpaths)
 - `scripts/kgraph/models.py` — Pydantic models (GraphNode, GraphEdge, Graph, GraphBuilder, ConfidenceLevel)
 - `scripts/kgraph/calibrate.py` — calibration harness for the two INFERRED/AMBIGUOUS
@@ -218,7 +230,7 @@ Backup exists
 
 head -1 <file>
 
-`#!/usr/bin/env bash` or `#!/bin/bash` for standalone scripts. Sourced modules use `# shellcheck shell=bash` instead of a shebang.
+`#!/usr/bin/env bash` or `#!/bin/bash` for standalone scripts. Sourced modules use `# shellcheck shell=bash` instead of a shebang. The `nas/butler/` mirror is the exception: its scripts run on the Debian NAS and deliberately use `#!/bin/sh` (12 at 2026-10-25) — foreign code for a different target, not a repo shebang.
 
 1.7
 
@@ -267,12 +279,13 @@ rather than matching the line exactly. Both halves are checked because they rot
 independently: `bin/llama-gpu-clear.sh` had the comment but no final newline, and six
 files had neither — all fixed 2026-09-16.
 
-COVERAGE GAP worth knowing, because it is how those six drifted unnoticed: the
-automated hygiene test (`tests/tactical-console.bats`, "hygiene: all scripts end
-with …") globs `scripts/[0-9][0-9]-*.sh`, `bin/*.sh`, `install.sh` and `tools/*.sh`.
-That MISSES `scripts/prompt-sets.sh`, `scripts/spec-decode-bench.sh`,
-`scripts/spec_dec_crossover.sh` and everything under `tools/hooks/*`. A new script
-outside those globs has nothing watching it but this item.
+COVERAGE GAP, and this item is what closed most of it on 2026-10-25: the automated
+hygiene tests (`tests/tactical-console.bats`, "hygiene: all scripts end with …") now
+glob `scripts/*.sh`, `bin/*.sh`, `install.sh`, `tools/*.sh` and
+`tools/qwen-hooks/*.sh`. That still MISSES `tools/hooks/*` and the `nas/butler/`
+mirror; the 2026-10-25 census found 15 NAS files without the marker (out of scope for
+the repo's Bash style, but not for this item). A new script in either remaining gap
+has nothing watching it but this item.
 
 1.12
 
@@ -405,9 +418,12 @@ From env vars, files with 600 perms, or secret managers
 
 🔧 Prevent log leakage
 
-grep -n 'set -x|set -o xtrace' <file>
+`grep -nE 'set -x|set -o xtrace' <file>`
 
-set -x is not enabled across blocks processing credentials
+set -x is not enabled across blocks processing credentials. **The command that used
+to be here was a BRE** (`'set -x|set -o xtrace'`), in which `|` is literal, so it
+could never match. Re-derived 2026-10-25: the `-E` form also returns 0, so the
+expected result stands — but the old zero was not evidence.
 
 2.3 Privilege & Permissions
 
@@ -431,9 +447,12 @@ None in code that runs at source-time; OK in explicit functions
 
 🔧 No chmod 777
 
-grep -n 'chmod 777|chmod a+rwx' <file>
+`grep -nE 'chmod 777' <file>; grep -nE 'chmod a\+rwx' <file>`
 
-Zero matches
+Zero matches. **The old command was a BRE** (`'chmod 777|chmod a+rwx'`), in which
+`|` is literal, so it could never match. Re-derived 2026-10-25: the two-branch form
+returns one hit — a regex literal in `tools/qwen-hooks/post-edit-check.sh:137`, not a
+chmod — so the answer is still zero.
 
 2.3.3
 
@@ -526,9 +545,11 @@ Zero matches
 
 🔧 pkill -x not pkill -f
 
-grep -n 'pkill -f' <file>
+`grep -n 'pkill -f' <file> | grep -vE ':[0-9]+:[[:space:]]*#'`
 
-Zero matches (use -x for exact match)
+Zero code matches (use -x for exact match). Re-derived 2026-10-25: the two hits are
+prose comments (`scripts/autotune-model.sh:415`, `bin/interview-benchmark.sh:12`),
+which the comment filter now removes — the unfiltered probe reported them as findings.
 
 2.4.3
 
@@ -542,9 +563,12 @@ All quoted: kill "$pid"
 
 🔧 pkill scoped to current user
 
-grep -n 'pkill' <file>
+`grep -n 'pkill' <file> | grep -vE ':[0-9]+:[[:space:]]*#'`
 
-All pkill calls use -u "$USER" to avoid killing other users' processes
+All pkill calls use -u "$USER" to avoid killing other users' processes. Re-derived
+2026-10-25: every real invocation carries `-u`; the eight non-`-u` hits are prose
+comments or warnings (e.g. `scripts/11d-llm-gpu.sh:430`), which the comment filter
+removes.
 
 2.4.5
 
@@ -674,7 +698,7 @@ Expected
 
 Non-interactive shells exit early in profiles — the loader (`tactical-console.bashrc:53`) and
 `scripts/14-wsl-extras.sh:158`. Expect **one known false positive**, not zero:
-`scripts/12-dashboard-help.sh:511` *echoes* the idiom (`$(case $- in (*i*) …)`) to print the
+`scripts/12-dashboard-help.sh:513` *echoes* the idiom (`$(case $- in (*i*) …)`) to print the
 interactive state, so three hits are two guards. Re-derived 2026-09-18 (line numbers
 2026-10-22): 2 guards across
 `*.sh`/`*.bashrc`. This item is about PROFILES, not every module — a reading that demanded a
@@ -705,6 +729,10 @@ Strict mode requirements vary by file type:
   or symlinks that are invoked as COMMANDS, never sourced. Two of them,
   `bin/bench-timeout-runner.sh:54` and `bin/tac_hostmetrics.sh:19`, legitimately use
   `set -euo pipefail` (verified 2026-09-16).
+- **Standalone utilities under `scripts/`** (e.g. `oc-update-enhanced.sh`,
+  `qwen-transcript-retention.sh`, `spec-decode-bench.sh`): MAY use `set -euo pipefail`
+  or `set -uo pipefail`. They are entry points, never sourced by either loader, so the
+  interactive-shell prohibition above does not reach them.
 - **`tools/lint.sh`, `tools/run-tests.sh`**: document an intentional omission with a
   comment if `set -e` is absent (e.g., bare `(( ))` operators return exit 1 on zero).
   `tools/lint.sh` has `-e`; `tools/run-tests.sh:16` deliberately omits it so that one
@@ -832,7 +860,8 @@ hiding it.
 
 Directives: this repo DOES carry `# shellcheck disable=` lines — **25 across 14 files** at the
 2026-09-16-era tip (`4381948d`), down from 37 across 25 before the module-graph change in
-`tools/lint.sh` (§17.1), and **20 across 13** when re-derived on 2026-09-18 — five were removed by
+`tools/lint.sh` (§17.1), and **20 across 14** when re-derived on 2026-10-25 (20 across 13 on
+2026-09-18) — five were removed by
 fixing their cause or proving them redundant, not by adjusting the count (two cause-fixes in
 §17.1, `bin/tac-exec`'s and the two in `tactical-console.bashrc` that its file-wide directive at
 `:47` already covered). The "22 across 12 files" that used to be here
@@ -1258,12 +1287,17 @@ single digits.
 
 `grep -nE '\bcat [^|]*\|[[:space:]]*[a-z]' <file>`
 
-No `cmd <file> | cmd` where `<file` or `<<<` would do. Expect **two known false
-positives**, not zero: `journalctl --output=cat | grep` (`scripts/09a-oc-gateway.sh:488`,
-where `cat` is a flag value) and a usage comment (`scripts/11f-llm-runtime.sh:701` —
-re-derived 2026-09-18; this line said `:691`, and the file has moved since the 2026-09-16
-audit while the citation did not). The previous command here had a literal newline inside its
-character class plus an empty alternative, so grep rejected it rather than reporting anything.
+No `cmd <file> | cmd` where `<file` or `<<<` would do. **Three hits at 2026-10-25, two
+of them known false positives:** `journalctl --output=cat | grep`
+(`scripts/09a-oc-gateway.sh:679`, where `cat` is a flag value), a usage comment
+(`scripts/11f-llm-runtime.sh:798` — the line has moved since the 2026-09-16 audit while
+the old citation did not), and one **genuine UUOC** —
+`cat /dev/shm/autotune-cuda-cycles-* | awk` (`scripts/cache-ram-probe-watch.sh:118`),
+where `awk` can take the glob directly. The third is a follow-up, not fixed in this
+pass: replacing the pipeline with `awk '…' /dev/shm/autotune-cuda-cycles-* 2>/dev/null`
+removes the fork and preserves the `0` on no-match. The previous command here had a
+literal newline inside its character class plus an empty alternative, so grep rejected
+it rather than reporting anything.
 
 6.3
 
@@ -1617,6 +1651,8 @@ or the commit, and is justified only when the script genuinely needs that
 interpreter: check for a version-specific construct before assuming it does. Note
 also that a shebang is IGNORED whenever the caller runs `bash <script>`, which is
 how every in-repo caller of the autotune benches invokes them (added 2026-09-16).
+The `nas/butler/` mirror is exempt: it is foreign code for a `/bin/sh` target and its
+`#!/bin/sh` shebangs are correct there, not drift.
 
 7.2
 
@@ -1787,11 +1823,11 @@ Expected
 
 `grep -cE '^function ' <file>` and `grep -cE '^[a-z_][A-Za-z0-9_]*\(\)' <file>`
 
-House style is `function name() {`. Measured 2026-09-16: **298** definitions use the
-`function` keyword and **92** use the bare `name()`, and **no file mixes the two** —
-each file is internally consistent, which is the property that actually matters. The 92
-sit in a handful of files (autotune-model, llama-watchdog, gpu-busy, run-tests, and the
-installer/standalone tools).
+House style is `function name() {`. Re-derived 2026-10-25: **396** definitions use the
+`function` keyword and **309** use the bare `name()`, and **no file mixes the two** —
+each file is internally consistent, which is the property that actually matters.  The
+2026-10-25 pass restored that property: `13-init.sh` and `cache-ram-probe.sh` each
+carried one outlier, now converted to the file's majority style.
 
 So the requirement is ONE STYLE PER FILE. The previous wording ("prefer func_name() { }")
 implied migrating the 298, and that is not wanted: it is churn that buries findings, and
@@ -1880,7 +1916,7 @@ Difficult regex, file-descriptor manipulation, or Bash-specific tricks have comm
 
 `ls scripts/[0-9][0-9]-*.sh | grep -v 18-lint.sh; ls scripts/09b-gog.sh`
 
-16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). **Do not count the raw glob:** `ls scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh` returns **17**, because the numbered pattern also matches `scripts/18-lint.sh`, a standalone utility that is not a profile module — so "16 numbered + 09b" double-counts against both the glob (17) and `scripts/_module-list.sh` (16). Correct composition: 15 numbered profile modules + `09b-gog.sh` = 16. 15 utility scripts live in tools/. The loaders (tactical-console.bashrc, env.sh) source the profile modules in the order given by scripts/_module-list.sh. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
+16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). **Do not count the raw glob:** `ls scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh` returns **17**, because the numbered pattern also matches `scripts/18-lint.sh`, a standalone utility that is not a profile module — so "16 numbered + 09b" double-counts against both the glob (17) and `scripts/_module-list.sh` (16). Correct composition: 15 numbered profile modules + `09b-gog.sh` = 16. 21 utility scripts live in tools/ (re-derived 2026-10-25; see the Scope list). The loaders (tactical-console.bashrc, env.sh) source the profile modules in the order given by scripts/_module-list.sh. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
 
 9.4.1
 
@@ -1956,9 +1992,12 @@ Functions that modify global variables have a comment at top listing which globa
 
 🔧 TODO/FIXME/HACK tags tracked
 
-grep -nEi 'TODO|FIXME|HACK|XXX|TEMP' <file>
+`grep -nEi '\b(TODO|FIXME|HACK)\b' <file>`
 
-Each tag has an owner or date; stale tags (>6 months) flagged for resolution
+Each tag has an owner or date; stale tags (>6 months) flagged for resolution.
+**The old probe was blind:** `grep -nEi 'TODO|FIXME|HACK|XXX|TEMP'` matches every
+`mktemp …XXXXXX` template, so at 2026-10-25 it returned 148 lines where the
+word-bounded probe returns 0. The `XXX`/`TEMP` branches are why.
 
 9.10
 
@@ -2217,12 +2256,12 @@ All checks passed — no bare excepts (BLE001), no unused imports (F401), no imp
 `.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_call_flow.py tests/test_update.py tests/test_life_index.py tests/test_benchmark.py tests/test_mcp_server.py tests/test_pr_dashboard.py tests/test_validate.py tests/test_graph_server.py tests/test_report.py tests/test_cli.py tests/test_memory_import.py tests/test_projection.py tests/test_ast_extractor.py tests/test_kgraph_package.py --timeout=60 -q`
 
 All collected tests pass. Do not trust a written-down count: derive it with
-`--collect-only -q` before quoting one. Measured 2026-10-03 by collection: **438**
-tests (165 + 59 + 214), with ZERO skip/xfail markers — so the "174 passed" this item
+`--collect-only -q` before quoting one. Measured 2026-10-25 by collection: **463**
+tests, with ZERO skip/xfail markers — so the "174 passed" this item
 used to state cannot describe the command any more (that would require ~150 failures,
 which would itself be the finding). A stale pass-count is worse than none: it reads as
-a target and quietly stops being checked. The 14 per-module kgraph files are the split
-of the former `test_untested_modules.py` (card 842f2b93).
+a target and quietly stops being checked. The 16 files named above are the kgraph
+split of the former `test_untested_modules.py` (card 842f2b93).
 
 11.10
 
@@ -2388,7 +2427,9 @@ build** — `llama-server --help` lists exactly the three above and nothing cont
 
 And something IS passed: every lane unit pins `--reasoning off` in its ExecStart
 (`systemd/llama-cuda-llama32-3b-chat.service`, `llama-cuda-qwen35-4b-pipeline.service`,
-`llama-xe-minicpm5-1b-chat.service`), confirmed against the live processes. That is the
+`llama-xe-minicpm5-1b-chat.service`, and — added since this item was written —
+`llama-xe-qwen25-3b-chat.service` and `llama-cpu-qwen25-3b-chat.service`; five at
+2026-10-25), confirmed against the live processes. That is the
 deliberate choice — thinking traces off for the served lanes.
 
 A 2026-09-16 audit pass reported "no `--reasoning*` flag is passed" and was WRONG: its
@@ -2568,11 +2609,13 @@ grep -rn 'LLM_PORT\|8081' scripts/ bin/ tactical-console.bashrc
 
 Defined once in 01-constants.sh; every other file references the variable. Every
 literal must agree on 8081 — a disagreement is the finding, not the existence of a
-literal. The sanctioned sites are: `scripts/oc-health-check.py` (Python cannot source
-the bash constants, so it carries the same default), `scripts/run-autotune-batch.sh`
-(an `ss` grep pattern for the interactive port, not a bind), `${LLM_PORT:-8081}`
-DEFAULT EXPRESSIONS (`scripts/spec-decode-bench.sh`, `scripts/09a-oc-gateway.sh` —
-a fallback, not a second definition), and comment prose. Note that the autotune bench
+literal. The sanctioned sites are: `scripts/run-autotune-batch.sh` (an `ss` grep
+pattern for the interactive port, not a bind), `${LLM_PORT:-8081}` DEFAULT
+EXPRESSIONS (`scripts/spec-decode-bench.sh`, `scripts/09a-oc-gateway.sh` — a
+fallback, not a second definition), and comment prose. **`scripts/oc-health-check.py`
+does NOT carry the 8081 default** (corrected 2026-10-25): it probes the production
+lane with `LLM_SERVICE_PORT`, whose default is 18081, and mentions 8081 only in
+comments at `:780-787`. Note that the autotune bench
 binds `AUTOTUNE_PORT` (18082), never 8081. Measured 2026-09-16: 5 code sites, all
 agreeing. (The old enumeration here listed three and called them exhaustive; it
 missed the two fallbacks — an incomplete list reads as a finding when it is not.)
@@ -2775,11 +2818,14 @@ Zero output — every module contains the AI instruction to bump its Module Vers
 
 grep -h '^# Module Version:' scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh | sort -t: -k3 -n
 
-One `# Module Version: N` line per module, with a plain integer N. The command's glob
-also matches `scripts/18-lint.sh` — a standalone utility, NOT a profile module (env.sh
-lists only the 16 held in `scripts/_module-list.sh`) — so it prints 17 lines, not 16.
-Count the canonical modules from `_module-list.sh`, not from the glob. Measured
-2026-09-16: 17 lines, 16 of them canonical.
+**Exactly one** `# Module Version: N` line per module, with a plain integer N. The
+command's glob also matches `scripts/18-lint.sh` — a standalone utility, NOT a profile
+module (env.sh lists only the 16 held in `scripts/_module-list.sh`) — so it prints 17
+lines, not 16. Count the canonical modules from `_module-list.sh`, not from the glob.
+Measured 2026-10-25: 17 lines, 16 of them canonical. "Exactly one" is load-bearing:
+the loader sums EVERY match, so a changelog heading that repeats the prefix inflates
+`TACTICAL_PROFILE_VERSION` silently — measured 2026-10-25 it read **10.538** against a
+correct **411** until the duplicate lines were removed.
 
 13.4.4
 
@@ -3056,11 +3102,27 @@ Expected
 
 `grep -rnE '# *noqa|# *type: *ignore|shellcheck disable=SC' scripts/ bin/ tools/ tests/ tactical-console.bashrc env.sh`
 
-No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code. Residue cleared (2026-09-12): the `scripts/` path insert now lives in `tests/_paths.py`, and the three `# noqa: E402` suppressions in `tests/test_kgraph.py`, `tests/test_kgraph_wiring.py` and `tests/test_untested_modules.py` are gone (standalone `python tests/x.py` runs still work).
+No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code — with ONE standing exception: an E402 where a directly-executable tool must put the repo root on `sys.path` before importing its own package, and the directive states that reason. The seven such sites at 2026-10-25 are the whole exception. Residue cleared (2026-09-12): the `scripts/` path insert now lives in `tests/_paths.py`, and the three `# noqa: E402` suppressions in `tests/test_kgraph.py`, `tests/test_kgraph_wiring.py` and `tests/test_untested_modules.py` are gone (standalone `python tests/x.py` runs still work).
 
-Re-measured 2026-09-18 with this item's own command: **20 directive lines across 13 files**
-(25 at the start of that day — this item's own two cause-fixes removed two, and three more went
-as redundant), down from 68, and **0** in the `noqa` / `type: ignore` class. Every remaining line's code is structural rather than noise — SC1090/SC1091 (computed source paths: the loaders' own module loop, the optional files they source, the tests' run-time generated copies), SC2016 (single-quoted pwsh payloads that must reach Windows unexpanded), SC2317/SC2329 (functions referenced only from quoted trap strings; quoting the trap instead changes when bash expands it, so that fix is not available), SC2034 (version headers read by people and by `tools/check-module-versions.sh`), SC2086/SC2188/SC2221/SC2222. Two causes were FIXED rather than suppressed on 2026-09-18: `__bench_cleanup`'s `return $_exit_code` is now quoted (SC2086), and the bench status line's `$(<file || echo unknown)` — which never ran its fallback, because bash's `$(<file)` takes no trailing command — became a plain assignment (SC2188). Both directives are gone and `tools/lint.sh` stays green.
+Re-derived 2026-10-25 with this item's own command: **20 `shellcheck disable=` lines
+across 14 files**, and **8 directive lines across 8 files** in the `noqa` /
+`type: ignore` class (7 E402 path-bootstrap imports, 1 S310 bandit exception), plus one
+prose mention.  The 2026-09-18 figure of **0** in the noqa class had drifted: 28
+directives accumulated between 2026-09-27 and 2026-10-17, every one in Python added
+after that date.  The 2026-10-25 pass removed 19 `type: ignore[attr-defined]`
+directives (replaced by `setattr`), one `F401` (replaced by
+`importlib.import_module`), and gave the 7 E402 sites their reason.  Every remaining
+line's code is structural rather than noise — SC1090/SC1091 (computed source paths:
+the loaders' own module loop, the optional files they source, the tests' run-time
+generated copies), SC2016 (single-quoted pwsh payloads that must reach Windows
+unexpanded), SC2317/SC2329 (functions referenced only from quoted trap strings;
+quoting the trap instead changes when bash expands it, so that fix is not available),
+SC2034 (version headers read by people and by `tools/check-module-versions.sh`),
+SC2086/SC2188/SC2221/SC2222. Two causes were FIXED rather than suppressed on
+2026-09-18: `__bench_cleanup`'s `return $_exit_code` is now quoted (SC2086), and the
+bench status line's `$(<file || echo unknown)` — which never ran its fallback, because
+bash's `$(<file)` takes no trailing command — became a plain assignment (SC2188). Both
+directives are gone and `tools/lint.sh` stays green.
 
 **Control for this count, because a looser grep over-counts.** Several module headers *document* a removed file-wide disable ("relying on a file-wide `disable=SC2154` (removed 2026-09-15)") without carrying one, so an unanchored `grep -rhoE 'disable=SC[0-9]+'` reports 35 where this item's command reports 20. Use the command above, and never write a comment that reproduces the directive text verbatim — it becomes a phantom hit for every grep-based audit, including this one — and never let a prose line *begin* with the word `shellcheck`, because the directive parser reads it as a malformed directive and fails the file (measured 2026-09-18: one such comment cost a full lint cycle with SC1073/SC1072).
 
@@ -3086,7 +3148,7 @@ No hardcoded array and no module glob in either loader — add modules to `scrip
 
 grep -rnE '^[[:space:]]*exec [^0-9{]' scripts/*.sh tactical-console.bashrc
 
-None. `exec` in a function dispatched by the interactive shell replaces (and on exit kills) the user's shell — this was oc-update's bug. Use a plain call and `return $?`. `exec {fd}>file` redirections and standalone wrappers under `bin/` are fine.
+None. `exec` in a function dispatched by the interactive shell replaces (and on exit kills) the user's shell — this was oc-update's bug. Use a plain call and `return $?`. `exec {fd}>file` redirections and standalone wrappers under `bin/` are fine. **Re-derived 2026-10-25: the probe returns 7, and none is the defect.** Three are inside heredocs that GENERATE the pwsh shims (`scripts/14-wsl-extras.sh:48,55,66`), and four are top-level `exec`s in standalone `scripts/` entry points (`autotune-model.sh:239`, `retune-band-chunk.sh:64`, `run-autotune-batch.sh:90`, `spec-decode-bench.sh:57`). Narrow the probe to function bodies before treating a hit as a finding.
 
 17.5
 
@@ -3382,11 +3444,11 @@ is deliberately not worth fixing, and what was still open when this pass ended.
 
   The counters are deliberately simple, stable patterns over the tracked shell corpus
   (`*.sh`, `*.bashrc`, `bin/*`, comment-only lines excluded): comparable across revisions,
-  not a semantic measurement of quality. Nine items are ratcheted, and their baselines —
-  which supersede the table above wherever they differ — are 4.2.4 10, 4.2.6 12, 4.3.6 31,
-  6.7 14, 8.1.8 254, 9.5 90, 9.7 45, 10.4 61, 10.7 156. The §8–§10 figures above were
-  already flagged as approximations by the 2026-09-16 pass, so most of these being higher
-  is expected rather than new drift.
+  not a semantic measurement of quality. **Do not quote the figures from this paragraph:
+  read `tools/count-ratchet.sh --list` (or `tools/ratchet-baseline.tsv`) at the revision
+  you are auditing.** At 2026-10-25 the ten rows were 4.2.4 20, 4.2.6 9, 4.3.6 31,
+  6.7 107, 8.1.8 293, 9.5 119, 9.7 80, 10.4 52, 10.7 222, 10.8 0; the figures that used
+  to stand here (4.2.4 10 … 10.7 156) were 2026-09-21 values and had drifted.
 
   Three of the ten items first counted are deliberately NOT ratcheted — 4.2.1 (`&&` with
   `||`), 4.2.5 (`if …; then` one-liners) and 8.2.2 (`readonly` not ALL_CAPS) — because
@@ -3556,5 +3618,34 @@ because a stale summary reads exactly like an open decision.
   resolves SC1090 rather than muting it), remove what the module graph made
   unnecessary, and see §18.3: this belongs in a RATCHET that fails when the count
   rises, not in a per-pass to-do list.
+
+18.7 Field Notes — the 2026-10-25 pass
+
+Re-derived at `478c1ccc` (before the pass's own fixes) and landed as four code commits
+plus this document revision:
+
+- `89e23ffa` — duplicate `# Module Version:` lines in `08-maintenance.sh` and
+  `12-dashboard-help.sh` inflated `TACTICAL_PROFILE_VERSION` from 411 to 538; the
+  loader sums EVERY match. Fixed at source, both modules bumped. Final banner 10.414
+  after the later commits.
+- `1ffe2207` — 28 `# noqa` / `# type: ignore` directives had accumulated since
+  2026-09-18. 19 became `setattr`, one `F401` became `importlib.import_module`, and
+  the 7 E402 bootstrap imports now state their reason. 8 directives remain, all
+  reasoned.
+- `438c59b5` — five tracked shell files lacked the end-of-file sentinel; the hygiene
+  tests' globs could not see them. Sentinels added, globs widened to `scripts/*.sh`
+  and `tools/qwen-hooks/*.sh`.
+- `7d12dd14` — two files mixed `function name()` with bare `name()`; normalised to
+  each file's majority style.
+
+Two probes were found dead in this pass and are now fixed: §2.2.4 and §2.3.2 both used
+a BRE in which `|` is literal, so neither could ever match. §9.9's `XXX` matched every
+`mktemp …XXXXXX` template (148 false hits). That is the same class §5.4/§6.2/§6.3
+recorded, and the control rule still applies: a zero from a probe that cannot match is
+not evidence.
+
+One genuine finding is left open rather than carded silently: §6.2's third hit, the
+`cat … | awk` at `scripts/cache-ram-probe-watch.sh:118`, is a real UUOC. It is recorded
+in §6.2 with its replacement and was deliberately not folded into this document commit.
 
 <!-- end of file -->
