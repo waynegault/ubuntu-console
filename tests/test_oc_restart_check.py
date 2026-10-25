@@ -315,7 +315,7 @@ def _fake_subprocess_run(returncode: int = 0, stdout: str = "", stderr: str = ""
     class SubprocessError(Exception):
         pass
 
-    module.SubprocessError = SubprocessError  # type: ignore[attr-defined]
+    setattr(module, "SubprocessError", SubprocessError)
 
     class Proc:
         def __init__(self) -> None:
@@ -328,7 +328,7 @@ def _fake_subprocess_run(returncode: int = 0, stdout: str = "", stderr: str = ""
             raise raise_exc
         return Proc()
 
-    module.run = run  # type: ignore[attr-defined]
+    setattr(module, "run", run)
     return module
 
 

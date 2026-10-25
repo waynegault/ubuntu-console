@@ -228,10 +228,10 @@ def _mi_scale(monkeypatch: pytest.MonkeyPatch) -> Any:
     paho = types.ModuleType("paho")
     mqtt = types.ModuleType("paho.mqtt")
     client = types.ModuleType("paho.mqtt.client")
-    client.CallbackAPIVersion = types.SimpleNamespace(VERSION2=2)  # type: ignore[attr-defined]
-    client.Client = lambda **k: types.SimpleNamespace()  # type: ignore[attr-defined]
-    mqtt.client = client  # type: ignore[attr-defined]
-    paho.mqtt = mqtt  # type: ignore[attr-defined]
+    setattr(client, "CallbackAPIVersion", types.SimpleNamespace(VERSION2=2))
+    setattr(client, "Client", lambda **k: types.SimpleNamespace())
+    setattr(mqtt, "client", client)
+    setattr(paho, "mqtt", mqtt)
     monkeypatch.setitem(sys.modules, "paho", paho)
     monkeypatch.setitem(sys.modules, "paho.mqtt", mqtt)
     monkeypatch.setitem(sys.modules, "paho.mqtt.client", client)

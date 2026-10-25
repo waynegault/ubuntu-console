@@ -6,14 +6,14 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from tools.contracts_checkers.core import (  # noqa: E402
+from tools.contracts_checkers.core import (  # noqa: E402 - repo root must be on sys.path first
     EXIT_CANNOT_RUN, EXIT_CLEAN, SUBCOMMANDS, USAGE, _CheckerOptions,
 )
-from tools.contracts_checkers.continuity import run_continuity  # noqa: E402
-from tools.contracts_checkers.derived import run_derived  # noqa: E402
-from tools.contracts_checkers.modules import run_modules  # noqa: E402
-from tools.contracts_checkers.state import run_state  # noqa: E402
-from tools.contracts_checkers.swallows import run_swallows  # noqa: E402
+from tools.contracts_checkers.continuity import run_continuity  # noqa: E402 - sys.path bootstrap above
+from tools.contracts_checkers.derived import run_derived  # noqa: E402 - sys.path bootstrap above
+from tools.contracts_checkers.modules import run_modules  # noqa: E402 - sys.path bootstrap above
+from tools.contracts_checkers.state import run_state  # noqa: E402 - sys.path bootstrap above
+from tools.contracts_checkers.swallows import run_swallows  # noqa: E402 - sys.path bootstrap above
 
 # ── argument parsing ────────────────────────────────────────────────────────
 def parse_args(argv):

@@ -1,4 +1,5 @@
 """Enforce the console's contracts. See the script header for scope per subcommand."""
+import importlib
 import os
 import re
 import sys
@@ -15,7 +16,7 @@ EXIT_DRIFT = 1
 EXIT_CANNOT_RUN = 2
 
 try:
-    import yaml  # noqa: F401
+    importlib.import_module("yaml")
 except ImportError:
     sys.stderr.write(
         "check-contracts: PyYAML is required to parse the contract, and is not importable.\n"

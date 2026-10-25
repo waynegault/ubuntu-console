@@ -142,7 +142,7 @@ def _fake_quant_env(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict], list[d
             seen_lora.append(kw)
             self.kw = kw
 
-    peft.LoraConfig = LoraConfig  # type: ignore[attr-defined]
+    setattr(peft, "LoraConfig", LoraConfig)
     transformers = types.ModuleType("transformers")
     seen_quant: list[dict] = []
 
@@ -151,7 +151,7 @@ def _fake_quant_env(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict], list[d
             seen_quant.append(kw)
             self.kw = kw
 
-    transformers.BitsAndBytesConfig = BitsAndBytesConfig  # type: ignore[attr-defined]
+    setattr(transformers, "BitsAndBytesConfig", BitsAndBytesConfig)
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setitem(sys.modules, "peft", peft)
     monkeypatch.setitem(sys.modules, "transformers", transformers)
@@ -258,25 +258,25 @@ def _fake_measure_env(monkeypatch: pytest.MonkeyPatch) -> tuple[_Log, _Model]:
 
     torch = types.ModuleType("torch")
     torch.__dict__["bfloat16"] = "bf16"
-    torch.randint = lambda *a, **k: "ids"  # type: ignore[attr-defined]
-    torch.ones_like = lambda x: "ones"  # type: ignore[attr-defined]
-    torch.optim = types.SimpleNamespace(AdamW=lambda ps, lr: _Optim(ps, log))  # type: ignore[attr-defined]
-    torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
+    setattr(torch, "randint", lambda *a, **k: "ids")
+    setattr(torch, "ones_like", lambda x: "ones")
+    setattr(torch, "optim", types.SimpleNamespace(AdamW=lambda ps, lr: _Optim(ps, log)))
+    setattr(torch, "cuda", types.SimpleNamespace(
         reset_peak_memory_stats=lambda: log.events.append("reset_peak"),
         synchronize=lambda: log.events.append("sync"),
-    )
-    torch.no_grad = lambda: contextlib.nullcontext()  # type: ignore[attr-defined]
+    ))
+    setattr(torch, "no_grad", lambda: contextlib.nullcontext())
 
     peft = types.ModuleType("peft")
-    peft.get_peft_model = lambda m, lora: m  # type: ignore[attr-defined]
-    peft.prepare_model_for_kbit_training = (  # type: ignore[attr-defined]
-        lambda m, use_gradient_checkpointing=True: m)
+    setattr(peft, "get_peft_model", lambda m, lora: m)
+    setattr(peft, "prepare_model_for_kbit_training",
+            lambda m, use_gradient_checkpointing=True: m)
 
     class LoraConfig:
         def __init__(self, **kw: Any) -> None:
             self.kw = kw
 
-    peft.LoraConfig = LoraConfig  # type: ignore[attr-defined]
+    setattr(peft, "LoraConfig", LoraConfig)
 
     transformers = types.ModuleType("transformers")
 
@@ -296,9 +296,9 @@ def _fake_measure_env(monkeypatch: pytest.MonkeyPatch) -> tuple[_Log, _Model]:
         def from_pretrained(cls, mid: str, **kw: Any) -> Any:
             return model
 
-    transformers.BitsAndBytesConfig = BitsAndBytesConfig  # type: ignore[attr-defined]
-    transformers.AutoTokenizer = AutoTokenizer  # type: ignore[attr-defined]
-    transformers.AutoModelForCausalLM = AutoModelForCausalLM  # type: ignore[attr-defined]
+    setattr(transformers, "BitsAndBytesConfig", BitsAndBytesConfig)
+    setattr(transformers, "AutoTokenizer", AutoTokenizer)
+    setattr(transformers, "AutoModelForCausalLM", AutoModelForCausalLM)
 
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setitem(sys.modules, "peft", peft)
