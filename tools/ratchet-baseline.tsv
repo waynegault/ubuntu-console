@@ -157,14 +157,21 @@
 # they were UNCOMMITTED (the count was taken mid-edit); that lane wrapped them in
 # 2c9aff9c, so the corpus measures 293 again and the ceiling is restored. Re-measured
 # with the counter's own pattern over git ls-files '*.sh' '*.bashrc' 'bin/*'.
+# 2026-10-25: 10.4 51 -> 52 — bin/qwen-memory-index-patch.sh gained its FIRST function
+# definition (parse_cap, the cap-value parser).  This counter bounds a function at the
+# NEXT definition, and that file's remaining top-level body follows it, so the file now
+# contributes one >100-line "function" while parse_cap itself is a short helper.  The
+# rise equals ONE file's own shape rather than drift, so it is recorded here instead of
+# reshaping a 900-line CLI body into functions.  6.7 108 -> 107 is NOT this change-set:
+# origin/main measures 107 too, so that row had simply been left behind — corrected now.
 4.2.4	20
 4.2.6	9
 4.3.6	31
-6.7	108
+6.7	107
 8.1.8	293
 9.5	119
 9.7	80
-10.4	51
+10.4	52
 # 2026-10-20: 10.7 220 -> 222 — bin/bench-resume.sh is a new standalone CLI with two
 # usage-error stderr writes and no shared helper on its (systemd-unit) path.  Recorded
 # here rather than reshaping a CLI's error path; the other rises from the same file
