@@ -2,10 +2,10 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 75
+# Module Version: 76
 #   v75 (2026-10-18): `timeout -k 5 30 openclaw doctor …` — the CLI ignores SIGTERM
 #   (measured on `gateway stop`), so a plain timeout never fired.
-# Module Version: 74
+#   v74 (version step; no changelog entry was recorded when it landed)
 #   v73 (2026-10-03, card 15da0400): __update_plugin (241 lines) split into named
 #   helpers — __update_plugin_npm_deps (the four duplicated dep-install blocks),
 #   __update_plugin_prompt_changes (the interactive keep/discard/skip prompt) and

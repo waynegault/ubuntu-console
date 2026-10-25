@@ -2,14 +2,12 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 28
+# Module Version: 29
 #   v28 (2026-10-23): the `oc purge` help row names the settled scope — agent mains and
 #   cron sessions are KEPT, the configured main (hal) is emptied, and the gateway is
 #   restarted — instead of "delete all sessions".
-# Module Version: 27
 #   v27 (2026-10-18): the `oc purge` help row names the new scope — reset every agent,
 #   delete all sessions (main included) and restart — rather than "stop and clear".
-# Module Version: 26
 #   v26 (2026-10-09): __dashboard_oc_active_agents reads its cache path from
 #   OC_AGENT_USE_FILE (default /dev/shm/oc_agent_use.txt, i.e. current behaviour
 #   unchanged).  The hard-coded path made the two-sided staleness guard — a
