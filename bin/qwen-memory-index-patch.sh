@@ -95,6 +95,25 @@
 #   QWEN_INDEX_PATCH_CHUNK_DIRS=<dir>[:<dir>…]  # scan ONLY these chunk dirs.  The test/CI
 #   affordance: CI has no CLI bundle, and a fixture run must not reach the real copies.
 #
+# SCOPE IS NOT OPTIONAL WHEN THE CLAIM IS "I VERIFIED IT" (2026-10-25, with Hal).
+#   With no QWEN_INDEX_PATCH_CHUNK_DIRS, this script globs EVERY shipped copy: the linuxbrew
+#   CLI, the WSL IDE companions (all versions), the /mnt/c WINDOWS IDE companion, and the
+#   ~/.qwen/updates npm tree. So an unscoped `--apply` patches Wayne's Windows build as well --
+#   a real edit to a host filesystem this box only mounts.  A verification run must therefore
+#   set a scope, and the scope must be the thing under test:
+#
+#     QWEN_INDEX_PATCH_CHUNK_DIRS=<one live 0.26.1 chunk dir>   # patching the live build
+#     HOME=/tmp/<throwaway>  (with a copy under $HOME/.vscode-server/…)  # proving the code
+#
+#   Both are legitimately scoped and both avoid the default blast radius. Two measured
+#   consequences, so nobody re-learns them:
+#     * a `--check` run WITHOUT a scope reports on six bundles at once, so `rc=0` there is a
+#       claim about the whole fleet and cannot be quoted as evidence about one file;
+#     * a `--check` run WITH a scope says nothing about the copies it skipped. "rc=0" and
+#       "rc=0 over the population you asked about" are different sentences.
+#   This is the fourth form of green-because-out-of-scope found tonight. The general shape:
+#   an instrument administered to a population is only ever evidence about that population.
+#
 # TRACKED HERE since 2026-10-01: this script used to exist only as a loose copy at
 # ~/.local/bin/qwen-memory-index-patch.sh, so a fix nobody could re-verify lived
 # outside version control.  `install.sh` links every file in `bin/` into
