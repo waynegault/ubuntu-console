@@ -121,7 +121,7 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 9
+# Module Version: 10
 #   v8 (2026-10-25): 0.26.1 SHIPS A REWRITTEN BUILDER and the tooling only half-knows it.  Two
 #   predicates repaired, one blocker remains, and NO 0.26.1 COPY IS PATCHED BY THIS VERSION:
 #     * the Python-side UPSTREAM test hardcoded `room=MAX_INDEX_LINE_CHARS-link2.length` while the
@@ -206,18 +206,10 @@ MARKER_LINES="LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap)"
 # Stock anchors used only for state detection in --check.
 PATHCAP_STOCK_SPACED='const chars = [...value].slice(0, MAX_INDEX_FIELD_CHARS);'
 PATHCAP_STOCK_MIN='const chars=[...value].slice(0,MAX_INDEX_FIELD_CHARS);'
-BYTES_STOCK_SPACED='var MAX_INDEX_BYTES = 25e3;'
-BYTES_STOCK_MIN='var MAX_INDEX_BYTES=25e3;'
-# 0.25.1 RENAMED the byte cap (measured 2026-10-14): the same 25e3 value under a new name.  A
-# copy whose cap is UNKNOWN while titlecap/linecap read `stock` is a 0.25.1 copy.
-BYTES_STOCK_V0251_SPACED='var MAX_INDEX_CHARS = 25e3;'
-BYTES_STOCK_V0251_MIN='var MAX_INDEX_CHARS=25e3;'
 FUNC_TRUNC_STOCK='function truncateIndexLine(text)'
 # hunks 4-5 (measured 2026-10-11 on the 0.24.4 linuxbrew CLI and the 0.25.0 companions).
 TITLE_STOCK_SPACED='const title = sanitizeIndexField(doc.title) || doc.type;'
 TITLE_STOCK_MIN='const title=sanitizeIndexField(doc.title)||doc.type;'
-LINES_STOCK_SPACED='var MAX_INDEX_LINES = 200;'
-LINES_STOCK_MIN='var MAX_INDEX_LINES=200;'
 # 0.25.0 REWROTE the builder (measured 2026-10-05 on the IDE companion's
 # chunk-QJ3UTSP5.js): `truncateIndexLine` is GONE, `docIndexLine` now budgets the
 # description AROUND the link (`room = MAX_INDEX_LINE_CHARS - link.length - suffix.length -
@@ -318,6 +310,7 @@ for f in "${files[@]}"; do
     # `|| true`: `set -o pipefail` + an EMPTY grep aborted the whole guard at that file with rc=1
     # after four `ok` lines -- a scan that read clean exited red. Same family as reading `$?`
     # after a pipe: the status belonged to the pipeline, not to the measurement.
+    # swallow-ok: an empty grep under `set -o pipefail` would abort this file's scan with rc=1; no match means "no cap declared", which the UNKNOWN branch below handles
     byte_decls=$(grep -oE 'MAX_INDEX_(CHARS|BYTES) *= *[0-9]+(e[0-9]+)?' "$f" | sed 's/.*= *//' || true)
     byte_num=""
     for _v in $byte_decls; do
@@ -333,6 +326,7 @@ for f in "${files[@]}"; do
         st_bytes="counterfeit"   # a receipt for a cap that is not declared anywhere in the file
     fi
 
+    # swallow-ok: same shape as byte_decls — `set -o pipefail` would abort this file's scan on an empty grep; "no MAX_INDEX_LINES declared" is the UNKNOWN case handled below
     lines_num=$(grep -oE 'MAX_INDEX_LINES *= *[0-9]+' "$f" | head -1 | sed 's/.*= *//' || true)
     st_lines="UNKNOWN"
     if [[ -n "$lines_num" ]]; then
