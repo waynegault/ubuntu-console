@@ -1171,7 +1171,7 @@ where it was last present.)
 │   └── sync-openclaw-completion.sh    #   Refresh OpenClaw bash completions
 ├── docs/                              # Reference documentation
 │   ├── AGENT-GUIDELINES.md            #   AI agent operating manual
-│   ├── audit-findings.md              #   Codebase audit record: 20 closed, 3 open follow-ups
+│   ├── audit-findings.md              #   Retired audit record; open follow-ups are cards AUD-FU-001–003
 │   ├── grpo-serving-path.md           #   Serving a trained artifact: the path, provenance, prompt contract (UBC-GRPO-004)
 │   ├── grpo-supervision.md            #   Supervising a long training run, and how the console shows it (UBC-GRPO-002)
 │   ├── grpo-training-env.md           #   Isolated training/rollout environments (UBC-GRPO-005) + their pins
