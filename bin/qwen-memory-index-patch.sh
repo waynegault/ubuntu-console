@@ -267,20 +267,75 @@ for f in "${files[@]}"; do
     st_path="applied"
     if grep -qF "$PATHCAP_STOCK_SPACED" "$f" || grep -qF "$PATHCAP_STOCK_MIN" "$f"; then st_path="stock"; fi
 
+    # VALUES, NOT MARKERS (2026-10-25, Hal's finding -- reproduced here before the fix).
+    # Until this change each of these three read `applied` iff the file contained the marker
+    # COMMENT STRING, so a pristine stock bundle with 25e3 / 200 and three comment lines
+    # inserted reported `bytecap: applied; titlecap: applied; linecap: applied` and the guard
+    # exited 0. MEASURED: stock chunk-Q3NSK7FV.js, constants untouched, rc=0 after inserting
+    # only the three marker strings. A green over an unfixed bundle, produced by the instrument
+    # every claim about these caps has rested on.
+    #
+    # The marker is CORROBORATION, never evidence: `counterfeit` is marker present + property
+    # absent, and it must read as a failure, not as `applied`.
+    parse_cap() {  # "25e3" -> 25000 ; "256000" -> 256000 ; NOTHING on anything else
+        # Returns 0 on every path: the caller is a command substitution under `set -e`, and a
+        # non-zero return for an unparseable value aborted the whole guard mid-scan. MEASURED:
+        # `byte_decl=` on the 0.24.3 npm copy killed the run at that file after printing four
+        # `ok` lines, so a scan that read fine exited 1 and looked like a fault.
+        local v="${1// /}" out
+        case "$v" in
+            *e*) if [[ "${v%e*}" =~ ^[0-9]+$ && "${v#*e}" =~ ^[0-9]+$ ]]; then
+                     out=$(( ${v%e*} * 10 ** ${v#*e} )); echo "$out"
+                 fi ;;
+            *)   if [[ "$v" =~ ^[0-9]+$ ]]; then echo "$v"; fi ;;
+        esac
+        return 0
+    }
+
+    # The cap has TWO spellings in this fleet: MAX_INDEX_CHARS (current) and MAX_INDEX_BYTES
+    # (0.24.3 and older). Take the LARGEST declaration present and compare the VALUE -- naming
+    # either spelling alone is a shape assertion, and 0.24.3 carries `MAX_INDEX_BYTES = 256000`
+    # with no MAX_INDEX_CHARS at all, which the first version of this check called counterfeit.
+    # `|| true`: `set -o pipefail` + an EMPTY grep aborted the whole guard at that file with rc=1
+    # after four `ok` lines -- a scan that read clean exited red. Same family as reading `$?`
+    # after a pipe: the status belonged to the pipeline, not to the measurement.
+    byte_decls=$(grep -oE 'MAX_INDEX_(CHARS|BYTES) *= *[0-9]+(e[0-9]+)?' "$f" | sed 's/.*= *//' || true)
+    byte_num=""
+    for _v in $byte_decls; do
+        _n=$(parse_cap "$_v")
+        if [[ -n "$_n" ]] && { [[ -z "$byte_num" ]] || (( _n > byte_num )); }; then byte_num="$_n"; fi
+    done
     st_bytes="UNKNOWN"
-    if grep -qF "$MARKER_BYTES" "$f"; then st_bytes="applied"
-    elif grep -qF "$BYTES_STOCK_SPACED" "$f" || grep -qF "$BYTES_STOCK_MIN" "$f" \
-      || grep -qF "$BYTES_STOCK_V0251_SPACED" "$f" || grep -qF "$BYTES_STOCK_V0251_MIN" "$f"; then
-        st_bytes="stock"
+    if [[ -n "$byte_num" ]]; then
+        if (( byte_num >= 256000 )); then st_bytes="applied"
+        elif grep -qF "$MARKER_BYTES" "$f"; then st_bytes="counterfeit"
+        else st_bytes="stock"; fi
+    elif grep -qF "$MARKER_BYTES" "$f"; then
+        st_bytes="counterfeit"   # a receipt for a cap that is not declared anywhere in the file
     fi
 
-    st_title="UNKNOWN"
-    if grep -qF "$MARKER_TITLE" "$f"; then st_title="applied"
-    elif grep -qF "$TITLE_STOCK_SPACED" "$f" || grep -qF "$TITLE_STOCK_MIN" "$f"; then st_title="stock"; fi
-
+    lines_num=$(grep -oE 'MAX_INDEX_LINES *= *[0-9]+' "$f" | head -1 | sed 's/.*= *//' || true)
     st_lines="UNKNOWN"
-    if grep -qF "$MARKER_LINES" "$f"; then st_lines="applied"
-    elif grep -qF "$LINES_STOCK_SPACED" "$f" || grep -qF "$LINES_STOCK_MIN" "$f"; then st_lines="stock"; fi
+    if [[ -n "$lines_num" ]]; then
+        if (( lines_num >= 400 )); then st_lines="applied"
+        elif grep -qF "$MARKER_LINES" "$f"; then st_lines="counterfeit"
+        else st_lines="stock"; fi
+    elif grep -qF "$MARKER_LINES" "$f"; then
+        st_lines="counterfeit"
+    fi
+
+    # titlecap has no single constant to read: the patch's property is that the TITLE is
+    # budgeted from the path, which is exactly the `titleLimit` expression below.
+    st_title="UNKNOWN"
+    # The PROPERTY is "the title is truncated to a path-derived budget", not the patch's own
+    # variable name: after minification `titleLimit` does not exist and the live bundles read
+    # `truncateIndexField(sanitizeIndexField(doc.title)||doc.type,Math.max(8,MAX_INDEX_LINE_CHARS
+    # -6-target.length))`. My first attempt asserted `titleLimit` and called four correctly
+    # patched bundles `counterfeit` -- a shape assertion, the exact defect this change removes.
+    if grep -qE 'Math\.max\( *8 *, *MAX_INDEX_LINE_CHARS *- *6 *- *target\.length *\)' "$f"; then
+        st_title="applied"
+    elif grep -qF "$MARKER_TITLE" "$f"; then st_title="counterfeit"
+    elif grep -qF "$TITLE_STOCK_SPACED" "$f" || grep -qF "$TITLE_STOCK_MIN" "$f"; then st_title="stock"; fi
 
     # `upstream` counts as satisfied: on 0.25.0 the builder already does what hunks 1-2 asked
     # for, so there is nothing to apply and reporting it as missing would be false.

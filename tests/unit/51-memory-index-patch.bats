@@ -217,4 +217,31 @@ setup() {
     [[ "$output" == *"all assertions passed"* ]]
 }
 
+
+@test "index patch: MARKERS ALONE never read applied — a stock copy with the three comments is counterfeit" {
+    # Hal's finding, 2026-10-25, reproduced before the fix: `st_bytes`/`st_title`/`st_lines` were
+    # decided by `grep -qF "$MARKER_*"` — the COMMENT STRING — and never by the value. So a pristine
+    # stock bundle with 25e3 / 200 and three marker lines inserted reported all three caps `applied`
+    # and the guard exited 0. A green over an unfixed bundle, from the instrument every claim about
+    # these caps rested on.
+    #
+    # The fixture is copied unchanged; ONLY the three marker strings are added. If this test ever
+    # passes with `bytecap: applied`, the guard has gone back to reading its own receipt.
+    FORGED="$CHUNKS/forged-chunk.js"
+    cp "$FIXTURE" "$FORGED"
+    # Constants must still be the stock values at this point, or the test proves nothing.
+    grep -q 'MAX_INDEX_LINES *= *200' "$FORGED"
+    printf '%s\n' '/* LOCAL PATCH 2026-10-01 (qwen-memory-index-bytecap) | LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap) | LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */' > "$FORGED.tmp"
+    cat "$FORGED" >> "$FORGED.tmp"
+    mv "$FORGED.tmp" "$FORGED"
+    grep -q 'MAX_INDEX_LINES *= *200' "$FORGED"   # the values survived the forgery intact
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS" bash "$PATCHER" --check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"bytecap: counterfeit"* ]]
+    [[ "$output" == *"titlecap: counterfeit"* ]]
+    [[ "$output" == *"linecap: counterfeit"* ]]
+    [[ "$output" != *"bytecap: applied"* ]]
+}
+
 # end of file
