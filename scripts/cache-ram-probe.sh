@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 #   v17 (2026-10-23): the RESULT summary names arm B's ACTUAL budget.  Measured: a
 #   `--cache-ram-mb 768` sizing run printed "ARM B (--cache-ram 0)" and a 512 run
 #   printed the same, because the label was a literal in _summarise_py while the value
@@ -392,7 +392,7 @@ printf '  ctx=%s batch=%s/%s threads=%s ngl=%s parallel=%s flash-attn=%s kv=%s/%
 #
 # The unit pins its own --cache-ram; that pair is STRIPPED here so the arm's value
 # is the only one in the argv (a duplicate would be the 2026-10-10 malformed arm).
-function __base_from_unit() {
+__base_from_unit() {
     local _unit="$1" _line _argv _i
     _line=$(systemctl --user show "$_unit" -p ExecStart --value) \
         || { warn "FATAL: no ExecStart for $_unit"; return 1; }

@@ -2,7 +2,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 19
+# Module Version: 20
 #   v19 (2026-10-24): the loopback0 check no longer reports an UNREADABLE boot
 #   state as "loopback0 missing".  Measured 2026-10-24: boot 19:02:56, the unit
 #   ran 19:03:43, "Startup finished in 53.181s" at 19:03:49, and the shell started
@@ -295,7 +295,7 @@ fi
 # already finished — harmless, since kill on a dead PID is a no-op. PIDs are
 # validated as numeric before signalling (matching env.sh's trap).
 __TAC_BG_PIDS=()
-function __tac_exit_cleanup() {
+__tac_exit_cleanup() {
     local pid
     for pid in "${__TAC_BG_PIDS[@]:-}"
     do
