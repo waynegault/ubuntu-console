@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 40
+#   v40 (2026-10-25): the CPU-DEGRADED row ATTRIBUTES instead of sending the operator to
+#   hunt for a process.  The warning it quotes already carries `work=[agent:…(…,age=…)…]`,
+#   so the row names the turns filling the event loop and says the row expires with them.
+#   The old text also asserted "its log shows completed client requests", which is only
+#   one of the two serving witnesses the classifier accepts ('ready'/'http server
+#   listening' is the other), and it prescribed `ps -eo pcpu`, a LIFETIME average that
+#   sorts the `ps` invocation itself to the top (measured here at 1300 %).
 # Module Version: 39
 #   v39 (2026-10-24): `__oc_wait_gateway_gone` replaces the single-sample read-back.  Live,
 #   `xo` read the unit as `activating` while its own stop sat queued behind an auto-restart,
@@ -833,6 +841,68 @@ function __so_gateway_bound_age() {
 }
 
 # ---------------------------------------------------------------------------
+# __so_degraded_row — print the CPU-DEGRADED row from ONE warning line.
+#
+# Returns 0 when it printed a row and 1 when the recency window holds no warning, so the
+# caller falls through to the health probe.  SO_DEGRADED_MIN is a LOOKBACK, not a
+# tolerance: widening it makes this row fire MORE often, not less.
+#
+# The row ATTRIBUTES instead of instructing.  The warning carries its own work=[…] list
+# and, measured 2026-10-25, those entries were the fleet's own turns (three agents
+# streaming at once) — so the old "find the consumer" sent the operator hunting for a
+# process the gateway had already named, with `ps -eo pcpu`, a LIFETIME average that
+# sorts the `ps` invocation itself to the top (1300 % measured here).  When the line
+# names no turns the row says that instead of guessing, and points at a live rate.
+#
+# Its age, its numbers and its turns all come from that ONE line: a second read could
+# answer about a different one.
+# ---------------------------------------------------------------------------
+function __so_degraded_row() {
+    local _svc="$1" _win="${SO_DEGRADED_MIN:-3}" _warn="" _deg="" _turns="" _counts="" _epoch="" _when=""
+    # swallow-ok: an unreadable journal is not evidence of health — an empty read falls through to the probe below, which answers the serving question itself
+    _warn=$(journalctl --user -u "$_svc" --since "-${_win} min" --no-pager --output=short-unix 2>/dev/null \
+        | grep '\[diagnostic\] liveness warning' | tail -n 1)
+    _deg=$(printf '%s\n' "$_warn" \
+        | grep -oE 'reasons=[a-z_,]+|degradedFor=[0-9]+s|eventLoopDelayP99Ms=[0-9.]+|cpuCoreRatio=[0-9.]+' \
+        | tr '\n' ' ')
+    _deg="${_deg% }"
+    [[ -n "$_deg" ]] || return 1
+    # The header trio is matched as a unit: work entries carry their own 'q=' and 'age=',
+    # so a bare 'active=' would also hit 'work=[active=agent:…'.
+    _counts=$(printf '%s\n' "$_warn" | grep -oE 'active=[0-9]+ waiting=[0-9]+ queued=[0-9]+' | head -n 1)
+    _turns=$(printf '%s\n' "$_warn" | grep -oE 'agent:[^()]+\([^)]*\)' \
+        | sed -E 's/^agent:([^:]+):[^(]+\([a-z]+\/([^,]+),[^)]*age=([0-9]+s)[^)]*\)/\1 \2 \3/' \
+        | awk 'NR<=3{s=s (s?", ":"") $0; next} {n++}
+               END{printf "%s%s", s, (n?" +" n " more":"")}')
+    _epoch="${_warn%% *}"
+    _epoch="${_epoch%%.*}"
+    if [[ "$_epoch" =~ ^[0-9]+$ ]]
+    then
+        _when=", $(( ($(date +%s) - _epoch) / 60 ))m ago,"
+    fi
+    __tac_info "Gateway" "[RUNNING but CPU-DEGRADED — do NOT restart]" "$C_Warning"
+    if [[ -n "$_turns" ]]
+    then
+        printf '%s\n' "  ${C_Dim}Its last warning${_when} named ${_counts:-no turn counts}:${C_Reset}"
+        printf '%s\n' "  ${C_Dim}its own turns, not a foreign consumer. Node's event loop${C_Reset}"
+        printf '%s\n' "  ${C_Dim}is single-threaded, so those turns ARE the delay:${C_Reset}"
+        printf '%s\n' "  ${C_Dim}  ${_turns}${C_Reset}"
+        printf '%s\n' "  ${C_Dim}${_deg}${C_Reset}"
+        printf '%s\n' "  ${C_Dim}It clears once they finish and the warning ages out of${C_Reset}"
+        printf '%s\n' "  ${C_Dim}the ${_win} min lookback — no restart, nothing to kill.${C_Reset}"
+    else
+        printf '%s\n' "  ${C_Dim}Its last warning${_when} reports a behind-schedule event loop${C_Reset}"
+        printf '%s\n' "  ${C_Dim}but names no turns in flight, so the delay comes from${C_Reset}"
+        printf '%s\n' "  ${C_Dim}outside the gateway.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}${_deg}${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Read a LIVE rate: the second sample of 'top -b -n2 -d1'.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}'ps -eo pcpu' is a lifetime average and sorts itself top.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}This row clears when the ${_win} min lookback passes.${C_Reset}"
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __so_health_gate — is the bound gateway actually SERVING?  0 yes, 1 no.
 #
 # Extracted from so() so these rules live in one place and so() keeps its size.  A
@@ -887,30 +957,11 @@ function __so_health_gate() {
     fi
     if [[ "$_phase" == "degraded" ]]
     then
-        # Recency-bounded on purpose: the classifier's window is 15 min, so a warning
-        # from 14 min ago would otherwise keep reporting a gateway that has since
-        # recovered as degraded for the rest of that window.  This read takes the
-        # row's numbers too, so the operator sees what the gateway said about itself.
-        local _deg=""
-        # swallow-ok: an unreadable journal is not evidence of health — an empty read falls through to the probe below, which answers the serving question itself
-        _deg=$(journalctl --user -u "$_svc" --since "-${SO_DEGRADED_MIN:-3} min" --no-pager --output=cat 2>/dev/null \
-            | grep '\[diagnostic\] liveness warning' | tail -n 1 \
-            | grep -oE 'reasons=[a-z_,]+|degradedFor=[0-9]+s|eventLoopDelayP99Ms=[0-9.]+|cpuCoreRatio=[0-9.]+' \
-            | tr '\n' ' ')
-        _deg="${_deg% }"
-        if [[ -n "$_deg" ]]
+        # exit 1 here is DELIBERATE and owner-ratified (Wayne, 2026-09-30): every
+        # non-green row of this command returns 1, so `so && …` does not proceed on a
+        # degraded gateway.  Exiting 0 was offered — the gateway IS up — and declined.
+        if __so_degraded_row "$_svc"
         then
-            __tac_info "Gateway" "[RUNNING but CPU-DEGRADED — do NOT restart]" "$C_Warning"
-            printf '%s\n' "  ${C_Dim}Its log shows completed client requests, but the${C_Reset}"
-            printf '%s\n' "  ${C_Dim}gateway's own liveness warning reports a behind-schedule${C_Reset}"
-            printf '%s\n' "  ${C_Dim}event loop: ${_deg}${C_Reset}"
-            printf '%s\n' "  ${C_Dim}A restart does not free CPU, and re-entering the restart${C_Reset}"
-            printf '%s\n' "  ${C_Dim}window is what turned one restart into 15.5 min of outage${C_Reset}"
-            printf '%s\n' "  ${C_Dim}(2026-09-22). Find the consumer instead:${C_Reset}"
-            printf '%s\n' "  ${C_Dim}ps -eo pcpu,pid,comm --sort=-pcpu | head -8${C_Reset}"
-            # exit 1 here is DELIBERATE and owner-ratified (Wayne, 2026-09-30): every
-            # non-green row of this command returns 1, so `so && …` does not proceed on a
-            # degraded gateway.  Exiting 0 was offered — the gateway IS up — and declined.
             return 1
         fi
     fi

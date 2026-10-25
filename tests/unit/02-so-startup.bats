@@ -426,6 +426,60 @@ __so_test_prelude() {
     [ ! -e "$TAC_TEST_TMPDIR/probe-ran" ]
 }
 
+@test "so: a degraded row NAMES the gateway's own turns instead of sending it hunting" {
+    # The warning line carries its own work=[…] list, so the row can say WHAT fills the
+    # event loop.  Captured verbatim 2026-10-25 09:14:00Z on this box (short-unix form,
+    # which is what the recency read now asks for): three fleet turns streaming at once,
+    # which is the state the previous text described as "find the consumer" — a hunt for
+    # a process the gateway had already named.  This catches that regression: the old row
+    # carried no agent name at all.
+    __so_test_prelude
+    journalctl() {
+        printf '%s\n' \
+            '1792919463.811766 XPS15-9520 node[1102723]: 2026-10-25T09:11:03.810+00:00 [ws] ⇄ res ✓ chat.history 1041ms bytes=537641 conn=1db0a102…5cf3 id=3226:790f4e4…a00b' \
+            '1792919640.036695 XPS15-9520 node[1102723]: 2026-10-25T09:14:00.035+00:00 [diagnostic] liveness warning: reasons=cpu interval=1s degradedFor=219s eventLoopDelayP99Ms=251.5 eventLoopDelayMaxMs=251.5 eventLoopUtilization=0.657 cpuCoreRatio=2.62 active=3 waiting=0 queued=0 work=[active=agent:jarvis:main(processing/tool_call,q=0,age=310s last=tool:process:started)|agent:vigil:main(processing/tool_call,q=0,age=322s last=tool:process:started)|agent:juno:main(processing/model_call,q=0,age=24s last=model_call:stream_progress)]'
+    }
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CPU-DEGRADED"* ]]
+    # Attribution: the three turns, with their phase and age, from the line itself.
+    [[ "$output" == *"jarvis tool_call 310s"* ]]
+    [[ "$output" == *"vigil tool_call 322s"* ]]
+    [[ "$output" == *"juno model_call 24s"* ]]
+    [[ "$output" == *"its own turns"* ]]
+    [[ "$output" == *"active=3 waiting=0 queued=0"* ]]
+    [[ "$output" == *"degradedFor=219s"* ]]
+    # And the old hunt for a process is GONE — the gateway had already named the cause.
+    [[ "$output" != *"Find the consumer"* ]]
+    [[ "$output" != *"ps -eo pcpu,pid,comm"* ]]
+    [[ "$output" != *"openclaw gateway restart"* ]]
+    [ ! -e "$TAC_TEST_TMPDIR/probe-ran" ]
+}
+
+@test "so: a degraded row with no turns named says the delay came from elsewhere" {
+    # The other measured shape (2026-09-30): a warning with active=0 and NO work list, so
+    # the gateway's own accounting cannot attribute the delay.  The row must not claim
+    # "its own turns" here — that would be an attribution the log never made — and the
+    # live-rate hint must not be the `ps -eo pcpu` lifetime average the old text gave.
+    __so_test_prelude
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-30T09:46:00.000+01:00 [gateway] ready' \
+            '2026-09-30T09:46:46.030+01:00 [diagnostic] liveness warning: reasons=cpu interval=2s degradedFor=223s eventLoopDelayP99Ms=707.3 cpuCoreRatio=1.851 active=0 waiting=0 queued=0'
+    }
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"outside the gateway"* ]]
+    [[ "$output" == *"top -b -n2 -d1"* ]]
+    [[ "$output" != *"its own turns"* ]]
+    [[ "$output" != *"openclaw gateway restart"* ]]
+    [ ! -e "$TAC_TEST_TMPDIR/probe-ran" ]
+}
+
 @test "xo: a gateway still active after the stop is not reported TERMINATED" {
     # THE INJECTED-FAILURE CASE for xo's read-back (docs/contracts/command-contracts.yaml,
     # entry `xo`): the unit is queried and still active, so the stop did not take.  Pre-fix
