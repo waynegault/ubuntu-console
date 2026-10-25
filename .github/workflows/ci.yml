@@ -257,7 +257,7 @@ jobs:
                tests/unit/56-two-sided-freshness.bats \
                tests/unit/57-cache-ram-probe.bats \
                tests/unit/58-gpu-busy-sanctioned-util.bats \
-               tests/unit/58-gpu-watch-selfcheck-timer.bats \
+               tests/unit/58b-gpu-watch-selfcheck-timer.bats \
                tests/unit/59-check-swallows-staged.bats \
                tests/unit/60-wsl-restart.bats \
                tests/unit/61-autotune-resume.bats \
