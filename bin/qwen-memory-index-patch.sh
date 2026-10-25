@@ -102,7 +102,7 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
+# Module Version: 9
 #   v8 (2026-10-25): 0.26.1 SHIPS A REWRITTEN BUILDER and the tooling only half-knows it.  Two
 #   predicates repaired, one blocker remains, and NO 0.26.1 COPY IS PATCHED BY THIS VERSION:
 #     * the Python-side UPSTREAM test hardcoded `room=MAX_INDEX_LINE_CHARS-link2.length` while the
@@ -112,12 +112,16 @@
 #       file in the same run.  Both sides now use the same regex.
 #     * the MIN title anchor hardcoded the minifier's link index (`link2`); 0.26.1 says `link4`.
 #       The index is not the property, so capture the name and emit it back.
-#   STILL BLOCKED: 0.26.1's assembleIndex calls trimIndexToBudget(lines,priorityPrefixLength) and
-#   the bytecap post-condition ("assembleIndex definition count is not 1") fails, so a 0.26.1 chunk
-#   is still REFUSED and left byte-identical (backup kept, node --check never reached).  Patching
-#   0.26.1 therefore needs a fourth anchor derived before the menu item is real.  Verified on a
-#   throwaway copy under a temp HOME, 2026-10-25: apply rc=1, caps still 25e3/200, chunk unchanged;
-#   the five already-patched copies stay ok and byte-identical.
+#   v8 (2026-10-25, continued): the fourth blocker was a POST-CONDITION asserting a SHAPE.
+#   0.26.1's assembleIndex is `function assembleIndex(lines,priorityPrefixLength=0)`, so the literal
+#   "function assembleIndex(lines)" count was 0 and the tool refused.  But 0.26.0's PRE-patch
+#   original also took one argument (measured), so the parameter is NEW UPSTREAM, not something the
+#   patch added or 0.26.1 lost: the assertion refused a bundle that was newer and better.  It now
+#   asserts what must hold -- exactly one assembleIndex definition, whatever its signature, plus
+#   the stock cap being gone -- because a shape assertion in a post-condition tests the form of the
+#   fix, not the fix.  Verified on a throwaway copy: apply rc=0, syntax verified, caps 400/256000,
+#   all five components applied/upstream, --check rc=0.  The live 0.26.1 copy is untouched by this
+#   version's commit; applying it there is a separate, deliberate act.
 #   v6 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 #   v5 (2026-10-14): recognise CLI 0.25.1, which RENAMED the byte cap `MAX_INDEX_BYTES` ->
 #   `MAX_INDEX_CHARS` and SPLIT assembleIndex: the kept-Set budget moved into trimIndexToBudget
@@ -818,8 +822,18 @@ if re.search(r"\[\.\.\.value\]\.slice\(0,\s*MAX_INDEX_FIELD_CHARS\)", src):
 if ("var MAX_INDEX_BYTES = 25e3;" in src or "var MAX_INDEX_BYTES=25e3;" in src
         or "var MAX_INDEX_CHARS = 25e3;" in src or "var MAX_INDEX_CHARS=25e3;" in src):
     raise SystemExit("refusing to patch: the stock byte-cap declaration is still present")
-if src.count("function assembleIndex(lines)") != 1:
-    raise SystemExit("refusing to patch: the assembleIndex definition count is not 1")
+# The signature is the FORM; the cap value is the PROPERTY.  0.26.1 added a second parameter
+# (`function assembleIndex(lines,priorityPrefixLength=0)`), which upstream introduced on purpose --
+# measured 2026-10-25: the 0.26.0 pre-patch original ALSO took one argument, so the parameter is
+# neither something this patch added nor something 0.26.1 lost.  Asserting the old shape refused a
+# bundle that was newer and better, which is the same defect as a marker assertion in --check:
+# it tests the form of the fix rather than the fix.  What must hold is that exactly one definition
+# exists and that the stock cap is gone (asserted above).
+_asm = re.findall(r"function assembleIndex\(lines(?:,\s*priorityPrefixLength\s*=\s*0)?\)", src)
+if len(_asm) != 1:
+    raise SystemExit(
+        f"refusing to patch: the assembleIndex definition count is {len(_asm)}, expected 1"
+    )
 if UPSTREAM:
     if "function truncateIndexField(" not in src:
         raise SystemExit("refusing to patch: the upstream truncateIndexField is absent from the result")
