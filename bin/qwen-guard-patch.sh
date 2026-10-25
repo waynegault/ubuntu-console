@@ -42,9 +42,10 @@
 #   3. allowed mutating repositories (LOCAL PATCH 2026-10-01)
 #      Wayne, 2026-10-01: "i authorise widening the guard's mutating-verb allowlist" so this
 #      session can commit the ~/.qwen memory stores (two repos, the second nested in the
-#      first).  Implemented as an EXPLICIT repository-root allowlist — those two paths only —
-#      NOT a blanket "any relocated mutating git", which would remove the protection the guard
-#      exists to provide for every other repository on the box.  Applied at the three gates
+#      first).  Implemented as an EXPLICIT repository-root allowlist — those two paths only at
+#      the time — NOT a blanket "any relocated mutating git", which would remove the protection
+#      the guard exists to provide for every other repository on the box.  Extended 2026-10-25
+#      to add /home/wayne/ubuntu-console on Wayne's explicit instruction.  Applied at the three gates
 #      that decide an OUTSIDE_TARGET denial, so it relaxes ONLY "which repository is
 #      reachable"; the dynamic-relocation, unparseable-payload and unrecognized-program
 #      refusals are untouched.
@@ -112,8 +113,9 @@
 # this file.  The companion to it, qwen-guard-selfheal.sh, is tracked beside it.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 #   v2 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
+#   v3 (2026-10-25): add /home/wayne/ubuntu-console to the mutating-repository allowlist.
 set -euo pipefail
 
 _BIN_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
@@ -129,11 +131,13 @@ MARKER_WRITE="LOCAL PATCH 2026-10-01 (allowed mutating repositories)"
 STOCK_0245='var RELOCATED_READ_ONLY_GIT_SUBCOMMANDS = /* @__PURE__ */ new Set(["cat-file", "rev-parse"]);'
 STOCK_0246='var RELOCATED_READ_ONLY_GIT_SUBCOMMANDS=new Set(["cat-file","rev-parse"]);'
 
-# Repository roots this box may mutate from OUTSIDE the session working directory.  Both are
-# git repositories and the second is nested inside the first, so both are named explicitly.
+# Repository roots this box may mutate from OUTSIDE the session working directory.  The two
+# ~/.qwen stores are git repositories and the second is nested inside the first, so both are
+# named explicitly; ~/ubuntu-console was added 2026-10-25 on Wayne's explicit instruction.
 ALLOWED_MUTATING_REPOSITORY_ROOTS=(
     "/home/wayne/.qwen"
     "/home/wayne/.qwen/memories"
+    "/home/wayne/ubuntu-console"
 )
 
 check_only=0
