@@ -102,7 +102,22 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-25): 0.26.1 SHIPS A REWRITTEN BUILDER and the tooling only half-knows it.  Two
+#   predicates repaired, one blocker remains, and NO 0.26.1 COPY IS PATCHED BY THIS VERSION:
+#     * the Python-side UPSTREAM test hardcoded `room=MAX_INDEX_LINE_CHARS-link2.length` while the
+#       shell side had already been made regex-tolerant (v7).  So `--check` printed
+#       "truncator: upstream" and the apply computed UPSTREAM=False and REFUSED -- one predicate,
+#       two implementations, one of them fixed.  The report and the action disagreed about the same
+#       file in the same run.  Both sides now use the same regex.
+#     * the MIN title anchor hardcoded the minifier's link index (`link2`); 0.26.1 says `link4`.
+#       The index is not the property, so capture the name and emit it back.
+#   STILL BLOCKED: 0.26.1's assembleIndex calls trimIndexToBudget(lines,priorityPrefixLength) and
+#   the bytecap post-condition ("assembleIndex definition count is not 1") fails, so a 0.26.1 chunk
+#   is still REFUSED and left byte-identical (backup kept, node --check never reached).  Patching
+#   0.26.1 therefore needs a fourth anchor derived before the menu item is real.  Verified on a
+#   throwaway copy under a temp HOME, 2026-10-25: apply rc=1, caps still 25e3/200, chunk unchanged;
+#   the five already-patched copies stay ok and byte-identical.
 #   v6 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 #   v5 (2026-10-14): recognise CLI 0.25.1, which RENAMED the byte cap `MAX_INDEX_BYTES` ->
 #   `MAX_INDEX_CHARS` and SPLIT assembleIndex: the kept-Set budget moved into trimIndexToBudget
@@ -312,8 +327,14 @@ bytes_v0251 = "INDEX_TRUNCATION_NOTICE" in src
 # 0.25.0's builder already keeps the link, so hunks 1-2 are upstream-satisfied there.
 # Recognised by the same two spellings the shell side uses; without this a copy that needs
 # ONLY hunk 3 is refused with "no known stock truncateIndexLine body".
+# The room calculation is spelled `-link2.length` in 0.25.0 and `-link4.length` in 0.26.1 -- the
+# minifier renumbered the variable.  The shell side learned this on 2026-10-25 (UPSTREAM_ROOM_CALC
+# was made a regex for exactly this reason) and the Python side did NOT, so for 0.26.1 the report
+# printed "truncator: upstream" while the apply computed UPSTREAM=False, fell through to the stock
+# bodies and refused the chunk.  One predicate, two implementations, one of them fixed: the guard
+# said the build was fine and the tool refused to touch it, about the same file, in the same run.
 UPSTREAM = ("function truncateIndexField(" in src
-            and "room=MAX_INDEX_LINE_CHARS-link2.length" in src)
+            and re.search(r"room=MAX_INDEX_LINE_CHARS-link[0-9]*\.length", src) is not None)
 
 # --- hunk 2: drop the 120-char path cap in encodeIndexPathTarget (two spellings) ---
 PATHCAP = {
@@ -740,7 +761,29 @@ else:
         t = new
         break
     if t is None:
-        raise SystemExit("refusing to patch: no known docIndexLine title anchor (UNKNOWN shape)")
+        # 0.26.1: the same minified builder, with the link variable renumbered link2 -> link4 and
+        # the title left UNCAPPED in docIndexLine (sanitizeIndexField trims it to 120, so a long
+        # title eats the description's room instead of being shortened to fit the line).  The
+        # minifier's index is not the property -- measured 2026-10-25 across 0.25.1 (link2) and
+        # 0.26.1 (link4) -- so capture the NAME and emit it back unchanged.
+        mt = re.search(
+            r"function docIndexLine\(doc,others=\[\]\)\{"
+            r"const title=sanitizeIndexField\(doc\.title\)\|\|doc\.type;"
+            r"const (link[0-9]+)=`- \[\$\{title\}\]\(\$\{encodeIndexPathTarget\(doc\.relativePath\)\}\)`;",
+            src,
+        )
+        if mt is None:
+            raise SystemExit("refusing to patch: no known docIndexLine title anchor (UNKNOWN shape)")
+        lv = mt.group(1)
+        t = (
+            "function docIndexLine(doc,others=[]){"
+            "/* LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap) */"
+            "const target=encodeIndexPathTarget(doc.relativePath);"
+            "const title=truncateIndexField(sanitizeIndexField(doc.title)||doc.type,"
+            "Math.max(8,MAX_INDEX_LINE_CHARS-6-target.length));"
+            "const " + lv + "=`- [${title}](${target})`;"
+        )
+        src = src[:mt.start()] + t + src[mt.end():]
     applied.append("titlecap")
 
 # hunk 5 (linecap)
