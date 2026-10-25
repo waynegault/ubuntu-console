@@ -174,12 +174,18 @@ def _get_bearer_token(otp: str) -> str:
         return token_data.get("access_token", "")
 
 def _fetch_cpap_data(bearer: str) -> dict:
-    """Fetch CPAP data using bearer token.
+    """Deliberate unimplemented placeholder: the active EU adapter is ``cpap-myair-fetch.py``.
 
-    NOT IMPLEMENTED.  This used to return a mock payload while ``main()`` printed
-    ``{"ok": true}``, so a caller saw success with nothing fetched (card 8dda5918).
-    It raises until the real myAir fetch exists — never return placeholder data from
-    a function whose success callers trust.
+    Nothing in the cron or the shell wrappers calls this entrypoint. The live CPAP path is
+    ``cpap-myair-collector.py --adapter command`` over ``cpap-myair-fetch.py`` (the EU adapter
+    that actually fetches); this "unified" file is kept only because deleting it needs a
+    NAS-side check that nothing there invokes it, and a future caller who lands here should be
+    pointed at the adapter that works rather than at a bare exception (AUD-FU-002, option (c)).
+
+    It raises rather than returning placeholder data: this function used to return a mock
+    payload while ``main()`` printed ``{"ok": true}``, so a caller saw success with nothing
+    fetched (card 8dda5918). Never return placeholder data from a function whose success
+    callers trust.
     """
     raise NotImplementedError(
         "myAir CPAP fetch is not implemented; refusing to return mock data"

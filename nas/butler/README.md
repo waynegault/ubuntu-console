@@ -177,3 +177,18 @@ either would diverge the mirror:
 - `test_salus_cli_parsers.py` `exec`s the INSTALLED skill copy at
   `/home/wayne/.openclaw/skills/salus-it500/salus.py` and needs `aiohttp` (installed by
   `.github/ci-requirements.txt`), so it tests the installed skill rather than the mirror.
+
+### `_run` length — AUD-FU-001 decision (2026-10-25)
+
+`salus.py::_run` is 266 lines and mixes scheduler setup, per-slot dispatch, retry/backoff, status
+persistence and result aggregation. **Decision: (b) leave `_run` as-is until a NAS window; (a) when
+that window opens, refactor in the NAS source of truth, re-mirror, then diff — the diff must be
+empty apart from the refactor.** Refactoring the mirror alone is not an option: the NAS copy is the
+deployed source, so a mirror-only refactor would silently diverge from what runs, and neither
+`_run`'s retry/backoff behaviour nor its status fields may change. `pytest.ini`'s `testpaths`
+keeps naming `nas/butler/openclaw/salus-it500/tests/` in place; the tests and the mirror are not
+moved here.
+
+No edit was made to `salus.py` for this decision. That file is a byte-identical mirror of the NAS
+source and must not be edited independently, so the decision is recorded here only. Option (a)'s
+refactor is the first change that belongs in the NAS source, followed by a re-mirror and a diff.
