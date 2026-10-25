@@ -21,6 +21,33 @@ class TestKgrapModuleEntryPoint(unittest.TestCase):
         self.assertIn("usage: kgraph", proc.stdout)
 
 
+class TestConceptConfigHasOneSource(unittest.TestCase):
+    """The repo copy and the packaged copy of concept-aliases.json must agree.
+
+    `scripts/kgraph/constants.py` reads `config/concept-aliases.json` from a
+    checkout and `scripts/kgraph/config/concept-aliases.json` from an installed
+    wheel (`scripts/pyproject.toml` ships `config/*.json` as package data).
+    The two are separate tracked files, so without this check an edit to one
+    silently changes classification in the checkout but not in the installed
+    tool — the same drift the module's own header records for the three
+    hardcoded tables it replaced.
+    """
+
+    def test_packaged_copy_matches_repo_copy(self):
+        repo_copy = os.path.join(REPO_ROOT, "config", "concept-aliases.json")
+        pkg_copy = os.path.join(REPO_ROOT, "scripts", "kgraph", "config",
+                                "concept-aliases.json")
+        with open(repo_copy, "rb") as fh:
+            repo_bytes = fh.read()
+        with open(pkg_copy, "rb") as fh:
+            pkg_bytes = fh.read()
+        self.assertEqual(
+            repo_bytes, pkg_bytes,
+            "scripts/kgraph/config/concept-aliases.json has drifted from "
+            "config/concept-aliases.json; copy the repo file over the packaged "
+            "copy so an installed kgraph classifies concepts the same way")
+
+
 class TestKgrapLibraryDoesNotPrint(unittest.TestCase):
     """Only cli.py — the CLI boundary — prints; library modules return data.
 
