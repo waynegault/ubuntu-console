@@ -506,3 +506,142 @@ MOCK
     grep -q 'needed+=(agentmail)' "$sh"
     grep -q 'agentmail) patch="\$AGENTMAIL"; label="agentmail dist patch"; apply_args=(--apply)' "$sh"
 }
+
+# ==============================================================================
+# The self-heal tick's WITNESS CLASSES (2026-10-25, T-JARVIS-094)
+# ==============================================================================
+# Measured 2026-10-25T09:23Z: the store witness read rc=3 (13 over-cap index lines across
+# two stores, bad=0, every link resolving) and the tick exited 1 — the same code, and the
+# same "tick exited 1" marker downstream, as a foreign bundle whose patch could not be
+# re-applied.  One is an edit to a store line; the other is the fault the watchdog exists
+# for, and while any store carries a long title a genuine revert is indistinguishable.
+#
+# These cases are BEHAVIOURAL, unlike the static wiring nets above: they run the REAL script
+# with every probed tool relocated into a scratch directory (QSH_TOOL_ROOT) and the log
+# redirected (QSH_LOG_DIR), so the class table is exercised end to end without touching a
+# live bundle or the real ~/.local/share/qwen-guard/selfheal.log.  The tool paths are the
+# tick's own test seam, added for this card; cron never sets it.
+#
+# What each case catches — the wrong outcome it exists to detect:
+#   * rc=3 → exit 3 and a WITNESS-STORE-EDIT marker naming the edit remedy.  THE regression
+#     this card was written for: an over-cap line borrowing the emergency's exit code.
+#   * rc=1 → exit 1 and WITNESS-EMERGENCY.  Catches the opposite flattening — a "fix" that
+#     lets a chopped link go out under the cosmetic class, or unreported.
+#   * rc=2 → exit 1 and WITNESS-NO-STORE, naming the store path.  Catches both a fold-back
+#     into the emergency class and the opposite error — silencing a witness that could not run.
+#   * rc=0 → exit 0 and silence.  A CONTROL, not a regression case: it passes pre-fix too,
+#     and exists so a table that starts reporting clean stores is caught.
+#   * an unclassified rc → WITNESS-UNKNOWN-<n>, carrying the number.  Catches a catch-all
+#     arm that drops the code the reader needs to look up.
+#   * rc=3 is never queued for repair, and the marker stops on the next green tick.  Catches
+#     "make rc=3 repairable" (an --apply cannot shorten an index line) and a marker that
+#     outlives the condition it describes.
+#   * a patch failure beside rc=3 → exit 1, not 3.  Catches a plain max() over the exit codes,
+#     which would rank the cosmetic finding above the fault (3 > 1 numerically).
+# ==============================================================================
+
+# Every probed tool in one scratch directory, each reporting "already applied", so no
+# re-apply is queued and each run below is decided by the witness alone.
+witness_tools() {
+    export TOOLS="$BATS_TEST_TMPDIR/tools" LOGS="$BATS_TEST_TMPDIR/logs"
+    mkdir -p "$TOOLS" "$LOGS"
+    local t
+    for t in qwen-guard-patch.sh qwen-memory-index-patch.sh qwen-memory-style-patch.sh \
+             workboard-commentcap-patch.sh workboard-proofcap-patch.sh \
+             vscode-pytest-log-patch.py skill-denlink.sh agentmail-dist-patch.sh; do
+        printf '#!/usr/bin/env bash\nexit 0\n' >"$TOOLS/$t"
+        chmod +x "$TOOLS/$t"
+    done
+}
+
+# The witness answers $1, and records the argv it was called with: a re-apply would appear
+# as a second invocation (with --apply), which is how "not repairable" is proved rather than
+# assumed.
+witness_exits() {
+    printf '#!/usr/bin/env bash\nprintf "called:%%s\\n" "$*" >>"%s/witness-calls"\nexit %s\n' \
+        "$BATS_TEST_TMPDIR" "$1" >"$TOOLS/qwen-memory-index-check.py"
+    chmod +x "$TOOLS/qwen-memory-index-check.py"
+}
+
+run_tick() {
+    run env QSH_TOOL_ROOT="$TOOLS" QSH_LOG_DIR="$LOGS" bash "$REPO_ROOT/bin/qwen-guard-selfheal.sh"
+}
+
+@test "self-heal witness: rc=3 is its own STORE-EDIT class, not the emergency" {
+    witness_tools
+    witness_exits 3
+    run_tick
+    [ "$status" -eq 3 ]
+    grep -q 'WITNESS-STORE-EDIT' "$LOGS/selfheal.log"
+    grep -q 'edit that store line' "$LOGS/selfheal.log"
+    ! grep -q 'WITNESS-EMERGENCY' "$LOGS/selfheal.log"
+}
+
+@test "self-heal witness: rc=1 keeps the EMERGENCY class and exit 1" {
+    witness_tools
+    witness_exits 1
+    run_tick
+    [ "$status" -eq 1 ]
+    grep -q 'WITNESS-EMERGENCY' "$LOGS/selfheal.log"
+    grep -q 'retiring pre-patch daemons' "$LOGS/selfheal.log"
+    ! grep -q 'STORE-EDIT' "$LOGS/selfheal.log"
+}
+
+@test "self-heal witness: rc=2 keeps exit 1 under its own NO-STORE class" {
+    witness_tools
+    witness_exits 2
+    run_tick
+    # Same severity as before v11: a witness that could not run is not a clean tree and must
+    # still page.  What changed is the class and the remedy, not the silence.
+    [ "$status" -eq 1 ]
+    grep -q 'WITNESS-NO-STORE' "$LOGS/selfheal.log"
+    grep -q 'check the STORE PATH' "$LOGS/selfheal.log"
+    ! grep -q 'WITNESS-EMERGENCY' "$LOGS/selfheal.log"
+    ! grep -qi 'reboot' "$LOGS/selfheal.log"
+}
+
+@test "self-heal witness: rc=0 stays silent (control)" {
+    witness_tools
+    witness_exits 0
+    run_tick
+    [ "$status" -eq 0 ]
+    [ ! -f "$LOGS/selfheal.log" ]
+}
+
+@test "self-heal witness: an unclassified rc carries its number into the marker" {
+    witness_tools
+    witness_exits 7
+    run_tick
+    [ "$status" -eq 1 ]
+    grep -q 'WITNESS-UNKNOWN-7' "$LOGS/selfheal.log"
+}
+
+@test "self-heal witness: rc=3 is never queued for repair, and its marker stops on a green tick" {
+    witness_tools
+    witness_exits 3
+    run_tick
+    [ "$status" -eq 3 ]
+    # Exactly one probe, with no arguments: the witness is never re-invoked with --apply.
+    [ "$(wc -l <"$BATS_TEST_TMPDIR/witness-calls")" -eq 1 ]
+    grep -qx 'called:' "$BATS_TEST_TMPDIR/witness-calls"
+    # The clearing condition the marker names: the witness answers 0, and nothing more is
+    # written.  A marker that outlived its condition would add a line here.
+    local before
+    before="$(wc -l <"$LOGS/selfheal.log")"
+    witness_exits 0
+    run_tick
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$LOGS/selfheal.log")" -eq "$before" ]
+}
+
+@test "self-heal witness: a patch failure outranks a store edit (exit 1, not 3)" {
+    witness_tools
+    witness_exits 3
+    # The guard patch never heals: its --check fails before and after the re-apply.
+    printf '#!/usr/bin/env bash\nexit 1\n' >"$TOOLS/qwen-guard-patch.sh"
+    chmod +x "$TOOLS/qwen-guard-patch.sh"
+    run_tick
+    [ "$status" -eq 1 ]
+    grep -q 'STILL-NEEDS-ATTENTION' "$LOGS/selfheal.log"
+    grep -q 'WITNESS-STORE-EDIT' "$LOGS/selfheal.log"
+}

@@ -77,7 +77,25 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 10
+# Module Version: 12
+#   v12 (2026-10-25): wrap the class remedies and comment witness_class (ratchet).
+#   v11 (2026-10-25, T-JARVIS-094): each store-witness class now has its OWN status, marker
+#   and exit status instead of every non-zero witness rc exiting 1.  Measured 2026-10-25T09:23Z:
+#   the witness read rc=3 (13 over-cap index lines, bad=0, every link resolving) and the tick
+#   exited 1 -- the same code, and the same "tick exited 1" marker downstream, as a foreign
+#   bundle whose patch could not be re-applied.  A cosmetic condition wore the emergency's
+#   voice, which is how a real revert gets read as noise.  The classes (table in the
+#   witness_class function below): rc=0 OK (silent), rc=1 EMERGENCY (exit 1, unchanged),
+#   rc=2 NO-STORE (exit 1, its own marker naming the store path), rc=3 STORE-EDIT (exit 3,
+#   the edit remedy named), any other rc=UNKNOWN-<n> (exit 1, the number carried).  The tick
+#   exits the MOST SEVERE class it saw, never the numerically largest, so a patch failure is
+#   never masked by an over-cap line.  ONLY rc=3's classification changed: every other class
+#   keeps the exit status it had before v11, so no condition was silenced to draw the line.
+#   rc=1 auto-repair (the patch loop) is untouched, and rc=3 is NOT made repairable: an
+#   --apply cannot shorten an index line, and the witness is never queued for one.
+#   OWED, cross-repo: ~/.openclaw/workspace-jarvis/scripts/qwen-guard-escalate.sh gates its
+#   one-tick rc=3 deferral on `guard_rc -eq 1`; with this tick now exiting 3 for that class the
+#   gate must accept 3 as well, or a first-sight over-cap sample escalates one tick sooner.
 #   v10 (2026-10-16): the store-witness REPORT is keyed on the witness's own rc.  It had
 #   claimed "a patch re-apply cannot fix this (retire pre-patch daemons / reboot)" for ANY
 #   non-zero witness exit, but only rc=1 (a broken/chopped index link) is a daemon case:
@@ -176,7 +194,23 @@ DENLINK="/home/wayne/.openclaw/scripts/skill-denlink.sh"
 # lives in the OTHER repo); its --check is rc-aware, so it is probed separately below.
 AGENTMAIL="/home/wayne/.openclaw/scripts/agentmail-dist-patch.sh"
 WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
-LOG_DIR="/home/wayne/.local/share/qwen-guard"
+# TEST SEAM (T-JARVIS-094).  Relocate every PROBED tool into one scratch directory so a suite
+# can drive each witness class through the real script without touching a live bundle or the
+# real log.  Cron never sets it, and the nine production literals above stay exactly as they
+# are -- the wiring net's cases grep those lines -- so this block only ever runs under a test.
+QSH_TOOL_ROOT="${QSH_TOOL_ROOT:-}"
+if [[ -n "$QSH_TOOL_ROOT" ]]; then
+  PATCH="$QSH_TOOL_ROOT/qwen-guard-patch.sh"
+  IDX="$QSH_TOOL_ROOT/qwen-memory-index-patch.sh"
+  STYLE="$QSH_TOOL_ROOT/qwen-memory-style-patch.sh"
+  COMMENTCAP="$QSH_TOOL_ROOT/workboard-commentcap-patch.sh"
+  PROOFCAP="$QSH_TOOL_ROOT/workboard-proofcap-patch.sh"
+  TESTLOG="$QSH_TOOL_ROOT/vscode-pytest-log-patch.py"
+  DENLINK="$QSH_TOOL_ROOT/skill-denlink.sh"
+  AGENTMAIL="$QSH_TOOL_ROOT/agentmail-dist-patch.sh"
+  WITNESS="$QSH_TOOL_ROOT/qwen-memory-index-check.py"
+fi
+LOG_DIR="${QSH_LOG_DIR:-/home/wayne/.local/share/qwen-guard}"
 LOG="$LOG_DIR/selfheal.log"
 
 # Ask each TOOL its own --check (never this guard's own idea of health), so one
@@ -258,9 +292,64 @@ if [[ -x "$WITNESS" ]]; then
   witness_rc=$?
 fi
 
+# ONE CLASS PER WITNESS EXIT CODE (v11, T-JARVIS-094).  The witness answers four different
+# questions with four exit codes, and two of them do not share a remedy: rc=1 is a chopped
+# link (a daemon case) and rc=3 is an over-cap line whose link still resolves (an edit to the
+# store).  Until v11 every non-zero code exited 1, so an over-cap title reached the downstream
+# marker as "the tick exited 1" -- the same voice as a foreign bundle whose patch could not be
+# re-applied.  Measured 2026-10-25T09:23Z: 13 over-cap lines, bad=0 on every store, and the
+# marker read as a reverted patch.  The class is carried into BOTH the log marker and the
+# tick's exit status, so the two conditions stop being indistinguishable to a reader and to
+# the cron wrapper that classifies the marker.
+#
+#   rc  class        tick exits  meaning / remedy
+#   0   OK           0           every store clean; nothing recorded
+#   1   EMERGENCY    1           a broken/chopped link -- retiring pre-patch daemons (a reboot)
+#   2   NO-STORE     1           the witness could not run (no index found) -- check the store path;
+#                               an empty scan is not a clean tree, so this keeps its old severity
+#   3   STORE-EDIT   3           an over-cap line (bad=0, link resolves) -- edit that store line
+#   *   UNKNOWN-<n>  1           an exit code this guard does not classify; the number is carried
+#
+# ONLY rc=3's exit status changed in v11.  rc=2 keeps the exit 1 it always had and gains its own
+# class and marker instead of being folded into the emergency's: "the witness could not run" is
+# not a chopped link, and a reader sent to check the store path should not be told to reboot.
+# Nothing is silenced to draw the line -- a condition that used to page still pages; it just
+# says which condition it is.
+#
+# rc=1 keeps its place in the PATCH loop, which is the only thing this tick repairs.  rc=3 is
+# NOT made repairable: an --apply cannot shorten an index line, and the witness is never
+# queued for one -- a class that cannot be fixed must not be retried, because a retry that
+# always fails is the "fires every tick and never clears" shape this file already refuses.
+witness_status=""
+witness_exit=0
+witness_remedy=""
+
+# Map the witness's own exit code to this tick's class, status and remedy.
+witness_class() {
+  case "$1" in
+    0) witness_status="OK";          witness_exit=0; witness_remedy="" ;;
+    1) witness_status="EMERGENCY";   witness_exit=1
+       witness_remedy="a broken/chopped index link.  A patch re-apply cannot restore it; \
+the remedy is retiring pre-patch daemons (a reboot), which a cron tick cannot do." ;;
+    2) witness_status="NO-STORE";    witness_exit=1
+       witness_remedy="the witness could not run (no index found).  An empty scan is not a clean tree; \
+check the STORE PATH before reading this as a daemon or patch failure." ;;
+    3) witness_status="STORE-EDIT";  witness_exit=3
+       witness_remedy="an over-cap index line (bad=0; the link still resolves).  Remedy: edit that store line \
+- no daemon retires a long line.  It recurs only if the patched writer re-emits one \
+(bin/qwen-memory-index-patch.sh hunk 4)." ;;
+    *) witness_status="UNKNOWN-$1";  witness_exit=1
+       witness_remedy="an exit code this guard does not classify.  Read the store lines below \
+before assuming a daemon or a patch failure." ;;
+  esac
+}
+witness_class "$witness_rc"
+
 # Every patch already in place, every store clean AND the test-log tool not in its
-# unreachable rc==3 state: stay silent, write nothing.
-if [[ "${#needed[@]}" -eq 0 && "$witness_rc" -eq 0 && -z "$testlog_report" ]]; then
+# unreachable rc==3 state: stay silent, write nothing.  A CLEAN witness (rc=0) is the only
+# class that lets this tick stay silent -- every other class carries its own marker and its
+# own exit status (see the class table above), so an absent store still pages.
+if [[ "${#needed[@]}" -eq 0 && "$witness_exit" -eq 0 && -z "$testlog_report" ]]; then
   exit 0
 fi
 
@@ -319,27 +408,34 @@ if [[ -n "$testlog_report" ]]; then
   rc=1
 fi
 
-# Report the store witness when it had something to say (bad>0, or it could not run),
-# and make the tick exit non-zero.  Silent and rc-neutral when every store reads clean.
-if [[ "$witness_rc" -ne 0 ]]; then
+# Report the store witness under ITS OWN class and exit status (v11).  OK (rc=0) writes
+# nothing: a clean store is not a finding.  Every other class writes its own marker and
+# carries its own exit status, so an absent store pages under WITNESS-NO-STORE rather than
+# under the emergency's code.  The
+# marker's first line carries the class token, so a reader -- and the cron wrapper that
+# classifies this tick -- can tell an edit to the store from the fault the watchdog exists
+# for.  The last line states the class's CLEARING CONDITION, which is the condition under
+# which this marker stops being written: the witness exiting 0 on a later tick.  Nothing is
+# left standing here to be cleared out of band, so a class that clears stops being reported
+# on the very next tick, and no stale marker outlives the condition it described.
+if [[ "$witness_exit" -ne 0 ]]; then
   {
-    echo "=== $(date -Is) - the memory-index store witness reported a problem"
-    # Key the remedy on the witness's OWN exit code.  Only a broken link is a daemon case:
-    # an over-cap line (rc=3, bad=0, link resolves) is an edit to the store, and a blanket
-    # "reboot" line sent a reader chasing a harmless 249-char line (measured 2026-10-16).
-    case "$witness_rc" in
-      1) echo "    rc=1 - a broken/chopped index link.  A patch re-apply cannot restore it;" \
-              "the remedy is retiring pre-patch daemons (a reboot), which a cron tick cannot do." ;;
-      3) echo "    rc=3 - an over-cap index line (bad=0; the link still resolves).  Remedy: edit" \
-              "that store line - no daemon retires a long line.  It recurs only if the patched" \
-              "writer re-emits one (bin/qwen-memory-index-patch.sh hunk 4)." ;;
-      2) echo "    rc=2 - the witness could not run (no index found).  An empty scan is not a" \
-              "clean tree; fix the store path before reading this as a daemon/patch failure." ;;
-      *) echo "    rc=$witness_rc - unexpected witness exit; read the store lines below." ;;
-    esac
+    echo "=== $(date -Is) - store witness WITNESS-$witness_status (witness rc=$witness_rc, tick exit $witness_exit)"
+    echo "    class: $witness_status (rc=$witness_rc) - $witness_remedy"
+    echo "    clears when: $WITNESS exits 0 again; this marker is not re-emitted while it does"
     printf '%s\n' "$witness_out"
   } >>"$LOG" 2>&1
+fi
+
+# The tick exits the MOST SEVERE class it saw, not the numerically largest: an emergency is
+# 1 and a store edit is 3, so a plain max() would rank the cosmetic finding above the fault.
+# A patch that could not be re-applied therefore keeps exit 1 even beside an over-cap line,
+# while a store edit with every patch in place exits 3 rather than borrowing the emergency's
+# code.  (An UNKNOWN witness class carries exit 1: an unclassifiable reading is a fault.)
+if [[ "$witness_exit" -eq 1 ]]; then
   rc=1
+elif [[ "$witness_exit" -ne 0 && "$rc" -eq 0 ]]; then
+  rc="$witness_exit"
 fi
 
 # Exit non-zero when a patch could not be restored: 30 consecutive runs on
