@@ -251,7 +251,7 @@ debug the parser.
 
 - **Not the weights:** identical failure for Qwen2.5-3B and Llama-3.2-3B (both fine on the CPU tier).
 - **Not memory:** no OpenCL alloc errors (`-61`/`-6`) in the log; the 2.6 GiB shared-pool caveat is unrelated.
-- **Fix:** append `--flash-attn off` to the lane's `ExecStart` (`systemd/llama-xe-qwen25-3b-chat.service`, ubuntu-console `86b0f2b2`).
+- **Fix:** append `--flash-attn off` to the lane's `ExecStart` (`systemd/llama-xe-qwen25-3b-chat.service`, ubuntu-console `86b0f2b2`; that unit is now `systemd/llama-xe-llama32-3b-chat.service`, renamed 2026-10-26).
 - **Also applies to the CUDA lane in principle** — if any lane degenerates on long prompts while
   another is clean, A/B the attention path (`--flash-attn off`) before swapping models. Trade-off:
   FA off costs a little long-context speed/memory (prompt-eval measured ~33 tok/s, marginal).

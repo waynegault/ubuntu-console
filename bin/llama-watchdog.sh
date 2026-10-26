@@ -73,7 +73,7 @@
 #   dxgkrnl leak repeated CUDA context cycles cause, a CPU lane has no such cost,
 #   and holding the chain's tail down would remove the tier rather than protect it.
 # v3.11 (2026-09-19): manage the SECOND Xe lane as well —
-#   llama-xe-qwen25-3b-chat.service (:18085).  Same card as LANE 1, so it takes
+#   llama-xe-llama32-3b-chat.service (:18085).  Same card as LANE 1, so it takes
 #   LANE 1's shape (always-on, 2-strike, bench-lock aware) and NOT the CUDA
 #   lane's gpu_busy/suspend gate: that gate asks whether the NVIDIA card is free,
 #   which is not a question this lane's card can answer.  It had sat `failed`
@@ -119,7 +119,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-10-26): LANE 4 addresses the second Xe lane as
+#   llama-xe-llama32-3b-chat.service.  The unit's name still claimed the
+#   Qwen2.5-3B weights the 2026-10-02 bake-off replaced, so a reader following
+#   the watchdog's own log line was sent to a model the lane does not serve.
+#   XE3B_UNIT and the two lane comments moved with the unit; the strike and
+#   flap file names (llama-watchdog-xe3b.*) are unchanged, since they key the
+#   LANE, not the unit name.
 #   v15 (2026-10-11): the suspend log line names the LIVE OWNER PID rather than the
 #   marker's presence.  Since v5 the marker is honoured only while its recorded pid
 #   is alive, so "($CUDA_SUSPEND_FILE present)" misdirected a reader to the file
@@ -192,7 +199,7 @@ CPU_UNIT="llama-cpu-qwen25-3b-chat"
 # The second Xe lane (v3.11).  Card-first sibling of XE_UNIT: same Xe/OpenCL card,
 # different model, so it takes the Xe lane's shape rather than the CUDA lane's.
 XE3B_PORT="${LLM_XE3B_PORT:-18085}"
-XE3B_UNIT="llama-xe-qwen25-3b-chat"
+XE3B_UNIT="llama-xe-llama32-3b-chat"
 STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
 STRIKE_CUDA="$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
 STRIKE_CPU="$WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.strikes"
@@ -785,7 +792,7 @@ else
 fi
 
 # ============================================================
-# LANE 4: Xe (second lane) — llama-xe-qwen25-3b-chat — always-on, same card as LANE 1
+# LANE 4: Xe (second lane) — llama-xe-llama32-3b-chat — always-on, same card as LANE 1
 # ============================================================
 # LANE 1's shape, deliberately, and not the CUDA lane's: this unit is on the SAME
 # Xe/OpenCL card as LANE 1, so the gpu_busy/suspend gate is the wrong question — it

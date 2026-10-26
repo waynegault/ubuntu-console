@@ -437,7 +437,11 @@ done
 # Remove them explicitly — the alias target is a BARE name, so a "prune links whose
 # target left the repo" pass cannot see it, and `systemctl --user list-unit-files`
 # would keep listing a name nothing resolves to.
-for _stale in llama-cuda-phi4-mini-decompose.service llama-server-phi4.service
+# llama-xe-qwen25-3b-chat.service joins them as a RENAME, not a removal: it became
+# llama-xe-llama32-3b-chat.service on 2026-10-26 (the old name still claimed the
+# weights the 2026-10-02 bake-off replaced), and it is retired with no alias.
+for _stale in llama-cuda-phi4-mini-decompose.service llama-server-phi4.service \
+              llama-xe-qwen25-3b-chat.service
 do
     if [[ -L "$HOME/.config/systemd/user/$_stale" ]]; then
         rm -f "$HOME/.config/systemd/user/$_stale"

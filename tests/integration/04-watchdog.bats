@@ -84,7 +84,7 @@ case "$op" in
         case "$unit" in
             *cuda*)        cat "$SYSTEMCTL_MOCK_STATE/cuda_state" 2>/dev/null || echo "inactive" ;;
             *cpu*)         cat "$SYSTEMCTL_MOCK_STATE/cpu_state" 2>/dev/null || echo "inactive" ;;
-            *qwen25-3b*)   cat "$SYSTEMCTL_MOCK_STATE/xe3b_state" 2>/dev/null || echo "inactive" ;;
+            *llama-xe-llama32-3b*) cat "$SYSTEMCTL_MOCK_STATE/xe3b_state" 2>/dev/null || echo "inactive" ;;
             *)             cat "$SYSTEMCTL_MOCK_STATE/xe_state" 2>/dev/null || echo "inactive" ;;
         esac
         ;;
@@ -777,7 +777,7 @@ setup() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Second Xe lane (v3.11) — llama-xe-qwen25-3b-chat (:18085)
+# Second Xe lane (v3.11) — llama-xe-llama32-3b-chat (:18085)
 # ─────────────────────────────────────────────────────────────────────────────
 # These tests neutralise the other three lanes on purpose: the Xe lane and the CPU
 # lane are put in `activating` (skipped without a strike) and the GPU is reported
@@ -818,8 +818,8 @@ setup() {
     run "$WATCHDOG_SCRIPT"
     [[ "$status" -eq 0 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    grep -q "restart llama-xe-qwen25-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
-    [[ "$output" == *"Recovery successful — llama-xe-qwen25-3b-chat healthy on :18085"* ]]
+    grep -q "restart llama-xe-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ "$output" == *"Recovery successful — llama-xe-llama32-3b-chat healthy on :18085"* ]]
 }
 
 @test "integration: watchdog leaves a still-loading (503) second Xe lane alone" {
@@ -868,7 +868,7 @@ setup() {
     run "$WATCHDOG_SCRIPT"
     [[ "$status" -eq 0 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/reset_failed_called" ]]
-    grep -q "reset-failed llama-xe-qwen25-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    grep -q "reset-failed llama-xe-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
 }
 
 @test "integration: watchdog skips the second Xe lane when the bench lock is present" {
@@ -912,7 +912,7 @@ setup() {
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"WARNING flap: llama-xe-qwen25-3b-chat died 4x"* ]]
+    [[ "$output" == *"WARNING flap: llama-xe-llama32-3b-chat died 4x"* ]]
     [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps")" -eq 4 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
     [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaphold" ]]

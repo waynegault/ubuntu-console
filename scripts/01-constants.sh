@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 41
+# Module Version: 42
+#   v42 (2026-10-26): LLAMA_LANE_SPECS follows the second Xe lane's rename to
+#   llama-xe-llama32-3b-chat.service.  The old name still claimed Qwen2.5-3B after
+#   the 2026-10-02 bake-off put Llama-3.2-3B on the lane, so `model lanes` was
+#   reporting a model it does not serve; the table and tests/unit/23 pin the name
+#   to the unit file, and both moved together.
 #   v41 (2026-10-23): OC_AGENTS no longer clobbers a caller's isolation override.  It was an
 #   unconditional `export OC_AGENTS="$OC_ROOT/agents"`, so `OC_AGENTS=/tmp/fixture; source env.sh`
 #   silently re-pointed the variable at the LIVE tree — and a probe's own cleanup line then ran
@@ -428,7 +433,7 @@ export LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
 # silently dropping a lane from the report.
 export LLAMA_LANE_SPECS="llama-xe-minicpm5-1b-chat.service|18081
 llama-xe-embeddinggemma-embed.service|18080
-llama-xe-qwen25-3b-chat.service|18085
+llama-xe-llama32-3b-chat.service|18085
 llama-cuda-llama32-3b-chat.service|18083
 llama-cpu-qwen25-3b-chat.service|18084"
 export OC_PORT=18789

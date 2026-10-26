@@ -3,10 +3,13 @@
 # The fleet heartbeat lane's GPU tier. Card is Xe — see docs/llm.md "The two cards".
 # Promoted 2026-09-17: the fleet heartbeat model moved from the 1B to this 3B
 # because the 1B could not reliably emit a structured tool call in the harness.
-# Weights swapped Qwen2.5-3B -> Llama-3.2-3B 2026-10-02 (bake-off, unit
-# name/lane key kept: the name is pinned by the watchdog, two test files and
-# docs/llm.md; the lane is identified by port 18085). Hardening lives client-side
-# in openclaw.json (stop sequences + maxTokens 128) for this lane key.
+# Weights swapped Qwen2.5-3B -> Llama-3.2-3B 2026-10-02 (bake-off).
+# Renamed 2026-10-26 from llama-xe-qwen25-3b-chat.service: that name still
+# claimed the weights the bake-off replaced, contrary to the card-first naming
+# rule (docs/llm.md) that a unit name states the card, model and function.
+# The old name is RETIRED — there is no alias — so the machine-local drop-in
+# (neo-maxalloc.conf) moved to this unit's name with it. Hardening lives
+# client-side in openclaw.json (stop sequences + maxTokens 128) for this lane.
 Description=llama.cpp server — Xe card, Llama-3.2-3B, chat (port 18085)
 After=network-online.target
 Wants=network-online.target

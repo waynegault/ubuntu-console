@@ -356,7 +356,7 @@ either historical, the card-less CPU tier, or wrong.
 |---|---|---|---|---|---|
 | **Xe** | `llama-xe-minicpm5-1b-chat.service` | `llama-xe-server` | 18081 | `--metrics` → `:18081/metrics` | the fleet server |
 | **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | `--metrics` → `:18080/metrics` | embeddings (`--embedding`; endpoint needs the lane's `--api-key-file`) |
-| **Xe** | `llama-xe-qwen25-3b-chat.service` | `llama-xe-server` | 18085 | `--metrics` → `:18085/metrics` | second Xe lane (**Llama-3.2-3B** chat — the `qwen25-3b` in the unit name is a legacy lane key, see below). Its served ctx is **16384**, carried by the unit itself since 2026-10-22 (the 16k drop-in was folded in and deleted), and measured on the iGPU — see the note under the table |
+| **Xe** | `llama-xe-llama32-3b-chat.service` | `llama-xe-server` | 18085 | `--metrics` → `:18085/metrics` | second Xe lane (**Llama-3.2-3B** chat; renamed from `llama-xe-qwen25-3b-chat` on 2026-10-26 — see below). Its served ctx is **16384**, carried by the unit itself since 2026-10-22 (the 16k drop-in was folded in and deleted), and measured on the iGPU — see the note under the table |
 | **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | `--metrics` → `:18083/metrics` | the enabled CUDA lane |
 | **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | not enabled (parked) | parked lane (disabled) |
 | **none (CPU)** | `llama-cpu-qwen25-3b-chat.service` | `llama-cpu-server` | 18084 | `--metrics` → `:18084/metrics` | CPU-only chain tier (no card) |
@@ -415,7 +415,7 @@ conversation switch pays a full re-prefill.
 
 **What is APPLIED now** (2026-10-22): the Xe 3B lane (`:18085`, the only lane
 measured) runs `--cache-ram 768`, in both places a start can come from — the
-`ExecStart` literal in `systemd/llama-xe-qwen25-3b-chat.service` and the
+`ExecStart` literal in `systemd/llama-xe-llama32-3b-chat.service` and the
 launcher's argv (`scripts/11e-llm-model.sh`, which reads the lane's budget by
 port).  The single authority for the number is `LLAMA_CACHE_RAM_MB_BY_PORT` in
 `scripts/01-constants.sh`; `tests/unit/23-*.bats` pins each unit's literal to
@@ -490,7 +490,7 @@ comparable; a lane's figure moves as it serves.
 |---|---|---|---|
 | `llama-xe-minicpm5-1b-chat` | 18081 | `0/0 prompt tokens (no requests yet)` | since 16:48 BST; restarted with `--metrics`, nothing served since |
 | `llama-xe-embeddinggemma-embed` | 18080 | `not-measured` (HTTP 401) | the endpoint sits behind the lane's `--api-key-file`, so a keyless probe cannot read it — an embed lane also has no prefix reuse to measure |
-| `llama-xe-qwen25-3b-chat` | 18085 | `22691/30347 prompt tokens (75%)` | since 16:51 BST; the gateway's second Xe lane, so it accumulates traffic |
+| `llama-xe-llama32-3b-chat` | 18085 | `22691/30347 prompt tokens (75%)` | since 16:51 BST; the gateway's second Xe lane, so it accumulates traffic |
 | `llama-cuda-llama32-3b-chat` | 18083 | `0/0 prompt tokens (no requests yet)` | since 17:17 BST; restarted after a peer's GPU job released the card |
 | `llama-cpu-qwen25-3b-chat` | 18084 | `460/773 prompt tokens (60%)` | since 16:38 BST; the cold+warm probe pair plus ordinary use |
 
@@ -565,16 +565,16 @@ Prefill was ~37 t/s and decode 1.4–5.2 t/s with the other Xe lanes resident �
 not certified, because the iGPU pool is shared. The original 16k decision was CUDA-side;
 this measurement is the iGPU evidence the rule requires.
 
-**Unit names are lane keys, not weight claims (drift fixed 2026-10-21).**  The
-:18085 unit is still called `llama-xe-qwen25-3b-chat` because the watchdog, two
-test files and this document address it by name, but its `ExecStart` has loaded
-**Llama-3.2-3B-Instruct-Q4_K_M** since the 2026-10-02 bake-off (the swap is
-recorded in the unit's own header, and its `Description=` has said Llama-3.2-3B
-since then).  This table, the port list below and the troubleshooting row said
-Qwen2.5-3B until 2026-10-21, which is exactly the stale label the card-first
-naming rule above exists to prevent: **a lane is identified by its port, a model
-by its `ExecStart`'s `-m` file** — read those two, never the unit name, when the
-served weights matter.
+**Unit names state the model (rename 2026-10-26).**  The :18085 unit is
+`llama-xe-llama32-3b-chat`, matching the **Llama-3.2-3B-Instruct-Q4_K_M** its
+`ExecStart` has loaded since the 2026-10-02 bake-off.  Until 2026-10-26 it was
+`llama-xe-qwen25-3b-chat` — a lane key coined for the Qwen2.5-3B weights the
+bake-off replaced — and the watchdog, two test files and this document all
+addressed it by that name, so the stale label survived the swap.  That is
+exactly the drift the card-first naming rule exists to prevent, and the old
+name is now **retired with no alias**: a lane is identified by its port, a model
+by its `ExecStart`'s `-m` file, and the unit name must agree with both.  The
+machine-local `neo-maxalloc.conf` drop-in moved to the new name with it.
 
 **One launcher per card, not per lane.**  Lanes differ in *arguments* (model, port,
 ctx); the *build* is what a launcher selects, and the CUDA chat and pipeline lanes
@@ -627,8 +627,8 @@ for the dxgkrnl leak that repeated CUDA context cycles cause, and holding the
 chain's tail down would remove the tier rather than protect it.
 
 **Second Xe lane (2026-09-19): also supervised now — LANE 4.**
-`llama-xe-qwen25-3b-chat.service` (:18085, serving **Llama-3.2-3B**, not the Qwen
-its name was coined for) is the other Xe/OpenCL lane and the one
+`llama-xe-llama32-3b-chat.service` (:18085, serving **Llama-3.2-3B**) is the
+other Xe/OpenCL lane and the one
 that shares the card with the fleet server, so it takes the **Xe lane's** shape and
 not the CUDA lane's: always-on, 2-strike, bench-lock aware, and deliberately with
 no `gpu_busy` or suspend gate, because that gate asks whether the *NVIDIA* card is
@@ -729,7 +729,7 @@ a coin-flip.  Use the card-explicit launchers.
 | `LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE` | `/dev/shm/llama-watchdog-cuda.gpustop` | Marker the watchdog writes when **it** stops the CUDA lane for a foreign GPU owner, renewed on every busy tick. The next tick that finds the card free consumes it and restarts the lane **without counting a flap** (v3.12) — a stop we made is not a death. Single-use and TTL-bounded, so it can explain exactly one restart and never mask a genuine dxgkrnl death. Delete it to make the next free tick count a flap again |
 | `LLAMA_WATCHDOG_CUDA_GPUSTOP_TTL_S` | `1800` | How long that marker stays valid after the last busy tick. It only has to outlive the 10-minute timer, because each busy tick rewrites it — so a foreign workload holding the card for hours still has a fresh marker at the moment the card frees |
 | `LLAMA_WATCHDOG_CPU_FLAP_FILE` | `/dev/shm/llama-watchdog-cpu.flaps` | One epoch-seconds stamp per unexpected **CPU-tier** death (`llama-cpu-qwen25-3b-chat.service`), pruned to the shared rolling window. Past the threshold the watchdog warns with systemd's `Result`/`ExecMainStatus` — `success`/`0` means something sent SIGTERM — and **keeps restarting**: unlike the CUDA lane this tier has no `...flaphold` cooling-off, because the hold guards the dxgkrnl leak from repeated CUDA context cycles and the CPU tier's only job is to stay up |
-| `LLAMA_WATCHDOG_XE3B_FLAP_FILE` | `/dev/shm/llama-watchdog-xe3b.flaps` | Same, for the **second Xe lane** (`llama-xe-qwen25-3b-chat.service`, :18085). Its expected killer is a bench session or VRAM sweep stopping lanes by name — sweeps take `/tmp/llm-bench.lock`, which the lane honours, so a flap counted here means the death was *not* one of those. No `...flaphold`: the lane holds no CUDA context, so the dxgkrnl argument for the CUDA cooling-off does not apply |
+| `LLAMA_WATCHDOG_XE3B_FLAP_FILE` | `/dev/shm/llama-watchdog-xe3b.flaps` | Same, for the **second Xe lane** (`llama-xe-llama32-3b-chat.service`, :18085). Its expected killer is a bench session or VRAM sweep stopping lanes by name — sweeps take `/tmp/llm-bench.lock`, which the lane honours, so a flap counted here means the death was *not* one of those. No `...flaphold`: the lane holds no CUDA context, so the dxgkrnl argument for the CUDA cooling-off does not apply |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
 
 ### WSL2 CUDA Cycle Budget (dxgkrnl degradation)

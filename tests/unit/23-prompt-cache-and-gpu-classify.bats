@@ -370,7 +370,7 @@ EOS
 # endpoint would hide exactly that.
 _LANE_SPECS='llama-xe-minicpm5-1b-chat.service|18081
 llama-xe-embeddinggemma-embed.service|18080
-llama-xe-qwen25-3b-chat.service|18085
+llama-xe-llama32-3b-chat.service|18085
 llama-cuda-llama32-3b-chat.service|18083
 llama-cpu-qwen25-3b-chat.service|18084'
 
