@@ -286,3 +286,81 @@ def test_compare_cli_reports_regression_with_nonzero_status(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert result == 1
     assert report["passed"] is False
+
+
+def _write_artifact_with_samples(path: Path, rates: list[float]) -> Path:
+    """An artefact carrying per-sample decode rates, the shape a real run writes."""
+    manifest = {
+        "model_sha256": "abc123",
+        "quantization": "Q4_K_M",
+        "runtime_version": "test",
+        "runtime_build": "fixture",
+        "gpu_name": "fixture gpu",
+        "gpu_driver": "1.0",
+        "context_size": 4096,
+        "max_tokens": 32,
+        "concurrency": 1,
+        "workloads": [{
+            "id": "sample",
+            "prompt_sha256": "prompt",
+            "system_sha256": "",
+            "max_tokens": 32,
+            "temperature": 0.0,
+        }],
+    }
+    payload = {
+        "schema_version": llm_benchmark.SCHEMA_VERSION,
+        "status": "complete",
+        "manifest": manifest,
+        "workloads": [{
+            "id": "sample",
+            "samples": [
+                {"warmup": False, "status": "ok", "decode_tokens_per_second": rate}
+                for rate in rates
+            ],
+            "summary": {"decode_tokens_per_second": {"median": sorted(rates)[len(rates) // 2]}},
+        }],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_compare_tolerates_a_drop_the_noise_can_explain(tmp_path):
+    """The measured 2026-10-25 case: about -9% on samples whose spread dwarfs the drop.
+
+    Fails if the gate reverts to a flat percentage on medians, which is what let a -8.6% run
+    both "pass" and prove nothing.
+    """
+    baseline = _write_artifact_with_samples(tmp_path / "b.json", [62.0, 100.0, 138.0])
+    current = _write_artifact_with_samples(tmp_path / "c.json", [56.0, 91.0, 126.0])
+
+    report = llm_benchmark.compare_artifacts(baseline, current, 10)
+
+    assert report["passed"] is True
+    row = report["checked"][0]
+    assert row["method"] == "welch_95"
+    assert row["ci_low_pct"] < 10
+    assert row["regression"] is False
+
+
+def test_compare_flags_a_drop_wider_than_the_interval(tmp_path):
+    """A 20% drop with tight samples is larger than the noise, so it must still fail."""
+    baseline = _write_artifact_with_samples(tmp_path / "b.json", [99.0, 100.0, 101.0])
+    current = _write_artifact_with_samples(tmp_path / "c.json", [79.0, 80.0, 81.0])
+
+    report = llm_benchmark.compare_artifacts(baseline, current, 10)
+
+    assert report["passed"] is False
+    assert report["regressions"][0]["method"] == "welch_95"
+    assert report["regressions"][0]["ci_low_pct"] > 10
+
+
+def test_compare_without_samples_keeps_the_median_rule(tmp_path):
+    """An artefact from before samples were stored stays comparable, and says which rule ran."""
+    baseline = _write_artifact(tmp_path / "b.json", median=100)
+    current = _write_artifact(tmp_path / "c.json", median=80)
+
+    report = llm_benchmark.compare_artifacts(baseline, current, 10)
+
+    assert report["passed"] is False
+    assert report["checked"][0]["method"] == "median"

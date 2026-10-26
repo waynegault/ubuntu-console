@@ -671,6 +671,80 @@ def _load_artifact(path: Path) -> dict[str, Any]:
     return payload
 
 
+#: Two-sided 95% Student-t critical values, keyed by degrees of freedom. A table rather than a
+#: dependency: this tool imports no scipy, and a compare must not need one installed to decide.
+_T95: dict[int, float] = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306,
+    9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
+    16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086, 25: 2.060, 30: 2.042,
+}
+
+
+def _t_critical_95(df: float) -> float:
+    """Two-sided 95% t critical value, linearly interpolated between table rows."""
+    if df <= 0:
+        return float("inf")
+    if df >= 30:
+        return 1.96
+    keys = sorted(_T95)
+    lower = max(k for k in keys if k <= df)
+    upper = min(k for k in keys if k >= df)
+    if lower == upper:
+        return _T95[lower]
+    weight = (df - lower) / (upper - lower)
+    return _T95[lower] + weight * (_T95[upper] - _T95[lower])
+
+
+def _measured_rates(row: dict[str, Any], metric: str) -> list[float]:
+    """The successful, non-warmup per-sample values for one workload and metric."""
+    values: list[float] = []
+    for sample in row.get("samples") or []:
+        if not isinstance(sample, dict) or sample.get("warmup"):
+            continue
+        if sample.get("status") != "ok":
+            continue
+        value = sample.get(metric)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            values.append(float(value))
+    return values
+
+
+def welch_interval(baseline: list[float], current: list[float]) -> dict[str, Any] | None:
+    """95% Welch interval for the DROP (baseline mean minus current mean).
+
+    A flat percentage threshold cannot separate a regression from run-to-run noise. Measured
+    2026-10-25 on this box: two runs of the SAME baseline differed by 6.4% and per-workload
+    variance was 62x the baseline figure, so a -8.6% run both "passed" and proved nothing.
+    The interval supplies the discrimination the fixed threshold lacks — a workload is a
+    regression only when the interval's LOWER bound is still above the threshold, i.e. the drop
+    is larger than the noise can explain.
+    """
+    n1, n2 = len(baseline), len(current)
+    if n1 < 2 or n2 < 2:
+        return None
+    mean1, mean2 = statistics.fmean(baseline), statistics.fmean(current)
+    term1 = statistics.variance(baseline) / n1
+    term2 = statistics.variance(current) / n2
+    diff = mean1 - mean2
+    if term1 + term2 == 0:
+        return {
+            "drop": diff, "low": diff, "high": diff, "df": None, "t": None,
+            "n_baseline": n1, "n_current": n2,
+        }
+    df = (term1 + term2) ** 2 / ((term1**2) / (n1 - 1) + (term2**2) / (n2 - 1))
+    t = _t_critical_95(df)
+    margin = t * math.sqrt(term1 + term2)
+    return {
+        "drop": diff,
+        "low": diff - margin,
+        "high": diff + margin,
+        "df": round(df, 3),
+        "t": round(t, 4),
+        "n_baseline": n1,
+        "n_current": n2,
+    }
+
+
 def compare_artifacts(baseline_path: Path, current_path: Path, threshold_pct: float) -> dict[str, Any]:
     baseline = _load_artifact(baseline_path)
     current = _load_artifact(current_path)
@@ -705,6 +779,7 @@ def compare_artifacts(baseline_path: Path, current_path: Path, threshold_pct: fl
         row["id"]: row for row in current["workloads"]
     }
     regressions: list[dict[str, Any]] = []
+    checked: list[dict[str, Any]] = []
     for workload_id in sorted(old_rows):
         old_summary = old_rows[workload_id].get("summary", {})
         new_summary = new_rows.get(workload_id, {}).get("summary", {})
@@ -732,18 +807,48 @@ def compare_artifacts(baseline_path: Path, current_path: Path, threshold_pct: fl
                     "error": "invalid metric median",
                 })
                 continue
-            drop_pct = max(0.0, (old_tps - new_tps) / old_tps * 100)
-            if drop_pct > threshold_pct:
-                regressions.append({
-                    "workload_id": workload_id,
-                    "metric": metric_name,
-                    "baseline_median_tps": old_tps,
-                    "current_median_tps": new_tps,
-                    "drop_pct": round(drop_pct, 3),
-                })
+            old_rates = _measured_rates(old_rows[workload_id], metric_name)
+            new_rates = _measured_rates(new_rows.get(workload_id, {}), metric_name)
+            interval = welch_interval(old_rates, new_rates)
+            if interval is not None:
+                baseline_mean = statistics.fmean(old_rates)
+                drop_pct = max(0.0, interval["drop"] / baseline_mean * 100)
+                low_pct: float | None = interval["low"] / baseline_mean * 100
+                high_pct: float | None = interval["high"] / baseline_mean * 100
+                # The interval's LOWER bound is the decision: a drop whose lower bound is still
+                # above the threshold is larger than this workload's noise can explain.
+                exceeds = low_pct > threshold_pct
+                method = "welch_95"
+            else:
+                # Pre-samples artefacts (or one sample per side) keep the historical rule, and
+                # say so rather than implying an interval was consulted.
+                drop_pct = max(0.0, (old_tps - new_tps) / old_tps * 100)
+                low_pct = high_pct = None
+                exceeds = drop_pct > threshold_pct
+                method = "median"
+            record = {
+                "workload_id": workload_id,
+                "metric": metric_name,
+                "method": method,
+                "baseline_median_tps": old_tps,
+                "current_median_tps": new_tps,
+                "drop_pct": round(drop_pct, 3),
+                "ci_low_pct": None if low_pct is None else round(low_pct, 3),
+                "ci_high_pct": None if high_pct is None else round(high_pct, 3),
+                "sample_count": {
+                    "baseline": interval["n_baseline"] if interval else len(old_rates),
+                    "current": interval["n_current"] if interval else len(new_rates),
+                },
+                "regression": exceeds,
+            }
+            checked.append(record)
+            if exceeds:
+                regressions.append(record)
     return {
         "compatible": True,
         "max_regression_pct": threshold_pct,
+        "decision_rule": "ci_low_above_threshold (fallback: median)",
+        "checked": checked,
         "regressions": regressions,
         "passed": not regressions,
     }
