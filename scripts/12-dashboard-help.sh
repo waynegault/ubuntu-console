@@ -2,7 +2,11 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-10-27): the GPU ENGINES row no longer prints "Idle" while the GPU
+#   row above it shows load.  The two numbers come from separate probes
+#   (nvidia-smi vs. the Windows GPU Engine counters), so the row names the
+#   missing sample instead of asserting an idle card.
 #   v28 (2026-10-23): the `oc purge` help row names the settled scope — agent mains and
 #   cron sessions are KEPT, the configured main (hal) is emptied, and the gateway is
 #   restarted — instead of "delete all sessions".
@@ -113,15 +117,54 @@ function __dashboard_system_metrics() {
 }
 
 
+# __dashboard_gpu_rows — the GPU and GPU ENGINES rows.
+# Split out of __dashboard_gpu_llm to keep that function inside the §18.3 10.4
+# bound of 100 counted lines (blank lines count; comments do not).
+function __dashboard_gpu_rows() {
+    local gpu_raw gpu_engines
+    _telemetry __get_gpu
+    gpu_raw=$_telemetry_out
+    _telemetry __get_gpu_engines
+    gpu_engines=$_telemetry_out
+
+    local gpu_display="$gpu_raw"
+    local g_name="" g_temp="" g_util="" g_mem_u="" g_mem_t=""
+    if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." && "$gpu_raw" != *"OFFLINE"* ]]
+    then
+        IFS=',' read -r g_name g_temp g_util g_mem_u g_mem_t <<< "$gpu_raw"
+        g_name="${g_name/ Laptop GPU/}"; g_name="${g_name# }"; g_name="${g_name% }"
+        gpu_display="${g_name} | ${g_util// /}% Load | ${g_temp// /}°C | ${g_mem_u// /} / ${g_mem_t// /} Mb"
+    fi
+    # GPU colour: <75% load=green, 75-90%=yellow, >90%=red
+    local gpu_color=$C_Highlight
+    local gpu_load_pct=0
+    if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." && "$gpu_raw" != *"OFFLINE"* ]]
+    then
+        local g_util_n=${g_util// /}
+        g_util_n=${g_util_n%\%}  # Strip trailing % for numeric comparison
+        g_util_n=${g_util_n:-0}   # Default to 0 if empty (prevents __threshold_color error)
+        gpu_color=$(__threshold_color "$g_util_n")
+        [[ "$g_util_n" =~ ^[0-9]+$ ]] && gpu_load_pct=$g_util_n
+    fi
+    __fRow "GPU" "$gpu_display" "$gpu_color"
+
+    # The engines row is Windows GPU Engine telemetry from a different probe than
+    # the nvidia-smi value in the row above, so a WSL CUDA burst between two
+    # typeperf samples leaves them disagreeing.  "Idle" beside a loaded card is a
+    # claim about the card that the measurement does not support: name the
+    # missing sample instead of asserting idleness.
+    local engines_color=$gpu_color
+    if [[ "$gpu_engines" == "Idle" && "$gpu_load_pct" -gt 0 ]]
+    then
+        gpu_engines="n/a (no Windows engine time)"
+        engines_color=$C_Dim
+    fi
+    __fRow "GPU ENGINES" "$gpu_engines" "$engines_color"
+}
+
 # __dashboard_gpu_llm — the GPU, LOCAL LLM and LLM CONTEXT rows for the GPU/LLM block.
 function __dashboard_gpu_llm() {
     local line="$1"
-    local gpu_raw
-    _telemetry __get_gpu
-    gpu_raw=$_telemetry_out
-    local gpu_engines
-    _telemetry __get_gpu_engines
-    gpu_engines=$_telemetry_out
 
     # CPU/GPU colour: >90% red, >75% yellow, else green
     local cpu_gpu_color
@@ -137,26 +180,7 @@ function __dashboard_gpu_llm() {
 
     # --- GPU & LLM block ---
     printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
-
-    local gpu_display="$gpu_raw"
-    local g_name="" g_temp="" g_util="" g_mem_u="" g_mem_t=""
-    if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." && "$gpu_raw" != *"OFFLINE"* ]]
-    then
-        IFS=',' read -r g_name g_temp g_util g_mem_u g_mem_t <<< "$gpu_raw"
-        g_name="${g_name/ Laptop GPU/}"; g_name="${g_name# }"; g_name="${g_name% }"
-        gpu_display="${g_name} | ${g_util// /}% Load | ${g_temp// /}°C | ${g_mem_u// /} / ${g_mem_t// /} Mb"
-    fi
-    # GPU colour: <75% load=green, 75-90%=yellow, >90%=red
-    local gpu_color=$C_Highlight
-    if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." && "$gpu_raw" != *"OFFLINE"* ]]
-    then
-        local g_util_n=${g_util// /}
-        g_util_n=${g_util_n%\%}  # Strip trailing % for numeric comparison
-        g_util_n=${g_util_n:-0}   # Default to 0 if empty (prevents __threshold_color error)
-        gpu_color=$(__threshold_color "$g_util_n")
-    fi
-    __fRow "GPU" "$gpu_display" "$gpu_color"
-    __fRow "GPU ENGINES" "$gpu_engines" "$gpu_color"
+    __dashboard_gpu_rows
 
     if __test_port "$LLM_PORT"
     then

@@ -270,7 +270,8 @@ jobs:
                tests/unit/68-llm-lane-cache-sample.bats \
                tests/unit/69-wsl-conf-guard.bats \
                tests/unit/70-agents-root-override.bats \
-               tests/unit/71-systemd-dropin-install.bats
+               tests/unit/71-systemd-dropin-install.bats \
+               tests/unit/72-tac-hostmetrics-engines.bats
 
       - name: Run integration tests
         run: |

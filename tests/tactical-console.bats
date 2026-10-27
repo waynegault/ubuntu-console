@@ -758,6 +758,29 @@ EOF
     [[ "$output" == *"3D 31% | VDec 12%"* ]]
 }
 
+@test "metrics: GPU ENGINES claims Idle only when the GPU row agrees" {
+    # Measured 2026-10-27 12:10 BST: the card was at 81% (Windows counters:
+    # Cuda#1 91.24) while the row read "Idle".  The two rows are separate
+    # probes, so a silent engine sample beside a loaded card must name the
+    # missing measurement rather than assert an idle card.
+    echo "18|2|48" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "RTX 3050 Ti Laptop GPU,75,48,3026,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "Idle" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"48% Load"* ]]
+    [[ "$output" == *"n/a (no Windows engine time)"* ]]
+
+    # The other side of the condition: an idle card with an idle engine sample
+    # is Idle, and the guard must not rewrite it.
+    echo "18|2|0" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "RTX 3050 Ti Laptop GPU,62,0,3000,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "Idle" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"GPU ENGINES  :: "*"Idle"* ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. PURE CALCULATION FUNCTIONS (llama.cpp)
 # ─────────────────────────────────────────────────────────────────────────────

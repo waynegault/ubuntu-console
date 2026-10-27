@@ -10,12 +10,17 @@
 # Typical runtime: ~5s from WSL
 # AI: Output format is a contract — callers split on '|'. Do not change it.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line — any edit here must move it, or the pre-commit guard rejects the
 #   commit.  Deliberately separate from VERSION= below (significant edits only).
 #   Added 2026-09-14: this script was outside the version guard until then.
-VERSION="1.2"
+#   v3 (2026-10-27): the engine summary folds per-instance names ("Cuda#1",
+#   "3D#2") and the CUDA/Compute/Graphics families into the row's labels and
+#   sorts by load.  The old fixed whitelist dropped every CUDA counter, so a
+#   dGPU at 90% under a WSL inference run rendered "Idle".  TAC_TYPERF_EXE
+#   redirects the probe (test seam, mirroring TAC_GPU_ENGINES_OUT).
+VERSION="1.3"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced so the repo's no-unused
@@ -39,7 +44,10 @@ fi
 # Resolve typeperf.exe absolutely first: many WSL setups disable
 # appendWindowsPath, so the bare name is not on PATH even though the Windows
 # binary exists (same reason WSL_NVIDIA_SMI below uses an absolute path).
-WSL_TYPERF_EXE="/mnt/c/Windows/System32/typeperf.exe"
+# TAC_TYPERF_EXE redirects the probe.  The default is the absolute Windows path
+# because appendWindowsPath is often off, but an absolute default also means a
+# PATH stub cannot reach it — the tests need a fixture, not this host's card.
+WSL_TYPERF_EXE="${TAC_TYPERF_EXE:-/mnt/c/Windows/System32/typeperf.exe}"
 typerf_cmd="$WSL_TYPERF_EXE"
 if [[ ! -x "$typerf_cmd" ]]
 then
@@ -197,39 +205,52 @@ END {
     }
   }
 
-  n = 0
   for (key in engsum) {
     split(key, parts, SUBSEP)
     if (parts[1] != max_luid)
       continue
 
     util = engsum[key]
-    if (util > 100)
-      util = 100
     if (util < 1)
       continue
 
+    # Windows reports one counter per engine INSTANCE ("Cuda#1", "3D#2"),
+    # and the class a WSL CUDA run loads is "Cuda" — names the fixed whitelist
+    # below never matched, so a dGPU at 90% rendered "Idle".  Fold the instance
+    # suffix and the CUDA/Compute/Graphics families into the row labels, and
+    # key the map on the LABEL so the families sum rather than overwrite.
     eng = parts[2]
+    sub(/#[0-9]+$/, "", eng)
     if (eng == "VideoDecode") eng = "VDec"
     else if (eng == "VideoEncode") eng = "VEnc"
     else if (eng == "VideoProcessing") eng = "VProc"
-    else if (eng == "Compute") eng = "Comp"
     else if (eng == "LegacyOverlay") eng = "Overlay"
+    else if (eng ~ /^Cuda/ || eng ~ /^Compute/) eng = "Comp"
+    else if (eng ~ /^Graphics/) eng = "3D"
 
-    util_map[eng] = util
+    util_map[eng] += util
   }
 
-  split("VDec VEnc VProc 3D Comp Copy Overlay Other", order, " ")
-  for (i = 1; i <= length(order); i++) {
-    eng = order[i]
-    if (!(eng in util_map))
-      continue
+  # Highest load first: the row has room for three classes, and the fixed
+  # VDec-first order hid a saturated Comp/Cuda behind an idle decoder.
+  n = 0
+  for (eng in util_map)
+    ranked[++n] = eng
+  for (i = 1; i <= n; i++)
+    for (j = i + 1; j <= n; j++)
+      if (util_map[ranked[j]] > util_map[ranked[i]]) {
+        swap = ranked[i]; ranked[i] = ranked[j]; ranked[j] = swap
+      }
+
+  for (i = 1; i <= n && i <= 3; i++) {
+    eng = ranked[i]
+    util = util_map[eng]
+    if (util > 100)
+      util = 100
     if (printed > 0)
       printf " | "
-    printf "%s %d%%", eng, int(util_map[eng] + 0.5)
+    printf "%s %d%%", eng, int(util + 0.5)
     printed++
-    if (printed >= 3)
-      break
   }
 
   if (printed == 0)
