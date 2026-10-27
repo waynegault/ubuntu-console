@@ -810,11 +810,13 @@ def compare_artifacts(baseline_path: Path, current_path: Path, threshold_pct: fl
             old_rates = _measured_rates(old_rows[workload_id], metric_name)
             new_rates = _measured_rates(new_rows.get(workload_id, {}), metric_name)
             interval = welch_interval(old_rates, new_rates)
+            low_pct: float | None = None
+            high_pct: float | None = None
             if interval is not None:
                 baseline_mean = statistics.fmean(old_rates)
                 drop_pct = max(0.0, interval["drop"] / baseline_mean * 100)
-                low_pct: float | None = interval["low"] / baseline_mean * 100
-                high_pct: float | None = interval["high"] / baseline_mean * 100
+                low_pct = float(interval["low"]) / baseline_mean * 100
+                high_pct = float(interval["high"]) / baseline_mean * 100
                 # The interval's LOWER bound is the decision: a drop whose lower bound is still
                 # above the threshold is larger than this workload's noise can explain.
                 exceeds = low_pct > threshold_pct
@@ -823,7 +825,6 @@ def compare_artifacts(baseline_path: Path, current_path: Path, threshold_pct: fl
                 # Pre-samples artefacts (or one sample per side) keep the historical rule, and
                 # say so rather than implying an interval was consulted.
                 drop_pct = max(0.0, (old_tps - new_tps) / old_tps * 100)
-                low_pct = high_pct = None
                 exceeds = drop_pct > threshold_pct
                 method = "median"
             record = {
