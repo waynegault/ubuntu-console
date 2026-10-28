@@ -4,6 +4,11 @@
 Description=llama.cpp server — Xe card, MiniCPM5-1B, chat (port 18081)
 After=network-online.target
 Wants=network-online.target
+# Intel Xe / oneAPI is an x86_64 part, so this lane cannot exist on any other
+# architecture.  A CONDITION, not an ExecStart failure: systemd skips the unit
+# there instead of burning restart attempts, and 01-constants narrows the lane
+# table to match, so `model lanes` does not report a port nobody serves.
+ConditionArchitecture=x86-64
 # 600/12 and Restart=always below were drop-ins on the OLD name
 # (llama-server.service.d/{restart.conf,memory.conf}); folded in here so the
 # effective config is one reviewable file per unit instead of a base file plus

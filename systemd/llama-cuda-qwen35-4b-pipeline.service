@@ -11,6 +11,10 @@
 Description=llama.cpp server — CUDA card, Qwen3.5-4B, investigator pipeline (port 8081)
 After=network-online.target
 Wants=network-online.target
+# x86_64-only: see llama-cuda-llama32-3b-chat.service — the CUDA lanes serve the
+# x86_64 WSL passthrough build, so systemd skips them (and 01-constants drops
+# them from the lane table) on any other architecture.
+ConditionArchitecture=x86-64
 StartLimitIntervalSec=600
 StartLimitBurst=6
 

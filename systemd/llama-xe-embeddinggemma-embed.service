@@ -3,6 +3,9 @@
 Description=llama.cpp embedding server — Xe card, embeddinggemma-300m, embed (port 18080)
 After=network-online.target
 Wants=network-online.target
+# Intel Xe / oneAPI is an x86_64 part: see llama-xe-minicpm5-1b-chat.service for
+# why this is a Condition rather than an ExecStart failure.
+ConditionArchitecture=x86-64
 StartLimitIntervalSec=600
 StartLimitBurst=6
 

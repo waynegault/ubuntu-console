@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 43
+# Module Version: 44
+#   v44 (2026-10-28): the lane table is narrowed by architecture.  The five-lane
+#   table stays canonical for this x86_64 box (tests/unit/23 pins it), but the Xe
+#   and CUDA units now carry ConditionArchitecture=x86-64, so on any other host
+#   systemd skips them — and the reporters (`model lanes`, the cache sampler) must
+#   not present those ports as broken lanes.
 #   v43 (2026-10-28): two defaults stop assuming this box's hardware.
 #   LLAMA_CPU_THREADS is 6 capped by nproc (a 4-core arm64 WSL VM was told to run
 #   six threads), and it now honours an explicit override instead of overwriting
@@ -441,6 +446,16 @@ llama-xe-embeddinggemma-embed.service|18080
 llama-xe-llama32-3b-chat.service|18085
 llama-cuda-llama32-3b-chat.service|18083
 llama-cpu-qwen25-3b-chat.service|18084"
+# The canonical table above is the x86_64 box's five lanes, and tests/unit/23
+# pins it against the units.  The Xe and CUDA units carry
+# ConditionArchitecture=x86-64 (Intel Xe is an x86 part; the CUDA lanes serve
+# this repo's x86_64 WSL build), so on any other architecture systemd skips
+# them — narrow the table to match, or `model lanes` and the cache sampler
+# report ports that nothing can ever bind as if they were broken lanes.
+if [[ "${HOSTTYPE:-}" != "x86_64" ]]
+then
+    export LLAMA_LANE_SPECS="llama-cpu-qwen25-3b-chat.service|18084"
+fi
 export OC_PORT=18789
 export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 

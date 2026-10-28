@@ -105,3 +105,42 @@ stub_uname() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"x86_64-only"* ]]
 }
+
+@test "every Xe and CUDA lane unit is conditioned on x86-64" {
+    # Criterion: on an arm64 host those units have no hardware to serve.  A
+    # Condition makes systemd SKIP them; without it each start burns restart
+    # attempts and the failure reads as a broken build.  Catches: a new lane unit
+    # added without the condition, and the condition being deleted in a rename.
+    local unit count=0
+    for unit in "$REPO_ROOT"/systemd/llama-xe-*.service "$REPO_ROOT"/systemd/llama-cuda-*.service
+    do
+        count=$((count + 1))
+        grep -qx 'ConditionArchitecture=x86-64' "$unit" \
+            || { echo "FAIL: $(basename "$unit") lacks ConditionArchitecture=x86-64"; return 1; }
+    done
+    [ "$count" -eq 5 ] || { echo "FAIL: expected 5 Xe/CUDA units, matched $count"; return 1; }
+}
+
+@test "the CPU lane unit stays architecture-neutral" {
+    # Control: the filter must not swallow the one lane an arm64 host CAN serve.
+    ! grep -q '^ConditionArchitecture=' "$REPO_ROOT/systemd/llama-cpu-qwen25-3b-chat.service"
+}
+
+@test "the lane table keeps all five lanes on x86_64" {
+    # Control for the narrowing below: on this box the table must be unchanged,
+    # because `model lanes` and the cache sampler read it.
+    run bash -c 'source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' _ "$REPO_ROOT/scripts/01-constants.sh"
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s\n' "$output" | grep -c .)" -eq 5 ]
+    [[ "$output" == *"18084"* ]]
+}
+
+@test "the lane table narrows to the CPU lane on a non-x86 host" {
+    # Criterion: the Xe/CUDA units are skipped there, so reporting their ports
+    # would present five lanes with three permanently down.  Catches: the table
+    # staying five-wide on arm64 and the sampler probing dead ports.
+    run bash -c 'HOSTTYPE=aarch64; source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
+        _ "$REPO_ROOT/scripts/01-constants.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "llama-cpu-qwen25-3b-chat.service|18084" ]
+}

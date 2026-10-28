@@ -4,6 +4,11 @@
 Description=llama.cpp server — CUDA card, Llama-3.2-3B, chat (port 18083)
 After=network-online.target
 Wants=network-online.target
+# The CUDA lanes serve THIS repo's x86_64 WSL passthrough build (llama-cuda-server
+# points at /home/wayne/llama.cpp/build), so an arm64 host has no CUDA lane to
+# start.  systemd skips the unit there, and 01-constants drops it from the lane
+# table so `model lanes` reports only what this host can serve.
+ConditionArchitecture=x86-64
 StartLimitIntervalSec=600
 StartLimitBurst=6
 

@@ -13,6 +13,9 @@
 Description=llama.cpp server — Xe card, Llama-3.2-3B, chat (port 18085)
 After=network-online.target
 Wants=network-online.target
+# Intel Xe / oneAPI is an x86_64 part: see llama-xe-minicpm5-1b-chat.service for
+# why this is a Condition rather than an ExecStart failure.
+ConditionArchitecture=x86-64
 StartLimitIntervalSec=600
 StartLimitBurst=6
 
