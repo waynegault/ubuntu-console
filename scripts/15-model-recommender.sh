@@ -2,7 +2,11 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-10-28): the VRAM figure comes from the CARD first.  Testing the
+#   4 GiB VRAM_TOTAL_BYTES constant before nvidia-smi made the driver branch dead
+#   code, so a 24 GB card and a cardless host both reported 4 GB.  The constant
+#   is now the fallback.
 #   v9 (2026-10-18): replace a bare postfix increment with the errexit-safe assignment
 #   form.  Under errexit `((shown++))` returns 1 while the value is 0, and
 #   tests/unit/29-errexit-arithmetic.bats:100 flags it (pre-existing CI red; no
@@ -93,20 +97,28 @@ function model-recommend() {
         return 1
     fi
 
-    # Calculate available VRAM in GB (fallback to 4GB if unavailable)
-    local vram_gb=4
-    if [[ -n "${VRAM_TOTAL_BYTES:-}" ]]
+    # Ask the CARD first.  VRAM_TOTAL_BYTES is the 4 GiB value tuned for the RTX
+    # 3050 Ti, and testing it first made the nvidia-smi branch below dead code:
+    # every larger card — including a CUDA arm64 box — was reported as 4 GB, and
+    # so was a host with no card at all.  The constant is the FALLBACK, not the
+    # answer.
+    local vram_gb vram_mb=""
+    if command -v nvidia-smi >/dev/null 2>&1
+    then
+        # swallow-ok: an unreadable card falls through to the constant below, which is the stated fallback
+        vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null)
+        vram_mb="${vram_mb%%$'\n'*}"
+        vram_mb="${vram_mb// /}"
+    fi
+    if [[ "$vram_mb" =~ ^[0-9]+$ ]]
+    then
+        # Round to the nearest GB: 4095 MB is a 4 GB card, not 3.
+        vram_gb=$(( (vram_mb + 512) / 1024 ))
+    elif [[ -n "${VRAM_TOTAL_BYTES:-}" ]]
     then
         vram_gb=$(( VRAM_TOTAL_BYTES / 1024 / 1024 / 1024 ))
-    elif command -v nvidia-smi >/dev/null 2>&1
-    then
-        local vram_mb
-        vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-        if [[ "$vram_mb" =~ ^[0-9]+$ ]]
-        then
-            # Round to the nearest GB: 4095 MB is a 4 GB card, not 3.
-            vram_gb=$(( (vram_mb + 512) / 1024 ))
-        fi
+    else
+        vram_gb=4
     fi
 
     __tac_header "MODEL RECOMMENDATIONS" "open"

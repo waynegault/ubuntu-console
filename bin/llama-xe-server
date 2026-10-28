@@ -16,12 +16,26 @@
 
 set -uo pipefail
 
+# _say — the one stderr writer, so no ad-hoc `printf ... >&2` sits at a call site (§18.3 10.7).
+_say() {
+    printf '%s\n' "$*" >&2
+}
+
 # Keep this default in step with LLAMA_XE_SERVER_BIN in scripts/01-constants.sh.
 # Repeated rather than sourced on purpose — see llama-cuda-server.
 _bin="${LLAMA_XE_SERVER_BIN:-/home/wayne/llama.cpp/build-opencl/bin/llama-server}"
 
+# Intel Xe / oneAPI is an x86_64 part; there is no Xe build to launch on an arm64
+# host (2026-10-28).  Naming that is the difference between "wrong computer" and
+# "broken build" when the lane refuses to start.  HOSTTYPE is bash's own value.
+if [[ "${HOSTTYPE:-}" != "x86_64" ]]
+then
+    _say "llama-xe-server: Intel Xe/oneAPI lanes are x86_64-only; this host is ${HOSTTYPE:-unknown}"
+    exit 1
+fi
+
 if [[ ! -x "$_bin" ]]; then
-    echo "llama-xe-server: Xe build not executable: $_bin" >&2
+    _say "llama-xe-server: Xe build not executable: $_bin"
     exit 1
 fi
 
@@ -46,7 +60,7 @@ if [[ ! "$_neo_mb" =~ ^[0-9]+$ ]] || (( _neo_mb < 1 )); then
         _neo_note="llama-xe-server: WARNING ignoring malformed"
         _neo_note+=" OverrideMaxMemAllocSizeMb=${_neo_mb@Q} (want a positive integer)"
         _neo_note+="; using ${_neo_default}"
-        echo "$_neo_note" >&2
+        _say "$_neo_note"
     fi
     _neo_mb="$_neo_default"
 fi

@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 71
+# Module Version: 72
+#   v72 (2026-10-28): `llm-build` no longer pins -DCMAKE_CUDA_ARCHITECTURES=86.  The
+#   compute architecture is a property of the CARD: 86 is this box's RTX 3050 Ti
+#   (Ampere), while an arm64 CUDA box reports 12.1 (GB10) or 8.7 (Orin), and nvcc
+#   refuses an architecture it does not know.  The driver is asked, and the
+#   fallback to 86 is PRINTED with its source rather than assumed.
 #   v70 (2026-10-22): the switch notice's number now spans the LAUNCH, not just the health
 #   poll.  Observed in a real swap that day: `model use 17` on the Xe lane printed
 #   "Swap: loaded in 0s; …" because /health answers on the first probe while the model is
@@ -4080,12 +4085,33 @@ function llm-build() {
     # swallow-ok: a machine without nproc builds with 4 jobs, and the output names that choice
     jobs=$(nproc 2>/dev/null || echo 4)
 
+    # The CUDA compute architecture belongs to the CARD, not to this repo.  86 is
+    # the RTX 3050 Ti's (Ampere); an arm64 CUDA box reports differently (GB10
+    # 12.1, Jetson Orin 8.7), and nvcc refuses an architecture it does not know.
+    # Ask the driver, and fall back to this box's measured 86 with the choice
+    # PRINTED, so a card that cannot be read is stated rather than assumed.
+    local cuda_arch="86"
+    local _cuda_cap=""
+    if command -v nvidia-smi >/dev/null 2>&1
+    then
+        # swallow-ok: an unreadable card leaves the value empty, and the guard below prints the fallback
+        _cuda_cap="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null)"
+        _cuda_cap="${_cuda_cap%%$'\n'*}"
+        _cuda_cap="${_cuda_cap// /}"
+    fi
+    if [[ "$_cuda_cap" =~ ^[0-9]+\.[0-9]+$ ]]
+    then
+        cuda_arch="${_cuda_cap/./}"
+    else
+        __tac_info "CUDA" "compute capability unreadable - building for sm_${cuda_arch}" "$C_Dim"
+    fi
+
     # Configure with CMake (skip if --quick and CMakeCache exists)
     if [[ "$quick" != "true" || ! -f "$root/build/CMakeCache.txt" ]]; then
-        __tac_info "Configure" "Running CMake with CUDA flags ..." "$C_Info"
+        __tac_info "Configure" "Running CMake with CUDA flags (sm_${cuda_arch}) ..." "$C_Info"
         cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CUDA_ARCHITECTURES=86 \
+            -DCMAKE_CUDA_ARCHITECTURES=${cuda_arch} \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_FA=ON \
             -DGGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16" \

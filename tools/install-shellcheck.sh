@@ -13,12 +13,23 @@
 # so a version skew makes the identical tree pass on one machine and fail on
 # another. CI and local lint must therefore resolve the same version.
 #
+# The ASSET is per architecture: upstream publishes linux.x86_64 and
+# linux.aarch64 tarballs with different bytes, so each carries its own sha256.
+# The host is read by tools/arch.sh and an unsupported machine is refused before
+# anything is downloaded.
+#
 # Usage:
 #   sudo tools/install-shellcheck.sh               # install to /usr/local/bin
 #        tools/install-shellcheck.sh -p "$HOME/.local/bin"
+#        tools/install-shellcheck.sh --print-asset # the asset this host resolves
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-28): aarch64 support.  The asset name and sha256 were x86_64-only,
+#   so the installer could not run on an arm64 box at all.  Both architectures'
+#   checksums are pinned — the arm64 value computed from the official v0.11.0
+#   aarch64 tarball — and an unsupported host is refused with the reason instead
+#   of a 404.
 #   v4 (2026-09-23): skip the download when the pin is already installed at the
 #   target prefix.  CI runs this before every shell job on a SELF-HOSTED runner
 #   where a previous job already put the pinned binary in place, so re-downloading
@@ -27,17 +38,38 @@
 #   connect to github.com port 443 ... Timeout was reached` while
 #   /usr/local/bin/shellcheck was ALREADY the pin on that runner — the Lint job
 #   reported `version: 0.11.0` from it minutes later.
-VERSION="1.0"
+VERSION="1.1"
 set -euo pipefail
 
+# shellcheck source=tools/arch.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/arch.sh"
+
 SHELLCHECK_VERSION="v0.11.0"
-# sha256 of shellcheck-v0.11.0.linux.x86_64.tar.xz from the official release
+# sha256 per host architecture, both from the official v0.11.0 release
 # (github.com/koalaman/shellcheck/releases/tag/v0.11.0).
-SHELLCHECK_SHA256="8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+declare -A SHELLCHECK_SHA256=(
+    [x86_64]="8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+    [aarch64]="12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+)
 
 # --version works without touching the network (repo-wide idiom).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "install-shellcheck $VERSION"
+    exit 0
+fi
+
+# Resolve the host BEFORE parsing options or touching the network: an
+# unsupported machine has no asset to install, and refusing here names the
+# architecture instead of failing later on a 404 or a checksum mismatch.
+host_arch="$(tac_host_arch)"
+tarball="shellcheck-${SHELLCHECK_VERSION}.linux.${host_arch}.tar.xz"
+url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${tarball}"
+sha256="${SHELLCHECK_SHA256[$host_arch]}"
+
+# --print-asset: the resolution above, printed without a download.  It exists so
+# the arch mapping has a network-free witness a test can check.
+if [[ "${1:-}" == "--print-asset" ]]; then
+    printf 'asset=%s\nurl=%s\nsha256=%s\n' "$tarball" "$url" "$sha256"
     exit 0
 fi
 
@@ -70,19 +102,16 @@ then
     echo "Installed $prefix/shellcheck is not ${SHELLCHECK_VERSION} (or will not run) — installing the pin."
 fi
 
-tarball="shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${tarball}"
-
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-echo "Downloading shellcheck ${SHELLCHECK_VERSION} ..."
+echo "Downloading shellcheck ${SHELLCHECK_VERSION} (${host_arch}) ..."
 # --connect-timeout/--max-time: without them a stalled connection blocks the
 # installer indefinitely, and this runs before shellcheck exists to check anything.
 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 300 \
     -o "$workdir/$tarball" "$url"
 
-sha256sum -c - <<< "${SHELLCHECK_SHA256}  $workdir/$tarball" >/dev/null
+sha256sum -c - <<< "${sha256}  $workdir/$tarball" >/dev/null
 echo "sha256 verified."
 
 tar -xJf "$workdir/$tarball" -C "$workdir"

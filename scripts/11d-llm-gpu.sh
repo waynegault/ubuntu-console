@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 27
+#   v27 (2026-10-28): model sizing asks the CARD for its VRAM total
+#   (__tac_vram_total_bytes, cached per shell) instead of trusting the 4 GiB
+#   constant.  On a larger card — including an arm64 CUDA box — every model that
+#   actually fits was recorded CPU-only, and the launch hint was wrong.  The
+#   constant remains the stated fallback when the driver cannot be read.
 #   v26 (2026-10-16): __llm_train_lane_holder requires the runner to be the SCRIPT the
 #   interpreter was GIVEN — the argv element immediately after an interpreter — instead of
 #   any element that merely names the path.  Measured 2026-10-16: a CI lint job's file list
@@ -850,6 +855,34 @@ function __gguf_metadata() {
     }'
 }
 
+# __tac_vram_total_bytes — the card's own VRAM total, or the constant when it cannot be read.
+# VRAM_TOTAL_BYTES is the 4 GiB value tuned for the RTX 3050 Ti.  Sizing every
+# model against it marks a model that fits a larger card (24 GB, or an arm64 CUDA
+# box) as CPU-only, so the driver is asked first and the constant is the stated
+# fallback.  Cached per shell: a card's total does not change under a session.
+function __tac_vram_total_bytes() {
+    if [[ -n "${__TAC_VRAM_TOTAL_BYTES_CACHE:-}" ]]
+    then
+        printf '%d\n' "$__TAC_VRAM_TOTAL_BYTES_CACHE"
+        return
+    fi
+    local _total_mb=""
+    if command -v nvidia-smi >/dev/null 2>&1
+    then
+        # swallow-ok: an unreadable card falls back to VRAM_TOTAL_BYTES below, which is the named fallback
+        _total_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null)
+        _total_mb="${_total_mb%%$'\n'*}"
+        _total_mb="${_total_mb// /}"
+    fi
+    if [[ "$_total_mb" =~ ^[0-9]+$ ]]
+    then
+        __TAC_VRAM_TOTAL_BYTES_CACHE=$(( _total_mb * 1048576 ))
+    else
+        __TAC_VRAM_TOTAL_BYTES_CACHE="${VRAM_TOTAL_BYTES:-4294967296}"
+    fi
+    printf '%d\n' "$__TAC_VRAM_TOTAL_BYTES_CACHE"
+}
+
 # __calc_gpu_layers — Calculate optimal GPU layer count for available VRAM.
 # Strategy: use -ngl 999 at launch to let llama.cpp offload the maximum
 # layers that fit in VRAM. This scan-time function determines the launch
@@ -868,7 +901,9 @@ function __gguf_metadata() {
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {
     local _file_bytes=$1 _total_layers=$2 _arch="${3:-}"
-    local usable_vram=$(( VRAM_TOTAL_BYTES * VRAM_USABLE_PCT / 100 ))
+    local _vram_total
+    _vram_total="$(__tac_vram_total_bytes)"
+    local usable_vram=$(( _vram_total * VRAM_USABLE_PCT / 100 ))
 
     # MoE models keep experts on CPU; full offload heuristics are not useful.
     if [[ "${_arch,,}" == *moe* ]]
@@ -893,6 +928,8 @@ function __calc_gpu_layers() {
 # is realistic instead of storing the GGUF metadata value (which can be 1M+).
 function __calc_ctx_size() {
     local _file_bytes=$1 _native_ctx=$2 _arch="${3:-}"
+    local _vram_total
+    _vram_total="$(__tac_vram_total_bytes)"
     # MoE models use a stable conservative context regardless of size.
     if [[ "${_arch,,}" == *moe* ]]
     then
@@ -901,7 +938,7 @@ function __calc_ctx_size() {
     fi
 
     # CPU-only mode (model exceeds VRAM threshold): cap to MOE_DEFAULT_CTX.
-    if (( _file_bytes > VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 ))
+    if (( _file_bytes > _vram_total * VRAM_THRESHOLD_PCT / 100 ))
     then
         echo "$MOE_DEFAULT_CTX"
         return
@@ -917,7 +954,7 @@ function __calc_ctx_size() {
         _vram_free_mb=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
     fi
     [[ "$_vram_free_mb" =~ ^[0-9]+$ ]] || _vram_free_mb=""
-    local _vram_total_mb=$(( VRAM_TOTAL_BYTES / 1048576 ))  # 4096 for 4GB
+    local _vram_total_mb=$(( _vram_total / 1048576 ))  # 4096 on the RTX 3050 Ti
     [[ -n "$_vram_free_mb" && "$_vram_free_mb" -gt "$_vram_total_mb" ]] && _vram_free_mb=$_vram_total_mb
     local _vram_avail_mb=$(( _vram_total_mb - _model_mb - 200 ))  # minus weights + 200MB OS
     [[ -n "$_vram_free_mb" && "$_vram_free_mb" -lt "$_vram_avail_mb" ]] && _vram_avail_mb=$_vram_free_mb

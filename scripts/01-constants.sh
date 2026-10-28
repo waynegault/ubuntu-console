@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 42
+# Module Version: 43
+#   v43 (2026-10-28): two defaults stop assuming this box's hardware.
+#   LLAMA_CPU_THREADS is 6 capped by nproc (a 4-core arm64 WSL VM was told to run
+#   six threads), and it now honours an explicit override instead of overwriting
+#   it; PYOPENCL_CTX is exported only where an Intel render node exists (the Xe
+#   env on a host with no Xe described a platform that was not there).
 #   v42 (2026-10-26): LLAMA_LANE_SPECS follows the second Xe lane's rename to
 #   llama-xe-llama32-3b-chat.service.  The old name still claimed Qwen2.5-3B after
 #   the 2026-10-02 bake-off put Llama-3.2-3B on the lane, so `model lanes` was
@@ -445,7 +450,17 @@ export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 #   profile|name|size|proc|file|gpu_layers|ctx_size|threads
 # If the last three fields are missing or empty, these defaults are used.
 export LLAMA_GPU_LAYERS=24   # Keep baseline offload under 4GB total VRAM usage on RTX 3050 Ti 4GB.
-export LLAMA_CPU_THREADS=6   # Pin heavy compute to P-cores for better throughput/thermals on i9-12900HK.
+# 6 is this box's P-core count.  A host with FEWER usable CPUs (a 4-core arm64
+# WSL VM) must not be told to run six threads, so the default is 6 capped by
+# nproc; an explicit LLAMA_CPU_THREADS still wins.
+_tac_cpu_threads=6
+# swallow-ok: an unreadable nproc keeps the measured 6, which the cap can only lower
+if _tac_total_cpus="$(nproc 2>/dev/null)" && (( _tac_total_cpus > 0 && _tac_total_cpus < _tac_cpu_threads ))
+then
+    _tac_cpu_threads="$_tac_total_cpus"
+fi
+export LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-$_tac_cpu_threads}"
+unset _tac_cpu_threads _tac_total_cpus
 # AUTOTUNE-002: ctx is registry-driven — the per-model ctx comes from
 # ~/.llm/models.conf (autotuned rows); there is deliberately NO
 # LLAMA_CTX_SIZE / LLM_CONTEXT_SIZE default here.  The launch resolves
@@ -567,7 +582,14 @@ export LLAMA_NO_MMAP_MODE="${LLAMA_NO_MMAP_MODE:-auto}"
 # The loader's default search path already includes /etc/OpenCL/vendors, so
 # leaving it unset is both correct and sufficient.
 #   removed 2026-09-14: export OCL_ICD_VENDORS=/etc/OpenCL/vendors
-export PYOPENCL_CTX='0'
+# Only exported where a device can answer: Intel Xe/oneAPI is an x86_64 part, and
+# /dev/dri is the render node pyopencl enumerates.  An arm64 WSL box has neither,
+# and exporting a platform index there would be state with no platform behind it.
+# HOSTTYPE is bash's own architecture variable — no fork at shell start.
+if [[ "${HOSTTYPE:-}" == "x86_64" && -d /dev/dri ]]
+then
+    export PYOPENCL_CTX='0'
+fi
 
 # ---- Named Constants (avoid magic numbers scattered through functions) ----
 if [[ -z "${VRAM_TOTAL_BYTES+x}" ]]; then

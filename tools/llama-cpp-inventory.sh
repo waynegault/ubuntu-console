@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-28): the update is ARCHITECTURE-AWARE.  It used to download
+#   `llama-b<tag>-bin-ubuntu-x64.zip` unconditionally, which installs a binary an
+#   arm64 machine cannot execute.  The asset is now read from the release's own
+#   asset list for the host architecture (x64 | arm64) and its real suffix
+#   (upstream moved from .zip to .tar.gz).  Release DISCOVERY also changed:
+#   /releases/latest answers with the newest release of any kind, and on
+#   2026-10-28 that was v0.8.0, which carries no b-tag and no Linux archives, so
+#   every `--update` failed with "latest release has no numeric tag_name".  The
+#   releases list is read instead and the newest b<digits> release that actually
+#   ships this host's Ubuntu archive is selected; one that does not is named.
 #   v4 (2026-10-20): a build tag is read from the binary's own version string or the
 #   versioned `<root>/llama.cpp/b<digits>/` layout, never from an arbitrary path segment.
 #   A BATS temp dir named `bats-run-SULb7C` made a custom binary report build `b7` and
@@ -38,8 +48,9 @@ Usage: llama-cpp-inventory.sh [--update]
        llama-cpp-inventory.sh --home-only
 
 Report installed llama-server binaries and their build type. By default this is
-read-only. --update explicitly downloads the latest Ubuntu x64 release and
-repoints ~/.local/bin/llama-server, preserving the previous link as .bak.
+read-only. --update explicitly downloads the latest Ubuntu release built for
+this host's architecture (x64 or arm64) and repoints ~/.local/bin/llama-server,
+preserving the previous link as .bak.
 --home-only omits system binary paths for isolated diagnostics.
 EOF
 }
@@ -135,33 +146,77 @@ _inventory() {
     done
 }
 
-# _update — fetch the latest Ubuntu x64 release and repoint ~/.local/bin/llama-server.
+# _release_arch — llama.cpp's spelling of this host's architecture in its Ubuntu asset names.
+_release_arch() {
+    local host_arch
+    host_arch="$(tac_host_arch)"
+    case "$host_arch" in
+        x86_64)  printf 'x64\n' ;;
+        aarch64) printf 'arm64\n' ;;
+        *)
+            # Not reachable through tac_host_arch today; kept so a future third name
+            # cannot fall through this case and silently select no archive.
+            _say "llama-cpp-inventory: no llama.cpp Ubuntu archive is named for $host_arch"
+            return 1
+            ;;
+    esac
+}
+
+# _select_release ARCH — print `<build>\t<asset>\t<url>` for the newest b<digits> release
+# that ships ARCH's Ubuntu archive.
+# /releases/latest is not usable: it answers with the newest release of ANY kind, and
+# a non-build tag carries no Linux archive (measured 2026-10-28: v0.8.0 shipped only
+# nightly-tag.txt).  A b-release without this host's archive is REFUSED by name, with
+# the assets it does carry, rather than skipped in favour of an older build.
+_select_release() {
+    local arch="$1" python_bin release_json
+    # shellcheck source=tools/python-runtime.sh
+    source "$REPO_ROOT/tools/python-runtime.sh"
+    python_bin="$(_tac_python_path "$REPO_ROOT")"
+    release_json="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+        "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20")"
+    "$python_bin" -c '
+import json, re, sys
+arch = sys.argv[1]
+releases = json.load(sys.stdin)
+if not isinstance(releases, list):
+    raise SystemExit("llama.cpp releases response is not a list")
+for release in releases:
+    tag = release.get("tag_name") or ""
+    match = re.fullmatch(r"b([0-9]+)", tag)
+    if not match:
+        continue
+    wanted = re.compile(r"^llama-b%s-bin-ubuntu-(x64|arm64)\.(tar\.gz|zip)$" % match.group(1))
+    names = []
+    for asset in release.get("assets") or []:
+        name = asset.get("name") or ""
+        names.append(name)
+        found = wanted.match(name)
+        if found and found.group(1) == arch:
+            print(match.group(1), name, asset.get("browser_download_url") or "", sep="\t")
+            raise SystemExit(0)
+    raise SystemExit("release %s has no ubuntu-%s archive (assets: %s)"
+                     % (tag, arch, ", ".join(names)))
+raise SystemExit("no b-tagged release in the first page")
+' "$arch" <<<"$release_json"
+}
+
+# _update — fetch the latest Ubuntu release for this host and repoint ~/.local/bin/llama-server.
 _update() {
-    local python_bin release_json latest_tag current_tag="" link dest extract_dir archive server
+    local latest_tag current_tag="" link dest extract_dir archive server
+    local release_arch asset_name asset_url selection
     local link_tmp
     : "${HOME:?HOME must be set to update llama.cpp}"
     command -v curl >/dev/null 2>&1 || {
         _say "llama-cpp-inventory: curl is required for --update"
         return "$EXIT_TOOL_MISSING"
     }
-    command -v unzip >/dev/null 2>&1 || {
-        _say "llama-cpp-inventory: unzip is required for --update"
-        return "$EXIT_TOOL_MISSING"
-    }
 
-    # shellcheck source=tools/python-runtime.sh
-    source "$REPO_ROOT/tools/python-runtime.sh"
-    python_bin="$(_tac_python_path "$REPO_ROOT")"
-    release_json="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
-        "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")"
-    latest_tag="$("$python_bin" -c '
-import json, re, sys
-tag = json.load(sys.stdin).get("tag_name")
-match = re.fullmatch(r"b?([0-9]+)", tag or "")
-if not match:
-    raise SystemExit("latest release has no numeric tag_name")
-print(match.group(1))
-' <<<"$release_json")"
+    # shellcheck source=tools/arch.sh
+    source "$REPO_ROOT/tools/arch.sh"
+    release_arch="$(_release_arch)"
+    selection="$(_select_release "$release_arch")"
+    IFS=$'\t' read -r latest_tag asset_name asset_url <<<"$selection"
 
     link="$HOME/.local/bin/llama-server"
     if [[ -e "$link" || -L "$link" ]]; then
@@ -197,14 +252,33 @@ print(match.group(1))
         mkdir -p "$HOME/.cache"
         _LLAMA_UPDATE_TMPDIR="$(mktemp -d "$HOME/.cache/llama-cpp-update.XXXXXX")"
         trap _cleanup_update_tmpdir EXIT
-        archive="$_LLAMA_UPDATE_TMPDIR/release.zip"
+        archive="$_LLAMA_UPDATE_TMPDIR/$asset_name"
         extract_dir="$_LLAMA_UPDATE_TMPDIR/extracted"
         mkdir -p "$extract_dir"
-        local zip_name="llama-b${latest_tag}-bin-ubuntu-x64.zip"
         curl --fail --location --silent --show-error --max-time 120 \
-            "https://github.com/ggml-org/llama.cpp/releases/download/b${latest_tag}/${zip_name}" \
-            --output "$archive"
-        unzip -q "$archive" -d "$extract_dir"
+            --output "$archive" "$asset_url"
+        # The release's own suffix decides the extractor: upstream publishes
+        # .tar.gz today, older builds are .zip, and neither is assumed.
+        case "$asset_name" in
+            *.tar.gz)
+                command -v tar >/dev/null 2>&1 || {
+                    _say "llama-cpp-inventory: tar is required for $asset_name"
+                    return "$EXIT_TOOL_MISSING"
+                }
+                tar -xzf "$archive" -C "$extract_dir"
+                ;;
+            *.zip)
+                command -v unzip >/dev/null 2>&1 || {
+                    _say "llama-cpp-inventory: unzip is required for $asset_name"
+                    return "$EXIT_TOOL_MISSING"
+                }
+                unzip -q "$archive" -d "$extract_dir"
+                ;;
+            *)
+                _say "llama-cpp-inventory: unsupported release archive: $asset_name"
+                return 1
+                ;;
+        esac
         server="$(find "$extract_dir" -type f -name llama-server -print -quit)"
         [[ -n "$server" ]] || {
             _say "llama-cpp-inventory: release archive contains no llama-server"

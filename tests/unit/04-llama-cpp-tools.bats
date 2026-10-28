@@ -52,7 +52,23 @@ if [[ "$url" == *api.github.com* ]]; then
         printf '%s\n' "curl: simulated API failure" >&2
         exit 22
     fi
-    printf '{"tag_name":"b%s"}\n' "${CURL_LATEST_TAG:-99999}"
+    # The updater reads the RELEASES LIST, not /releases/latest: the newest
+    # release of any kind may be a non-build tag (upstream's v0.8.0 carries only
+    # nightly-tag.txt), so the selector looks for a b-tagged release carrying
+    # this host's Ubuntu archive.
+    tag="${CURL_LATEST_TAG:-99999}"
+    printf '[{"tag_name":"v0.8.0","assets":[{"name":"nightly-tag.txt","browser_download_url":"https://example.invalid/nightly-tag.txt"}]},'
+    assets=()
+    if [[ "${CURL_ARM64_ONLY:-0}" != "1" ]]; then
+        assets+=("{\"name\":\"llama-b${tag}-bin-ubuntu-x64.zip\",\"browser_download_url\":\"https://example.invalid/llama-b${tag}-bin-ubuntu-x64.zip\"}")
+    fi
+    if [[ "${CURL_X64_ONLY:-0}" != "1" ]]; then
+        assets+=("{\"name\":\"llama-b${tag}-bin-ubuntu-arm64.tar.gz\",\"browser_download_url\":\"https://example.invalid/llama-b${tag}-bin-ubuntu-arm64.tar.gz\"}")
+    fi
+    printf '{"tag_name":"b%s","assets":[' "$tag"
+    printf '%s' "${assets[0]:-}"
+    [[ "${#assets[@]}" -le 1 ]] || printf ',%s' "${assets[@]:1}"
+    printf ']}]\n'
 elif [[ -n "$output" ]]; then
     if [[ "${CURL_ARCHIVE_FAIL:-0}" == 1 ]]; then
         printf '%s\n' "curl: simulated archive failure" >&2
@@ -112,6 +128,47 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
     [ "$(readlink "$HOME/.local/bin/llama-server.bak")" = \
         "$HOME/.local/opt/llama.cpp/b9371/llama-server" ]
     [ -z "$(find "$HOME/.cache" -maxdepth 1 -name 'llama-cpp-update.*' -print -quit)" ]
+    # Criterion (tools/llama-cpp-inventory.sh v5): the archive fetched is the one
+    # built for THIS host.  Catches: the x86_64 archive being installed on arm64.
+    grep -qF "llama-b99999-bin-ubuntu-x64.zip" "$CURL_LOG"
+    ! grep -qF "ubuntu-arm64" "$CURL_LOG"
+}
+
+@test "an arm64 host downloads the arm64 tar.gz, not the x64 archive" {
+    # Criterion: upstream publishes both arches, so the host decides.  The tar.gz
+    # suffix is the one upstream ships today (measured 2026-10-28, b11969).
+    mkdir -p "$BATS_TEST_TMPDIR/release/bin"
+    printf '#!/bin/sh\nprintf "version (build 99999)\\n"\n' \
+        > "$BATS_TEST_TMPDIR/release/bin/llama-server"
+    chmod +x "$BATS_TEST_TMPDIR/release/bin/llama-server"
+    tar -czf "$LLAMA_RELEASE_FIXTURE" -C "$BATS_TEST_TMPDIR/release" .
+
+    mkdir -p "$MOCK_BIN_DIR/arm"
+    printf '#!/usr/bin/env bash\nprintf "aarch64\\n"\n' > "$MOCK_BIN_DIR/arm/uname"
+    chmod +x "$MOCK_BIN_DIR/arm/uname"
+    export PATH="$MOCK_BIN_DIR/arm:$PATH"
+
+    run "$REPO_ROOT/tools/llama-cpp-inventory.sh" --update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Installed b99999"* ]]
+    [ -x "$HOME/.local/opt/llama.cpp/b99999/bin/llama-server" ]
+    grep -qF "llama-b99999-bin-ubuntu-arm64.tar.gz" "$CURL_LOG"
+    ! grep -qF "ubuntu-x64" "$CURL_LOG"
+}
+
+@test "a b-release without this host's archive is refused by name" {
+    # Criterion (fail closed): if the newest b-tagged release ships no archive for
+    # this host, the updater says so and installs NOTHING.  Catches: silently
+    # falling back to an older build, or downloading a foreign-arch binary.
+    export CURL_ARM64_ONLY=1
+    local before
+    before="$(readlink "$HOME/.local/bin/llama-server")"
+
+    run "$REPO_ROOT/tools/llama-cpp-inventory.sh" --update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"release b99999 has no ubuntu-x64 archive"* ]]
+    [ "$(readlink "$HOME/.local/bin/llama-server")" = "$before" ]
+    [ ! -e "$HOME/.local/opt/llama.cpp/b99999" ]
 }
 
 @test "update is idempotent when the current build matches latest" {
@@ -154,10 +211,15 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
 }
 
 @test "llm-build is defined and retains the required CUDA configuration" {
-    local src
+    local src want_arch='DCMAKE_CUDA_ARCHITECTURES=${cuda_arch}'
     src="$(declare -f llm-build)"
     [[ "$src" == *"GGML_CUDA=ON"* ]]
-    [[ "$src" == *"CMAKE_CUDA_ARCHITECTURES=86"* ]]
+    # Criterion (scripts/11e-llm-model.sh v72): the compute architecture comes from
+    # the driver, with 86 as the stated fallback.  Catches: the old hard-coded
+    # sm_86 reaching an arm64 CUDA card that needs 121 or 87.
+    [[ "$src" == *"$want_arch"* ]]
+    [[ "$src" == *"compute_cap"* ]]
+    [[ "$src" == *'local cuda_arch="86"'* ]]
     [[ "$src" == *"GGML_CUDA_FA=ON"* ]]
     [[ "$src" != *"GGML_CUDA_FA_ALL_QUANTS"* ]]
     [[ "$src" == *'GGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16"'* ]]
