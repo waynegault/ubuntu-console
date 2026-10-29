@@ -13,7 +13,7 @@
 # shellcheck disable=SC2034  # this file's version header is read by people and by
 #                             # git history, never by the file itself — SC2034 is the
 #                             # one diagnostic that cannot describe a header.
-VERSION="1.6"
+VERSION="1.7"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -41,6 +41,15 @@ setup_file() {
     export _TAC_REAL_HOME="$HOME"
     export HOME="$TAC_TEST_TMPDIR/home"
     mkdir -p "$HOME"
+
+    # Drop an inherited OC_AGENTS pin.  01-constants honours a caller's override
+    # (v41), so a session that exports one — this box's sessions do — left
+    # OC_AGENTS pointing at the LIVE agent tree while the fixture had redirected
+    # HOME/OC_ROOT, and "constants: OC_AGENTS is under OC_ROOT" failed for that
+    # reason alone (measured 2026-10-28: red with OC_AGENTS exported, green under
+    # `env -u OC_AGENTS`).  Unsetting here makes every OC_* path derive from the
+    # fixture's own HOME; the SANDBOXED marker is derived state and goes with it.
+    unset OC_AGENTS OC_AGENTS_SANDBOXED
     cat > "$HOME/.bashrc" << 'EOF'
 # ~/.bashrc — Thin Loader
 # This file is intentionally minimal and should remain read-only.
@@ -2287,7 +2296,12 @@ EOF
 }
 
 @test "constants: OC_AGENTS is under OC_ROOT" {
-    [[ "$OC_AGENTS" == "$OC_ROOT"* ]]
+    # Derived, not inherited: setup_file drops an exported OC_AGENTS pin, so this
+    # is the canonical path under the fixture's HOME.  A prefix test alone passed
+    # for a LIVE /home/wayne/.openclaw/agents whenever the caller exported one
+    # (measured 2026-10-28), which is how the leak stayed invisible on a box that
+    # sets it while `env -u OC_AGENTS` read green.
+    [[ "$OC_AGENTS" == "$OC_ROOT/agents" ]]
 }
 
 @test "constants: OC_LOGS is under OC_ROOT" {
