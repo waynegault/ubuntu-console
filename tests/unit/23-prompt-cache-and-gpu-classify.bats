@@ -35,6 +35,10 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 LAUNCHER="$REPO_ROOT/scripts/11e-llm-model.sh"
 AUTOTUNE="$REPO_ROOT/scripts/autotune-model.sh"
 CONSTANTS="$REPO_ROOT/scripts/01-constants.sh"
+# The per-port prompt-cache budgets are a HOST PROFILE fact (measured on one lane on
+# one card), so the cases below read them from this box's profile, not from the
+# constants file that merely consumes them.
+PROFILE="$REPO_ROOT/config/hosts.d/intel-xe-cuda.conf"
 TELEMETRY="$REPO_ROOT/scripts/07-telemetry.sh"
 ENV_SH="$REPO_ROOT/env.sh"
 UNIT_DIR="$REPO_ROOT/systemd"
@@ -177,9 +181,9 @@ __spec_launch_flags() { :; }
 __tac_info() { printf '%s\n' "$2"; }
 source "$1"
 [[ -n "${2:-}" ]] && export LLAMA_CACHE_RAM_MB="$2"
-# The MEASURED per-lane table is read from its shipped home rather than restated
-# here, so this harness exercises the real override path.
-[[ -n "${5:-}" ]] && eval "$(sed -n '/^declare -gA LLAMA_CACHE_RAM_MB_BY_PORT=(/,/^)/p' "$5")"
+# The MEASURED per-lane table is read from its shipped home (the HOST PROFILE)
+# rather than restated here, so this harness exercises the real override path.
+[[ -n "${5:-}" ]] && source "$5"
 llm_backend="native"
 LLAMA_SERVER_BIN="/stub/llama-server"
 model_path="/stub/model.gguf"
@@ -203,7 +207,7 @@ if [[ -n "${3:-}" ]]; then export __BENCH_MODE=1; else unset __BENCH_MODE; fi
 __model_use_build_command || { echo "FAIL: builder returned non-zero"; exit 1; }
 printf '%s\n' "${cmd[@]}"
 EOS
-    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench" "$_port" "$CONSTANTS"
+    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench" "$_port" "$PROFILE"
 }
 
 # ── the prompt-cache reader ──────────────────────────────────────────────────
@@ -334,7 +338,7 @@ EOS
         # keeps the global default.  Reading the table rather than restating 768 keeps
         # this case pointed at the one authority, and the case below proves the
         # LAUNCHER uses that same table.
-        expected=$(sed -nE "s/^ *\[${port}\]=([0-9]+).*/\1/p" "$CONSTANTS" | head -1)
+        expected=$(sed -nE "s/^ *\[${port}\]=([0-9]+).*/\1/p" "$PROFILE" | head -1)
         expected="${expected:-$default}"
         [[ "$exec_line" == *"--cache-ram ${expected}"* ]] \
             || { echo "FAIL: ${u##*/} does not pass '--cache-ram ${expected}' (port ${port})"; status=1; }
