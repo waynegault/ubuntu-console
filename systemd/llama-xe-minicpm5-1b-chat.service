@@ -1,6 +1,10 @@
 [Unit]
+# install-profile: intel-xe-cuda
 # CARD: Xe (Intel OpenCL)   MODEL: MiniCPM5-1B   FUNCTION: chat/serving
-# The fleet/lane server.  Card is Xe — see docs/llm.md "The two cards".
+# The fleet/lane server.  Card is Xe — see docs/llm.md "The two cards".  The Xe card
+# exists only on this box, so the profile is the ownership marker; the
+# ConditionArchitecture below is defence in depth if this unit is ever linked by hand
+# somewhere else.
 Description=llama.cpp server — Xe card, MiniCPM5-1B, chat (port 18081)
 After=network-online.target
 Wants=network-online.target

@@ -3,6 +3,12 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.13 (2026-10-29, host profiles): the installer resolves WHICH box it is on
+#   (tools/host-profile.sh) before linking systemd units, and links only the units
+#   marked `# install-profile: <id>` for that profile plus the unmarked shared set.
+#   No profile is a hard refusal: linking every lane on an unknown machine is how a
+#   CUDA lane naming this box's model file lands on a different box.  The id is
+#   chosen by LLM_HOST_PROFILE or ~/.llm/host-profile, else detected from arch + card.
 # v1.12 (2026-10-24, card SYSTEMD-DROPIN-INSTALL-001): a `systemd/*.conf` is a DROP-IN
 #   source, not a unit. The user-unit loop skipped only directories, so every .conf was
 #   linked into ~/.config/systemd/user/ as a non-unit stray that systemd ignored silently —
@@ -22,7 +28,7 @@
 #   systemd/* linking loop (it ran before it, so on a FIRST install the target
 #   units did not exist yet and every alias was skipped), and a skipped alias now
 #   names its missing target on stderr instead of passing silently.
-VERSION="1.11"
+VERSION="1.13"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -42,6 +48,30 @@ PROFILE_PATH="$REPO/tactical-console.bashrc"
 warn() {
     printf '%s\n' "$@" >&2
 }
+
+# ── Host profile (WHICH box this is) ─────────────────────────────────────────
+# This repo serves more than one machine, and a machine-specific lane unit must
+# never be linked onto the wrong one: a CUDA lane pointing at this box's model
+# file would start on another box and fail, or, worse, serve the wrong card's
+# model.  Every `systemd/*` unit that is not shared carries
+# `# install-profile: <id>`; this installer links the shared ones plus the ones
+# marked for the resolved profile and skips the rest BY NAME.
+#
+# No profile here is a REFUSAL, not a default: an install is the moment the box's
+# identity must be settled, and linking every unit on an unknown machine is
+# exactly the defect this block prevents.  The override (LLM_HOST_PROFILE, or an id
+# on a line in ~/.llm/host-profile) is stated in the message.
+# shellcheck source=/dev/null
+source "$REPO/tools/host-profile.sh"
+if ! HOST_PROFILE="$(tac_host_profile_selected)"
+then
+    warn "ERROR: cannot determine this host's profile — refusing to install lane units." \
+         "       Profiles: $(tac_host_profile_ids | tr '\n' ' ')" \
+         "       Fix: record this box's id on a line in ~/.llm/host-profile" \
+         "            (or export LLM_HOST_PROFILE=<id>), then re-run ./install.sh"
+    exit 2   # 2 = usage: this machine has no resolvable host profile
+fi
+echo "  host profile: $HOST_PROFILE"
 
 append_loader_block() {
     cat <<LOADER
@@ -330,6 +360,12 @@ fi
 # `# install-dropin:` lines, which the block after this loop installs. Linking one
 # here put a stray in the unit dir that systemd ignored silently (card
 # SYSTEMD-DROPIN-INSTALL-001), so .conf files are skipped rather than linked.
+#
+# A unit marked `# install-profile: <id>` belongs to ONE box's lane set and is
+# linked only where that id matches; an unmarked unit is shared infrastructure
+# (watchdogs, timers, samplers) and is linked everywhere.  The marker is read from
+# the file, beside the ExecStart it applies to, so a new lane cannot be added
+# with its ownership declared in some other file.
 for f in "$REPO"/systemd/*
 do
     [[ -f "$f" ]] || continue
@@ -338,8 +374,15 @@ do
     then
         continue
     fi
+    _unit_profile="$(tac_host_unit_profile "$f")"
+    if [[ "$_unit_profile" != "any" && "$_unit_profile" != "$HOST_PROFILE" ]]
+    then
+        echo "  skipped systemd/$_bn (belongs to profile: $_unit_profile)"
+        continue
+    fi
     link "systemd/$_bn" "$HOME/.config/systemd/user/$_bn"
 done
+unset _unit_profile
 
 # ── Drop-in sources (systemd/*.conf) ─────────────────────────────────────────
 # A .conf here is a drop-in for one or more units, and it declares every destination

@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 40
+# Module Version: 41
+#   v41 (2026-10-29): the rows that name the production lane take its unit name from
+#   the HOST PROFILE (TAC_HOST_PRIMARY_LANE) instead of hardcoding this box's Xe lane,
+#   so on a box with a different primary lane the message does not name a stranger.
 #   v40 (2026-10-25): the CPU-DEGRADED row ATTRIBUTES instead of sending the operator to
 #   hunt for a process.  The warning it quotes already carries `work=[agent:…(…,age=…)…]`,
 #   so the row names the turns filling the event loop and says the row expires with them.
@@ -379,9 +382,10 @@ function __so_ensure_llm_running() {
     # stopped by the fallback start path below.
     if __test_port "${LLM_SERVICE_PORT:-18081}"
     then
-        if systemctl --user is-active --quiet llama-xe-minicpm5-1b-chat.service 2>/dev/null
+        if [[ -n "${TAC_HOST_PRIMARY_LANE:-}" ]] \
+           && systemctl --user is-active --quiet "$TAC_HOST_PRIMARY_LANE" 2>/dev/null
         then
-            __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — llama-xe-minicpm5-1b-chat.service]" "$C_Success"
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — $TAC_HOST_PRIMARY_LANE]" "$C_Success"
         else
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — production server detected]" "$C_Success"
         fi
@@ -402,9 +406,11 @@ function __so_ensure_llm_running() {
     # a duplicate model and killed every llama-server (including this very
     # service), driving the repeated restart cycles that made 'so' slow.
     # TAC_SKIP_SERVICE_LLM=1 (CI/unit tests) bypasses systemd management so
-    # the legacy registry-based fallback below stays unit-testable.
-    if [[ -z "${TAC_SKIP_SERVICE_LLM:-}" ]] \
-        && systemctl --user list-unit-files llama-xe-minicpm5-1b-chat.service >/dev/null 2>&1
+    # the legacy registry-based fallback below stays unit-testable.  The lane's UNIT
+    # NAME is a host fact (TAC_HOST_PRIMARY_LANE): a box that declares none skips
+    # straight to the fallback instead of asking systemd about a stranger's lane.
+    if [[ -n "${TAC_HOST_PRIMARY_LANE:-}" && -z "${TAC_SKIP_SERVICE_LLM:-}" ]] \
+        && systemctl --user list-unit-files "$TAC_HOST_PRIMARY_LANE" >/dev/null 2>&1
     then
         # Stop any legacy profile-managed instance and stale keepers so VRAM
         # is free for the service (the service itself is down here, so this
@@ -415,7 +421,7 @@ function __so_ensure_llm_running() {
         then
             __tac_info "Local LLM" "[legacy instance stop failed — it may still hold the VRAM]" "$C_Warning"
         fi
-        if systemctl --user start llama-xe-minicpm5-1b-chat.service 2>/dev/null
+        if systemctl --user start "$TAC_HOST_PRIMARY_LANE" 2>/dev/null
         then
             local _so_svc_wait=0
             while (( _so_svc_wait < 180 ))
@@ -423,13 +429,13 @@ function __so_ensure_llm_running() {
                 if __test_port "$LLM_SERVICE_PORT" \
                     && curl -sf --max-time 2 "http://127.0.0.1:$LLM_SERVICE_PORT/health" >/dev/null 2>&1
                 then
-                    __tac_info "Local LLM" "[ONLINE on PORT $LLM_SERVICE_PORT — llama-xe-minicpm5-1b-chat.service] (${_so_svc_wait}s)" "$C_Success"
+                    __tac_info "Local LLM" "[ONLINE on PORT $LLM_SERVICE_PORT — $TAC_HOST_PRIMARY_LANE] (${_so_svc_wait}s)" "$C_Success"
                     return 0
                 fi
                 sleep 1
                 _so_svc_wait=$(( _so_svc_wait + 1 ))
             done
-            __tac_info "Local LLM" "[SERVICE START TIMEOUT — check: journalctl --user -u llama-xe-minicpm5-1b-chat.service]" "$C_Error"
+            __tac_info "Local LLM" "[SERVICE START TIMEOUT — check: journalctl --user -u $TAC_HOST_PRIMARY_LANE]" "$C_Error"
             return 1
         fi
         __tac_info "Local LLM" "[SERVICE START FAILED — falling back to port $LLM_PORT]" "$C_Warning"

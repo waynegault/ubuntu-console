@@ -352,6 +352,13 @@ other: the Xe card keeps serving while the CUDA card is cleared, and vice versa.
 are card-first as of 2026-09-15, so a name that does not say `cuda` or `xe` is
 either historical, the card-less CPU tier, or wrong.
 
+> **This table is one HOST PROFILE's lane set** (`intel-xe-cuda`).  Every unit
+> below carries `# install-profile: intel-xe-cuda`, so `install.sh` links it on
+> this box and skips it by name on any other.  The arm64 box declares its own
+> lanes — none yet — in `config/hosts.d/asus-n1n-rtx-spark.conf`, because a lane
+> names a GGUF file in ONE machine's model store.  `LLAMA_LANE_SPECS` comes from
+> the profile, not from this file; see README "Host profiles".
+
 | Card | Unit | Launcher | Port | Metrics | Notes |
 |---|---|---|---|---|---|
 | **Xe** | `llama-xe-minicpm5-1b-chat.service` | `llama-xe-server` | 18081 | `--metrics` → `:18081/metrics` | the fleet server |
@@ -1004,10 +1011,12 @@ one (`model autotune N --workload agentic`).
 | Path | Purpose |
 |---|---|
 | `~/llama.cpp/` | llama.cpp installation root (`$LLAMA_ROOT`) — upstream: [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). See [Building llama.cpp](#building-llamacpp) below for CUDA compilation instructions. |
-| `/mnt/m/active/` | Active GGUF model files (`$LLAMA_MODEL_DIR`) |
+| `/mnt/m/active/` | Active GGUF model files (`$LLAMA_MODEL_DIR`) — `/mnt/m` is the `intel-xe-cuda` profile's `$LLAMA_DRIVE_ROOT`; each box has its own |
 | `/mnt/m/archive/` | Archived/discouraged models (`$LLAMA_ARCHIVE_DIR`) |
 | `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) — custom-tuned CUDA build (see [Building llama.cpp](#building-llamacpp) below) |
-| `~/.llm/models.conf` | Model registry — 45-column format (schema v7: v6 + the 2b measurement columns 40-44 + `ctx_policy` 45) (`$LLM_REGISTRY`) |
+| `~/.llm/models.conf` | Model registry — 45-column format (schema v7: v6 + the 2b measurement columns 40-44 + `ctx_policy` 45) (`$LLM_REGISTRY`) — per box |
+| `~/.llm/host-profile` | This box's host-profile id (optional, machine-local; `LLM_HOST_PROFILE` overrides it) |
+| `config/hosts.d/<id>.conf` | Host profile — the machine's cards, lanes, tuning, model store and quant policy |
 | `~/.llm/models.conf` | Also stores autotune winners (`autotuned`, row-level knobs, `mmap_mode`) |
 | `~/.llm/bench_*.tsv` | Benchmark history from `model bench` |
 | `~/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |

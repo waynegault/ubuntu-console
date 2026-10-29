@@ -2,7 +2,10 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-10-29): with no card reading AND no honest profile fallback, the
+#   recommender says so and returns 1 instead of ranking against an invented 4 GB
+#   (this matters on a box whose card size this repo has never measured).
 #   v10 (2026-10-28): the VRAM figure comes from the CARD first.  Testing the
 #   4 GiB VRAM_TOTAL_BYTES constant before nvidia-smi made the driver branch dead
 #   code, so a 24 GB card and a cardless host both reported 4 GB.  The constant
@@ -97,11 +100,11 @@ function model-recommend() {
         return 1
     fi
 
-    # Ask the CARD first.  VRAM_TOTAL_BYTES is the 4 GiB value tuned for the RTX
-    # 3050 Ti, and testing it first made the nvidia-smi branch below dead code:
-    # every larger card — including a CUDA arm64 box — was reported as 4 GB, and
-    # so was a host with no card at all.  The constant is the FALLBACK, not the
-    # answer.
+    # Ask the CARD first.  A constant tested first made the nvidia-smi branch dead
+    # code: every larger card — including a CUDA arm64 box — was reported as 4 GB,
+    # and so was a host with no card at all.  The HOST PROFILE's fallback is the
+    # second choice, and 0 there means this host has no honest constant — at which
+    # point there is no answer to give rather than a guessed one.
     local vram_gb vram_mb=""
     if command -v nvidia-smi >/dev/null 2>&1
     then
@@ -114,11 +117,15 @@ function model-recommend() {
     then
         # Round to the nearest GB: 4095 MB is a 4 GB card, not 3.
         vram_gb=$(( (vram_mb + 512) / 1024 ))
-    elif [[ -n "${VRAM_TOTAL_BYTES:-}" ]]
+    elif [[ "${VRAM_TOTAL_BYTES:-0}" =~ ^[0-9]+$ ]] && (( ${VRAM_TOTAL_BYTES:-0} > 0 ))
     then
         vram_gb=$(( VRAM_TOTAL_BYTES / 1024 / 1024 / 1024 ))
     else
-        vram_gb=4
+        # A ranking built on an invented card size would recommend models this card
+        # cannot hold (or hide ones it can) with nothing saying so.
+        __tac_info "VRAM Available" "[UNKNOWN - card unreadable, no profile fallback]" "$C_Error"
+        __tac_info "Recommender" "[refusing to rank against a guessed card size]" "$C_Text"
+        return 1
     fi
 
     __tac_header "MODEL RECOMMENDATIONS" "open"

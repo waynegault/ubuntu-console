@@ -2,7 +2,12 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 76
+# Module Version: 77
+#   v77 (2026-10-29): the stale-process reaper protects every lane the HOST PROFILE
+#   declares (LLAMA_LANE_SPECS) instead of three unit names written here — a list
+#   that protected nothing on another box and stopped protecting a newly added lane
+#   on this one.
+#   v76 (version step; see the entries below)
 #   v75 (2026-10-18): `timeout -k 5 30 openclaw doctor …` — the CLI ignores SIGTERM
 #   (measured on `gateway stop`), so a plain timeout never fired.
 #   v74 (version step; no changelog entry was recorded when it landed)
@@ -1400,12 +1405,15 @@ function __up_stale_processes() {
     local stale_pids
     stale_pids=$(__llm_server_pids)
     local stale_count=0
-    local _unit _protect_pid _pid _p _skip _has_port
+    local _unit _port _protect_pid _pid _p _skip _has_port
     local _protect_probe_ok=1
     local -a _protect=()
-    for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
-                 llama-cuda-llama32-3b-chat.service
+    # Every lane the HOST PROFILE declares, not this box's three: a lane list
+    # written here would protect nothing on a box whose lanes are named differently
+    # and would stop protecting a new lane added to this one.
+    while IFS='|' read -r _unit _port
     do
+        [[ -n "$_unit" ]] || continue
         # swallow-ok: systemctl's own message is discarded because its rc carries the answer, and a failed probe stops the reap with the [SKIP] row below naming these units
         if ! _protect_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null)
         then
@@ -1421,7 +1429,7 @@ function __up_stale_processes() {
         then
             _protect+=("$_protect_pid")
         fi
-    done
+    done <<< "${LLAMA_LANE_SPECS:-}"
     if [[ -n "$stale_pids" ]]
     then
         # FAIL CLOSED on the protect list too, for the same reason as the port below: a

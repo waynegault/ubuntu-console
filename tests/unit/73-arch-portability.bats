@@ -106,28 +106,47 @@ stub_uname() {
     [[ "$output" == *"x86_64-only"* ]]
 }
 
-@test "every Xe and CUDA lane unit is conditioned on x86-64" {
-    # Criterion: on an arm64 host those units have no hardware to serve.  A
-    # Condition makes systemd SKIP them; without it each start burns restart
-    # attempts and the failure reads as a broken build.  Catches: a new lane unit
-    # added without the condition, and the condition being deleted in a rename.
+@test "every Xe lane unit is conditioned on x86-64 and owned by this box's profile" {
+    # Criterion: Intel Xe/oneAPI is an x86_64 part, so these units have no hardware
+    # to serve anywhere else.  A Condition makes systemd SKIP them; without it each
+    # start burns restart attempts and the failure reads as a broken build.  Ownership
+    # is separate: the lane names a model in this box's store, so install.sh links it
+    # only where the profile matches (tools/host-profile.sh).
     local unit count=0
-    for unit in "$REPO_ROOT"/systemd/llama-xe-*.service "$REPO_ROOT"/systemd/llama-cuda-*.service
+    for unit in "$REPO_ROOT"/systemd/llama-xe-*.service
     do
         count=$((count + 1))
         grep -qx 'ConditionArchitecture=x86-64' "$unit" \
             || { echo "FAIL: $(basename "$unit") lacks ConditionArchitecture=x86-64"; return 1; }
+        grep -qx '# install-profile: intel-xe-cuda' "$unit" \
+            || { echo "FAIL: $(basename "$unit") is not marked for a host profile"; return 1; }
     done
-    [ "$count" -eq 5 ] || { echo "FAIL: expected 5 Xe/CUDA units, matched $count"; return 1; }
+    [ "$count" -eq 3 ] || { echo "FAIL: expected 3 Xe units, matched $count"; return 1; }
+}
+
+@test "a CUDA lane unit is profile-owned, not architecture-gated" {
+    # Criterion: CUDA is arch-neutral — an arm64 CUDA box builds and owns its own
+    # lane.  This box's CUDA lanes are kept off other hosts by their profile marker,
+    # not by ConditionArchitecture, which would also block a legitimate arm64 lane.
+    local unit count=0
+    for unit in "$REPO_ROOT"/systemd/llama-cuda-*.service
+    do
+        count=$((count + 1))
+        ! grep -q '^ConditionArchitecture=' "$unit" \
+            || { echo "FAIL: $(basename "$unit") is still architecture-gated"; return 1; }
+        grep -qx '# install-profile: intel-xe-cuda' "$unit" \
+            || { echo "FAIL: $(basename "$unit") is not marked for a host profile"; return 1; }
+    done
+    [ "$count" -eq 2 ] || { echo "FAIL: expected 2 CUDA units, matched $count"; return 1; }
 }
 
 @test "the CPU lane unit stays architecture-neutral" {
-    # Control: the filter must not swallow the one lane an arm64 host CAN serve.
+    # Control: the filter must not swallow the one lane any architecture CAN serve.
     ! grep -q '^ConditionArchitecture=' "$REPO_ROOT/systemd/llama-cpu-qwen25-3b-chat.service"
 }
 
-@test "the lane table keeps all five lanes on x86_64" {
-    # Control for the narrowing below: on this box the table must be unchanged,
+@test "the lane table on this box keeps all five lanes" {
+    # Control for the profile below: on intel-xe-cuda the table must be unchanged,
     # because `model lanes` and the cache sampler read it.
     run bash -c 'source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
@@ -135,12 +154,12 @@ stub_uname() {
     [[ "$output" == *"18084"* ]]
 }
 
-@test "the lane table narrows to the CPU lane on a non-x86 host" {
-    # Criterion: the Xe/CUDA units are skipped there, so reporting their ports
-    # would present five lanes with three permanently down.  Catches: the table
-    # staying five-wide on arm64 and the sampler probing dead ports.
-    run bash -c 'HOSTTYPE=aarch64; source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
+@test "the arm64 box's profile declares no lanes this box owns" {
+    # Criterion: the arm64 box's models are its own, so no lane unit from this box
+    # may be claimed there.  Catches: a lane table inherited across boxes, which
+    # would report ports nothing on that machine can bind as broken lanes.
+    run bash -c 'HOSTTYPE=aarch64; source "$1"; printf "[%s]\n" "$LLAMA_LANE_SPECS"' \
         _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
-    [ "$output" = "llama-cpu-qwen25-3b-chat.service|18084" ]
+    [ "$output" = "[]" ]
 }

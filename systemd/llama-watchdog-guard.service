@@ -1,4 +1,6 @@
 [Unit]
+# install-profile: intel-xe-cuda
+# Ships with the watchdog it supervises (see llama-watchdog.service's header).
 Description=Llama Watchdog Supervision Guard (re-arm the watchdog when nothing claims the GPU)
 Documentation=file:%h/ubuntu-console/systemd/llama-watchdog-guard.README.md
 After=llama-watchdog.service

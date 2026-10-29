@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
+#   v28 (2026-10-29): the CUDA cleanup protects every lane the HOST PROFILE
+#   declares instead of three unit names written here, so a lane added to this box
+#   (or named differently on another) is still never evicted by a bench cleanup.
 #   v27 (2026-10-28): model sizing asks the CARD for its VRAM total
 #   (__tac_vram_total_bytes, cached per shell) instead of trusting the 4 GiB
 #   constant.  On a larger card — including an arm64 CUDA box — every model that
@@ -455,16 +458,18 @@ function __llm_kill_cuda_llama_servers() {
         return 0
     fi
 
-    # Protected: MainPIDs of the persistent llama systemd units.
-    for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
-                 llama-cuda-llama32-3b-chat.service
+    # Protected: MainPIDs of the persistent llama systemd units — every lane the
+    # HOST PROFILE declares, because a lane list written here would protect no lane
+    # on a box whose lanes are named differently.
+    while IFS='|' read -r _unit _port
     do
+        [[ -n "$_unit" ]] || continue
         _svc_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
         if [[ "$_svc_pid" =~ ^[0-9]+$ ]] && (( _svc_pid > 0 ))
         then
             _protected+=("$_svc_pid")
         fi
-    done
+    done <<< "${LLAMA_LANE_SPECS:-}"
 
     # CUDA attribution: only llama.cpp processes holding a CUDA compute
     # context are candidates.  When nvidia-smi cannot attribute (absent or
@@ -855,11 +860,13 @@ function __gguf_metadata() {
     }'
 }
 
-# __tac_vram_total_bytes — the card's own VRAM total, or the constant when it cannot be read.
-# VRAM_TOTAL_BYTES is the 4 GiB value tuned for the RTX 3050 Ti.  Sizing every
-# model against it marks a model that fits a larger card (24 GB, or an arm64 CUDA
-# box) as CPU-only, so the driver is asked first and the constant is the stated
-# fallback.  Cached per shell: a card's total does not change under a session.
+# __tac_vram_total_bytes — the card's own VRAM total, or the profile's fallback.
+# The card is asked first: sizing every model against a constant marks a model that
+# fits a larger card (24 GB, or an arm64 CUDA box) as CPU-only.  When the card
+# cannot be read the HOST PROFILE's fallback is used, and 0 there means "this host
+# has no honest constant" — callers then size conservatively (CPU-only) instead of
+# borrowing another card's number.  Cached per shell: a card's total does not change
+# under a session.
 function __tac_vram_total_bytes() {
     if [[ -n "${__TAC_VRAM_TOTAL_BYTES_CACHE:-}" ]]
     then
@@ -878,7 +885,7 @@ function __tac_vram_total_bytes() {
     then
         __TAC_VRAM_TOTAL_BYTES_CACHE=$(( _total_mb * 1048576 ))
     else
-        __TAC_VRAM_TOTAL_BYTES_CACHE="${VRAM_TOTAL_BYTES:-4294967296}"
+        __TAC_VRAM_TOTAL_BYTES_CACHE="${VRAM_TOTAL_BYTES:-0}"
     fi
     printf '%d\n' "$__TAC_VRAM_TOTAL_BYTES_CACHE"
 }

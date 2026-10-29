@@ -1,14 +1,15 @@
 [Unit]
+# install-profile: intel-xe-cuda
 # CARD: CUDA (NVIDIA)   MODEL: Llama-3.2-3B-Instruct   FUNCTION: chat/serving
 # Serves the registry's DEFAULT model.  Card is CUDA — see docs/llm.md.
 Description=llama.cpp server — CUDA card, Llama-3.2-3B, chat (port 18083)
 After=network-online.target
 Wants=network-online.target
-# The CUDA lanes serve THIS repo's x86_64 WSL passthrough build (llama-cuda-server
-# points at /home/wayne/llama.cpp/build), so an arm64 host has no CUDA lane to
-# start.  systemd skips the unit there, and 01-constants drops it from the lane
-# table so `model lanes` reports only what this host can serve.
-ConditionArchitecture=x86-64
+# HOST PROFILE, not architecture: this lane belongs to THIS box — its ExecStart
+# names a file in this box's model store — so install.sh links it only where
+# `# install-profile` matches (tools/host-profile.sh).  CUDA is arch-neutral (an
+# arm64 CUDA box builds and owns its own lane under its own profile), which is why
+# no ConditionArchitecture sits here.
 StartLimitIntervalSec=600
 StartLimitBurst=6
 

@@ -164,17 +164,23 @@
 # rise equals ONE file's own shape rather than drift, so it is recorded here instead of
 # reshaping a 900-line CLI body into functions.  6.7 108 -> 107 is NOT this change-set:
 # origin/main measures 107 too, so that row had simply been left behind — corrected now.
-4.2.4	20
-4.2.6	9
-4.3.6	31
-6.7	107
-8.1.8	293
-9.5	119
-9.7	80
-10.4	52
 # 2026-10-20: 10.7 220 -> 222 — bin/bench-resume.sh is a new standalone CLI with two
 # usage-error stderr writes and no shared helper on its (systemd-unit) path.  Recorded
 # here rather than reshaping a CLI's error path; the other rises from the same file
 # were fixed at source.
-10.7	222
+# 2026-10-29: 10.7 222 -> 225 and 8.1.8 293 -> 292 — the host-profile work added ONE
+# shell file, tools/host-profile.sh (a library for install.sh and every sourced shell,
+# with no UI tokens on its path, so it reports a refusal with plain `printf ... >&2`
+# exactly as tools/arch.sh does: three counted sites).  4.2.4's +3 from the same file
+# was FIXED at source (explicit `*)` arms), not re-baselined.  8.1.8 fell by one because
+# 01-constants.sh lost a >120-char line in the same change.
+4.2.4	20
+4.2.6	9
+4.3.6	31
+6.7	107
+8.1.8	292
+9.5	119
+9.7	80
+10.4	52
+10.7	225
 10.8	0

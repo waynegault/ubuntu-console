@@ -1,4 +1,5 @@
 [Unit]
+# install-profile: intel-xe-cuda
 # CARD: CUDA (NVIDIA)   MODEL: Qwen3.5-4B   FUNCTION: investigator pipeline endpoint
 # This is the endpoint the investigator pipeline points at: their
 # pipeline/benchmark/phases.py sets LLM_SERVER_BASE_URL=http://127.0.0.1:8081.
@@ -11,10 +12,9 @@
 Description=llama.cpp server — CUDA card, Qwen3.5-4B, investigator pipeline (port 8081)
 After=network-online.target
 Wants=network-online.target
-# x86_64-only: see llama-cuda-llama32-3b-chat.service — the CUDA lanes serve the
-# x86_64 WSL passthrough build, so systemd skips them (and 01-constants drops
-# them from the lane table) on any other architecture.
-ConditionArchitecture=x86-64
+# HOST PROFILE, not architecture: see llama-cuda-llama32-3b-chat.service — this
+# lane belongs to this box and install.sh links it only where `# install-profile`
+# matches.  CUDA is arch-neutral.
 StartLimitIntervalSec=600
 StartLimitBurst=6
 

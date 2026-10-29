@@ -1,4 +1,6 @@
 [Unit]
+# install-profile: intel-xe-cuda
+# Ships with the guard service it wakes (see llama-watchdog.service's header).
 Description=Run the llama-watchdog supervision guard every 5 minutes
 
 [Timer]

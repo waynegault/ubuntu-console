@@ -2,7 +2,11 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-10-29): the CPU / GPU row names only the accelerators this HOST has.
+#   The iGPU and NVIDIA columns were always printed, so a box with no Intel iGPU
+#   showed a zero from a probe that found nothing.  Which ones exist is a host
+#   profile fact (TAC_HOST_PROFILE_XE, TAC_HOST_CUDA).
 #   v30 (2026-10-27): the GPU ENGINES row no longer prints "Idle" while the GPU
 #   row above it shows load.  The two numbers come from separate probes
 #   (nvidia-smi vs. the Windows GPU Engine counters), so the row names the
@@ -170,7 +174,19 @@ function __dashboard_gpu_llm() {
     local cpu_gpu_color
     local max_gpu=$(( gpu0 > gpu1 ? gpu0 : gpu1 ))
     cpu_gpu_color=$(__threshold_color $(( cpu > max_gpu ? cpu : max_gpu )))
-    __fRow "CPU / GPU" "CPU ${cpu}% | iGPU ${gpu0}% | NVIDIA ${gpu1}%" "$cpu_gpu_color"
+    # Which accelerators are named is a HOST fact: a box with no Intel iGPU must not
+    # print an iGPU reading (it is a zero from a probe that found nothing), and a
+    # box with no CUDA card must not print NVIDIA.
+    local cpu_gpu_row="CPU ${cpu}%"
+    if [[ "${TAC_HOST_PROFILE_XE:-0}" == "1" ]]
+    then
+        cpu_gpu_row+=" | iGPU ${gpu0}%"
+    fi
+    if [[ "${TAC_HOST_CUDA:-0}" == "1" ]]
+    then
+        cpu_gpu_row+=" | NVIDIA ${gpu1}%"
+    fi
+    __fRow "CPU / GPU" "$cpu_gpu_row" "$cpu_gpu_color"
 
     # Memory colour: <75% used=green, 75-90%=yellow, >90%=red
     local mem_color

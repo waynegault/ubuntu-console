@@ -537,8 +537,12 @@ EOF
     [[ -n "$LLAMA_BUILD_VERSION" ]]
 }
 
-@test "constants: VRAM_TOTAL_BYTES equals 4GB" {
-    [[ "$VRAM_TOTAL_BYTES" -eq $((4 * 1024 * 1024 * 1024)) ]]
+@test "constants: VRAM_TOTAL_BYTES is the host profile's fallback" {
+    # The card is asked first at every call site; this constant is only the fallback
+    # for an unreadable driver, and which number that is belongs to the BOX.  Assert
+    # the two agree rather than restating this box's 4 GiB as if it were universal.
+    local expected="${VRAM_TOTAL_BYTES_FALLBACK:-0}"
+    [[ "$VRAM_TOTAL_BYTES" -eq "$expected" ]]
 }
 
 @test "constants: VRAM_USABLE_PCT is 95" {

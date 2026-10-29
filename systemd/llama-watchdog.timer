@@ -1,4 +1,6 @@
 [Unit]
+# install-profile: intel-xe-cuda
+# Ships with the watchdog service it requires (see that unit's header).
 Description=Llama Server Health Watchdog Timer
 Requires=llama-watchdog.service
 

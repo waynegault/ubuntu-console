@@ -9,7 +9,9 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-10-29): the local provider's model label takes the card's name from
+#   the HOST PROFILE (TAC_HOST_GPU_LABEL) instead of hardcoding this box's GPU.
 #   v30 (2026-10-23): the v29 entry below was labelled `v28`, so the marker and its note
 #   disagreed; corrected, no behaviour change.
 #   v29 (2026-10-23): `oc-env` names a PINNED agent root instead of showing it as if it were the
@@ -1046,7 +1048,7 @@ function oc-local-llm() {
     provider_json=$(jq -n \
         --arg url "http://127.0.0.1:${LLM_PORT}/v1" \
         --arg id "${model_file:-local}" \
-        --arg name "${model_name} (Local RTX 3050 Ti)" \
+        --arg name "${model_name} (Local ${TAC_HOST_GPU_LABEL:-GPU})" \
         '{
             baseUrl: $url,
             api: "openai-completions",

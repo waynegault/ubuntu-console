@@ -2,7 +2,15 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 44
+# Module Version: 45
+#   v45 (2026-10-29): per-box values move to a HOST PROFILE.  This file now reads
+#   its lane table, model-drive default, GPU/CPU/fit tuning, per-lane cache budget,
+#   VRAM fallback, quant guide, production-lane port and hardware labels from
+#   tools/host-profile.sh + config/hosts.d/<id>.conf instead of declaring this
+#   box's values as universal.  On `intel-xe-cuda` every value is unchanged; on a
+#   host with no matching profile the generic defaults apply and a one-line notice
+#   says so.  The HOSTTYPE narrowings of v43/v44 are subsumed: lane membership and
+#   the Xe environment are profile facts now, not architecture guesses.
 #   v44 (2026-10-28): the lane table is narrowed by architecture.  The five-lane
 #   table stays canonical for this x86_64 box (tests/unit/23 pins it), but the Xe
 #   and CUDA units now carry ConditionArchitecture=x86-64, so on any other host
@@ -86,6 +94,20 @@
 #   export WINDOWS_USER_ROOT="/mnt/c/Users/yourname"
 # ==============================================================================
 
+# ---- Host profile (WHICH box this is) ----
+# The per-machine half of the console: model drive, GPU/CPU tuning, quant policy,
+# resident lanes and labels.  Resolved once, here, because every module below reads
+# these values.  A host with no profile keeps the generic defaults and is told so
+# once (tools/host-profile.sh); nothing here aborts a shell over it.
+export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# shellcheck source=/dev/null
+source "$TACTICAL_REPO_ROOT/tools/host-profile.sh"
+# Never aborts: no matching profile is announced once inside the applier and leaves
+# TAC_HOST_PROFILE=generic, so the generic defaults below still define the shell.
+tac_host_profile_apply
+export TAC_HOST_PROFILE TAC_HOST_PROFILE_MATCHED TAC_HOST_ARCH TAC_HOST_CUDA \
+       TAC_HOST_RENDER_NODE TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL
+
 # ---- WSL Windows Drive Configuration ----
 # Model storage drive (change if your models are on a different drive)
 export LLAMA_DRIVE_ROOT="${LLAMA_DRIVE_ROOT:-/mnt/m}"
@@ -112,7 +134,7 @@ export WINDOWS_USER_ROOT="${WINDOWS_USER_ROOT:-/mnt/c/Users}"
 
 # ---- Storage Roots ----
 export AI_STORAGE_ROOT="$HOME"
-export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# TACTICAL_REPO_ROOT is resolved above, before the host profile is sourced.
 
 # ---- OpenClaw ----
 export OC_ROOT="$AI_STORAGE_ROOT/.openclaw"
@@ -162,9 +184,16 @@ fi
 # check consults it for an interpreter exe only.
 export LLM_SERVER_MODULE="${LLM_SERVER_MODULE:-llama_cpp.server}"
 export LLAMA_CPP_PYTHON_VERSION="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
-# Quantization priority guide — editable config controlling download warnings.
-# See ~/ubuntu-console/config/quant-guide.conf for rating/description of each quant.
-export QUANT_GUIDE="$TACTICAL_REPO_ROOT/config/quant-guide.conf"
+# Quantization priority guide — a HOST PROFILE fact.  The ratings describe one
+# card's VRAM, so another box must not inherit them and auto-archive quants that
+# fit it.  An EMPTY value means "this host has no guide" (the readers test -f, so
+# nothing is rated); only a host with no profile at all gets this box's file as a
+# generic default.
+if [[ -z "${QUANT_GUIDE:-}" && "${TAC_HOST_PROFILE_MATCHED:-0}" != "1" ]]
+then
+    QUANT_GUIDE="$TACTICAL_REPO_ROOT/config/quant-guide.conf"
+fi
+export QUANT_GUIDE
 # Detect drive size at startup; falls back to 200 GB if df unavailable.
 # WARNING: If the drive is not mounted, all capacity calculations will use
 # the 200GB fallback, which may over- or under-estimate available space.
@@ -432,45 +461,54 @@ export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
 
 # ---- Network & API ----
 export LLM_PORT=8081
-# Production LLM runs as the systemd user service llama-xe-minicpm5-1b-chat.service on this
-# port (gateway baseUrl: http://127.0.0.1:18081/v1). 'so' treats a healthy
-# server here as "LLM running" instead of loading a duplicate on LLM_PORT.
+# The lane `so` treats as the production server (gateway baseUrl target).  Which
+# lane that is belongs to the host: this box's Xe 3B lane on 18081, an empty
+# table on a box with no resident lanes yet.  The generic 18081 remains the
+# fallback so the `so` probe has something to ask about.
 export LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
-# The five resident lanes, as unit|port.  `model lanes` reads each one's
-# Prometheus counters (SWITCH-CONSOLE-METRICS-001); tests/unit/23-*.bats pins
-# this list and every port against the units' own ExecStart lines, so a lane
+# The resident lanes, as unit|port — from the HOST PROFILE.  `model lanes` reads
+# each one's Prometheus counters (SWITCH-CONSOLE-METRICS-001); tests/unit/23-*.bats
+# pins this list and every port against the units' own ExecStart lines, so a lane
 # rename or port move that forgets this table fails the suite rather than
 # silently dropping a lane from the report.
-export LLAMA_LANE_SPECS="llama-xe-minicpm5-1b-chat.service|18081
-llama-xe-embeddinggemma-embed.service|18080
-llama-xe-llama32-3b-chat.service|18085
-llama-cuda-llama32-3b-chat.service|18083
-llama-cpu-qwen25-3b-chat.service|18084"
-# The canonical table above is the x86_64 box's five lanes, and tests/unit/23
-# pins it against the units.  The Xe and CUDA units carry
-# ConditionArchitecture=x86-64 (Intel Xe is an x86 part; the CUDA lanes serve
-# this repo's x86_64 WSL build), so on any other architecture systemd skips
-# them — narrow the table to match, or `model lanes` and the cache sampler
-# report ports that nothing can ever bind as if they were broken lanes.
-if [[ "${HOSTTYPE:-}" != "x86_64" ]]
-then
-    export LLAMA_LANE_SPECS="llama-cpu-qwen25-3b-chat.service|18084"
-fi
+#
+# A lane unit names a specific GGUF file and port, so a lane is a property of the
+# BOX, never of the architecture: the x86 box's five lanes and the arm64 box's
+# (none, until its own are named) cannot be inferred from `uname -m`.  install.sh
+# links only the units marked `# install-profile: <this profile>`, so the table
+# and what systemd can actually start stay in step.
+export LLAMA_LANE_SPECS="${LLAMA_LANE_SPECS:-}"
 export OC_PORT=18789
 export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 
-# ---- Hardware Tuning (Intel i9 / RTX 3050 Ti 4GB VRAM) ----
+# ---- Hardware Tuning (per host profile) ----
 # These are DEFAULTS, used when the model registry does not specify per-model
 # values. The registry format (models.conf) supports per-model overrides:
 #   profile|name|size|proc|file|gpu_layers|ctx_size|threads
 # If the last three fields are missing or empty, these defaults are used.
-export LLAMA_GPU_LAYERS=24   # Keep baseline offload under 4GB total VRAM usage on RTX 3050 Ti 4GB.
-# 6 is this box's P-core count.  A host with FEWER usable CPUs (a 4-core arm64
-# WSL VM) must not be told to run six threads, so the default is 6 capped by
-# nproc; an explicit LLAMA_CPU_THREADS still wins.
-_tac_cpu_threads=6
-# swallow-ok: an unreadable nproc keeps the measured 6, which the cap can only lower
-if _tac_total_cpus="$(nproc 2>/dev/null)" && (( _tac_total_cpus > 0 && _tac_total_cpus < _tac_cpu_threads ))
+#
+# The values come from config/hosts.d/<id>.conf.  A generic host (no profile)
+# keeps the conservative 24 / 6 / 1024 below — deliberately the smallest-VRAM
+# settings in the repo, because a wrong guess upward is an OOM and a wrong guess
+# downward is only slower.
+export LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-24}"
+# Base thread count from the profile.  An EMPTY base means "derive from this
+# machine" (half of nproc), for a box whose core count is not the i9's.  Either
+# way the result is capped by nproc, and an explicit LLAMA_CPU_THREADS wins.
+# swallow-ok: an unreadable nproc leaves the count underived, so the safe 1 / profile base stands rather than a guessed core count
+_tac_total_cpus="$(nproc 2>/dev/null)" || _tac_total_cpus=""
+_tac_cpu_threads="${LLAMA_CPU_THREADS_BASE:-}"
+if ! [[ "$_tac_cpu_threads" =~ ^[0-9]+$ ]] || (( _tac_cpu_threads == 0 ))
+then
+    if [[ "$_tac_total_cpus" =~ ^[0-9]+$ ]] && (( _tac_total_cpus > 0 ))
+    then
+        _tac_cpu_threads=$(( _tac_total_cpus / 2 ))
+    else
+        _tac_cpu_threads=1
+    fi
+    (( _tac_cpu_threads > 0 )) || _tac_cpu_threads=1
+fi
+if [[ "$_tac_total_cpus" =~ ^[0-9]+$ ]] && (( _tac_total_cpus > 0 && _tac_total_cpus < _tac_cpu_threads ))
 then
     _tac_cpu_threads="$_tac_total_cpus"
 fi
@@ -550,12 +588,16 @@ export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 # REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
 #      (Ibrahim, TDS, 2026-09-16) — https://towardsdatascience.com/the-kv-cache-tax-why-inference-servers-run-out-of-memory-before-compute/
 export LLAMA_CACHE_RAM_MB="${LLAMA_CACHE_RAM_MB:-0}"
-# MEASURED per-lane budgets, MiB, keyed by the lane's port.  Only lanes with a
-# measurement appear; everything else uses LLAMA_CACHE_RAM_MB above.  The comment
-# block above carries the measurement, the bracket and why the others stay 0.
-declare -gA LLAMA_CACHE_RAM_MB_BY_PORT=(
-    [18085]=768   # Xe 3B — 640 re-prefills, 768 hits (both probe positions)
-)
+# MEASURED per-lane budgets, MiB, keyed by the lane's port — a HOST PROFILE value,
+# because it was measured on one lane on one card.  Only lanes with a measurement
+# appear; everything else uses LLAMA_CACHE_RAM_MB above.  The comment block above
+# carries the measurement, the bracket and why the others stay 0.
+# `${arr+x}` tests element 0, which this sparse map does not have — `declare -p` is
+# the only reliable "is it already declared" test for an associative array.
+if ! declare -p LLAMA_CACHE_RAM_MB_BY_PORT >/dev/null 2>&1
+then
+    declare -gA LLAMA_CACHE_RAM_MB_BY_PORT=()
+fi
 # --cache-reuse is NOT set on any lane (SWITCH-CONSOLE-REUSE-001, MEASURED 2026-10-21).
 # The engine ACCEPTS 256 on the CPU tier and the three q8_0 chat lanes — the refusal is
 # per-CONTEXT, not per-quant: llama_kv_cache::get_can_shift() tests LLM_ARCH_STEP35 and
@@ -597,18 +639,21 @@ export LLAMA_NO_MMAP_MODE="${LLAMA_NO_MMAP_MODE:-auto}"
 # The loader's default search path already includes /etc/OpenCL/vendors, so
 # leaving it unset is both correct and sufficient.
 #   removed 2026-09-14: export OCL_ICD_VENDORS=/etc/OpenCL/vendors
-# Only exported where a device can answer: Intel Xe/oneAPI is an x86_64 part, and
-# /dev/dri is the render node pyopencl enumerates.  An arm64 WSL box has neither,
-# and exporting a platform index there would be state with no platform behind it.
-# HOSTTYPE is bash's own architecture variable — no fork at shell start.
-if [[ "${HOSTTYPE:-}" == "x86_64" && -d /dev/dri ]]
+# Only exported where a device can answer: the PROFILE must declare an Intel iGPU
+# (TAC_HOST_PROFILE_XE=1) AND a render node must be present.  Intel Xe/oneAPI is an
+# x86_64 part, and /dev/dri is the node pyopencl enumerates; on a box with neither,
+# exporting a platform index would be state with no platform behind it.
+if [[ "${TAC_HOST_PROFILE_XE:-0}" == "1" && "${TAC_HOST_RENDER_NODE:-0}" == "1" ]]
 then
     export PYOPENCL_CTX='0'
 fi
 
 # ---- Named Constants (avoid magic numbers scattered through functions) ----
+# The VRAM fallback is the HOST PROFILE's, not this card's: it is only consulted
+# when the driver cannot be read, and 0 means "this host has no honest constant" —
+# callers treat that as no reading rather than sizing against a neighbour's card.
 if [[ -z "${VRAM_TOTAL_BYTES+x}" ]]; then
-declare -ri VRAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024))  # 4 GB RTX 3050 Ti
+declare -ri VRAM_TOTAL_BYTES="${VRAM_TOTAL_BYTES_FALLBACK:-0}"
 fi
 if [[ -z "${VRAM_USABLE_PCT+x}" ]]; then
 declare -ri VRAM_USABLE_PCT=95       # Percentage usable after driver overhead

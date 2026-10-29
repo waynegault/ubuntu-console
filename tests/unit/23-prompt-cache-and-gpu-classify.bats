@@ -398,13 +398,15 @@ llama-cpu-qwen25-3b-chat.service|18084'
     [[ "$status" -eq 0 ]] || return 1
 }
 
-@test "metrics: the constants lane table is the same five units and ports as the units" {
-    # `model lanes` iterates LLAMA_LANE_SPECS.  If it drifted it would either drop
-    # a lane from the report or query a port nobody serves — both silent.
+@test "metrics: the host profile's lane table is the same five units and ports as the units" {
+    # `model lanes` iterates LLAMA_LANE_SPECS, which the HOST PROFILE declares (this
+    # box's lanes are a property of this box, not of the architecture).  If the table
+    # drifted from the units it would either drop a lane from the report or query a
+    # port nobody serves — both silent.
     local table
-    table=$(awk '/^export LLAMA_LANE_SPECS="/ { f=1; sub(/^export LLAMA_LANE_SPECS="/, "") }
-                 f { if (sub(/"$/, "")) { print; exit } print }' "$CONSTANTS")
-    [[ -n "$table" ]] || { echo "FAIL: 01-constants declares no LLAMA_LANE_SPECS"; return 1; }
+    table=$(bash -c 'source "$1"; printf "%s\n" "${LLAMA_LANE_SPECS:-}"' _ \
+            "$REPO_ROOT/config/hosts.d/intel-xe-cuda.conf")
+    [[ -n "$table" ]] || { echo "FAIL: the host profile declares no LLAMA_LANE_SPECS"; return 1; }
     [[ "$(printf '%s\n' "$table" | sort)" == "$(printf '%s\n' "$_LANE_SPECS" | sort)" ]] \
         || { echo "the lane table and the units disagree:"; diff \
              <(printf '%s\n' "$_LANE_SPECS" | sort) <(printf '%s\n' "$table" | sort); return 1; }
