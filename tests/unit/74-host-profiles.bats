@@ -212,6 +212,23 @@ install_stub_env() {
     [ ! -e "$unit_dir/llama-watchdog.service" ]
 }
 
+@test "the recommender refuses to rank when the card cannot answer and no fallback exists" {
+    # Catches: an invented card size on a box this repo has never measured — a 4 GB
+    # ranking hides models the card can hold and recommends ones it cannot, and
+    # nothing in the output would say the size was guessed.  Hermetic: a failing
+    # nvidia-smi stub, the arm64 profile (fallback 0), and a throwaway registry.
+    local stub="$BATS_TEST_TMPDIR/nosmi"
+    mkdir -p "$stub"
+    printf '#!/bin/sh\nexit 1\n' > "$stub/nvidia-smi"
+    chmod +x "$stub/nvidia-smi"
+    printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry.conf"
+    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" PATH="$stub:$PATH" \
+        LLM_REGISTRY="$BATS_TEST_TMPDIR/registry.conf" TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" \
+        bash -c 'source "$1" >/dev/null 2>&1; model-recommend general' _ "$REPO_ROOT/env.sh"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+}
+
 @test "the installer links all five lanes on this box's own profile" {
     # Control for the case above: the filter must not drop this box's lanes, or the
     # next fresh install here comes up with no resident model at all.
