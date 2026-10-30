@@ -2555,6 +2555,34 @@ EOF
     [ "$(grep -c 'tactical-console\.bashrc' "$home_dir/.bashrc")" -eq 2 ]
 }
 
+@test "install: refreshes a loader path that reaches the profile through a symlink" {
+    # A literal path that RESOLVES today, but only because a symlink bridges it
+    # (~/ubuntu-console -> ~/github-wsl/ubuntu-console on the box this was measured
+    # on). The loader must name the repo DIRECTLY: the day that convenience link is
+    # removed, a loader that depended on it turns every new shell into
+    # "[WARNING] Tactical Console Profile not found" — and nothing else changes,
+    # so the breakage would look like the profile vanished (v1.15).
+    local home_dir="$TAC_TEST_TMPDIR/install-home-symlinked"
+    mkdir -p "$home_dir"
+    ln -sfn "$REPO_ROOT" "$home_dir/ubuntu-console"
+    cat > "$home_dir/.bashrc" << EOF
+# existing config
+if [[ -f "$home_dir/ubuntu-console/tactical-console.bashrc" ]]
+then
+    source "$home_dir/ubuntu-console/tactical-console.bashrc"
+fi
+EOF
+
+    run env HOME="$home_dir" bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+
+    # The symlinked mention is gone and the direct one is present.
+    ! grep -Fq "$home_dir/ubuntu-console/tactical-console.bashrc" "$home_dir/.bashrc"
+    grep -Fq "source \"$REPO_ROOT/tactical-console.bashrc\"" "$home_dir/.bashrc"
+    # Refreshed in place, not rewritten from the template: user content survives.
+    grep -q '# existing config' "$home_dir/.bashrc"
+}
+
 @test "wsl-extras: installs complete PowerShell shims atomically" {
     local home_dir="$TAC_TEST_TMPDIR/wsl-extras-shims"
     mkdir -p "$home_dir"

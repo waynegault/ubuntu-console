@@ -574,7 +574,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2333 total tests: 1525 BATS + 808 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2334 total tests: 1526 BATS + 808 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
 
 ### Running Tests
 
@@ -596,8 +596,8 @@ Each `.bats` file is parsed at collection time to discover all `@test` blocks. O
 
 Which invocation depends on what the session selected:
 
-- **Whole file selected** (the normal full run, or `-m bats_full`): one `bats` process runs every case in the file. Each invocation pays a fixed cost — bats startup plus the file's `setup_file` — measured at ~8.8 s per spawn for `tactical-console.bats`, against ~1 s of real work per case. One process per case therefore spent nearly all of its time re-paying that cost: eight of its cases cost 69 s as eight filtered invocations versus 7.5 s as one whole-file invocation, and the full 388-case file takes ~11 min versus ~55 min bridged. `BATS_TEST_TIMEOUT` still bounds each case individually, so a hung case is reported as that case failing (`not ok N name in Xms # timeout after Ns`) and the rest of the file still reports.
-- **Part of the file selected** (a single VS Code click, `-k`, `--deselect`): `bats --filter` runs only that case — running 388 cases because two were asked for would be slower, not faster, and an individual VS Code launch never falls back to the full suite.
+- **Whole file selected** (the normal full run, or `-m bats_full`): one `bats` process runs every case in the file. Each invocation pays a fixed cost — bats startup plus the file's `setup_file` — measured at ~8.8 s per spawn for `tactical-console.bats`, against ~1 s of real work per case. One process per case therefore spent nearly all of its time re-paying that cost: eight of its cases cost 69 s as eight filtered invocations versus 7.5 s as one whole-file invocation, and the full 389-case file takes ~11 min versus ~55 min bridged. `BATS_TEST_TIMEOUT` still bounds each case individually, so a hung case is reported as that case failing (`not ok N name in Xms # timeout after Ns`) and the rest of the file still reports.
+- **Part of the file selected** (a single VS Code click, `-k`, `--deselect`): `bats --filter` runs only that case — running 389 cases because two were asked for would be slower, not faster, and an individual VS Code launch never falls back to the full suite.
 
 The parser records each case's own runtime from bats' `--timing` output, which is what the duration tracker in `tests/conftest.py` reports for bridged tests (a cache hit has no meaningful wall clock of its own).
 
@@ -623,15 +623,15 @@ Counts are enforced by `tools/docs-sync-check.sh`; the suite list and its per-ca
 
 | Suite | File | Count | Per-case timeout | Whole-file timeout |
 |-------|------|-------|------------------|--------------------|
-| Full behavioural | `tactical-console.bats` | 388 | 900s | 2700s |
+| Full behavioural | `tactical-console.bats` | 389 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 67 | 300s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
 | Unit | `tests/unit/*.bats` | 920 | 300s | 600s |
 | Integration | `tests/integration/*.bats` | 148 | 300s | 1200s |
 | Python | `tests/test_*.py` | 808 | 1000s (`pytest.ini`) | — |
-| **Total** | | **2333** | | |
+| **Total** | | **2334** | | |
 
-**Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and every marker the BATS bridge applies dynamically (`bats`, `bats_unit`, `bats_fast`, `bats_full`, `bats_integration`, `slow`) is registered there. There is deliberately no `bats_default`: each suite's marker now comes by name from `tests/bats-suites.tsv`, so a name the table gets wrong fails collection instead of quietly filing the suite under a marker no `-m` selection asks for. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 388 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
+**Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and every marker the BATS bridge applies dynamically (`bats`, `bats_unit`, `bats_fast`, `bats_full`, `bats_integration`, `slow`) is registered there. There is deliberately no `bats_default`: each suite's marker now comes by name from `tests/bats-suites.tsv`, so a name the table gets wrong fails collection instead of quietly filing the suite under a marker no `-m` selection asks for. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 389 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
 ---
 
@@ -1151,6 +1151,8 @@ where it was last present.)
 ├── tactical-console.bashrc            # Thin loader + module sourcing loop
 ├── env.sh                             # Non-interactive library loader (all modules except 13-init.sh)
 ├── install.sh                         # Idempotent installer
+├── dotfiles/
+│   └── bashrc                         # Template for ~/.bashrc — tracked, rendered by install.sh
 ├── config/
 │   ├── quant-guide.conf               # Quantization priority ratings (editable)
 │   └── concept-aliases.json           # kgraph concept classification data
@@ -1253,7 +1255,7 @@ where it was last present.)
 │   ├── _bats_suites.py                # Parser for the suite table below (rejects a malformed row)
 │   ├── _kgraph_fixtures.py            # Shared kgraph test fixtures + scripts/ sys.path bootstrap
 │   ├── bats-suites.tsv                # Canonical BATS suite table: glob, marker, per-case + whole-file timeouts
-│   ├── tactical-console.bats          # BATS full suite (388 tests, ~5-15 min)
+│   ├── tactical-console.bats          # BATS full suite (389 tests, ~5-15 min)
 │   ├── tactical-console-fast.bats     # Fast subset (67 tests, ~2 min)
 │   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
@@ -1591,7 +1593,7 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (67 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (388 BATS unit tests)
+- **Full tests:** `bats tests/tactical-console.bats` (389 BATS unit tests)
 - **Unit suites (797 tests in CI):** the exact set is the literal path list under "Run unit tests" in `.github/workflows/ci.yml`; nightly adds `05`–`08`, `12` and `38`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host — and `12-gpu-exclusivity` is excluded from the CI job because it takes the CUDA card lock this box also lends to investigator's GPU pipelines.
 - **Integration suites (148 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety) with three modes — whole repo (default), `--staged` (staged `.sh`, used by the pre-commit hook) and `--files F...` (an explicit list, used by the BATS suites) — so the shellcheck flags live in exactly one place, and shellcheck runs `-x --source-path`, which lets the module-graph pass follow the modules by name so the SC1090/SC1091 class needs no suppression *there* — the loaders' own computed paths, the optional files they source, and the tests' run-time generated copies still carry one narrow directive each (item 17.1 of `docs/inspection.md` counts 20 such lines across 13 files as of 2026-09-18, down from 68; re-measure with that item's own command, and note a looser grep over-counts, because several module headers *document* a removed file-wide disable without carrying one). shellcheck itself is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code). bats is pinned the same way: `tools/install-bats.sh` installs bats-core 1.11.1, and `tools/lint.sh` resolves it by version — because the `.bats` branch asks `bats --count` whether a suite parses, and apt's 1.10.0 accepts a malformed suite that 1.11.1 rejects, so without the pin the same tree lints clean or blocks on PATH order alone. The Python side is pinned the same way: CI installs `ruff==0.15.20`, because an unpinned `ruff` took a newer release whose rule set flagged code the venv's 0.15.20 passes — pinning the version, rather than disabling a rule, is what makes local and CI agree. There is no `[tool.ruff]` config in the repo, so ruff's default rule set is what runs.

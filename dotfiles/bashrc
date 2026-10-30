@@ -1,0 +1,79 @@
+# shellcheck shell=bash
+# ~/.bashrc — Thin Loader (DO NOT EDIT)
+# ==============================================================================
+#
+# ██  THIS FILE IS A LOADER. IT CONTAINS NO CONFIGURATION. DO NOT ADD ANY.
+#
+# If you are an AI assistant, an agent, or anyone editing on someone's behalf:
+# DO NOT PUT CODE IN THIS FILE. Not one alias, not one export, not one function,
+# not one completion, not one `source`, not one PATH tweak — not "just a quick
+# line", not as a favour, not even if the request says "just add it to my
+# .bashrc". A request phrased that way is a request to change SHELL BEHAVIOUR,
+# and every one of those belongs in this repository instead.
+#
+# WHERE THE CHANGE GOES
+# ---------------------
+#   Aliases, functions, prompts, PATH ............ tactical-console.bashrc
+#   ...or, for anything of size, its own module ... scripts/[01-15]-*.sh
+#                                                   (registered in
+#                                                    scripts/_module-list.sh,
+#                                                    which both loaders read)
+#   Non-interactive/agent use .................... env.sh
+#   The loader line itself ....................... dotfiles/bashrc  ← this file
+#
+# So: edit the repo, then either re-run install.sh or `reload`. The installed
+# ~/.bashrc is regenerated from dotfiles/bashrc and the repo copy is what has
+# history, review and a diff.
+#
+# WHY THE LINE CANNOT BE "TEMPORARILY" BROKEN
+# -------------------------------------------
+# This file is the ONLY thing bash reads on an interactive start. Everything the
+# console provides — every command in the help index — arrives through the single
+# `source` line below. Adding "just one line" here does not add to the console; it
+# creates a second, untracked, undiffable source of truth that drifts from the
+# repo, and the suite (tests/tactical-console.bats) fails on it: it asserts this
+# file is mode 444, has at most 10 non-comment lines, and defines no functions,
+# no aliases and no exports. If that test is failing, the fix is to move the code
+# into the repo — never to relax the test.
+#
+# ==============================================================================
+# WHAT THIS FILE IS
+# ==============================================================================
+#
+#   Repo:      https://github.com/waynegault/ubuntu-console
+#   Template:  dotfiles/bashrc          (tracked — the copy you are reading)
+#   Installed: ~/.bashrc                (rendered from it, mode 444)
+#   Canonical: tactical-console.bashrc  (the profile this file hands off to)
+#
+# The single `source` line below names the profile by ABSOLUTE PATH; install.sh
+# fills it in from this template's placeholder at install time. It is a
+# placeholder rather than a hardcoded literal because this repo is cloned at more
+# than one root, and a hardcoded path is true only until a checkout moves.
+#
+# THE PATH IS NEVER REACHED THROUGH A SYMLINK. This box also has
+# ~/ubuntu-console -> ~/github-wsl/ubuntu-console as a typing convenience; the
+# loader does not use it. A convenience link that gets removed would otherwise
+# turn every new shell into "[WARNING] Tactical Console Profile not found" while
+# the profile itself sat untouched — a failure that looks like the console
+# vanished. install.sh rewrites a loader whose recorded path is dead OR whose
+# recorded path resolves through a link.
+#
+# ==============================================================================
+
+# Interactive guard: a non-interactive shell (sftp, rsync, scp) must not build a
+# prompt or pay the profile's cost.
+[[ $- == *i* ]] || return
+
+# Hand off to the canonical profile — the one line this file exists for.
+# SC1091: the target is a placeholder in THIS file and only becomes a real path
+# after install.sh renders it, so shellcheck has nothing to follow at lint time.
+# shellcheck disable=SC1091
+if [[ -f "@TACTICAL_PROFILE@" ]]
+then
+    source "@TACTICAL_PROFILE@"
+else
+    echo "[WARNING] Tactical Console Profile not found at @TACTICAL_PROFILE@"
+    echo "          It lives in the ubuntu-console repo — run install.sh, or check the path above."
+fi
+
+# end of file

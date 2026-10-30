@@ -4,7 +4,7 @@
 # ==============================================================================
 # Purpose:        Tactical Console Profile (Interactive shell configuration)
 # Author:         Wayne
-# Last modified:  2026-08-06
+# Last modified:  2026-10-30
 # Environment:    WSL2 (Ubuntu 24.04) / RTX 3050 Ti
 #
 # Prerequisites:  bash >= 5.2
@@ -15,11 +15,13 @@
 #                 Avoid privileged operations (sudo, chown, chmod 777) at startup.
 #
 # Loader:         This file is the CANONICAL source of truth and is versioned at:
-#                   ~/ubuntu-console/tactical-console.bashrc
-#                 ~/.bashrc must remain a THIN LOADER that only sources this file:
-#                   source "$HOME/ubuntu-console/tactical-console.bashrc"
+#                   ~/github-wsl/ubuntu-console/tactical-console.bashrc
+#                 ~/.bashrc must remain a THIN LOADER that only sources this file,
+#                 naming it DIRECTLY — never through the ~/ubuntu-console symlink
+#                 (v1.15: the loader is tracked at dotfiles/bashrc):
+#                   source "$HOME/github-wsl/ubuntu-console/tactical-console.bashrc"
 #                 Modular sections live under:
-#                   ~/ubuntu-console/scripts/[01-15]-*.sh + 09b-gog.sh
+#                   ~/github-wsl/ubuntu-console/scripts/[01-15]-*.sh + 09b-gog.sh
 #                   (load order: scripts/_module-list.sh, shared with env.sh)
 #
 # HELP INDEX:     See the HELP INDEX section below for functions, aliases, and

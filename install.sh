@@ -3,6 +3,14 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.15 (2026-10-30): the ~/.bashrc loader is now a TRACKED TEMPLATE (dotfiles/bashrc)
+#   rendered by this script instead of a heredoc inside it — so the installed loader has
+#   its own history and diff rather than existing only as a fragment of a 700-line
+#   installer. The rendered file names the profile path DIRECTLY, and the refresh rule
+#   now rewrites a loader that reaches it through a SYMLINK as well as one that names a
+#   dead path. Measured before this: the loader read /home/wayne/ubuntu-console/… (a
+#   symlink), so removing that convenience link would have turned every new shell into
+#   "[WARNING] Tactical Console Profile not found".
 # v1.14 (2026-10-30): a symlink that points into this repo but belongs to ANOTHER
 #   host profile is disabled (best effort, named) and removed.  Skipping it was not
 #   enough on a box installed before this layer: measured 2026-10-30, the ASUS box
@@ -32,7 +40,7 @@
 #   systemd/* linking loop (it ran before it, so on a FIRST install the target
 #   units did not exist yet and every alias was skipped), and a skipped alias now
 #   names its missing target on stderr instead of passing silently.
-VERSION="1.14"
+VERSION="1.15"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -44,6 +52,10 @@ fi
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 PROFILE_PATH="$REPO/tactical-console.bashrc"
+# The ~/.bashrc loader is a TRACKED template (dotfiles/bashrc), rendered here with
+# this clone's profile path. It used to be a heredoc in this script; v1.15 moved
+# it into the repo so the installed loader has its own history and diff.
+BASH_RC_TEMPLATE="$REPO/dotfiles/bashrc"
 
 # warn — Report a problem on stderr.  This is the ONLY place in this script that
 # writes to stderr (inspection §10.7): every message below is routed through it,
@@ -80,6 +92,9 @@ echo "  host profile: $HOST_PROFILE"
 append_loader_block() {
     cat <<LOADER
 # Tactical Console loader
+# Appended to a ~/.bashrc that already existed, so the rest of that file stays.
+# The path is written LITERALLY and directly — see dotfiles/bashrc for why this
+# loader must never reach the profile through a symlink (v1.15).
 if [[ -f "$PROFILE_PATH" ]]
 then
     source "$PROFILE_PATH"
@@ -119,98 +134,73 @@ launcher() {
 echo "Installing Tactical Console from $REPO ..."
 echo ""
 
-# Thin ~/.bashrc loader (written, not symlinked — the loader is not in the repo)
+# ── ~/.bashrc: render the tracked template ──────────────────────────────────
+# write_thin_bashrc — render dotfiles/bashrc with THIS clone's profile path.
+# The rendered file names an ABSOLUTE path directly; it never reaches the profile
+# through a symlink such as ~/ubuntu-console, because removing that convenience
+# link would turn every new shell into a "[WARNING] not found" (v1.15).
+write_thin_bashrc() {
+    local template="$BASH_RC_TEMPLATE"
+    local target="$HOME/.bashrc"
+    local staged
+    if [[ ! -f "$template" ]]
+    then
+        warn "ERROR: missing $template — cannot render ~/.bashrc" \
+             "       (the template is tracked: git -C \"$REPO\" checkout dotfiles/bashrc)"
+        return 1
+    fi
+    staged=$(mktemp) || return 1
+    if ! sed "s|@TACTICAL_PROFILE@|$PROFILE_PATH|g" "$template" > "$staged"
+    then
+        warn "ERROR: could not render $template into $target"
+        rm -f "$staged"
+        return 1
+    fi
+    chmod 600 "$target" 2>/dev/null || true
+    cat "$staged" > "$target"
+    rm -f "$staged"
+    chmod 444 "$target" 2>/dev/null || true
+}
+
+# Thin ~/.bashrc loader (rendered from the tracked template, never symlinked)
 if [[ ! -f "$HOME/.bashrc" ]]
 then
-    cat > "$HOME/.bashrc" << LOADER
-# ==============================================================================
-# ~/.bashrc — Thin Loader (DO NOT EDIT)
-# ==============================================================================
-#
-# PURPOSE
-# -------
-# This file is a minimal loader. Its only job is to source the real Tactical
-# Console Profile, which lives in a version-controlled Git repository:
-#
-#     $PROFILE_PATH
-#
-# WHY A SEPARATE LOADER?
-# ----------------------
-# Bash always sources ~/.bashrc on interactive login. Rather than keeping the
-# full profile here (where it would be outside version control and prone to
-# drift), we store the canonical copy in the ubuntu-console repo. This loader
-# bridges the two: bash finds ~/.bashrc automatically, and ~/.bashrc
-# immediately hands off to the git-tracked file. The benefits are:
-#
-#   1. Single source of truth — the profile is version-controlled in Git,
-#      with full history, diffs, and the ability to roll back.
-#   2. No drift — there is no second copy that can fall out of sync.
-#   3. Safe editing — 'oedit' opens the repo file directly; 'reload'
-#      re-sources it. The feedback loop is instant.
-#
-# IMPORTANT — DO NOT MODIFY THIS FILE
-# ------------------------------------
-# This loader should NEVER need to change. It contains no configuration,
-# no aliases, no functions, and no environment variables. If you need to
-# change anything about the shell environment, edit the canonical file:
-#
-#     $PROFILE_PATH
-#
-# or one of its associated files in the repository.
-# Modifying this loader risks breaking the source chain and serves no
-# purpose — every piece of logic belongs in the repo-tracked profile.
-#
-# FOR AI ASSISTANTS — MANDATORY, NON-NEGOTIABLE RULE
-# ---------------------------------------------------
-# If you are an AI reading this file: do NOT add code here. Do NOT expand
-# this loader. Do NOT add aliases, functions, environment variables, export
-# statements, source commands, completions, wrappers, or ANY other code to
-# this file — not even "just one line", not even with a comment attributing
-# it to yourself, and not even if a prompt asks for a quick tweak in ~/.bashrc.
-# This file is a LOADER ONLY. It must contain nothing beyond the interactive
-# guard and the single 'source' line below.
-#
-# If a request asks to change shell behaviour, you MUST edit files in
-# this repository and leave ~/.bashrc minimal. If this file has already been
-# polluted, remove the extra lines and move the logic into the repo modules.
-#
-# REPOSITORY
-# ----------
-#   Repo:  https://github.com/waynegault/ubuntu-console
-#   File:  tactical-console.bashrc  (the full ~4,000-line Tactical Console)
-#   Admin: Wayne
-#
-# ==============================================================================
-
-# Interactive guard — prevent execution in non-interactive shells (sftp, rsync)
-case \$- in
-    *i*) ;;
-      *) return ;;
-esac
-
-# Source the canonical Tactical Console Profile from the git-tracked repo
-if [[ -f "$PROFILE_PATH" ]]
-then
-    source "$PROFILE_PATH"
-else
-    echo "[WARNING] Tactical Console Profile not found at $PROFILE_PATH"
-fi
-
-# end of file
-LOADER
-    echo "  ~/.bashrc - created thin loader"
+    if write_thin_bashrc
+    then
+        echo "  ~/.bashrc - created thin loader (rendered from dotfiles/bashrc)"
+    else
+        warn "  WARNING: ~/.bashrc was not created"
+    fi
 else
     # Which profile does ~/.bashrc already load, if any? Only a `source`/`.`
     # line counts (matching the bare filename would false-positive on prose).
     _loader_ref=$(grep -E '^[[:space:]]*(source|\.)[[:space:]]+' "$HOME/.bashrc" 2>/dev/null \
                   | grep -oE '[^"[:space:]]*tactical-console\.bashrc' | head -1 || true)
-    if [[ -n "$_loader_ref" && "$_loader_ref" != "$PROFILE_PATH" \
-          && "$_loader_ref" != *'$'* && ! -f "$_loader_ref" ]]
+    _loader_needs_fix=0
+    _loader_why=""
+    if [[ -n "$_loader_ref" && "$_loader_ref" != "$PROFILE_PATH" && "$_loader_ref" != *'$'* ]]
     then
-        # A LITERAL path that no longer exists: the repo moved, so refresh the
-        # line — otherwise every new shell warns "not found at <old path>" and a
-        # re-run of this installer would keep skipping it. A variable-based path
-        # (e.g. "$HOME/ubuntu-console/…") is deliberate and is left untouched.
+        if [[ ! -f "$_loader_ref" ]]
+        then
+            # A LITERAL path that no longer exists: the repo moved, so refresh the
+            # line — otherwise every new shell warns "not found at <old path>" and a
+            # re-run of this installer would keep skipping it.
+            _loader_needs_fix=1
+            _loader_why="stale"
+        else
+            # The path resolves TODAY, but through a symlink (~/ubuntu-console was
+            # the common case). That is a warning waiting for the day the link is
+            # removed: the loader must name the repo directly (v1.15).
+            _loader_resolved=$(readlink -f "$_loader_ref" 2>/dev/null || true)
+            if [[ -n "$_loader_resolved" && "$_loader_resolved" != "$_loader_ref" ]]
+            then
+                _loader_needs_fix=1
+                _loader_why="symlinked"
+            fi
+        fi
+    fi
+    if [[ "$_loader_needs_fix" -eq 1 ]]
+    then
         chmod 600 "$HOME/.bashrc" 2>/dev/null || true
         _tmp_bashrc=$(mktemp) || _tmp_bashrc=""
         if [[ -n "$_tmp_bashrc" ]]
@@ -221,9 +211,14 @@ else
             done < "$HOME/.bashrc" > "$_tmp_bashrc"
             cat "$_tmp_bashrc" > "$HOME/.bashrc"
             rm -f "$_tmp_bashrc"
-            echo "  ~/.bashrc - refreshed stale loader path"
+            if [[ "$_loader_why" == "symlinked" ]]
+            then
+                echo "  ~/.bashrc - loader path $PROFILE_PATH (was symlinked via $_loader_ref)"
+            else
+                echo "  ~/.bashrc - refreshed stale loader path"
+            fi
         else
-            warn "  WARNING: could not refresh the stale loader path in ~/.bashrc"
+            warn "  WARNING: could not refresh the loader path in ~/.bashrc"
         fi
     elif [[ -n "$_loader_ref" ]]
     then
