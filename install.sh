@@ -502,6 +502,15 @@ do
     if [[ -e "$HOME/.config/systemd/user/$_new" ]]; then
         ln -sfn "$_new" "$HOME/.config/systemd/user/$_old"
         echo "  ~/.config/systemd/user/$_old -> $_new (relative alias)"
+    elif [[ -L "$HOME/.config/systemd/user/$_old" ]] \
+         && [[ "$(readlink "$HOME/.config/systemd/user/$_old")" == "$_new" ]]
+    then
+        # The alias exists but its target does not: the target was removed above as
+        # another host profile's.  A dangling alias still makes
+        # `systemctl --user list-unit-files` name something nothing resolves, so it
+        # goes with its target.  Only an alias pointing at THIS pair's target goes.
+        rm -f "$HOME/.config/systemd/user/$_old"
+        echo "  removed alias $_old (target $_new is not installed on this box)"
     else
         warn "  WARNING: alias $_old skipped — target $_new is not installed"
     fi

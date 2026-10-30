@@ -222,6 +222,8 @@ install_stub_env() {
     mkdir -p "$unit_dir"
     ln -s "$REPO_ROOT/systemd/llama-xe-minicpm5-1b-chat.service" \
         "$unit_dir/llama-xe-minicpm5-1b-chat.service"
+    # The legacy alias the installer itself creates, pointing at that unit by name.
+    ln -s "llama-xe-minicpm5-1b-chat.service" "$unit_dir/llama-server.service"
     printf '[Unit]\nDescription=the operator own unit\n' > "$unit_dir/operator-own.service"
 
     run env HOME="$INSTALL_HOME" PATH="$STUB_DIR:$PATH" LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
@@ -230,6 +232,9 @@ install_stub_env() {
     [ ! -e "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
     [ ! -L "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
     [[ "$output" == *"removed llama-xe-minicpm5-1b-chat.service (belongs to profile: intel-xe-cuda)"* ]]
+    # The installer's own alias goes with its target rather than dangling.
+    [ ! -e "$unit_dir/llama-server.service" ]
+    [ ! -L "$unit_dir/llama-server.service" ]
     # Control: a unit the operator owns is never touched.
     [ -e "$unit_dir/operator-own.service" ]
 }
