@@ -108,7 +108,8 @@ and read by `install.sh` before it links a single systemd unit.
 
 The arm64 profile's measured facts (2026-10-30, over SSH from this box) are recorded in the
 profile's header: 20 CPUs, 39 GiB RAM, the card reporting 81920 MiB, `/dev/dri` and `/dev/dxg`
-present, a NAS mounted but no GGUF store, and no CUDA build of llama.cpp yet. Its VRAM fallback
+present, one model under `~/models` in a flat layout the repo's `<root>/active` convention does not
+read, and no CUDA build of llama.cpp yet. Its VRAM fallback
 stays 0 because the card's 80 GiB and the box's 39 GiB of unified RAM disagree — no single
 constant is honest until that is decided.
 
