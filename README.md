@@ -146,6 +146,13 @@ is not there. Lane units carry `# install-profile: <id>`; unmarked units
 reaches the other. A profile with no lane table (the arm64 box today) reports no
 resident lanes instead of ports nothing there can bind.
 
+**So is state, and state is not in the remote.** What the repository carries is code
+and the *declarations* the code reads — `config/hosts.d/*.conf`, `systemd/*`, the quant
+guide. Anything true of ONE machine only stays out and is ignored: that box's
+`.wslconfig`, the KV-quant certification rows measured on its card, and run output
+under `logs/`. Each box regenerates its own (`model scan`, the KV probe), and a box
+without the KV rows refuses the sweep rather than assuming another card's verdict.
+
 ### First Commands
 
 ```bash

@@ -1534,8 +1534,8 @@ Disk:           build tree on the WSL2 ext4 VHD (/dev/sdd, 1 TB)
 ```
 
 > **Guest vs host — use the guest numbers.** The WSL2 guest is deliberately capped
-> by `C:\Users\<you>\.wslconfig` (`processors=16`, `memory=48GB`; the tracked copy is
-> `config/wslconfig`), so `nproc` reports **16**, not the host's 20, and only
+> by `C:\Users\<you>\.wslconfig` (`processors=16`, `memory=48GB` on THIS box), so
+> `nproc` reports **16**, not the host's 20, and only
 > ~47 GiB of the host's 63.7 GB is visible. Every build-time decision — `-j`, and
 > the memory available to parallel CUDA translation units — must be sized against
 > the *guest*, not the host CPU name. `-j$(nproc)` (= 12) completed a full
@@ -1543,6 +1543,11 @@ Disk:           build tree on the WSL2 ext4 VHD (/dev/sdd, 1 TB)
 > CUDA translation units exhaust the guest's memory you will see `cc1plus: out of
 > memory`; drop to `-j8` or `-j4` (see Troubleshooting).
 > That failure mode is environment-dependent, not a property of this setup.
+>
+> The cap is a **per-box** fact, so the file itself is not in the remote: `.wslconfig`
+> is edited on the Windows side and copied in, and each box has its own values (the
+> arm64 box is 20 cores / 39 GiB with no such cap). `config/wslconfig` is ignored by
+> `.gitignore`; the numbers quoted here describe the x86_64 box as measured.
 >
 > **Why SM 86?** The RTX 3050 Ti is an Ampere GA107 chip with compute capability
 > 8.6 (not 8.0 like A100 or 8.9 like Ada). Setting `CMAKE_CUDA_ARCHITECTURES=86`

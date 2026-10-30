@@ -111,3 +111,25 @@ graphify-out/
 # NOTE: git has NO inline comments — text after a pattern is PART of the pattern,
 # so each reason must sit on its own line above its rule.
 *.lock
+
+# ---- Per-box state ----------------------------------------------------------
+# This repo serves two machines (Intel x86_64 and ASUS arm64).  The CODE is
+# identical on both and stays tracked, and so do the per-box DECLARATIONS the code
+# reads — config/hosts.d/*.conf, systemd/* — because a declaration is reviewed
+# text, not a measurement.  What stays OUT of the remote is anything true of ONE
+# machine only: a measurement taken on one card, that box's WSL host settings, and
+# any run output.  Each box regenerates its own (`model scan`, the autotune's KV
+# probe, the WSL config copied to C:\Users\<you>\.wslconfig).
+#
+# A rule here cannot untrack a file that is already in the index — `git rm
+# --cached <path>` is the separate step, and `git ls-files -i -c` lists what a rule
+# covers only if it is tracked.
+#
+# This box's .wslconfig values (memory=48GB, processors=16); the arm64 box differs.
+config/wslconfig
+# The KV-quant certification rows measured on THIS card at THIS ctx.  A box without
+# it treats every kv type as uncertified and refuses the sweep — fail-closed.
+config/kv-recall-baseline.tsv
+# Run output.  logs/ is ignored above; this rule names the reason for the tree.
+logs/
+
