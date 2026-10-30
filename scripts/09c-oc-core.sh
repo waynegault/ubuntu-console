@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 39
+#   v39 (2026-10-30): three §18.3 counters rose with v37/v38 and nothing re-baselined them,
+#   so the pre-push ratchet refused every push from this checkout — a gate doing its job on a
+#   style debt, not on the fix. Fixed the three rather than re-baselining: two __tac_info calls
+#   wrapped under 120 columns, a comment directly above `xo` (the definition had a blank line,
+#   which the counter reads as unattributed), and `return 4` in the tombstone path named, since
+#   a code other than 0/1 with no comment on the line is unreadable to the next editor.
 # Module Version: 38
 #   v38 (2026-10-29): corrects v37's third point, which claimed a tombstoned main simply
 #   cannot be reset.  Measured on a live gateway the same day: `sessions.reset` IS allowed
@@ -171,6 +178,7 @@
 [[ -n "${__TAC_MOD_09C_OC_CORE_LOADED:-}" ]] && return 0
 __TAC_MOD_09C_OC_CORE_LOADED=1
 
+# `xo` — stop every OpenClaw process this box owns, then report what is still running.
 function xo() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot stop gateway]" "$C_Error"
@@ -806,7 +814,7 @@ function __oc_purge_reset_main() {
             _rec_params=$(jq -cn --arg k "$_key" '{key:$k}') || return 1
             if __oc_purge_rpc "sessions.recover" "$_rec_params"
             then
-                return 4
+                return 4   # 4 = successor started, tombstone left set
             fi
             return 1
         fi
@@ -916,7 +924,9 @@ function oc-purge() {
     # dry run is where that matters most: its job is to let the owner see the blast radius.
     if ! __oc_purge_store_census
     then
-        __tac_info "Purge" "[REFUSED - an agent store could not be read, so this run's blast radius would be UNDERSTATED]" "$C_Error"
+        __tac_info "Purge" \
+            "[REFUSED - an agent store could not be read, so this run's blast radius would be UNDERSTATED]" \
+            "$C_Error"
         return 1
     fi
 
@@ -1040,7 +1050,8 @@ function oc-purge() {
                    __tac_info "Sessions" "[$_reset_key reset - main kept, transcript empty]" "$C_Dim" ;;
                 3) : ;;
                 4) _tombstoned=$(( _tombstoned + 1 ))
-                   __tac_info "Sessions" "[$_reset_key TOMBSTONED - successor started, tombstone REMAINS]" "$C_Warning" ;;
+                   __tac_info "Sessions" \
+                       "[$_reset_key TOMBSTONED - successor started, tombstone REMAINS]" "$C_Warning" ;;
                 *) _failed=$(( _failed + 1 ))
                    __tac_info "Sessions" "[FAILED to reset $_reset_key]" "$C_Error" ;;
             esac
