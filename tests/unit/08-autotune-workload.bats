@@ -270,9 +270,11 @@ EOF
 # AUTOTUNE_SELFTEST replaces bench_ctx/ttft_probe/cleanup_gpu with canned curves
 # and skips persistence, so the probe -> descent -> certification path runs
 # server-free in seconds.  Isolation notes:
-#   * 01-constants assigns LLM_REGISTRY="$HOME/.llm/models.conf" and
-#     LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active" UNCONDITIONALLY, so exporting
-#     those directly is ignored — HOME and LLAMA_DRIVE_ROOT are the levers.
+#   * 01-constants assigns LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active" UNCONDITIONALLY,
+#     so exporting that directly is ignored — LLAMA_DRIVE_ROOT is the lever.
+#     LLM_REGISTRY is now overridable (2026-10-30), so it is set EXPLICITLY below:
+#     without that, the value exported at the top of this file would follow the run
+#     into the sandbox and quietly be the registry under test.
 #   * the documented LLM_AUTOTUNE_BASELINE_GAP_MAX knob tolerates the CUDA lane
 #     holding the card, which would otherwise refuse the run before any logic.
 _selftest_run() {
@@ -312,6 +314,7 @@ _selftest_run() {
     # test-private lock makes the suite independent of the shared box-wide lock while still
     # exercising the real heavy-job serialisation path (card 34c28be3).
     env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
+        LLM_REGISTRY="$sandbox/home/.llm/models.conf" \
         HEAVY_JOB_LOCK="$sandbox/heavy-job.lock" \
         CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
         LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 \

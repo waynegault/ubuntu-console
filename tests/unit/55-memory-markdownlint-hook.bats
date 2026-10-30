@@ -22,7 +22,17 @@
 setup() {
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     HOOK="$REPO_ROOT/tools/qwen-hooks/memory-markdownlint.sh"
-    LINTER="/home/linuxbrew/.linuxbrew/bin/markdownlint"
+    # Resolved, not hardcoded: the linuxbrew path is the x86 box's install. Measured
+    # 2026-10-30 — the arm64 box has markdownlint at ~/.local/bin, so every case in
+    # this file failed there with "no such file" while passing on the other box. A test
+    # that names one machine's install directory is a test about that machine.
+    LINTER="$(command -v markdownlint 2>/dev/null || true)"
+    if [[ -z "$LINTER" && -x /home/linuxbrew/.linuxbrew/bin/markdownlint ]]; then
+        LINTER=/home/linuxbrew/.linuxbrew/bin/markdownlint
+    fi
+    if [[ -z "$LINTER" ]]; then
+        skip "markdownlint is not installed on this box, so the hook cannot be exercised"
+    fi
     FIX="$BATS_TEST_TMPDIR/home"
     mkdir -p "$FIX/.qwen/memories" "$FIX/.qwen/tmp"
     # Only MD049: the fixer's contract is emphasis style, and a tight rule set keeps the case honest
