@@ -28,7 +28,11 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-30): the model store's shape and the memory model are profile facts —
+#   TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT (a bind mount vs a plain directory) and
+#   TAC_HOST_PROFILE_SHARED_MEMORY (the card's memory is the system pool).  Both are
+#   cleared with the other profile-owned facts and exported with them.
 #   v2 (2026-10-30): PROFILE-OWNED FACTS are cleared before the profile is sourced.
 #   A console-started window exports its profile into every child, so the arm64
 #   profile could not take effect in a shell that inherited the intel five-lane
@@ -252,6 +256,8 @@ tac_host_profile_apply() {
     unset LLAMA_LANE_SPECS LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
           VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
           TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
+          TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT \
+          LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
           LLAMA_QUANT_GUIDE_REL QUANT_GUIDE
     _facts="$(tac_host_facts)" || _facts=""
     if [[ -n "$_facts" ]]
@@ -284,8 +290,10 @@ tac_host_profile_apply() {
     export TAC_HOST_PROFILE TAC_HOST_PROFILE_MATCHED
     export LLAMA_DRIVE_ROOT LLAMA_GPU_LAYERS LLAMA_FIT_TARGET_MB \
            LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLM_SERVICE_PORT \
+           LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
            TAC_HOST_PRIMARY_LANE VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL \
-           TAC_HOST_IGPU_LABEL TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION
+           TAC_HOST_IGPU_LABEL TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
+           TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT
     # The quant guide is a PATH, and `""` is meaningful (this host has no guide),
     # so an empty value is exported as empty rather than skipped.
     QUANT_GUIDE=""

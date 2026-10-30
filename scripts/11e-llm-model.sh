@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 72
+# Module Version: 73
+#   v73 (2026-10-30): a store that is a plain directory is told to be CREATED, not
+#   mounted — the refusal keeps its teeth but names the remedy the host actually has.
 #   v72 (2026-10-28): `llm-build` no longer pins -DCMAKE_CUDA_ARCHITECTURES=86.  The
 #   compute architecture is a property of the CARD: 86 is this box's RTX 3050 Ti
 #   (Ampere), while an arm64 CUDA box reports 12.1 (GB10) or 8.7 (Orin), and nvcc
@@ -191,9 +193,18 @@ function __model_scan_row_bytes() {
 function __model_scan() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
     then
-        __tac_info "Error" \
-            "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount $LLAMA_DRIVE_ROOT (fstab: bind of /srv/models)]" \
-            "$C_Error"
+        # The two shapes fail differently and the remedy differs: an absent mount is
+        # a mount to run, a plain directory store is one to create.
+        if [[ "${TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT:-1}" == "1" ]]
+        then
+            __tac_info "Error" \
+                "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount $LLAMA_DRIVE_ROOT (fstab: bind of /srv/models)]" \
+                "$C_Error"
+        else
+            __tac_info "Error" \
+                "[Model store $LLAMA_MODEL_DIR does not exist - create it: mkdir -p $LLAMA_MODEL_DIR]" \
+                "$C_Error"
+        fi
         return 1
     fi
 
@@ -3312,9 +3323,18 @@ function __model_delete() {
 function __model_download() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
     then
-        __tac_info "Error" \
-            "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount $LLAMA_DRIVE_ROOT (fstab: bind of /srv/models)]" \
-            "$C_Error"
+        # The two shapes fail differently and the remedy differs: an absent mount is
+        # a mount to run, a plain directory store is one to create.
+        if [[ "${TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT:-1}" == "1" ]]
+        then
+            __tac_info "Error" \
+                "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount $LLAMA_DRIVE_ROOT (fstab: bind of /srv/models)]" \
+                "$C_Error"
+        else
+            __tac_info "Error" \
+                "[Model store $LLAMA_MODEL_DIR does not exist - create it: mkdir -p $LLAMA_MODEL_DIR]" \
+                "$C_Error"
+        fi
         return 1
     fi
     if [[ $# -eq 0 ]]

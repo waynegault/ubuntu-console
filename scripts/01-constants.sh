@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 45
+# Module Version: 46
+#   v46 (2026-10-30): the model store's SHAPE is a host-profile fact.  The dirs may be
+#   declared by the profile (a flat store, not <root>/active), and readiness is tested
+#   the way the store exists: `mountpoint` for a bind mount, existence for a plain
+#   directory — the old unconditional mountpoint test refused a legitimate store.
 #   v45 (2026-10-29): per-box values move to a HOST PROFILE.  This file now reads
 #   its lane table, model-drive default, GPU/CPU/fit tuning, per-lane cache budget,
 #   VRAM fallback, quant guide, production-lane port and hardware labels from
@@ -164,8 +168,11 @@ export OC_TMP_LOG="/tmp/openclaw/openclaw.log"
 # Build:    cmake -B build -DGGML_CUDA=ON && cmake --build build --target llama-server
 export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
 # LLAMA_DRIVE_ROOT is user-configurable at the top of this file.
-export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"
-export LLAMA_ARCHIVE_DIR="$LLAMA_DRIVE_ROOT/archive"
+# A HOST PROFILE may name the store's directories directly, because a store is not
+# necessarily <root>/active on every box (measured 2026-10-30: the arm64 box keeps a
+# flat ~/models).  Set here only when the profile did not declare them.
+export LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-$LLAMA_DRIVE_ROOT/active}"
+export LLAMA_ARCHIVE_DIR="${LLAMA_ARCHIVE_DIR:-$LLAMA_DRIVE_ROOT/archive}"
 export LLM_SERVER_PYTHON_BIN="${LLM_SERVER_PYTHON_BIN:-python3}"
 # TAC_PYTHON: project .venv Python when available, else system python3.
 # All inline Python calls in scripts/ and bin/ should use this.
@@ -197,12 +204,39 @@ export QUANT_GUIDE
 # Detect drive size at startup; falls back to 200 GB if df unavailable.
 # WARNING: If the drive is not mounted, all capacity calculations will use
 # the 200GB fallback, which may over- or under-estimate available space.
-# Check mountpoint first to prevent model downloads writing to the WSL rootfs.
-__LLAMA_DRIVE_MOUNTED=1
-if ! mountpoint -q "$LLAMA_DRIVE_ROOT" 2>/dev/null
+# Readiness is a PROFILE fact: this box's store is a bind mount, so an absent mount
+# is the failure to catch; another box's is a plain directory, where `mountpoint` is
+# the wrong question and "does it exist" is the right one.  The test exists to stop
+# model writes landing on the WSL rootfs when the data drive did not come up.
+#
+# __tac_model_store_ready <path> <is_mount 0|1> — is the store usable?
+# Returns only 0 (ready) or 1 (not ready): `mountpoint` exits 32 for "not a
+# mountpoint", and leaking that as a third code makes every arithmetic caller wrong.
+__tac_model_store_ready() {
+    local _path="${1:-}" _is_mount="${2:-1}"
+    [[ -n "$_path" ]] || return 1
+    if [[ "$_is_mount" == "1" ]]
+    then
+        # swallow-ok: mountpoint's own message is noise here; its status is the answer
+        mountpoint -q "$_path" 2>/dev/null || return 1
+    else
+        [[ -d "$_path" ]] || return 1
+    fi
+    return 0
+}
+_tac_store_is_mount="${TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT:-1}"
+if [[ "$_tac_store_is_mount" == "1" ]]
 then
-    __LLAMA_DRIVE_MOUNTED=0
+    _tac_store_check="$LLAMA_DRIVE_ROOT"    # the MOUNT is the root itself
+else
+    _tac_store_check="$LLAMA_MODEL_DIR"     # a plain dir is ready when it exists
 fi
+__LLAMA_DRIVE_MOUNTED=0
+if __tac_model_store_ready "$_tac_store_check" "$_tac_store_is_mount"
+then
+    __LLAMA_DRIVE_MOUNTED=1
+fi
+unset _tac_store_is_mount _tac_store_check
 # 200 GB assumed-size fallback, declared here (before first use) so the magic
 # number lives in exactly one place; re-source-guarded like the block below.
 if [[ -z "${LLAMA_DRIVE_FALLBACK_BYTES+x}" ]]; then

@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-10-30): on a UNIFIED-MEMORY host the sizing ceiling is physical RAM, not
+#   the card's reported figure (81920 MiB reported against 39 GiB of RAM, measured on
+#   the arm64 box) — the profile declares TAC_HOST_PROFILE_SHARED_MEMORY and the
+#   helper clamps to /proc/meminfo MemTotal, measured rather than invented.
 #   v28 (2026-10-29): the CUDA cleanup protects every lane the HOST PROFILE
 #   declares instead of three unit names written here, so a lane added to this box
 #   (or named differently on another) is still never evicted by a bench cleanup.
@@ -860,6 +864,39 @@ function __gguf_metadata() {
     }'
 }
 
+# __tac_ram_total_bytes — physical RAM total, cached per shell.
+# The seam TAC_HOST_RAM_TOTAL_BYTES exists so a test can state the figure; otherwise
+# it is read from /proc/meminfo with bash builtins (no fork per call).
+function __tac_ram_total_bytes() {
+    if [[ -n "${__TAC_RAM_TOTAL_BYTES_CACHE:-}" ]]
+    then
+        printf '%d\n' "$__TAC_RAM_TOTAL_BYTES_CACHE"
+        return
+    fi
+    local _kb="" _line _key _val
+    if [[ "${TAC_HOST_RAM_TOTAL_BYTES:-}" =~ ^[0-9]+$ ]] && (( TAC_HOST_RAM_TOTAL_BYTES > 0 ))
+    then
+        __TAC_RAM_TOTAL_BYTES_CACHE="$TAC_HOST_RAM_TOTAL_BYTES"
+    elif [[ -r /proc/meminfo ]]
+    then
+        while IFS= read -r _line
+        do
+            _key="${_line%%:*}" _val="${_line#*:}"
+            if [[ "$_key" == "MemTotal" ]]
+            then
+                _val="${_val//[[:space:]]/}"
+                _kb="${_val%kB}"
+                break
+            fi
+        done < /proc/meminfo
+        if [[ "$_kb" =~ ^[0-9]+$ ]]
+        then
+            __TAC_RAM_TOTAL_BYTES_CACHE=$(( _kb * 1024 ))
+        fi
+    fi
+    printf '%d\n' "${__TAC_RAM_TOTAL_BYTES_CACHE:-0}"
+}
+
 # __tac_vram_total_bytes — the card's own VRAM total, or the profile's fallback.
 # The card is asked first: sizing every model against a constant marks a model that
 # fits a larger card (24 GB, or an arm64 CUDA box) as CPU-only.  When the card
@@ -886,6 +923,26 @@ function __tac_vram_total_bytes() {
         __TAC_VRAM_TOTAL_BYTES_CACHE=$(( _total_mb * 1048576 ))
     else
         __TAC_VRAM_TOTAL_BYTES_CACHE="${VRAM_TOTAL_BYTES:-0}"
+    fi
+    # UNIFIED MEMORY (a HOST PROFILE fact, TAC_HOST_PROFILE_SHARED_MEMORY=1): the card
+    # reports a figure the machine cannot back with separate memory — measured
+    # 2026-10-30, 81920 MiB reported against 39 GiB of RAM — so the ceiling is physical
+    # RAM, not the card's number.  Sizing above RAM would mark models "fits GPU" that
+    # can only OOM, and the figure is measured here rather than invented.
+    if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
+    then
+        local _ram
+        _ram="$(__tac_ram_total_bytes)"
+        if (( _ram > 0 ))
+        then
+            # No reading on a unified host still has an honest ceiling — the pool —
+            # so an unreadable card does not become "unknown" there.  When the card
+            # DOES answer, its figure may exceed the pool and is clamped to it.
+            if (( __TAC_VRAM_TOTAL_BYTES_CACHE == 0 || __TAC_VRAM_TOTAL_BYTES_CACHE > _ram ))
+            then
+                __TAC_VRAM_TOTAL_BYTES_CACHE="$_ram"
+            fi
+        fi
     fi
     printf '%d\n' "$__TAC_VRAM_TOTAL_BYTES_CACHE"
 }

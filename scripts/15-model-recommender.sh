@@ -2,7 +2,10 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-10-30): the VRAM figure comes from the shared helper, so the
+#   recommender and the scanner size against the SAME ceiling — including the
+#   unified-memory clamp to physical RAM.
 #   v11 (2026-10-29): with no card reading AND no honest profile fallback, the
 #   recommender says so and returns 1 instead of ranking against an invented 4 GB
 #   (this matters on a box whose card size this repo has never measured).
@@ -100,30 +103,22 @@ function model-recommend() {
         return 1
     fi
 
-    # Ask the CARD first.  A constant tested first made the nvidia-smi branch dead
-    # code: every larger card — including a CUDA arm64 box — was reported as 4 GB,
-    # and so was a host with no card at all.  The HOST PROFILE's fallback is the
-    # second choice, and 0 there means this host has no honest constant — at which
-    # point there is no answer to give rather than a guessed one.
-    local vram_gb vram_mb=""
-    if command -v nvidia-smi >/dev/null 2>&1
+    # ONE ceiling decides what a model may be sized against: the shared helper, so
+    # the recommender cannot disagree with scan/autotune about it.  It asks the CARD
+    # first (a constant tested first once made that branch dead code, reporting every
+    # larger card as 4 GB), falls back to the HOST PROFILE's value, and clamps to
+    # physical RAM on a unified-memory host — where the card's own figure is larger
+    # than the machine can back.  0 means "no honest figure", not "zero memory".
+    local vram_bytes vram_gb
+    vram_bytes="$(__tac_vram_total_bytes)"
+    if [[ "$vram_bytes" =~ ^[0-9]+$ ]] && (( vram_bytes > 0 ))
     then
-        # swallow-ok: an unreadable card falls through to the constant below, which is the stated fallback
-        vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null)
-        vram_mb="${vram_mb%%$'\n'*}"
-        vram_mb="${vram_mb// /}"
-    fi
-    if [[ "$vram_mb" =~ ^[0-9]+$ ]]
-    then
-        # Round to the nearest GB: 4095 MB is a 4 GB card, not 3.
-        vram_gb=$(( (vram_mb + 512) / 1024 ))
-    elif [[ "${VRAM_TOTAL_BYTES:-0}" =~ ^[0-9]+$ ]] && (( ${VRAM_TOTAL_BYTES:-0} > 0 ))
-    then
-        vram_gb=$(( VRAM_TOTAL_BYTES / 1024 / 1024 / 1024 ))
+        # Round to the nearest GB: a 4095 MiB card is 4 GB, not 3.
+        vram_gb=$(( (vram_bytes + 536870912) / 1073741824 ))
     else
         # A ranking built on an invented card size would recommend models this card
         # cannot hold (or hide ones it can) with nothing saying so.
-        __tac_info "VRAM Available" "[UNKNOWN - card unreadable, no profile fallback]" "$C_Error"
+        __tac_info "VRAM Available" "[UNKNOWN - no card reading, no profile fallback]" "$C_Error"
         __tac_info "Recommender" "[refusing to rank against a guessed card size]" "$C_Text"
         return 1
     fi

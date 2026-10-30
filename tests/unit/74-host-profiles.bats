@@ -255,21 +255,115 @@ install_stub_env() {
     [[ "$output" != *"removed llama-xe-minicpm5-1b-chat.service"* ]]
 }
 
+@test "the arm64 profile names a flat store on a plain directory, sized to RAM" {
+    # The two decisions of 2026-10-30, asserted together: the box's store is named
+    # directly (~/models, flat) instead of reshaping its files to <root>/active, and
+    # its GPU memory is the system pool, so sizing is RAM-clamped.
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
+        TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s|%s|%s\n" \
+            "$LLAMA_MODEL_DIR" "$TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT" \
+            "$TAC_HOST_PROFILE_SHARED_MEMORY" "$LLAMA_ARCHIVE_DIR"' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "/home/wayne/models|0|1|/home/wayne/models/archive" ]
+}
+
+@test "the intel profile keeps the derived dirs, the mount test and private VRAM" {
+    # Control: nothing about this box's store or memory model changes.  The dirs stay
+    # unset here so 01-constants derives <root>/active; the mount test stays on.
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin LLM_HOST_PROFILE="intel-xe-cuda" \
+        TAC_HOST_FACTS_OVERRIDE="x86_64 1 1" \
+        bash -c 'source "$1"; tac_host_profile_apply; printf "[%s]|%s|%s\n" \
+            "${LLAMA_MODEL_DIR:-}" "$TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT" \
+            "$TAC_HOST_PROFILE_SHARED_MEMORY"' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "[]|1|0" ]
+}
+
+@test "store readiness asks the question the store's shape answers" {
+    # A plain directory is ready when it exists; a mount is only ready when it IS a
+    # mountpoint.  Catches: the old unconditional mountpoint test refusing a store
+    # that is simply a directory (measured on the arm64 box).
+    run bash -c 'source "$1" >/dev/null 2>&1
+        d="$(mktemp -d)"
+        __tac_model_store_ready "$d" 0; a=$?
+        __tac_model_store_ready "$d/nope" 0; b=$?
+        __tac_model_store_ready "$d" 1; c=$?
+        rmdir "$d"
+        printf "%s%s%s\n" "$a" "$b" "$c"' _ "$REPO_ROOT/scripts/01-constants.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "011" ]   # a plain dir is NOT a mountpoint: the mount test must say so
+}
+
+@test "unified-memory sizing clamps the card's figure to physical RAM" {
+    # Catches: a model marked "fits GPU" against 81920 MiB on a box with 39 GiB of
+    # RAM — it can only OOM.  The two functions are extracted rather than the module
+    # sourced, so the case needs no card and no live shell.
+    local fn="$BATS_TEST_TMPDIR/sizing.sh"
+    awk '/^function __tac_ram_total_bytes\(\)/,/^}/' "$REPO_ROOT/scripts/11d-llm-gpu.sh" > "$fn"
+    awk '/^function __tac_vram_total_bytes\(\)/,/^}/' "$REPO_ROOT/scripts/11d-llm-gpu.sh" >> "$fn"
+    grep -q 'TAC_HOST_PROFILE_SHARED_MEMORY' "$fn" || { echo "FAIL: functions not extracted"; return 1; }
+
+    local stub="$BATS_TEST_TMPDIR/cardbin"
+    mkdir -p "$stub"
+    printf '#!/bin/sh\nprintf "81920\\n"\n' > "$stub/nvidia-smi"
+    chmod +x "$stub/nvidia-smi"
+
+    # 4 GiB of RAM, a card reporting 80 GiB.
+    run env PATH="$stub:$PATH" TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) \
+        TAC_HOST_PROFILE_SHARED_MEMORY=1 bash -c 'source "$1"; __tac_vram_total_bytes' _ "$fn"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$((4 * 1024 * 1024 * 1024))" ]
+
+    # Control: without the shared-memory fact, the card's own figure stands.
+    run env PATH="$stub:$PATH" TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) \
+        TAC_HOST_PROFILE_SHARED_MEMORY=0 bash -c 'source "$1"; __tac_vram_total_bytes' _ "$fn"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$((81920 * 1048576))" ]
+}
+
 @test "the recommender refuses to rank when the card cannot answer and no fallback exists" {
     # Catches: an invented card size on a box this repo has never measured — a 4 GB
     # ranking hides models the card can hold and recommends ones it cannot, and
-    # nothing in the output would say the size was guessed.  Hermetic: a failing
-    # nvidia-smi stub, the arm64 profile (fallback 0), and a throwaway registry.
+    # nothing in the output would say the size was guessed.  The fixture is a profile
+    # with NEITHER a fallback NOR shared memory, which is the only shape that has no
+    # honest ceiling at all.
+    local prof="$BATS_TEST_TMPDIR/profiles"
+    mkdir -p "$prof"
+    cat > "$prof/bare.conf" <<'PROFILE'
+TAC_HOST_PROFILE_ID="bare"
+TAC_HOST_PROFILE_ARCH="x86_64"
+TAC_HOST_PROFILE_CUDA=0
+: "${VRAM_TOTAL_BYTES_FALLBACK:=0}"
+PROFILE
     local stub="$BATS_TEST_TMPDIR/nosmi"
     mkdir -p "$stub"
     printf '#!/bin/sh\nexit 1\n' > "$stub/nvidia-smi"
     chmod +x "$stub/nvidia-smi"
     printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry.conf"
-    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" PATH="$stub:$PATH" \
+    run env LLM_HOST_PROFILE="bare" TAC_HOST_PROFILE_DIR="$prof" \
+        TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" PATH="$stub:$PATH" \
         LLM_REGISTRY="$BATS_TEST_TMPDIR/registry.conf" TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" \
         bash -c 'source "$1" >/dev/null 2>&1; model-recommend general' _ "$REPO_ROOT/env.sh"
     [ "$status" -eq 1 ]
     [[ "$output" == *"UNKNOWN"* ]]
+}
+
+@test "a unified-memory host with an unreadable card sizes to RAM, not to UNKNOWN" {
+    # The other half of the decision: on the arm64 box the GPU memory IS the system
+    # pool, so an unreadable card still has an honest ceiling.  Catches: that box
+    # refusing to rank because nvidia-smi did not answer.
+    local stub="$BATS_TEST_TMPDIR/nosmi2"
+    mkdir -p "$stub"
+    printf '#!/bin/sh\nexit 1\n' > "$stub/nvidia-smi"
+    chmod +x "$stub/nvidia-smi"
+    printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry2.conf"
+    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) PATH="$stub:$PATH" \
+        LLM_REGISTRY="$BATS_TEST_TMPDIR/registry2.conf" TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache2" \
+        bash -c 'source "$1" >/dev/null 2>&1; model-recommend general' _ "$REPO_ROOT/env.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"4GB"* ]]
 }
 
 @test "the installer links all five lanes on this box's own profile" {
