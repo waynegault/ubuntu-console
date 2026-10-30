@@ -212,6 +212,44 @@ install_stub_env() {
     [ ! -e "$unit_dir/llama-watchdog.service" ]
 }
 
+@test "the installer removes a stale lane link that belongs to another profile" {
+    # Catches the state a box installed BEFORE this layer is left in: the symlink
+    # survives a re-install that merely skips it, so systemd keeps starting a lane
+    # that names another machine's model file.  Measured 2026-10-30 — the ASUS box
+    # carried this repo's CPU lane as a live, enabled and failing unit that way.
+    install_stub_env
+    local unit_dir="$INSTALL_HOME/.config/systemd/user"
+    mkdir -p "$unit_dir"
+    ln -s "$REPO_ROOT/systemd/llama-xe-minicpm5-1b-chat.service" \
+        "$unit_dir/llama-xe-minicpm5-1b-chat.service"
+    printf '[Unit]\nDescription=the operator own unit\n' > "$unit_dir/operator-own.service"
+
+    run env HOME="$INSTALL_HOME" PATH="$STUB_DIR:$PATH" LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
+        bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+    [ ! -e "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
+    [ ! -L "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
+    [[ "$output" == *"removed llama-xe-minicpm5-1b-chat.service (belongs to profile: intel-xe-cuda)"* ]]
+    # Control: a unit the operator owns is never touched.
+    [ -e "$unit_dir/operator-own.service" ]
+}
+
+@test "the installer keeps a link for the box's OWN profile" {
+    # Control for the removal above: the same link must survive where it belongs,
+    # or the next re-install on this box deletes its own lanes.
+    install_stub_env
+    local unit_dir="$INSTALL_HOME/.config/systemd/user"
+    mkdir -p "$unit_dir"
+    ln -s "$REPO_ROOT/systemd/llama-xe-minicpm5-1b-chat.service" \
+        "$unit_dir/llama-xe-minicpm5-1b-chat.service"
+
+    run env HOME="$INSTALL_HOME" PATH="$STUB_DIR:$PATH" LLM_HOST_PROFILE="intel-xe-cuda" \
+        bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+    [ -L "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
+    [[ "$output" != *"removed llama-xe-minicpm5-1b-chat.service"* ]]
+}
+
 @test "the recommender refuses to rank when the card cannot answer and no fallback exists" {
     # Catches: an invented card size on a box this repo has never measured — a 4 GB
     # ranking hides models the card can hold and recommends ones it cannot, and

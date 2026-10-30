@@ -3,6 +3,10 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.14 (2026-10-30): a symlink that points into this repo but belongs to ANOTHER
+#   host profile is disabled (best effort, named) and removed.  Skipping it was not
+#   enough on a box installed before this layer: measured 2026-10-30, the ASUS box
+#   kept this repo's CPU lane as a live, enabled and failing unit.
 # v1.13 (2026-10-29, host profiles): the installer resolves WHICH box it is on
 #   (tools/host-profile.sh) before linking systemd units, and links only the units
 #   marked `# install-profile: <id>` for that profile plus the unmarked shared set.
@@ -28,7 +32,7 @@
 #   systemd/* linking loop (it ran before it, so on a FIRST install the target
 #   units did not exist yet and every alias was skipped), and a skipped alias now
 #   names its missing target on stderr instead of passing silently.
-VERSION="1.13"
+VERSION="1.14"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -383,6 +387,34 @@ do
     link "systemd/$_bn" "$HOME/.config/systemd/user/$_bn"
 done
 unset _unit_profile
+
+# ── Stale links for a DIFFERENT profile ─────────────────────────────────────
+# Skipping a unit is not enough on a box that was installed before this layer, or
+# under a different profile: the old symlink stays in the unit dir and systemd keeps
+# starting a lane that names another machine's model file. Measured 2026-10-30 — the
+# ASUS box carried this repo's CPU lane as a live, ENABLED and failing unit exactly
+# that way. So a symlink that points INTO this repo but is owned by another profile
+# is disabled (best effort, its name reported) and removed. Only links into
+# $REPO/systemd/ are touched; anything the operator owns is left alone.
+for _stale in "$HOME"/.config/systemd/user/*
+do
+    [[ -L "$_stale" ]] || continue
+    _stale_tgt="$(readlink -f "$_stale")" || continue
+    [[ "$_stale_tgt" == "$REPO"/systemd/* ]] || continue
+    _stale_owner="$(tac_host_unit_profile "$_stale_tgt")"
+    [[ "$_stale_owner" == "any" || "$_stale_owner" == "$HOST_PROFILE" ]] && continue
+    if systemctl --user is-enabled --quiet "${_stale##*/}" 2>/dev/null
+    then
+        if ! systemctl --user disable "${_stale##*/}" >/dev/null 2>&1
+        then
+            warn "  WARNING: could not disable ${_stale##*/} before removing its link" \
+                 "           it belongs to profile '$_stale_owner', not '$HOST_PROFILE'"
+        fi
+    fi
+    rm -f "$_stale"
+    echo "  removed ${_stale##*/} (belongs to profile: $_stale_owner)"
+done
+unset _stale _stale_tgt _stale_owner
 
 # ── Drop-in sources (systemd/*.conf) ─────────────────────────────────────────
 # A .conf here is a drop-in for one or more units, and it declares every destination
