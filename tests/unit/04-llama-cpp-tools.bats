@@ -59,8 +59,12 @@ if [[ "$url" == *api.github.com* ]]; then
     tag="${CURL_LATEST_TAG:-99999}"
     printf '[{"tag_name":"v0.8.0","assets":[{"name":"nightly-tag.txt","browser_download_url":"https://example.invalid/nightly-tag.txt"}]},'
     assets=()
+    # .tar.gz for BOTH arches: upstream moved off .zip at b11969 (see this file's
+    # header), and a fixture that only produces a tarball then cannot be the archive a
+    # zip-named asset would deliver — measured 2026-10-30, where the arm64 box
+    # downloaded a ".tar.gz" and the fixture at that path was a zip, so tar failed.
     if [[ "${CURL_ARM64_ONLY:-0}" != "1" ]]; then
-        assets+=("{\"name\":\"llama-b${tag}-bin-ubuntu-x64.zip\",\"browser_download_url\":\"https://example.invalid/llama-b${tag}-bin-ubuntu-x64.zip\"}")
+        assets+=("{\"name\":\"llama-b${tag}-bin-ubuntu-x64.tar.gz\",\"browser_download_url\":\"https://example.invalid/llama-b${tag}-bin-ubuntu-x64.tar.gz\"}")
     fi
     if [[ "${CURL_X64_ONLY:-0}" != "1" ]]; then
         assets+=("{\"name\":\"llama-b${tag}-bin-ubuntu-arm64.tar.gz\",\"browser_download_url\":\"https://example.invalid/llama-b${tag}-bin-ubuntu-arm64.tar.gz\"}")
@@ -112,12 +116,12 @@ CURL
     source "$REPO_ROOT/tools/python-runtime.sh"
     local _py
     _py="$(_tac_python_path "$REPO_ROOT")"
-    "$_py" -c '
-import sys, zipfile
-with zipfile.ZipFile(sys.argv[1], "w") as archive:
-    archive.writestr("bin/llama-server", "#!/bin/sh\nprintf \"version (build 99999)\\n\"\n")
-    archive.writestr("lib/libggml-cuda.so", "")
-' "$LLAMA_RELEASE_FIXTURE"
+    local src="$BATS_TEST_TMPDIR/release39"
+    mkdir -p "$src/bin" "$src/lib"
+    printf '#!/bin/sh\nprintf "version (build 99999)\\n"\n' > "$src/bin/llama-server"
+    chmod +x "$src/bin/llama-server"
+    : > "$src/lib/libggml-cuda.so"
+    tar -czf "$LLAMA_RELEASE_FIXTURE" -C "$src" .
 
     run "$REPO_ROOT/tools/llama-cpp-inventory.sh" --update
     [ "$status" -eq 0 ]
@@ -130,8 +134,17 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
     [ -z "$(find "$HOME/.cache" -maxdepth 1 -name 'llama-cpp-update.*' -print -quit)" ]
     # Criterion (tools/llama-cpp-inventory.sh v5): the archive fetched is the one
     # built for THIS host.  Catches: the x86_64 archive being installed on arm64.
-    grep -qF "llama-b99999-bin-ubuntu-x64.zip" "$CURL_LOG"
-    ! grep -qF "ubuntu-arm64" "$CURL_LOG"
+    #
+    # Host-derived, and .tar.gz: it used to grep for the literal x64 .zip, so on the
+    # arm64 box (which correctly fetches ubuntu-arm64.tar.gz) the case could only ever
+    # pass by fetching the wrong archive — the assertion enforced the bug it names.
+    case "$(uname -m)" in
+        aarch64|arm64) host_asset="llama-b99999-bin-ubuntu-arm64.tar.gz"; foreign=ubuntu-x64 ;;
+        x86_64|amd64)  host_asset="llama-b99999-bin-ubuntu-x64.tar.gz";   foreign=ubuntu-arm64 ;;
+        *) echo "FAIL: unsupported arch $(uname -m)"; return 1 ;;
+    esac
+    grep -qF "$host_asset" "$CURL_LOG"
+    ! grep -qF "$foreign" "$CURL_LOG"
 }
 
 @test "an arm64 host downloads the arm64 tar.gz, not the x64 archive" {
@@ -160,13 +173,33 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
     # Criterion (fail closed): if the newest b-tagged release ships no archive for
     # this host, the updater says so and installs NOTHING.  Catches: silently
     # falling back to an older build, or downloading a foreign-arch binary.
-    export CURL_ARM64_ONLY=1
+    # Hide THIS host's archive.  The knob used to be a fixed `CURL_ARM64_ONLY=1`, which
+    # means "the release lists only the arm64 build" — and on an arm64 host that is the
+    # archive the host wants, so the updater downloaded it and the case failed for the
+    # wrong reason (measured 2026-10-30).  Which knob is right depends on the host.
+    # The knobs omit an asset: CURL_ARM64_ONLY=1 drops the x64 asset, CURL_X64_ONLY=1
+    # drops the arm64 one.  So hiding the host's archive means asking for the OTHER
+    # one, which is the opposite knob on each box.
+    case "$(uname -m)" in
+        aarch64|arm64) export CURL_X64_ONLY=1 ;;    # release lists x64 only -> no arm64 archive
+        x86_64|amd64)  export CURL_ARM64_ONLY=1 ;;  # release lists arm64 only -> no x64 archive
+        *) echo "FAIL: unsupported arch $(uname -m)"; return 1 ;;
+    esac
     local before
     before="$(readlink "$HOME/.local/bin/llama-server")"
 
     run "$REPO_ROOT/tools/llama-cpp-inventory.sh" --update
     [ "$status" -ne 0 ]
-    [[ "$output" == *"release b99999 has no ubuntu-x64 archive"* ]]
+    # The refusal names THIS host's archive, so the expectation has to ask for the host's
+    # architecture rather than assume x86_64: the arm64 box was told "no ubuntu-arm64
+    # archive" and the case called the correct message a failure (measured 2026-10-30).
+    local host_arch
+    case "$(uname -m)" in
+        x86_64|amd64)   host_arch=ubuntu-x64 ;;
+        aarch64|arm64)  host_arch=ubuntu-arm64 ;;
+        *) echo "FAIL: unsupported arch $(uname -m)"; return 1 ;;
+    esac
+    [[ "$output" == *"release b99999 has no ${host_arch} archive"* ]]
     [ "$(readlink "$HOME/.local/bin/llama-server")" = "$before" ]
     [ ! -e "$HOME/.local/opt/llama.cpp/b99999" ]
 }

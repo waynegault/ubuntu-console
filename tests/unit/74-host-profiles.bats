@@ -345,6 +345,14 @@ install_stub_env() {
     [ "$output" = "$((81920 * 1048576))" ]
 }
 
+# NOTE ON THE UNREADABLE-CARD STUB (2026-10-30).  The stub is re-prepended AFTER
+# env.sh is sourced, not only passed in the environment.  env.sh puts WSL's
+# /usr/lib/wsl/lib on the front of PATH so CUDA works, and on the arm64 box that
+# directory contains the REAL nvidia-smi — so a stub placed before $PATH was silently
+# shadowed, the card answered 81920 MiB, and the case reported an invented 80 GB
+# budget as the recommender's fault.  On the x86 box there is no such directory and
+# the case passed, which is exactly how a cross-box test lies.  Prepending after the
+# source makes "the card cannot answer" true on both boxes.
 @test "the recommender refuses to rank when the card cannot answer and no fallback exists" {
     # Catches: an invented card size on a box this repo has never measured — a 4 GB
     # ranking hides models the card can hold and recommends ones it cannot, and
@@ -367,7 +375,8 @@ PROFILE
     run env LLM_HOST_PROFILE="bare" TAC_HOST_PROFILE_DIR="$prof" \
         TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" PATH="$stub:$PATH" \
         LLM_REGISTRY="$BATS_TEST_TMPDIR/registry.conf" TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" \
-        bash -c 'source "$1" >/dev/null 2>&1; model-recommend general' _ "$REPO_ROOT/env.sh"
+        bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; model-recommend general' \
+        _ "$REPO_ROOT/env.sh" "$stub"
     [ "$status" -eq 1 ]
     [[ "$output" == *"UNKNOWN"* ]]
 }
@@ -384,7 +393,8 @@ PROFILE
     run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
         TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) PATH="$stub:$PATH" \
         LLM_REGISTRY="$BATS_TEST_TMPDIR/registry2.conf" TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache2" \
-        bash -c 'source "$1" >/dev/null 2>&1; model-recommend general' _ "$REPO_ROOT/env.sh"
+        bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; model-recommend general' \
+        _ "$REPO_ROOT/env.sh" "$stub"
     [ "$status" -eq 0 ]
     [[ "$output" == *"4GB"* ]]
 }
