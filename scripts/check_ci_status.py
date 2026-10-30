@@ -194,6 +194,14 @@ class Report:
     #: landed after the probe, so the pair is not a statement about the checkout
     #: now.  Reported as unverified instead of replayed.
     awaiting_push_unverified: bool = False
+    #: The pushed tip is red AND local HEAD is ahead of it, so the commit in hand is
+    #: a repair attempt.  The red is still reported, but it does not block: blocking
+    #: here deadlocks the only way out.  Measured 2026-10-30 — a red main made
+    #: `tools/lint.sh` refuse the commit that fixed it, and the documented escape
+    #: (CI_STATUS_ALLOW_UNKNOWN=1) relaxes UNKNOWN, not RED, so there was no
+    #: override at all.  An expired exemption still blocks: that is a lapsed waiver,
+    #: a fact about the baseline rather than about this push.
+    repair_queued: bool = False
 
     @property
     def unknown(self) -> bool:
@@ -203,6 +211,10 @@ class Report:
     @property
     def failing(self) -> bool:
         """True when an unexempted red run, or an expired exemption, blocks."""
+        if self.repair_queued:
+            # Reported, never silent: _print_report names the red and why it does
+            # not block, and the next probe judges the NEW tip.
+            return bool(self.expired_entries)
         return bool(self.red) or bool(self.expired_entries)
 
     @property
@@ -398,6 +410,10 @@ def evaluate(
         else:
             report.exempted.append((status, exemption))
     report.expired_entries = [e for e in entries if e.expired]
+
+    # A red tip with commits ahead of it is a repair in progress.  The reason is
+    # carried, not swallowed: _print_report prints the red lines either way.
+    report.repair_queued = bool(report.red) and report.awaiting_push
 
     # DARK: a commit on the branch with no run after it.  Counted against
     # PUSH-TRIGGERED runs only (event == "push"); a scheduled nightly says nothing
@@ -706,6 +722,12 @@ def _print_report(report: Report) -> None:
         )
     if report.unknown:
         print(f"  UNKNOWN         : {report.unknown_reason}")
+    if report.repair_queued:
+        print(
+            "  REPAIR QUEUED   : the red above is on the PUSHED tip, and local HEAD is "
+            "ahead of it — this push is the repair attempt, so the red does not block. "
+            "The next probe judges the new tip."
+        )
     if report.green:
         if report.awaiting_push:
             print("  OK              : no unexempted red; local HEAD awaits a push")
@@ -755,6 +777,7 @@ def _to_json(report: Report) -> str:
             "unknown": report.unknown,
             "unknown_reason": report.unknown_reason,
             "failing": report.failing,
+            "repair_queued": report.repair_queued,
             "green": report.green,
             "checked_at": report.checked_at.isoformat() if report.checked_at else None,
         },

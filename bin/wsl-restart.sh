@@ -110,7 +110,7 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
 #   v24 (2026-10-20): same change-set — the force block pushed render_wrapper past the
 #   §18.3 10.4 hundred-line bound, so the gate renderer moved into
 #   render_chunk_and_fleet_gates (the render_fleet_gate / render_operator_gate convention).
@@ -272,8 +272,22 @@ set -uo pipefail
 # name, so `TAC_WSL_RESTART_TASK_NAME=$SOMETHING_UNSET` would arm production while looking
 # isolated - the same mistake in a new costume.  Empty is now a refusal.
 TASK_NAME="${TAC_WSL_RESTART_TASK_NAME-tac-wsl-restart}"
-DISTRO="Ubuntu-24.04"
-FOLDER_DEFAULT="/home/wayne/ubuntu-console"
+# The distro is a PER-BOX fact, and until 2026-10-30 it was a bare literal: this repo
+# runs on an x86 box whose distro is Ubuntu-24.04 and an arm64 box whose is
+# Ubuntu-26.04, sharing one remote.  `wsl.exe -d Ubuntu-24.04` on the arm64 box names
+# a distro that does not exist, so every arm/relaunch/quiesce line in the generated
+# wrapper failed there and the script reported the wrapper as armed.
+#
+# $WSL_DISTRO_NAME is set by WSL itself and names the distro you are IN — the one a
+# restart would target — so it leads.  The literal survives only as the last resort,
+# for a shell that is not in WSL at all.  The seam is first, and `:-` (not `-`) on
+# purpose: an empty distro is never a valid target, so an empty override must fall
+# through rather than become `wsl.exe -d ""`.
+DISTRO="${TAC_WSL_RESTART_DISTRO:-${WSL_DISTRO_NAME:-Ubuntu-24.04}}"
+# Same reason, one line down: the clone root is per-box (`/home/wayne/github-wsl/...`
+# on both, per the layout policy) while the old literal named a path that only existed
+# because a symlink happened to sit there.  A seam first, then the clone under $HOME.
+FOLDER_DEFAULT="${TAC_WSL_RESTART_FOLDER:-$HOME/github-wsl/ubuntu-console}"
 DELAY_MINUTES_DEFAULT=2
 WAIT_TRIES=20          # wrapper: bounded distro wait, 5 s apart (100 s)
 CLOSE_GRACE_SECONDS=15 # wrapper: bounded graceful-close wait before the forced kill

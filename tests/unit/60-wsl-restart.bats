@@ -122,6 +122,13 @@ STUB_EOF
     export TAC_WSL_RESTART_PROMPT_WIN='C:\Users\wayne\wsl-restart-prompt.ps1'
     export TAC_WSL_RESTART_LOG_UNIX="$SANDBOX/wsl-restart-action.log"
     export TAC_WSL_RESTART_CODE_CMD_UNIX="$CODE_CMD"
+
+    # The DISTRO is a per-box fact (v1.5.0): it comes from TAC_WSL_RESTART_DISTRO,
+    # then $WSL_DISTRO_NAME, then a literal.  These cases assert the ARGV this script
+    # BUILDS, so it is pinned here — an assertion on the distro of whichever box is
+    # running the suite is a test that passes on one box and fails on the other. The
+    # derivation and the seam have their own case below.
+    export TAC_WSL_RESTART_DISTRO=Ubuntu-24.04
 }
 
 teardown() {
@@ -192,6 +199,26 @@ JSON
     # behaviour, so this pins the MECHANISM, as the operator gate's stdout case does.
     [ "$(printf '%s\n' "$output" | grep -c 'call "%CODE_CMD%"')" -eq 2 ]
     ! printf '%s\n' "$output" | grep -qE '^[[:space:]]*"%CODE_CMD%"'
+}
+
+# Falsification: both halves fail against v1.4.x, where DISTRO was the bare literal
+# "Ubuntu-24.04".  Measured 2026-10-30: this repo runs on an x86 box (Ubuntu-24.04) and
+# an arm64 box (Ubuntu-26.04) sharing one remote, so on the arm64 box every generated
+# `wsl.exe -d Ubuntu-24.04` line named a distro that does not exist — the wrapper armed,
+# reported success, and the restart could not happen.
+@test "wsl-restart: the distro is resolved per box, not baked in" {
+    # (a) the seam wins over everything
+    run env TAC_WSL_RESTART_DISTRO=Ubuntu-99.04 WSL_DISTRO_NAME=Ubuntu-88.04 \
+        "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'--remote wsl+Ubuntu-99.04'* ]]
+    [[ "$output" != *'Ubuntu-88.04'* ]]
+
+    # (b) with no seam, WSL's own answer is the distro it must restart
+    run env -u TAC_WSL_RESTART_DISTRO WSL_DISTRO_NAME=Ubuntu-88.04 "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'--remote wsl+Ubuntu-88.04'* ]]
+    [[ "$output" != *'Ubuntu-24.04'* ]]
 }
 
 # The line number of the FIRST line matching a pattern, or 0 when there is none.
