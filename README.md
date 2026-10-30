@@ -2,7 +2,7 @@
 
 > **Repo:** [`waynegault/ubuntu-console`](https://github.com/waynegault/ubuntu-console)
 > **Environment:** WSL2 Ubuntu 24.04 on Windows 11 Pro — x86_64 or arm64
-> **Hardware:** two machines, one repo. Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB (CUDA) on the x86_64 box; an ASUS arm64 box with its own CUDA GPU (N1N RTX Spark). Each machine's GPU, model store, tuning and lane set live in a **host profile** (`config/hosts.d/`), so no accelerator and no model is assumed.
+> **Hardware:** two machines, one repo. Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB (CUDA) on the x86_64 box; an ASUS ProArt P16 (arm64, 20 cores, 39 GiB RAM) whose GPU reports as **NVIDIA RTX Spark N1X** (Blackwell, compute 12.1, 81920 MiB). Each machine's GPU, model store, tuning and lane set live in a **host profile** (`config/hosts.d/`), so no accelerator and no model is assumed.
 > **Shell:** Bash 5.2+
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/waynegault/ubuntu-console)
@@ -104,7 +104,13 @@ and read by `install.sh` before it links a single systemd unit.
 | Profile | Machine | Accelerators | Resident lanes |
 |---|---|---|---|
 | `intel-xe-cuda` | Intel i9, WSL2 x86_64 | Intel Iris Xe iGPU + RTX 3050 Ti 4 GB (CUDA) | five: 3 Xe, 1 CUDA, 1 CPU |
-| `asus-n1n-rtx-spark` | ASUS, WSL2 aarch64 | N1N RTX Spark (CUDA), no Intel iGPU | none declared — that box's models are its own |
+| `asus-n1n-rtx-spark` | ASUS ProArt P16, WSL2 aarch64 | RTX Spark N1X (Blackwell, compute 12.1), no Intel iGPU | none declared — that box's models are its own |
+
+The arm64 profile's measured facts (2026-10-30, over SSH from this box) are recorded in the
+profile's header: 20 CPUs, 39 GiB RAM, the card reporting 81920 MiB, `/dev/dri` and `/dev/dxg`
+present, a NAS mounted but no GGUF store, and no CUDA build of llama.cpp yet. Its VRAM fallback
+stays 0 because the card's 80 GiB and the box's 39 GiB of unified RAM disagree — no single
+constant is honest until that is decided.
 
 What a profile carries: the model-store root, `gpu_layers` / thread / fit-target
 tuning, the measured per-lane `--cache-ram` budgets, the resident lane table
