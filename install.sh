@@ -396,11 +396,22 @@ unset _unit_profile
 # that way. So a symlink that points INTO this repo but is owned by another profile
 # is disabled (best effort, its name reported) and removed. Only links into
 # $REPO/systemd/ are touched; anything the operator owns is left alone.
+#
+# ...and the comparison is made on PHYSICAL paths.  Measured 2026-10-30 on the ASUS
+# box: `~/ubuntu-console` is a symlink to this clone, so $REPO is
+# the logical path while `readlink -f` returns the physical one.  (Measured when the
+# clone root was still `~/github-wsl`; the root has since been renamed to `~/github`,
+# and the fix is indifferent to which of the two you reach it through — that is the point.)  The sweep matched
+# nothing and removed nothing — the v1.14 fix above, shipped, did not fire on the very
+# box it was written for, while every test passed because a test fixture's repo root
+# is not a symlink.  Same shape as "green because out of scope": the check was honest
+# and its scope was the test's layout, not the box's.
+_repo_phys="$(cd "$REPO" && pwd -P)"
 for _stale in "$HOME"/.config/systemd/user/*
 do
     [[ -L "$_stale" ]] || continue
     _stale_tgt="$(readlink -f "$_stale")" || continue
-    [[ "$_stale_tgt" == "$REPO"/systemd/* ]] || continue
+    [[ "$_stale_tgt" == "$_repo_phys"/systemd/* ]] || continue
     _stale_owner="$(tac_host_unit_profile "$_stale_tgt")"
     [[ "$_stale_owner" == "any" || "$_stale_owner" == "$HOST_PROFILE" ]] && continue
     if systemctl --user is-enabled --quiet "${_stale##*/}" 2>/dev/null
@@ -414,7 +425,7 @@ do
     rm -f "$_stale"
     echo "  removed ${_stale##*/} (belongs to profile: $_stale_owner)"
 done
-unset _stale _stale_tgt _stale_owner
+unset _stale _stale_tgt _stale_owner _repo_phys
 
 # ── Drop-in sources (systemd/*.conf) ─────────────────────────────────────────
 # A .conf here is a drop-in for one or more units, and it declares every destination

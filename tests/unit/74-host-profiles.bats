@@ -239,6 +239,29 @@ install_stub_env() {
     [ -e "$unit_dir/operator-own.service" ]
 }
 
+@test "the stale sweep fires when the repo is reached through a symlink" {
+    # Catches the shape that shipped broken and passed every test: the box's canonical
+    # path to this repo is a symlink (~/ubuntu-console -> the clone root), so $REPO is
+    # logical while `readlink -f` is physical.  The sweep compared the two,
+    # matched nothing and removed nothing — measured 2026-10-30 on the ASUS box, whose
+    # stale lanes survived a v1.14 re-install that was written to delete them.  A test
+    # fixture's repo root is a real directory, which is why the other cases stay green.
+    install_stub_env
+    local unit_dir="$INSTALL_HOME/.config/systemd/user"
+    local link_root="$BATS_TEST_TMPDIR/repo-link"
+    mkdir -p "$unit_dir"
+    ln -s "$REPO_ROOT" "$link_root"
+    ln -s "$link_root/systemd/llama-xe-minicpm5-1b-chat.service" \
+        "$unit_dir/llama-xe-minicpm5-1b-chat.service"
+
+    run env HOME="$INSTALL_HOME" PATH="$STUB_DIR:$PATH" LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
+        bash "$link_root/install.sh"
+    [ "$status" -eq 0 ]
+    [ ! -e "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
+    [ ! -L "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
+    [[ "$output" == *"removed llama-xe-minicpm5-1b-chat.service (belongs to profile: intel-xe-cuda)"* ]]
+}
+
 @test "the installer keeps a link for the box's OWN profile" {
     # Control for the removal above: the same link must survive where it belongs,
     # or the next re-install on this box deletes its own lanes.
