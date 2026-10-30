@@ -28,7 +28,11 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-30): PROFILE-OWNED FACTS are cleared before the profile is sourced.
+#   A console-started window exports its profile into every child, so the arm64
+#   profile could not take effect in a shell that inherited the intel five-lane
+#   table, sizing fallback and labels.  The documented operator knobs still win.
 #   v1 (2026-10-29): first cut — host profile selection so one repo serves the
 #   Intel x86_64 box and the ASUS arm64 box without sharing tuning, lanes,
 #   model-store paths or labels between them.
@@ -233,8 +237,22 @@ tac_host_profile_selected() {
 # Profile files use `: "${VAR:=value}"` so an explicit environment value still
 # wins, and the applier marks each export as set by the profile only when the
 # profile actually declared it.
+#
+# PROFILE-OWNED FACTS are cleared before the profile is sourced.  They are not
+# user knobs: they describe a machine.  An exported value inherited from a parent
+# shell is a SNAPSHOT of whichever profile that shell resolved, so letting it win
+# hands this process a foreign box's lanes, labels or sizing fallback — measured
+# 2026-10-30, when a console-started window exported the intel profile's five-lane
+# table into every child and the arm64 profile could no longer take effect.  The
+# documented knobs (LLAMA_DRIVE_ROOT, LLAMA_GPU_LAYERS, LLAMA_CPU_THREADS,
+# LLAMA_FIT_TARGET_MB, LLAMA_CACHE_RAM_MB) are deliberately NOT cleared: those are
+# the values an operator is told to export.
 tac_host_profile_apply() {
     local _id _file _facts _arch _cuda _render
+    unset LLAMA_LANE_SPECS LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
+          VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
+          TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
+          LLAMA_QUANT_GUIDE_REL QUANT_GUIDE
     _facts="$(tac_host_facts)" || _facts=""
     if [[ -n "$_facts" ]]
     then
