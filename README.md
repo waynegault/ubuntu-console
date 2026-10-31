@@ -1302,7 +1302,7 @@ where it was last present.)
 │   ├── test_report.py                 # Tests for kgraph.report
 │   ├── test_update.py                 # Tests for kgraph.update
 │   ├── test_validate.py               # Tests for kgraph.validate
-│   ├── unit/                          # BATS unit tests (922 tests: 33+43+10+5+5+6+44+4+12+10+7+42+19+16+6+1+6+10+2+3+3+20+36+41+31+6+8+8+3+15+6+13+31+29+16+9+17+9+6+4+4+6+3+3+4+5+4+13+2+10+11+1+8+5+4+28+34+5+4+7+36+24+11+8+8+10+6+5+7+5+4+3+3+13+23)
+│   ├── unit/                          # BATS unit tests (922 tests: 33+43+10+5+5+6+44+4+12+10+7+42+19+16+6+1+6+10+2+3+3+20+36+41+31+6+8+8+3+15+6+13+31+29+16+9+17+9+6+4+4+6+3+3+4+5+4+13+2+10+11+1+8+5+4+28+34+4+5+7+36+24+11+8+8+10+6+5+7+5+4+3+3+13+23)
 │   └── integration/                   # BATS integration tests (148 tests: 14+47+10+45+3+29)
 ├── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
