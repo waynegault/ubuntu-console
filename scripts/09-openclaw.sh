@@ -2,7 +2,8 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-10-31): drop oc-stinger from the sub-module list (OpenStinger retired).
 # ==============================================================================
 # 9. OPENCLAW MANAGER (THIN LOADER)
 # ==============================================================================
@@ -17,7 +18,7 @@
 #   wacli, oc-kgraph, owk, ologs, ocroot, lc, oc-update,
 #   oc-cron, oc-skills, oc-plugins, oc-plugin-update, oc-tail,
 #   oc-restart-check,
-#   oc-channels, oc-sec, oc-stinger, oc-tui, oc-config, oc-docs,
+#   oc-channels, oc-sec, oc-tui, oc-config, oc-docs,
 #   oc-usage, oc-local-llm, oc-sync-models, ocms, oc-browser,
 #   oc-nodes, oc-sandbox, oc-env, oc-cache-clear, oc-trust-sync,
 #   mem-index, oc-memory-search

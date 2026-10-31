@@ -9,7 +9,9 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-10-31): remove the `oc-stinger` command entirely — OpenStinger is no
+#   longer used, so its start/stop/status management is gone too.
 #   v33 (2026-10-31): oc-plugin-update no longer checks OpenStinger (it is no longer
 #   used), so the updater covers gigabrain and lossless-claw only.
 #   v32 (2026-10-30): new `__oc_timer_arming` row, in BOTH human branches, reporting whether
@@ -128,7 +130,7 @@
 # @uses: llm-registry, llm-server, maintenance
 # @exports: oc-health, oc-diag, oc-doctor-local, oc-failover, oc-sec,
 #   oc-cron, oc-skills, oc-plugins, oc-plugin-update, oc-tail, oc-channels,
-#   oc-stinger, oc-tui, oc-config, oc-docs, oc-usage, oc-local-llm,
+#   oc-tui, oc-config, oc-docs, oc-usage, oc-local-llm,
 #   oc-sync-models, ocms, oc-browser, oc-nodes, oc-sandbox, oc-env,
 #   oc-cache-clear
 
@@ -850,160 +852,6 @@ function oc-channels() {
 # ---------------------------------------------------------------------------
 function oc-sec() {
     openclaw security audit --deep
-}
-
-# ---------------------------------------------------------------------------
-# oc-stinger — OpenStinger MCP memory server management.
-# Usage: oc-stinger {start|stop|status|logs|progress|doctor|restart}
-# ---------------------------------------------------------------------------
-function oc-stinger() {
-    local action="${1:-status}"
-    local os_dir="$HOME/.openclaw/vendor/openstinger"
-    local os_script="$os_dir/scripts/start.sh"
-    local os_venv_python="$os_dir/.venv/bin/python"
-
-    case "$action" in
-        start)
-            __tac_header "OPENSTINGER START" "open"
-            # Start FalkorDB + PostgreSQL
-            if docker compose -f "$os_dir/docker-compose.yml" up -d 2>&1
-            then
-                __tac_line "Containers" "[STARTED]" "$C_Success"
-            else
-                __tac_line "Containers" "[FAILED]" "$C_Error"
-                return 1
-            fi
-            sleep 2
-            # Start Gradient MCP server (Tier 3) in background
-            if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
-            then
-                __tac_line "MCP Server" "[ALREADY RUNNING]" "$C_Dim"
-            else
-                # Save/restore PWD: oc-stinger start is a shell function, so a
-                # bare `cd "$os_dir"` would leave the user's shell in the
-                # vendor directory after the command returns.
-                local _prev_pwd="$PWD"
-                set +m
-                cd "$os_dir" || { __tac_line "MCP Server" "[FAILED - dir not found: $os_dir]" "$C_Error"; return 1; }
-                source "$os_dir/.venv/bin/activate" && \
-                    nohup "$os_venv_python" -m openstinger.gradient.mcp.server \
-                    > "$os_dir/.openstinger/openstinger.log" 2>&1 &
-                disown
-                set -m
-                # A failed restore is reported, not swallowed: the caller's shell would
-                # otherwise be left in the vendor directory with no cue at all.
-                if ! cd "$_prev_pwd" 2>/dev/null
-                then
-                    __oc_note "[oc-stinger] could not return to $_prev_pwd — the shell is still in $PWD"
-                fi
-                sleep 3
-                if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
-                then
-                    __tac_line "MCP Server (Gradient)" "[STARTED on port 8766]" "$C_Success"
-                else
-                    __tac_line "MCP Server" "[FAILED - check logs]" "$C_Error"
-                fi
-            fi
-            __tac_footer
-            ;;
-        stop)
-            __tac_header "OPENSTINGER STOP" "open"
-            # Stop MCP server
-            # -f required: target is a Node.js module path (not a simple argv[0]), -x would miss it
-            if pkill -u "$USER" -f "openstinger.mcp.server" 2>/dev/null || \
-               pkill -u "$USER" -f "openstinger.gradient.mcp.server" 2>/dev/null
-            then
-                __tac_line "MCP Server" "[STOPPED]" "$C_Success"
-            else
-                __tac_line "MCP Server" "[NOT RUNNING]" "$C_Dim"
-            fi
-            # Stop containers
-            if docker compose -f "$os_dir/docker-compose.yml" down 2>&1
-            then
-                __tac_line "Containers" "[STOPPED]" "$C_Success"
-            else
-                __tac_line "Containers" "[FAILED]" "$C_Warning"
-            fi
-            __tac_footer
-            ;;
-        restart)
-            oc-stinger stop
-            sleep 2
-            oc-stinger start
-            ;;
-        status)
-            __tac_header "OPENSTINGER STATUS" "open"
-            # Check MCP server
-            if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
-            then
-                __tac_line "MCP Server (Gradient)" "[RUNNING]" "$C_Success"
-            elif pgrep -f "openstinger.mcp.server" >/dev/null 2>&1
-            then
-                __tac_line "MCP Server (Tier 1)" "[RUNNING]" "$C_Success"
-            else
-                __tac_line "MCP Server" "[STOPPED]" "$C_Warning"
-            fi
-            # Check FalkorDB (container name pattern: openstinger-*falkordb*)
-            if docker ps --filter "name=falkordb" --format "{{.Status}}" 2>/dev/null | grep -q "Up"
-            then
-                __tac_line "FalkorDB" "[RUNNING]" "$C_Success"
-            else
-                __tac_line "FalkorDB" "[STOPPED]" "$C_Warning"
-            fi
-            # Check PostgreSQL (for Gradient tier)
-            if docker ps --filter "name=openstinger-postgres" --format "{{.Status}}" 2>/dev/null | grep -q "Up"
-            then
-                __tac_line "PostgreSQL" "[RUNNING]" "$C_Success"
-            else
-                __tac_line "PostgreSQL" "[NOT RUNNING]" "$C_Dim"
-            fi
-            # Check database
-            if [[ -f "$os_dir/.openstinger/openstinger.db" ]]
-            then
-                local db_size
-                db_size=$(du -h "$os_dir/.openstinger/openstinger.db" 2>/dev/null | cut -f1)
-                __tac_line "SQLite DB" "[$db_size]" "$C_Success"
-            else
-                __tac_line "SQLite DB" "[NOT FOUND]" "$C_Warning"
-            fi
-            # Check SSE endpoint
-            if curl -s --connect-timeout 2 "http://localhost:8766/sse" >/dev/null 2>&1
-            then
-                __tac_line "SSE Endpoint" "[READY on :8766]" "$C_Success"
-            else
-                __tac_line "SSE Endpoint" "[NOT REACHABLE]" "$C_Warning"
-            fi
-            __tac_footer
-            ;;
-        logs)
-            tail -f "$os_dir/.openstinger/openstinger.log" 2>/dev/null || \
-                echo "Log file not found: $os_dir/.openstinger/openstinger.log"
-            ;;
-        progress)
-            if command -v openstinger-cli >/dev/null 2>&1
-            then
-                openstinger-cli progress
-            elif [[ -f "$os_dir/.venv/bin/openstinger-cli" ]]
-            then
-                "$os_dir/.venv/bin/openstinger-cli" progress
-            else
-                __tac_info "Error" "openstinger-cli not found" "$C_Warning"
-                __tac_info "Tip" "Run: cd $os_dir && pip install -e ." "$C_Dim"
-            fi
-            ;;
-        doctor)
-            if [[ -x "$os_script" ]]
-            then
-                "$os_script" doctor
-            else
-                __tac_info "Error" "Doctor script not found: $os_script" "$C_Error"
-            fi
-            ;;
-        *)
-            echo "Usage: oc-stinger {start|stop|status|logs|progress|doctor|restart}"
-            return 1
-            ;;
-    esac
 }
 
 # ---------------------------------------------------------------------------

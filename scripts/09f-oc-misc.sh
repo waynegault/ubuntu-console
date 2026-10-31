@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-10-31): drop the OpenStinger line from the graph-roles help (retired).
 #   v13 (2026-10-02): oc-kgraph's viewer launch and its stale-viewer guard use the kgraph
 #   SUBCOMMAND form (`kgraph serve`), not the removed flat `--serve` flag, so `oc g` keeps
 #   working against cli.py's subcommand-only dispatch (card 75219978).
@@ -46,7 +47,6 @@ function oc-kgraph() {
                 printf '%s\n' "Graph roles:"
                 printf '%s\n' "  Obsidian/Gigabrain = curated human memory browser"
                 printf '%s\n' "  oc g               = operational / derived graph browser"
-                printf '%s\n' "  OpenStinger        = temporal/entity recall layer"
                 printf '%s\n' ""
                 printf '%s\n' "Views in oc g UI: overview, topics, files, semantic, raw"
                 return 0
