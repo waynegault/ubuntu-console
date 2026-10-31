@@ -1,6 +1,6 @@
 [Unit]
 Description=Resume an interrupted bench sweep after a boot
-Documentation=file:%h/ubuntu-console/bin/bench-resume.sh
+Documentation=file:%h/github-wsl/ubuntu-console/bin/bench-resume.sh
 # Started by bench-resume.timer (OnBootSec=2min). Enable the TIMER, never this
 # service: a Type=oneshot inside the boot transaction would hold it open.
 

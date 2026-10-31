@@ -62,7 +62,7 @@ case $- in
 esac
 
 # Source the canonical tactical console profile from the git-tracked repo
-source "$HOME/ubuntu-console/tactical-console.bashrc"
+source "$HOME/github-wsl/ubuntu-console/tactical-console.bashrc"
 
 # end of file
 EOF
@@ -2515,9 +2515,9 @@ EOF
     mkdir -p "$home_dir"
     cat > "$home_dir/.bashrc" << 'EOF'
 # existing config
-if [[ -f "$HOME/ubuntu-console/tactical-console.bashrc" ]]
+if [[ -f "$HOME/github-wsl/ubuntu-console/tactical-console.bashrc" ]]
 then
-    source "$HOME/ubuntu-console/tactical-console.bashrc"
+    source "$HOME/github-wsl/ubuntu-console/tactical-console.bashrc"
 fi
 EOF
     local before
@@ -2602,6 +2602,26 @@ EOF
     grep -q '^--user daemon-reload$' "$log_file"
 }
 
+@test "install: repairs enable links that name a stale absolute unit path" {
+    # `systemctl --user enable` writes an ABSOLUTE path into *.wants/ when the unit file
+    # is itself a symlink into the repo, so a repo move leaves the unit enabled in name
+    # only: the link dangles, systemd cannot load it, and nothing reports it.
+    local home_dir="$TAC_TEST_TMPDIR/install-home-wants"
+    mkdir -p "$home_dir/.config/systemd/user/default.target.wants"
+    printf '[Unit]\nDescription=probe\n' > "$home_dir/.config/systemd/user/probe.service"
+    ln -s "/old/nowhere/ubuntu-console/systemd/probe.service" \
+          "$home_dir/.config/systemd/user/default.target.wants/probe.service"
+    # A dangling link to something this repo does NOT install is the operator's.
+    ln -s "/elsewhere/gone.service" \
+          "$home_dir/.config/systemd/user/default.target.wants/gone.service"
+
+    run env HOME="$home_dir" bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+
+    [ "$(readlink "$home_dir/.config/systemd/user/default.target.wants/probe.service")" = "../probe.service" ]
+    [ "$(readlink "$home_dir/.config/systemd/user/default.target.wants/gone.service")" = "/elsewhere/gone.service" ]
+}
+
 @test "bin: tac-exec sources env.sh relative to its own path" {
     grep -q 'readlink -f "\${BASH_SOURCE\[0\]}"' "$REPO_ROOT/bin/tac-exec"
     grep -q 'source "\$_tac_exec_root/env.sh"' "$REPO_ROOT/bin/tac-exec"
@@ -2623,7 +2643,7 @@ EOF
 
 @test "openclaw: restore writes tactical-console.bashrc into TACTICAL_REPO_ROOT" {
     grep -q 'mkdir -p "\$TACTICAL_REPO_ROOT"' "$REPO_ROOT/scripts/09f-oc-misc.sh"
-    grep -q 'cp "\$tmp_restore/ubuntu-console/tactical-console.bashrc"' \
+    grep -q 'cp "\$tmp_restore/github-wsl/ubuntu-console/tactical-console.bashrc"' \
         "$REPO_ROOT/scripts/09f-oc-misc.sh"
 }
 

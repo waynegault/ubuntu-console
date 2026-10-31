@@ -96,7 +96,7 @@ opt-in rather than a CI gate because an all-missing profile exits 2 by design.
 
 ## Quantization Guide
 
-The file `~/ubuntu-console/config/quant-guide.conf` is a manually editable
+The file `~/github-wsl/ubuntu-console/config/quant-guide.conf` is a manually editable
 configuration that rates GGUF quantizations for the RTX 3050 Ti (4 GB VRAM):
 
 | Rating | Quants | Meaning |
@@ -1019,7 +1019,7 @@ one (`model autotune N --workload agentic`).
 | `config/hosts.d/<id>.conf` | Host profile — the machine's cards, lanes, tuning, model store and quant policy |
 | `~/.llm/models.conf` | Also stores autotune winners (`autotuned`, row-level knobs, `mmap_mode`) |
 | `~/.llm/bench_*.tsv` | Benchmark history from `model bench` |
-| `~/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
+| `~/github-wsl/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
 | `/dev/shm/active_llm` | Active model FILE name (the row's identity; not a row number) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr log |
 | `/dev/shm/last_tps` | Last measured tokens/sec |
@@ -1388,7 +1388,7 @@ The `__llm_autotune_profile_save` function sets `autotuned=yes` in the registry,
 
 ### Single Mechanism
 
-`model autotune <N>` and `model autotune all` both route to the same standalone script (`~/ubuntu-console/scripts/autotune-model.sh`). The old `__model_autotune` shell function (which had the `--fit on` bug that caused all the batch-2 failures) is marked deprecated and no longer called. `model bench` also routes to the same script when it needs to autotune an untuned model before benchmarking. There is one live autotune mechanism.
+`model autotune <N>` and `model autotune all` both route to the same standalone script (`~/github-wsl/ubuntu-console/scripts/autotune-model.sh`). The old `__model_autotune` shell function (which had the `--fit on` bug that caused all the batch-2 failures) is marked deprecated and no longer called. `model bench` also routes to the same script when it needs to autotune an untuned model before benchmarking. There is one live autotune mechanism.
 
 The former parallel Python implementation (`bin/model-autotune.py`) was removed on 2026-09-01 to eliminate the second, unwired implementation — the shell script is the single source of truth for the whole flow, and `env.sh`'s `LLM_MIN_TPS` is the single source of truth for the floor policy.
 
@@ -1495,7 +1495,7 @@ complex with no current runtime impact. Deferred.
 
 ---
 
-*Spec written 2026-06-06. Updated 2026-08-04 (v4: filled-cache floor certification, prefill throughput, beam search, ngl/KV-quant band sweep, Pareto profile 2, 26-column registry). Updated 2026-09-12 (schema realigned to v6/37 columns — speculative-decoding (27-32) and `workload`/`ttft_ms`/`bench_*` (33-37) fields — and the knob defaults matched to `env.sh`). Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*
+*Spec written 2026-06-06. Updated 2026-08-04 (v4: filled-cache floor certification, prefill throughput, beam search, ngl/KV-quant band sweep, Pareto profile 2, 26-column registry). Updated 2026-09-12 (schema realigned to v6/37 columns — speculative-decoding (27-32) and `workload`/`ttft_ms`/`bench_*` (33-37) fields — and the knob defaults matched to `env.sh`). Corresponding code in `~/github-wsl/ubuntu-console/scripts/autotune-model.sh` and `~/github-wsl/ubuntu-console/scripts/run-autotune-batch.sh`.*
 
 ---
 

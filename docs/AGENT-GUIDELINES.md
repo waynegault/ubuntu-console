@@ -11,7 +11,7 @@ description: Complete reference for AI agents (Hal) accessing Tactical Console v
 tac-exec <command> [args...]
 ```
 
-`tac-exec` sources `~/ubuntu-console/env.sh` (which loads all 16 profile modules
+`tac-exec` sources `~/github-wsl/ubuntu-console/env.sh` (which loads all 16 profile modules
 except `13-init.sh`) then executes the command. All ~100+ shell functions become
 available without an interactive shell.
 
@@ -32,7 +32,7 @@ jq '.agents.main.allowlist[] | select(.pattern | contains("tac-exec"))' \
   ~/.openclaw/exec-approvals.json
 
 # Install the tactical-console OpenClaw skill (optional — improves discovery)
-cp -r ~/ubuntu-console/skills/tactical-console ~/.openclaw/skills/
+cp -r ~/github-wsl/ubuntu-console/skills/tactical-console ~/.openclaw/skills/
 openclaw skills enable tactical-console
 ```
 
@@ -86,7 +86,7 @@ These normally open VS Code; with `--read` they output content to stdout:
 | `tac-exec --read llmconf` | `~/.llm/models.conf` |
 | `tac-exec --read mlogs` | Last 100 lines of `/dev/shm/llama-server.log` |
 | `tac-exec --read occonf` | `~/.openclaw/openclaw.json` |
-| `tac-exec --read oedit` | `~/ubuntu-console/tactical-console.bashrc` |
+| `tac-exec --read oedit` | `~/github-wsl/ubuntu-console/tactical-console.bashrc` |
 | `tac-exec --read oclogs` | OpenClaw temp log |
 
 ### Diagnostics
@@ -250,7 +250,7 @@ cat ~/.openclaw/logs/bash-errors.log | tail -20
 | LLM logs | `tac-exec --read mlogs` → `/dev/shm/llama-server.log` |
 | OpenClaw config | `tac-exec --read occonf` → `~/.openclaw/openclaw.json` |
 | Gateway journal | `tac-exec le` / `tac-exec lo` |
-| Shell profile | `tac-exec --read oedit` → `~/ubuntu-console/tactical-console.bashrc` |
+| Shell profile | `tac-exec --read oedit` → `~/github-wsl/ubuntu-console/tactical-console.bashrc` |
 | Active model FILE name (not a row number) | `/dev/shm/active_llm` |
 | Last TPS measurement | `/dev/shm/last_tps` |
 | API key cache | `/dev/shm/tac_win_api_keys` (chmod 600, tmpfs) |
@@ -309,7 +309,7 @@ REF: "How Can AI Agents Read Untrusted Sources Safely?", Thuwarakesh Murallie, T
 ```bash
 which tac-exec                          # should be /home/wayne/.local/bin/tac-exec
 ls -la ~/.local/bin/tac-exec           # check symlink
-ls -la ~/ubuntu-console/bin/tac-exec  # check source
+ls -la ~/github-wsl/ubuntu-console/bin/tac-exec  # check source
 ```
 
 ### Commands fail silently
@@ -322,7 +322,7 @@ cat ~/.openclaw/logs/bash-errors.log | tail -20
 ### env.sh not loading all modules
 
 ```bash
-bash -c 'source ~/ubuntu-console/env.sh && declare -f model' | head -5
+bash -c 'source ~/github-wsl/ubuntu-console/env.sh && declare -f model' | head -5
 ```
 
 ### Hal can't run commands — check allowlist

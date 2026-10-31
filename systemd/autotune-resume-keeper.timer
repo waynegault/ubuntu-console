@@ -1,6 +1,6 @@
 [Unit]
 Description=Autotune keeper — re-arm a restart whose fire never rebooted us (timer)
-Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+Documentation=file:%h/github-wsl/ubuntu-console/systemd/autotune-resume.README.md
 
 [Timer]
 # Every 15 minutes, on a fixed phase (:10/:25/:40/:55).

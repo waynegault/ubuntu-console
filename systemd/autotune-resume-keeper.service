@@ -1,6 +1,6 @@
 [Unit]
 Description=Autotune keeper — re-arm a restart whose fire never rebooted us
-Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+Documentation=file:%h/github-wsl/ubuntu-console/systemd/autotune-resume.README.md
 # Started by autotune-resume-keeper.timer, never by default.target (see
 # autotune-resume.service for why boot-transaction oneshots are forbidden here).
 #

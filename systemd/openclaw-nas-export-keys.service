@@ -32,7 +32,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 [Unit]
 Description=Mirror the OpenClaw key names to the NAS (oc export-keys-nas)
-Documentation=file:%h/ubuntu-console/docs/openclaw.md
+Documentation=file:%h/github-wsl/ubuntu-console/docs/openclaw.md
 # Ordering against the credential bridge.  The export reads the bridge cache that
 # `oc refresh-keys` populates, and at boot it ran BEFORE that bridge finished, so it
 # exited 1 with "no bridge cache — run 'oc refresh-keys' first" (measured 2026-10-11:

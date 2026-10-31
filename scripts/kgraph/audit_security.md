@@ -4,7 +4,7 @@
 **Revised:** 2026-09-12 — claims re-verified against the code and corrected where
 they had drifted (see each section's *Correction* note).
 **Auditor:** finn
-**Scope:** All modules in `/home/wayne/ubuntu-console/scripts/kgraph/`
+**Scope:** All modules in `/home/wayne/github-wsl/ubuntu-console/scripts/kgraph/`
 
 ## Attack Vectors Assessed
 

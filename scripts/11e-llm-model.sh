@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 73
+# Module Version: 74
 #   v73 (2026-10-30): a store that is a plain directory is told to be CREATED, not
 #   mounted — the refusal keeps its teeth but names the remedy the host actually has.
 #   v72 (2026-10-28): `llm-build` no longer pins -DCMAKE_CUDA_ARCHITECTURES=86.  The
@@ -2513,7 +2513,7 @@ function __model_bench() {
                 local _autotune_rc=0
                 # Single autotuner policy: bench and interactive flows both
                 # use the standalone autotune script (no --fit bug, verified).
-                bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "${b_file[$i]}" 2>&1 || _autotune_rc=$?
+                bash "$HOME/github-wsl/ubuntu-console/scripts/autotune-model.sh" "${b_file[$i]}" 2>&1 || _autotune_rc=$?
                 if (( _autotune_rc != 0 ))
                 then
                     # Clear any lifted/safe overrides before skipping this model so
@@ -3912,7 +3912,7 @@ function model() {
                 # 1 = rows failed, 0 = clean (2026-09-15 — it used to return 0 even on
                 # a 2-of-2 failure, and this line then announced "[Complete]" over it).
                 _at_rc=0
-                bash "$HOME/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1 || _at_rc=$?
+                bash "$HOME/github-wsl/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1 || _at_rc=$?
                 if (( _at_rc == 0 ))
                 then
                     __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
@@ -3933,7 +3933,7 @@ function model() {
             fi
             # Route to the standalone autotune script (proven, no --fit bug).
             # Forward all remaining args so flags like --workload reach it.
-            bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$@" 2>&1
+            bash "$HOME/github-wsl/ubuntu-console/scripts/autotune-model.sh" "$@" 2>&1
             ;;
 
         bench-diff)

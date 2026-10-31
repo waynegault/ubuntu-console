@@ -45,14 +45,14 @@
 #      first).  Implemented as an EXPLICIT repository-root allowlist — those two paths only at
 #      the time — NOT a blanket "any relocated mutating git", which would remove the protection
 #      the guard exists to provide for every other repository on the box.  Extended 2026-10-25
-#      to add /home/wayne/ubuntu-console on Wayne's explicit instruction.  Applied at the three gates
+#      to add /home/wayne/github-wsl/ubuntu-console on Wayne's explicit instruction.  Applied at the three gates
 #      that decide an OUTSIDE_TARGET denial, so it relaxes ONLY "which repository is
 #      reachable"; the dynamic-relocation, unparseable-payload and unrecognized-program
 #      refusals are untouched.
 #
 # WHY THIS EXISTS
 #   Full rationale, evidence and the harness that tests the patched file:
-#   /home/wayne/ubuntu-console/docs/qwen-shell-guard-audit.md  (that doc now documents all
+#   /home/wayne/github-wsl/ubuntu-console/docs/qwen-shell-guard-audit.md  (that doc now documents all
 #   three states — state 1 under "Local patch", states 2 and 3 under "The 2026-10-01 patch";
 #   ubuntu-console owns it).
 #
@@ -113,9 +113,10 @@
 # this file.  The companion to it, qwen-guard-selfheal.sh, is tracked beside it.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 #   v2 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
-#   v3 (2026-10-25): add /home/wayne/ubuntu-console to the mutating-repository allowlist.
+#   v3 (2026-10-25): add /home/wayne/github-wsl/ubuntu-console to the mutating-repository allowlist.
+#   v4 (2026-10-30): repo relocated to ~/github-wsl/ubuntu-console - allowlist repointed.
 set -euo pipefail
 
 _BIN_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
@@ -133,11 +134,11 @@ STOCK_0246='var RELOCATED_READ_ONLY_GIT_SUBCOMMANDS=new Set(["cat-file","rev-par
 
 # Repository roots this box may mutate from OUTSIDE the session working directory.  The two
 # ~/.qwen stores are git repositories and the second is nested inside the first, so both are
-# named explicitly; ~/ubuntu-console was added 2026-10-25 on Wayne's explicit instruction.
+# named explicitly; ~/github-wsl/ubuntu-console was added 2026-10-25 on Wayne's explicit instruction.
 ALLOWED_MUTATING_REPOSITORY_ROOTS=(
     "/home/wayne/.qwen"
     "/home/wayne/.qwen/memories"
-    "/home/wayne/ubuntu-console"
+    "/home/wayne/github-wsl/ubuntu-console"
 )
 
 check_only=0

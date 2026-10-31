@@ -1,6 +1,6 @@
 [Unit]
 Description=Autotune resume — re-arm the remaining rows after a boot (timer)
-Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+Documentation=file:%h/github-wsl/ubuntu-console/systemd/autotune-resume.README.md
 
 [Timer]
 # Fires ONCE per boot, two minutes in. That is the whole contract: `autotune-resume.sh`

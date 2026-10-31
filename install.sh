@@ -3,6 +3,12 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.15 (2026-10-30, repo relocation): `systemctl --user enable` records an ABSOLUTE
+#   path in *.wants/ when the unit file is itself a symlink into this repo, so moving the
+#   repo left six lanes and eight timers ENABLED IN NAME ONLY - dangling links, units
+#   systemd could no longer load, and an install that still reported success.  A dangling
+#   enable link whose basename names a unit installed here is now repointed at the unit
+#   NAME (systemd's own relative shape), so it also survives the NEXT move.
 # v1.14 (2026-10-30): a symlink that points into this repo but belongs to ANOTHER
 #   host profile is disabled (best effort, named) and removed.  Skipping it was not
 #   enough on a box installed before this layer: measured 2026-10-30, the ASUS box
@@ -32,7 +38,7 @@
 #   systemd/* linking loop (it ran before it, so on a FIRST install the target
 #   units did not exist yet and every alias was skipped), and a skipped alias now
 #   names its missing target on stderr instead of passing silently.
-VERSION="1.14"
+VERSION="1.15"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -210,7 +216,7 @@ else
         # A LITERAL path that no longer exists: the repo moved, so refresh the
         # line — otherwise every new shell warns "not found at <old path>" and a
         # re-run of this installer would keep skipping it. A variable-based path
-        # (e.g. "$HOME/ubuntu-console/…") is deliberate and is left untouched.
+        # (e.g. "$HOME/github-wsl/ubuntu-console/…") is deliberate and is left untouched.
         chmod 600 "$HOME/.bashrc" 2>/dev/null || true
         _tmp_bashrc=$(mktemp) || _tmp_bashrc=""
         if [[ -n "$_tmp_bashrc" ]]
@@ -415,6 +421,28 @@ do
     echo "  removed ${_stale##*/} (belongs to profile: $_stale_owner)"
 done
 unset _stale _stale_tgt _stale_owner
+
+# -- Enable-time links that name an ABSOLUTE path ----------------------------
+# `systemctl --user enable` records WHERE the unit file is, and these units are
+# themselves symlinks into this repo, so the enable link is a *.wants/*.requires
+# entry naming an absolute path (`.../ubuntu-console/systemd/x.service`).  Nothing
+# in this installer creates that path, so when the repo MOVES every enabled lane
+# stays enabled in name only: the link dangles, systemd cannot load the unit, and
+# the install still reports success -- measured 2026-10-30, a relocation left six
+# lanes and eight timers dangling exactly that way.  Repairing a dangling link as a
+# RELATIVE link to the unit NAME (systemd's own shape for a unit in this directory)
+# also survives the next move.  Only a dangling link whose basename names a unit
+# installed here is touched; anything else in those directories is the operator's.
+for _want in "$HOME"/.config/systemd/user/*.wants/* "$HOME"/.config/systemd/user/*.requires/*
+do
+    [[ -L "$_want" ]] || continue
+    [[ -e "$_want" ]] && continue
+    _want_name="${_want##*/}"
+    [[ -e "$HOME/.config/systemd/user/$_want_name" ]] || continue
+    ln -sfn "../$_want_name" "$_want"
+    echo "  repaired stale enable link ${_want#"$HOME"/} -> ../$_want_name"
+done
+unset _want _want_name
 
 # ── Drop-in sources (systemd/*.conf) ─────────────────────────────────────────
 # A .conf here is a drop-in for one or more units, and it declares every destination

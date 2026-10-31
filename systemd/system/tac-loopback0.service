@@ -18,7 +18,7 @@
 
 [Unit]
 Description=Tactical Console — WSL2 mirrored-networking loopback0 (127.0.0.2)
-Documentation=file:///home/wayne/ubuntu-console/README.md
+Documentation=file:///home/wayne/github-wsl/ubuntu-console/README.md
 # Ordering is deliberately NOT tied to a specific consumer: this unit provides
 # the address, and a service that must not start before the address exists
 # orders itself with `After=tac-loopback0.service`.  Naming a consumer here

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 #   v6 (2026-10-20): the planned rows are written to a resume plan before measuring and
 #   cleared only on success, so a restart mid-sweep is resumed by bench-resume.sh after
 #   boot instead of losing the run.  The plan is advisory: an unwritable plan never stops
@@ -55,7 +55,7 @@ if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
         "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
 fi
 
-REPO="${REPO:-/home/wayne/ubuntu-console}"
+REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
 LOGDIR="$HOME/.llm/autotune-logs"

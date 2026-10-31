@@ -36,7 +36,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 [Unit]
 Description=Re-bridge the Windows credentials into the systemd user manager (once per boot)
-Documentation=file:%h/ubuntu-console/README.md
+Documentation=file:%h/github-wsl/ubuntu-console/README.md
 # ORDERING (2026-10-17): Before=openclaw-gateway.service.  This file used to argue the
 # opposite - "OpenClaw owns that unit, not this repo, so naming it here would be an
 # ordering against something this tree cannot keep valid" - and that argument cost a real

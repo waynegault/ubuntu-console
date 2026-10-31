@@ -29,7 +29,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 [Unit]
 Description=Prune the OpenClaw update-capture store (~/.openclaw.update-captures)
-Documentation=file:%h/ubuntu-console/systemd/openclaw-update-capture-prune.service
+Documentation=file:%h/github-wsl/ubuntu-console/systemd/openclaw-update-capture-prune.service
 
 [Service]
 Type=oneshot

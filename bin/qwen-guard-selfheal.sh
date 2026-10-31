@@ -77,7 +77,7 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 12
+# Module Version: 13
 #   v12 (2026-10-25): wrap the class remedies and comment witness_class (ratchet).
 #   v11 (2026-10-25, T-JARVIS-094): each store-witness class now has its OWN status, marker
 #   and exit status instead of every non-zero witness rc exiting 1.  Measured 2026-10-25T09:23Z:
@@ -193,7 +193,7 @@ DENLINK="/home/wayne/.openclaw/scripts/skill-denlink.sh"
 # The agentmail dist patch (2026-10-13).  Named by path like the comment-cap patcher (it
 # lives in the OTHER repo); its --check is rc-aware, so it is probed separately below.
 AGENTMAIL="/home/wayne/.openclaw/scripts/agentmail-dist-patch.sh"
-WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
+WITNESS="/home/wayne/github-wsl/ubuntu-console/scripts/qwen-memory-index-check.py"
 # TEST SEAM (T-JARVIS-094).  Relocate every PROBED tool into one scratch directory so a suite
 # can drive each witness class through the real script without touching a live bundle or the
 # real log.  Cron never sets it, and the nine production literals above stay exactly as they

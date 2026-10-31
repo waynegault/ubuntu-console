@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 #   v13 (2026-10-02): oc-kgraph's viewer launch and its stale-viewer guard use the kgraph
 #   SUBCOMMAND form (`kgraph serve`), not the removed flat `--serve` flag, so `oc g` keeps
 #   working against cli.py's subcommand-only dispatch (card 75219978).
@@ -64,7 +64,7 @@ function oc-kgraph() {
         # descriptor and hold the box-wide lock for as long as it ran.
         "$TACTICAL_REPO_ROOT/bin/heavy-job" "$TAC_PYTHON" - <<'PY' >/dev/null || true
 import sys, os
-repo_root = os.environ.get('TACTICAL_REPO_ROOT', '/home/wayne/ubuntu-console')
+repo_root = os.environ.get('TACTICAL_REPO_ROOT', '/home/wayne/github-wsl/ubuntu-console')
 if repo_root:
     sys.path.insert(0, os.path.join(repo_root, 'scripts'))
 from kgraph import (
@@ -376,7 +376,8 @@ function oc-backup() {
         # Canonical profile is in the ubuntu-console repo; back up both the
         # thin loader (~/.bashrc) and the full profile.
         [[ -f ".bashrc" ]]                && targets+=(".bashrc")
-        [[ -f "ubuntu-console/tactical-console.bashrc" ]] && targets+=("ubuntu-console/tactical-console.bashrc")
+        [[ -f "github-wsl/ubuntu-console/tactical-console.bashrc" ]] \
+            && targets+=("github-wsl/ubuntu-console/tactical-console.bashrc")
         local _script
         for _script in .local/bin/llama-watchdog.sh .local/bin/tac_hostmetrics.sh
         do
@@ -649,10 +650,11 @@ function oc-restore() {
         && mv "$tmp_restore/.llm/models.conf" "$LLM_REGISTRY"
     # Restore shell profile and standalone scripts if present
     [[ -f "$tmp_restore/.bashrc" ]] && cp "$tmp_restore/.bashrc" "$HOME/.bashrc"
-    if [[ -f "$tmp_restore/ubuntu-console/tactical-console.bashrc" ]]
+    if [[ -f "$tmp_restore/github-wsl/ubuntu-console/tactical-console.bashrc" ]]
     then
         mkdir -p "$TACTICAL_REPO_ROOT"
-        cp "$tmp_restore/ubuntu-console/tactical-console.bashrc" "$TACTICAL_REPO_ROOT/tactical-console.bashrc"
+        cp "$tmp_restore/github-wsl/ubuntu-console/tactical-console.bashrc" \
+           "$TACTICAL_REPO_ROOT/tactical-console.bashrc"
     fi
     local _rs
     for _rs in .local/bin/llama-watchdog.sh .local/bin/tac_hostmetrics.sh

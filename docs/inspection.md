@@ -2745,7 +2745,7 @@ Expected
 
 🔍 env.sh sources all profile modules except 13-init.sh
 
-`grep -c 'continue' ~/ubuntu-console/env.sh`
+`grep -c 'continue' ~/github-wsl/ubuntu-console/env.sh`
 
 Returns 2, and the count is not the signal. Line 153 is the documented
 `case/continue` skip of `13-init.sh`; line 199 is a PID-validation `continue` inside
@@ -2758,7 +2758,7 @@ library mode, so its side-effects don’t run.
 
 🔍 env.sh has idempotency guard
 
-`grep '__TAC_ENV_LOADED' ~/ubuntu-console/env.sh`
+`grep '__TAC_ENV_LOADED' ~/github-wsl/ubuntu-console/env.sh`
 
 Guard variable is checked at entry and set after first load.
 
@@ -2766,7 +2766,7 @@ Guard variable is checked at entry and set after first load.
 
 🔍 tac-exec delegates via `"$@"`
 
-`grep '"\$@"' ~/ubuntu-console/bin/tac-exec`
+`grep '"\$@"' ~/github-wsl/ubuntu-console/bin/tac-exec`
 
 Arguments are passed through unmodified.
 
@@ -2774,7 +2774,7 @@ Arguments are passed through unmodified.
 
 🔍 tac-exec is executable
 
-`[[ -x ~/ubuntu-console/bin/tac-exec ]] && echo OK`
+`[[ -x ~/github-wsl/ubuntu-console/bin/tac-exec ]] && echo OK`
 
 Prints `OK`.
 
@@ -2880,7 +2880,7 @@ Expected
 
 🔍 env.sh exists and is sourced correctly
 
-`bash -c 'source ~/ubuntu-console/env.sh && echo $__TAC_ENV_LOADED'`
+`bash -c 'source ~/github-wsl/ubuntu-console/env.sh && echo $__TAC_ENV_LOADED'`
 
 Prints `1`. No errors on stderr.
 
@@ -2888,7 +2888,7 @@ Prints `1`. No errors on stderr.
 
 🔍 env.sh loads all function-defining modules
 
-`bash -c 'source ~/ubuntu-console/env.sh && type oc && type so && type model && type tactical_dashboard && type serve && type halt && type commit_auto && type __test_port' >/dev/null 2>&1 && echo OK`
+`bash -c 'source ~/github-wsl/ubuntu-console/env.sh && type oc && type so && type model && type tactical_dashboard && type serve && type halt && type commit_auto && type __test_port' >/dev/null 2>&1 && echo OK`
 
 Prints `OK`. Every user-facing function from modules 01-12 is available.
 
@@ -2896,7 +2896,7 @@ Prints `OK`. Every user-facing function from modules 01-12 is available.
 
 🔍 env.sh skips 13-init.sh
 
-`bash -c 'source ~/ubuntu-console/env.sh && echo ${__TAC_INITIALIZED:-unset}'`
+`bash -c 'source ~/github-wsl/ubuntu-console/env.sh && echo ${__TAC_INITIALIZED:-unset}'`
 
 Prints `unset`. The init module (banner, completions, loopback check, EXIT trap) must not run in library mode.
 
@@ -2904,7 +2904,7 @@ Prints `unset`. The init module (banner, completions, loopback check, EXIT trap)
 
 🔍 env.sh is idempotent
 
-`bash -c 'source ~/ubuntu-console/env.sh; source ~/ubuntu-console/env.sh && echo OK'`
+`bash -c 'source ~/github-wsl/ubuntu-console/env.sh; source ~/github-wsl/ubuntu-console/env.sh && echo OK'`
 
 Prints `OK`. No readonly variable collision errors. Second source is a no-op.
 
@@ -2912,7 +2912,7 @@ Prints `OK`. No readonly variable collision errors. Second source is a no-op.
 
 🔍 tac-exec is executable and on PATH
 
-`ls -la ~/ubuntu-console/bin/tac-exec ~/.local/bin/tac-exec`
+`ls -la ~/github-wsl/ubuntu-console/bin/tac-exec ~/.local/bin/tac-exec`
 
 `bin/tac-exec` is `-rwxr-xr-x`. `~/.local/bin/tac-exec` is a symlink to it.
 
@@ -2920,7 +2920,7 @@ Prints `OK`. No readonly variable collision errors. Second source is a no-op.
 
 🔍 tac-exec runs functions in non-interactive shell
 
-`bash -c '~/ubuntu-console/bin/tac-exec oc 2>&1 | head -5'`
+`bash -c '~/github-wsl/ubuntu-console/bin/tac-exec oc 2>&1 | head -5'`
 
 Prints the `oc` help reference (subcommand list). Not `command not found`.
 
@@ -2928,7 +2928,7 @@ Prints the `oc` help reference (subcommand list). Not `command not found`.
 
 🔍 tac-exec propagates arguments correctly
 
-`bash -c '~/ubuntu-console/bin/tac-exec model list 2>&1 | head -3'`
+`bash -c '~/github-wsl/ubuntu-console/bin/tac-exec model list 2>&1 | head -3'`
 
 Prints the model registry table header. Multi-word arguments are preserved.
 
@@ -2936,7 +2936,7 @@ Prints the model registry table header. Multi-word arguments are preserved.
 
 🔍 tac-exec with no arguments shows usage
 
-`bash -c '~/ubuntu-console/bin/tac-exec 2>&1'`
+`bash -c '~/github-wsl/ubuntu-console/bin/tac-exec 2>&1'`
 
 Prints usage message. Exits non-zero.
 
@@ -2946,7 +2946,7 @@ Prints usage message. Exits non-zero.
 
 `for f in so xo serve oc-backup oc-model-list oc-model-stop; do grep -q tac-exec ~/.local/bin/$f && echo "$f: OK" || echo "$f: FAIL"; done`
 
-All wrappers print `OK`. None contain re-implemented logic — they must delegate via `exec ~/ubuntu-console/bin/tac-exec`.
+All wrappers print `OK`. None contain re-implemented logic — they must delegate via `exec ~/github-wsl/ubuntu-console/bin/tac-exec`.
 
 15.10
 
@@ -2968,7 +2968,7 @@ Returns ≥ 5. TOOLS.md must contain: usage examples, the "do not extract" instr
 
 🔍 env.sh does not leak interactive side-effects
 
-`bash -c 'source ~/ubuntu-console/env.sh; [[ -z "$PROMPT_COMMAND" ]] && echo OK || echo "LEAK: PROMPT_COMMAND is set"'`
+`bash -c 'source ~/github-wsl/ubuntu-console/env.sh; [[ -z "$PROMPT_COMMAND" ]] && echo OK || echo "LEAK: PROMPT_COMMAND is set"'`
 
 Prints `OK`. PROMPT_COMMAND, PS1 customisations, and DEBUG traps from hooks (§6) should not fire in library mode. If they do, the hooks module needs a `TAC_LIBRARY_MODE` guard.
 
@@ -2976,7 +2976,7 @@ Prints `OK`. PROMPT_COMMAND, PS1 customisations, and DEBUG traps from hooks (§6
 
 🔍 env.sh does not run slow startup operations
 
-`time bash -c 'source ~/ubuntu-console/env.sh' 2>&1 | grep real`
+`time bash -c 'source ~/github-wsl/ubuntu-console/env.sh' 2>&1 | grep real`
 
 real < 1.0s. env.sh must not call `pwsh.exe` (API key bridge), `sudo` (loopback), or `clear` (screen). Those belong in 13-init only.
 
@@ -2984,7 +2984,7 @@ real < 1.0s. env.sh must not call `pwsh.exe` (API key bridge), `sudo` (loopback)
 
 🔧 No mcp-tools/ directory present
 
-`[[ -d ~/ubuntu-console/mcp-tools ]] && echo "FAIL: mcp-tools/ still exists" || echo "OK: removed"`
+`[[ -d ~/github-wsl/ubuntu-console/mcp-tools ]] && echo "FAIL: mcp-tools/ still exists" || echo "OK: removed"`
 
 Prints `OK: removed`. The mcp-tools directory was superseded by tac-exec and should not be recreated. If it exists, it contains stale duplicates.
 
@@ -2992,7 +2992,7 @@ Prints `OK: removed`. The mcp-tools directory was superseded by tac-exec and sho
 
 🔍 TAC_LIBRARY_MODE is exported
 
-`bash -c 'source ~/ubuntu-console/env.sh && env | grep TAC_LIBRARY_MODE'`
+`bash -c 'source ~/github-wsl/ubuntu-console/env.sh && env | grep TAC_LIBRARY_MODE'`
 
 Prints `TAC_LIBRARY_MODE=1`. Functions that need to detect library mode (e.g., to skip UI output) can check this variable.
 
@@ -3000,7 +3000,7 @@ Prints `TAC_LIBRARY_MODE=1`. Functions that need to detect library mode (e.g., t
 
 🔍 Minimal-PATH fallback works
 
-`env -i HOME="$HOME" PATH="/usr/local/bin:/usr/bin:/bin" bash -c '~/ubuntu-console/bin/tac-exec oc 2>&1 | head -3'`
+`env -i HOME="$HOME" PATH="/usr/local/bin:/usr/bin:/bin" bash -c '~/github-wsl/ubuntu-console/bin/tac-exec oc 2>&1 | head -3'`
 
 Prints the `oc` help header. Even without `~/.local/bin` on PATH, the full path to tac-exec must work. TOOLS.md should document this fallback.
 
@@ -3034,7 +3034,7 @@ Zero findings. Suppression directives are not a fix — see 17.1: remove the dir
 
 🔍 Sourcing works
 
-bash -ic 'source ~/ubuntu-console/tactical-console.bashrc; exit'
+bash -ic 'source ~/github-wsl/ubuntu-console/tactical-console.bashrc; exit'
 
 Exit 0 — loader sources all 16 profile modules without error
 
@@ -3058,7 +3058,7 @@ Timer is active and last trigger time is recent
 
 🔍 Clean environment source test
 
-env -i HOME="$HOME" bash --noprofile --norc -c 'source ~/ubuntu-console/tactical-console.bashrc'
+env -i HOME="$HOME" bash --noprofile --norc -c 'source ~/github-wsl/ubuntu-console/tactical-console.bashrc'
 
 Sourcing in a minimal environment doesn't fail due to missing dependencies
 

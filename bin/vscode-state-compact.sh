@@ -21,12 +21,12 @@
 # USAGE: vscode-state-compact.sh      (no arguments)
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 VERSION="1.0.0"
 
 set -uo pipefail
 
-REPO="${REPO:-/home/wayne/ubuntu-console}"
+REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
 TOOL="${TAC_COMPACT_TOOL:-$REPO/tools/vscode-companion-state/vscode-companion-state-trim.py}"
 PY="${TAC_PYTHON:-python3}"
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
 #   v23 (2026-10-20): a degraded paravirtualization (TAC_LOAD_DEGRADED=1) refuses at startup
 #   with exit 5 — the row script already checked it, but this batch discarded env.sh's report
 #   and ran against a card it could not attribute.  And the row engine now runs from
-#   $_SELF_DIR, not $HOME/ubuntu-console, so a worktree measures with its own tree.
+#   $_SELF_DIR, not $HOME/github-wsl/ubuntu-console, so a worktree measures with its own tree.
 #   v22 (2026-10-16): the two card-tenancy halts (a supervised TRAINING run, or a foreign
 #   owner) now exit 5 instead of falling through with HALT_EXIT unset.  Measured
 #   2026-10-16: a 10-row batch halted on the training-tenant gate 9 s in and exited 0, so
@@ -414,7 +414,7 @@ __rab_footer() {
         else
             echo "  resume:"
         fi
-        echo "    bash ~/ubuntu-console/bin/autotune-rows.sh ${REMAINING[*]}"
+        echo "    bash ~/github-wsl/ubuntu-console/bin/autotune-rows.sh ${REMAINING[*]}"
         echo "  (through the WRAPPER, never this batch alone: only the wrapper takes the"
         echo "   box lock and holds the CUDA lane down, so the card is free enough for a"
         echo "   row to pass its VRAM baseline; a bare batch launch refuses on VRAM)"

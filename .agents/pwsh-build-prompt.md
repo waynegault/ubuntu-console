@@ -68,7 +68,7 @@ which is symlinked from WSL at:
 The Bash source is at (WSL path):
 
   \\wsl.localhost\Ubuntu-24.04\home\wayne\ubuntu-console
-  (or from WSL:  /home/wayne/ubuntu-console)
+  (or from WSL:  /home/wayne/github-wsl/ubuntu-console)
 
 
 GUIDING DOCUMENTS — READ THESE FIRST

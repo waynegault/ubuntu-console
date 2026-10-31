@@ -6,8 +6,8 @@
 
 | Piece | Installed at |
 |---|---|
-| Guard script | `~/ubuntu-console/bin/llama-watchdog-guard.sh`, symlinked to `~/.local/bin/llama-watchdog-guard.sh` |
-| Units | `~/ubuntu-console/systemd/llama-watchdog-guard.{service,timer}` and `~/.config/systemd/user/` |
+| Guard script | `~/github-wsl/ubuntu-console/bin/llama-watchdog-guard.sh`, symlinked to `~/.local/bin/llama-watchdog-guard.sh` |
+| Units | `~/github-wsl/ubuntu-console/systemd/llama-watchdog-guard.{service,timer}` and `~/.config/systemd/user/` |
 | Timer | `OnBootSec=3min`, `OnUnitActiveSec=5min` — verified next fire 09:19:00, manual run `ExecMainStatus=0` (no-op while supervision is healthy) |
 
 ## The problem, with the attribution corrected

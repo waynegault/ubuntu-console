@@ -38,7 +38,7 @@
 #     systemd-run --user --unit=openclaw-doctor-fix --collect --property=Type=oneshot \
 #       --property=TimeoutStartSec=3600 \
 #       --property=EnvironmentFile=-/home/wayne/.openclaw/gateway.systemd.env \
-#       /home/wayne/ubuntu-console/bin/openclaw-doctor-fix-window.sh
+#       /home/wayne/github-wsl/ubuntu-console/bin/openclaw-doctor-fix-window.sh
 #
 # EXIT  0 window completed · 1 the stop was refused or the Gateway could not be stopped, so
 #       NOTHING was repaired · 2 doctor --fix non-zero · 3 doctor REPAIRED STATE but its own
@@ -47,7 +47,7 @@
 #       is ~102 s under load, so 3 is the normal outcome on a busy box)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
 #   v3 (2026-09-30): honour the safe-stop refusal (a DO NOT STOP used to be downgraded to a
 #   warning, so doctor ran against a LIVE Gateway and failed with a misleading contention
 #   error); exit codes now match this header (`exit "$doctor_rc"` returned 1 for a doctor

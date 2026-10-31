@@ -15,11 +15,11 @@
 #                 Avoid privileged operations (sudo, chown, chmod 777) at startup.
 #
 # Loader:         This file is the CANONICAL source of truth and is versioned at:
-#                   ~/ubuntu-console/tactical-console.bashrc
+#                   ~/github-wsl/ubuntu-console/tactical-console.bashrc
 #                 ~/.bashrc must remain a THIN LOADER that only sources this file:
-#                   source "$HOME/ubuntu-console/tactical-console.bashrc"
+#                   source "$HOME/github-wsl/ubuntu-console/tactical-console.bashrc"
 #                 Modular sections live under:
-#                   ~/ubuntu-console/scripts/[01-15]-*.sh + 09b-gog.sh
+#                   ~/github-wsl/ubuntu-console/scripts/[01-15]-*.sh + 09b-gog.sh
 #                   (load order: scripts/_module-list.sh, shared with env.sh)
 #
 # HELP INDEX:     See the HELP INDEX section below for functions, aliases, and
@@ -69,7 +69,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="10"
+_TAC_LOADER_VERSION="11"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -100,7 +100,7 @@ _TAC_LOADER_VERSION="10"
 # ==============================================================================
 # ARCHITECTURE MAP
 # ==============================================================================
-# Modules are sourced from ~/ubuntu-console/scripts/ in numeric order.
+# Modules are sourced from ~/github-wsl/ubuntu-console/scripts/ in numeric order.
 # Each module has @modular-section, @depends, and @exports annotations.
 #
 # -  01-constants.sh       - All paths, ports, env vars (single truth)
@@ -257,7 +257,7 @@ if (( _tac_found_count < ${#_tac_expected_modules[@]} ))
 then
     printf '%s\n' "${C_Warning:-}[Tactical Profile]${C_Reset:-}" \
         "Expected ${#_tac_expected_modules[@]} modules, found $_tac_found_count" >&2
-    printf '%s\n' "  ${C_Dim:-}Some modules may be missing — check ~/ubuntu-console/scripts/${C_Reset:-}" >&2
+    printf '%s\n' "  ${C_Dim:-}Some modules may be missing — check ~/github-wsl/ubuntu-console/scripts/${C_Reset:-}" >&2
 fi
 
 export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"

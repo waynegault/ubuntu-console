@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 #   v6 (2026-10-15): the halt classes are distinguished.  A spent cycle budget is
 #   exit 4 (the designed end of one boot's measuring, and the only halt a restart
 #   resumes); exit 3 is the OTHER adapter stop — a stall with the budget unspent,
@@ -57,7 +57,7 @@ if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
         "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
 fi
 
-REPO="${REPO:-/home/wayne/ubuntu-console}"
+REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
 REGISTRY="$HOME/.llm/models.conf"
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"

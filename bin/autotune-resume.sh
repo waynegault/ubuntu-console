@@ -60,7 +60,7 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
 #   v23 (2026-10-20): v22 polish, from a self-review.  The empty-plan message said "every row is
 #   certified and unflagged", which became FALSE once `unacceptable` existed as a terminal state;
 #   it now says "certified or terminal".  And the streak-file write is checked: a failed write
@@ -224,7 +224,7 @@ EXIT_ADAPTER=3 # the chunk stalled with the cycle budget UNSPENT: a person looks
 # above records it.  EXIT_PAUSED keeps that value for the paths that genuinely stop.
 EXIT_PAUSED=4  # the campaign PAUSED: the cap, a CI job that will not drain, or an unwritable plan
 
-REPO="${REPO:-/home/wayne/ubuntu-console}"
+REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
 REGISTRY="${TAC_RESUME_REGISTRY:-$HOME/.llm/models.conf}"
 MODEL_DIR="${TAC_RESUME_MODEL_DIR:-${LLAMA_MODEL_DIR:-/mnt/m/active}}"
 STATE_DIR="${TAC_RESUME_STATE_DIR:-${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tactical-console}}"

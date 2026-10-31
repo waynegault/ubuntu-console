@@ -386,7 +386,7 @@ returns the built-in decision directly. A chunk copied out of its directory will
 a directory that has those siblings (symlinks work). Node keys module loading off the file
 extension, which is why a bare `.orig-*` backup cannot be imported as-is.
 
-The 15 rows run on 2026-09-27 (session cwd `~/ubuntu-console`, other repo `~/investigator`):
+The 15 rows run on 2026-09-27 (session cwd `~/github-wsl/ubuntu-console`, other repo `~/investigator`):
 
 | Command | Expected | Stock | 19:22 | 19:46 |
 | --- | --- | --- | --- | --- |

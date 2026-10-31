@@ -121,7 +121,7 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 60
+# Module Version: 61
 #   v60 (2026-10-23): the SecretRef table no longer OVERWRITES a provider apiKey that names a
 #   declared auth profile (auth.profiles). Measured that evening: a run with DEEPSEEK_API_KEY
 #   exported rewrote models.providers.deepseek.apiKey from "deepseek:manual" to the env ref,
@@ -685,7 +685,7 @@ function ockeys() {
 # them, and the plaintext-secret case is caught with doctor's own audit.
 #
 # HOW THE WINDOW RUNS (2026-09-30, Wayne's call): this function no longer runs doctor
-# itself — it DELEGATES to the versioned ~/ubuntu-console/bin/openclaw-doctor-fix-window.sh
+# itself — it DELEGATES to the versioned ~/github-wsl/ubuntu-console/bin/openclaw-doctor-fix-window.sh
 # (arm hold -> safe-stop-gateway.py -> doctor --fix -> restore), so there is ONE
 # implementation of the window rather than two. The delegated window runs DETACHED: it must
 # not inherit this shell's TTY, or doctor takes its interactive service-config step and
@@ -740,7 +740,7 @@ function ocdoc-fix() {
     # ("Package convergence must wait until the updating parent releases its install
     # records"). With the Gateway UP the same command skips doctor and completes rc=0, so do
     # `openclaw update repair` by hand that way. Set OCDOC_FIX_UPDATE_REPAIR=1 to opt in.
-    local window="$HOME/ubuntu-console/bin/openclaw-doctor-fix-window.sh"
+    local window="$HOME/github-wsl/ubuntu-console/bin/openclaw-doctor-fix-window.sh"
     local wlog
     wlog="$OC_ROOT/logs/oc-doc-fix-window-$(date +%Y%m%d-%H%M%S).log"
     if [[ ! -x "$window" ]]

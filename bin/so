@@ -1,4 +1,4 @@
 #!/bin/bash
 # Thin wrapper — delegates to the real 'so' function via tac-exec
-exec ~/ubuntu-console/bin/tac-exec so "$@"
+exec ~/github-wsl/ubuntu-console/bin/tac-exec so "$@"
 # end of file

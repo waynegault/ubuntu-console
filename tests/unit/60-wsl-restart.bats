@@ -137,11 +137,11 @@ teardown() {
     # measured 2026-10-16 05:39: "capture: 0 open window(s)" then the fallback to one folder.
     cat > "$_storage" <<'JSON'
 {"windowsState":{"openedWindows":[
- {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"},
+ {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/github-wsl/ubuntu-console"},
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/investigator"},
  {"folder": "vscode-remote://wslbubuntu-24.04/home/wayne/investigator"},
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/c%3A/Users/wayne/GitHub/Python/Projects/quicken_prices"},
- {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"}]}}
+ {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/github-wsl/ubuntu-console"}]}}
 JSON
 
     run env TAC_WSL_RESTART_STORAGE_UNIX="$_storage" \
@@ -163,7 +163,7 @@ JSON
     # so this asserts the decoded form AND the absence of any `%` at all; the pre-v13 code emitted
     # `%2B` and the old assertions here (a line count and `grep investigator`) PASSED on it, which is
     # exactly why they could not disagree.  The stored `wslbubuntu` entry must be repaired too.
-    grep -q '^folder-uri|vscode-remote://wsl+ubuntu-24.04/home/wayne/ubuntu-console$' "$_out"
+    grep -q '^folder-uri|vscode-remote://wsl+ubuntu-24.04/home/wayne/github-wsl/ubuntu-console$' "$_out"
     grep -q '^folder-uri|vscode-remote://wsl+ubuntu-24.04/home/wayne/investigator$' "$_out"
     ! grep -q '%' "$_out"
     ! grep -q 'wslbubuntu' "$_out"

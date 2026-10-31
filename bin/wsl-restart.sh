@@ -110,7 +110,7 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
 #   v24 (2026-10-20): same change-set — the force block pushed render_wrapper past the
 #   §18.3 10.4 hundred-line bound, so the gate renderer moved into
 #   render_chunk_and_fleet_gates (the render_fleet_gate / render_operator_gate convention).
@@ -273,7 +273,7 @@ set -uo pipefail
 # isolated - the same mistake in a new costume.  Empty is now a refusal.
 TASK_NAME="${TAC_WSL_RESTART_TASK_NAME-tac-wsl-restart}"
 DISTRO="Ubuntu-24.04"
-FOLDER_DEFAULT="/home/wayne/ubuntu-console"
+FOLDER_DEFAULT="/home/wayne/github-wsl/ubuntu-console"
 DELAY_MINUTES_DEFAULT=2
 WAIT_TRIES=20          # wrapper: bounded distro wait, 5 s apart (100 s)
 CLOSE_GRACE_SECONDS=15 # wrapper: bounded graceful-close wait before the forced kill

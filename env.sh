@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091  # the module loop sources _module-list.sh entries by name
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -9,8 +9,8 @@
 #           (oc, so, xo, model, serve, etc.) are available in non-interactive
 #           contexts: MCP tool scripts, AI exec environments, cron jobs.
 #
-# Usage:    source ~/ubuntu-console/env.sh
-#     or:   ~/ubuntu-console/bin/tac-exec <command> [args...]
+# Usage:    source ~/github-wsl/ubuntu-console/env.sh
+#     or:   ~/github-wsl/ubuntu-console/bin/tac-exec <command> [args...]
 #
 # Modules loaded:  the canonical list in scripts/_module-list.sh, shared with
 #                  tactical-console.bashrc so the two can never drift.
