@@ -17,7 +17,12 @@
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-10-31): force LC_ALL=C so the per-file breakdown globs in ONE order on
+#   every box.  The bash glob's sort order follows LC_COLLATE, and the two boxes
+#   disagree: C.UTF-8 puts 58-gpu-busy before 58b-gpu-watch ("-" < "b") while a
+#   locale that ignores punctuation puts 58b first — the same tree read as drift on
+#   the other box.  C collation is the canonical order, so the README pins it.
 #   v8 (2026-10-03, card 43e4800a): guard the README "CI Status" bullets.  They
 #   restated three test counts that nothing computed and had drifted — fast said
 #   62 (actual 65), "Unit suites (227 tests in CI)" against 428, and integration
@@ -30,6 +35,10 @@
 #   drifted (Unit 135 vs 177, Python 363 vs 415, Total 1092 vs 1186).
 # ==============================================================================
 set -u
+# The per-file breakdown below depends on bash's glob order, which follows
+# LC_COLLATE and differs per box (see the v9 note).  Pin the C collation so the
+# canonical order is the same on every host.
+export LC_ALL=C
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 README="$REPO_ROOT/README.md"
