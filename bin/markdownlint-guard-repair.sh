@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
+#   v1 (2026-10-31): first tracked copy; the shim path is resolved from this script's
+#   own location instead of hardcoding the old checkout path, so moving the repo cannot
+#   leave the absolute path dangling.
 # ==============================================================================
 # markdownlint-guard-repair.sh — keep the absolute path pointing at the shim.
 # ==============================================================================
@@ -86,3 +91,5 @@ case "${1:-}" in
         _usage
         ;;
 esac
+
+# end of file
