@@ -2,7 +2,13 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 77
+# Module Version: 78
+#   v78 (2026-10-31): two false issues from `up`:
+#   * the disk audit no longer flags the WSL linux-tools mount (/usr/lib/linux-tools/*),
+#     a fixed-size tools VHD that is 100% full by design;
+#   * __tac_fix_loopback checks 127.0.0.2/8 FIRST and returns 0 when it is already up,
+#     instead of demanding passwordless sudo and reporting a failure on a box whose
+#     systemd unit already installed the loopback.
 #   v77 (2026-10-29): the stale-process reaper protects every lane the HOST PROFILE
 #   declares (LLAMA_LANE_SPECS) instead of three unit names written here — a list
 #   that protected nothing on another box and stopped protecting a newly added lane
@@ -1305,7 +1311,8 @@ function __up_temp_sanitation() {
 
 # ---------------------------------------------------------------------------
 # __up_disk_audit — [15/20] Audit disk space and warn on mounts > 90%.
-# No cooldown. Excludes /snap/ and Docker Desktop mounts.
+# No cooldown. Excludes /snap/, Docker Desktop and the WSL linux-tools mounts
+# (a fixed-size tools VHD that is 100% full by design, not freeable space).
 # ---------------------------------------------------------------------------
 function __up_disk_audit() {
     local now="$1" force_mode="$2"
@@ -1328,7 +1335,8 @@ function __up_disk_audit() {
     # swallow-ok: df's own message is not the report — the ROW COUNT and the per-row percentages are, and an empty listing is reported as a SKIP
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
-        | grep -v '/mnt/wsl/docker-desktop')
+        | grep -v '/mnt/wsl/docker-desktop' \
+        | grep -v '/usr/lib/linux-tools/')
     if (( _df_rows == 0 ))
     then
         # No rows is not "every mount is fine": a df that could not run lists nothing, and
@@ -1738,6 +1746,15 @@ function __up_npm_cache() {
 # logging the latter to ErrorLogPath.
 # ---------------------------------------------------------------------------
 function __tac_fix_loopback() {
+    # Idempotent FIRST: when 127.0.0.2/8 is already configured (the systemd unit
+    # installs it at boot), there is nothing to repair — and no sudo is needed to
+    # say so.  Only reach for sudo when the address is actually absent.
+    # swallow-ok: an absent loopback0 is the "needs repair" state, not an error — the grep below decides it
+    if command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
+    then
+        return 0
+    fi
+
     local _lb_sudo=0
     # swallow-ok: the probe's failure IS the answer — no passwordless sudo is the refused-and-explained case just below, on stderr
     sudo -n true 2>/dev/null && _lb_sudo=1
