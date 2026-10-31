@@ -200,6 +200,40 @@ class EvaluateRedTests(unittest.TestCase):
         self.assertEqual(len(report.red), 1)
         self.assertEqual(len(report.expired_entries), 1)
 
+    def test_a_red_tip_with_commits_ahead_is_reported_but_does_not_block(self) -> None:
+        """A repair push must be possible while the tip it repairs is red.
+
+        Measured 2026-10-30: a red main made tools/lint.sh refuse the commit that
+        fixed it, and the documented escape (CI_STATUS_ALLOW_UNKNOWN=1) relaxes
+        UNKNOWN, not RED, so there was no override at all.
+        """
+        report = evaluate(
+            [run_row("CI", "failure", NOW)],
+            local_sha=OTHER,
+            awaiting_push_reason="local HEAD is not the pushed tip",
+        )
+        # Named, not swallowed: the red is still in the report.
+        self.assertEqual([s.workflow for s in report.red], ["CI"])
+        self.assertTrue(report.repair_queued)
+        self.assertFalse(report.failing)
+
+    def test_a_red_tip_with_nothing_ahead_still_blocks(self) -> None:
+        """The exemption is for a queued repair, not for red main in general."""
+        report = evaluate([run_row("CI", "failure", NOW)])
+        self.assertFalse(report.repair_queued)
+        self.assertTrue(report.failing)
+
+    def test_an_expired_exemption_still_blocks_during_a_repair(self) -> None:
+        """A lapsed waiver is a fact about the baseline, not about this push."""
+        report = evaluate(
+            [run_row("CI", "failure", NOW)],
+            [entry("CI", expiry=PAST)],
+            local_sha=OTHER,
+            awaiting_push_reason="local HEAD is not the pushed tip",
+        )
+        self.assertTrue(report.repair_queued)
+        self.assertTrue(report.failing)
+
     def test_exemption_for_a_different_workflow_does_not_leak(self) -> None:
         report = evaluate(
             [run_row("CI", "failure", NOW)],

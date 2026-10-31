@@ -49,6 +49,30 @@ FAKE_GH
     TEST_PATH="$SHIM_DIR:$REAL_DIR:/usr/bin:/bin"
 }
 
+# A bin directory holding every system utility EXCEPT gh.
+#
+# The "no other gh on PATH" case used to run with PATH="$SHIM_DIR:/usr/bin:/bin" and
+# assume that contained no gh.  Measured 2026-10-30 on the arm64 box: gh IS a distro
+# package there (/usr/bin/gh, /bin/gh), so the shim found the REAL gh, gh answered
+# `auth token` with the live credential from ~/.config/gh/hosts.yml, and the case
+# printed it into the test output — a live token in a log, on a test that exists to
+# stop tokens leaking. It also failed on the status, which is the only reason anyone
+# would notice.
+#
+# Built once, not per test: it is ~2k symlinks.
+setup_file() {
+    NOGH_DIR="$BATS_FILE_TMPDIR/nogh-bin"
+    mkdir -p "$NOGH_DIR"
+    for _d in /usr/bin /bin; do
+        for _f in "$_d"/*; do
+            _n="${_f##*/}"
+            [[ "$_n" == gh ]] && continue
+            [[ -e "$NOGH_DIR/$_n" ]] || ln -s "$_f" "$NOGH_DIR/$_n" 2>/dev/null || true
+        done
+    done
+    export NOGH_DIR
+}
+
 # Invoke the shim with the caller's own GH_TOKEN/GITHUB_TOKEN removed, whatever
 # the surrounding shell happens to carry.
 run_shim() {
@@ -121,10 +145,17 @@ run_shim() {
     # `run -127` declares the expectation: bats warns (BW01) that a bare 127
     # normally means the test's OWN command was not found, and here it is the
     # shim's answer — "there is no gh to run" — that is under test.
-    run -127 env -u GH_TOKEN -u GITHUB_TOKEN PATH="$SHIM_DIR:/usr/bin:/bin" SEEN="$SEEN" \
+    run -127 env -u GH_TOKEN -u GITHUB_TOKEN PATH="$SHIM_DIR:$NOGH_DIR" SEEN="$SEEN" \
         "$SHIM_DIR/gh" auth token
     [ "$status" -eq 127 ]
     [[ "$output" == *"refusing to exec itself"* ]]
+
+    # Belt and braces, and the reason this assertion exists at all: this case once ran
+    # the real gh and printed a live credential into the test output. A token pattern
+    # in the output of a token test is a FAILURE, not a curiosity.
+    [[ "$output" != *"gho_"* ]]
+    [[ "$output" != *"ghp_"* ]]
+    [[ "$output" != *"github_pat_"* ]]
 }
 
 @test "gh shim: install.sh links it to ~/.local/bin/gh" {

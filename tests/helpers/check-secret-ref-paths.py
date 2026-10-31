@@ -130,7 +130,15 @@ def main():
 
     env = dict(os.environ)
     for _, env_var in rows:
-        env.setdefault(env_var, "dummy-validation-value")
+        # Treat EMPTY as absent.  setdefault alone was not enough: the console exports
+        # GH_TOKEN="" on a box whose bridge has no token, so the key was present and
+        # the placeholder was never substituted — the validator then reported
+        # `env:default:GH_TOKEN -> Environment variable "GH_TOKEN" is missing or empty`
+        # and this check failed for a reason that has nothing to do with mapping paths
+        # (measured 2026-10-30, the arm64 box).  The check validates PATHS; the value
+        # being absent from this process is not a schema fact.
+        if not env.get(env_var):
+            env[env_var] = "dummy-validation-value"
 
     # A throwaway state dir, owned here: `openclaw config patch` reads the state DB
     # on every call, and the host's DB is deliberately taken offline while an

@@ -771,6 +771,32 @@ EOF
     [[ "$output" == *"3D 31% | VDec 12%"* ]]
 }
 
+@test "metrics: tactical_dashboard renders the measured CPU value in the CPU / GPU row" {
+    # cpu is a local of __dashboard_system_metrics; a dashboard split had moved the
+    # row into __dashboard_gpu_llm, which read it as a global and rendered "CPU %"
+    # with no number.  This pins the value reaching the row.
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "RTX 3050 Ti Laptop GPU,64,35,3497,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "3D 31% | VDec 12%" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CPU / GPU"*"CPU 42%"* ]]
+}
+
+@test "metrics: the GPU row prefers the short host label over the long vendor name" {
+    # The ASUS box's nvidia-smi name is 48 characters ("NVIDIA RTX Spark N1X
+    # (6144-core Blackwell RTX GPU)") and pushed the load/temperature off the
+    # truncated row.  The host profile's label must win so they stay visible.
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "NVIDIA RTX Spark N1X (6144-core Blackwell RTX GPU),64,35,3497,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "3D 31% | VDec 12%" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    export TAC_HOST_GPU_LABEL="RTX Spark N1X"
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RTX Spark N1X | 35% Load | 64°C"* ]]
+    [[ "$output" != *"6144-core Blackwell"* ]]
+}
+
 @test "metrics: GPU ENGINES claims Idle only when the GPU row agrees" {
     # Measured 2026-10-27 12:10 BST: the card was at 81% (Windows counters:
     # Cuda#1 91.24) while the row read "Idle".  The two rows are separate
@@ -2553,6 +2579,34 @@ EOF
     grep -q '# existing config' "$home_dir/.bashrc"
     # Refreshed in place: exactly the two original mentions, nothing appended.
     [ "$(grep -c 'tactical-console\.bashrc' "$home_dir/.bashrc")" -eq 2 ]
+}
+
+@test "install: refreshes a loader path that reaches the profile through a symlink" {
+    # A literal path that RESOLVES today, but only because a symlink bridges it
+    # (~/ubuntu-console -> ~/github-wsl/ubuntu-console on the box this was measured
+    # on). The loader must name the repo DIRECTLY: the day that convenience link is
+    # removed, a loader that depended on it turns every new shell into
+    # "[WARNING] Tactical Console Profile not found" — and nothing else changes,
+    # so the breakage would look like the profile vanished (v1.15).
+    local home_dir="$TAC_TEST_TMPDIR/install-home-symlinked"
+    mkdir -p "$home_dir"
+    ln -sfn "$REPO_ROOT" "$home_dir/ubuntu-console"
+    cat > "$home_dir/.bashrc" << EOF
+# existing config
+if [[ -f "$home_dir/ubuntu-console/tactical-console.bashrc" ]]
+then
+    source "$home_dir/ubuntu-console/tactical-console.bashrc"
+fi
+EOF
+
+    run env HOME="$home_dir" bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+
+    # The symlinked mention is gone and the direct one is present.
+    ! grep -Fq "$home_dir/ubuntu-console/tactical-console.bashrc" "$home_dir/.bashrc"
+    grep -Fq "source \"$REPO_ROOT/tactical-console.bashrc\"" "$home_dir/.bashrc"
+    # Refreshed in place, not rewritten from the template: user content survives.
+    grep -q '# existing config' "$home_dir/.bashrc"
 }
 
 @test "wsl-extras: installs complete PowerShell shims atomically" {

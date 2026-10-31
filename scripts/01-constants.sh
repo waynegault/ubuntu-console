@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 46
+# Module Version: 47
 #   v46 (2026-10-30): the model store's SHAPE is a host-profile fact.  The dirs may be
 #   declared by the profile (a flat store, not <root>/active), and readiness is tested
 #   the way the store exists: `mountpoint` for a bind mount, existence for a plain
@@ -313,7 +313,12 @@ fi
 # (bench_avg_prompt_tokens, col 37); profile-missing means col 37 was never measured — it is
 # a missing measurement, not a pass.
 export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy'
-export LLM_REGISTRY="$HOME/.llm/models.conf"
+# Overridable, like everything else in this file: a test, or a box whose models live
+# somewhere other than the home directory, has to be able to point at its own registry.
+# Measured 2026-10-30: the assignment ignored a pre-set LLM_REGISTRY, so a fixture
+# registry became "$HOME/.llm/models.conf" and every caller reported NOT FOUND — the
+# unified-memory recommendation case had been failing on both boxes for that reason.
+export LLM_REGISTRY="${LLM_REGISTRY:-$HOME/.llm/models.conf}"
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"

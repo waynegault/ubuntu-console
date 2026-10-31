@@ -270,14 +270,18 @@ EOF
 # AUTOTUNE_SELFTEST replaces bench_ctx/ttft_probe/cleanup_gpu with canned curves
 # and skips persistence, so the probe -> descent -> certification path runs
 # server-free in seconds.  Isolation notes:
-#   * 01-constants assigns LLM_REGISTRY="$HOME/.llm/models.conf" and
-#     LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active" UNCONDITIONALLY, so exporting
-#     those directly is ignored — HOME and LLAMA_DRIVE_ROOT are the levers.
+#   * LLAMA_MODEL_DIR is PROFILE-OWNED and its shape differs per box: intel-xe-cuda
+#     (and a generic box) derive it as $LLAMA_DRIVE_ROOT/active, while asus-n1n-rtx-spark
+#     names a FLAT $HOME/models store.  LLAMA_DRIVE_ROOT is therefore NOT the lever it
+#     used to be, so the fixture is planted at BOTH candidate paths (see _selftest_run).
+#     LLM_REGISTRY is now overridable (2026-10-30), so it is set EXPLICITLY below:
+#     without that, the value exported at the top of this file would follow the run
+#     into the sandbox and quietly be the registry under test.
 #   * the documented LLM_AUTOTUNE_BASELINE_GAP_MAX knob tolerates the CUDA lane
 #     holding the card, which would otherwise refuse the run before any logic.
 _selftest_run() {
     local sandbox="$1"; shift
-    mkdir -p "$sandbox/home/.llm" "$sandbox/drive/active"
+    mkdir -p "$sandbox/home/.llm" "$sandbox/drive/active" "$sandbox/home/models"
     # _SELFTEST_FIXTURE=<case> plants a REAL metadata fixture (make-gguf-fixture.py) instead
     # of the unparseable stub.  The capacity ctx comes from the GGUF's <arch>.context_length,
     # so a test that needs a ceiling ABOVE MIN_CTX must use one: 'plain-ctx' declares
@@ -293,6 +297,11 @@ _selftest_run() {
     else
         printf 'not-a-real-gguf' > "$sandbox/drive/active/stub.gguf"
     fi
+    # The registry row names `stub.gguf` RELATIVE to LLAMA_MODEL_DIR, and that dir is
+    # profile-owned (see the isolation note above): copy the planted fixture to the flat
+    # $HOME/models path too, so the relative name resolves on a box whose profile names a
+    # flat store rather than deriving $LLAMA_DRIVE_ROOT/active.
+    cp "$sandbox/drive/active/stub.gguf" "$sandbox/home/models/stub.gguf"
     {
         printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram'
         printf '%s\n' '1|Stub Model|stub.gguf|0.1G|Q4_K_M/q8_0|llama|0|4096|4|1024|256|1|256|native|auto|on|0|no|no|no'
@@ -312,6 +321,7 @@ _selftest_run() {
     # test-private lock makes the suite independent of the shared box-wide lock while still
     # exercising the real heavy-job serialisation path (card 34c28be3).
     env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
+        LLM_REGISTRY="$sandbox/home/.llm/models.conf" \
         HEAVY_JOB_LOCK="$sandbox/heavy-job.lock" \
         CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
         LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 \

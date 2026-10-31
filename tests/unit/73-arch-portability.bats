@@ -145,10 +145,16 @@ stub_uname() {
     ! grep -q '^ConditionArchitecture=' "$REPO_ROOT/systemd/llama-cpu-qwen25-3b-chat.service"
 }
 
-@test "the lane table on this box keeps all five lanes" {
+@test "the lane table for intel-xe-cuda keeps all five lanes" {
     # Control for the profile below: on intel-xe-cuda the table must be unchanged,
     # because `model lanes` and the cache sampler read it.
-    run bash -c 'source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' _ "$REPO_ROOT/scripts/01-constants.sh"
+    #
+    # The PROFILE is named, not implied.  Sourcing the constants on the arm64 box picks
+    # up asus-n1n-rtx-spark, whose lane table is empty on purpose ("its own are not
+    # named yet"), so the case read 0 lines and called a correct empty table a defect —
+    # measured 2026-10-30.  A case about a profile has to say which profile.
+    run bash -c 'LLM_HOST_PROFILE=intel-xe-cuda source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
+        _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
     [ "$(printf '%s\n' "$output" | grep -c .)" -eq 5 ]
     [[ "$output" == *"18084"* ]]

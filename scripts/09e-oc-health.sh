@@ -9,7 +9,15 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
+#   v32 (2026-10-30): new `__oc_timer_arming` row, in BOTH human branches, reporting whether
+#   this repo's systemd user timers are armed. ProArt read 0 of 10 for days with every automation
+#   that watches for a missing layer silent, because none of them looked at arming: install.sh
+#   links units and deliberately does not enable them, so arming is a manual step nothing
+#   observed. The population comes from TACTICAL_REPO_ROOT rather than the host — iterating what
+#   systemd knows censuses the derived set and misses a never-linked unit, and resolving a unit's
+#   FragmentPath to find the repo is circular, since `show -p FragmentPath --value` returns rc=0
+#   with an EMPTY value for an absent unit and an unreadable one alike. Reported, never gated.
 #   v31 (2026-10-29): the local provider's model label takes the card's name from
 #   the HOST PROFILE (TAC_HOST_GPU_LABEL) instead of hardcoding this box's GPU.
 #   v30 (2026-10-23): the v29 entry below was labelled `v28`, so the marker and its note
@@ -299,6 +307,113 @@ function __oc_vscode_pytest_log_state() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_timer_arming — are this repo's systemd user timers ARMED, for `oc health`?
+#
+# Human-mode only, like the other watches: a status row, not a machine field.
+# Reported, NEVER gated — `install.sh` links units and deliberately does not
+# enable them, because arming is a documented manual step. So a fresh box is
+# SUPPOSED to read "armed 0 of N", and a census that escalated that would cry
+# wolf on every new host. What is not supposed to happen is this box reading
+# 0 of 10 for days while every automation watching for a missing layer stayed
+# silent — which is the state ProArt was in on 2026-10-30.
+#
+# THE POPULATION DOES NOT COME FROM THE HOST. Iterating what systemd knows
+# (`list-unit-files --state=linked`) censuses the DERIVED set and is silent
+# about a unit that was never linked at all; and resolving a unit's FragmentPath
+# to find the repo is circular, because on a box where install.sh never ran
+# there is no unit to resolve from — measured, `show -p FragmentPath --value`
+# returns rc=0 with an EMPTY value for both an absent unit and an unreadable
+# one, so absent and unreadable are the same reading. The manifest therefore
+# comes from TACTICAL_REPO_ROOT, which 01-constants.sh derives from this file's
+# own location: known by construction, unambiguous, and not derived from the
+# thing whose absence is the question.
+#
+# Four states, and the third is not a number:
+#   armed        - is-enabled would run it (enabled / enabled-runtime)
+#   linked       - placed, never armed: an incomplete install, not a resting state
+#   enabled but inactive - armed and stopped
+#   manifest-unknown     - TACTICAL_REPO_ROOT absent or has no systemd/*.timer.
+#                          Printed as its own state; NEVER rendered as "0 of 0".
+#
+# The standalone prober with the throwaway-timer self-test lives at
+# workspace-jarvis/scripts/timer-arming-census.sh; this row is the one that
+# reaches `oc health` without editing another lane.
+# ---------------------------------------------------------------------------
+function __oc_timer_arming() {
+    local _root="${TACTICAL_REPO_ROOT:-}"
+    local _dir="$_root/systemd"
+    local _u _state
+    local _total=0 _armed=0 _linked=0 _stalled=0
+    local _armed_list="" _linked_list="" _stalled_list=""
+
+    if [[ -z "$_root" || ! -d "$_dir" ]]
+    then
+        __tac_info "Timer arming" \
+            "[MANIFEST UNKNOWN — no repo root, so nothing censused; this is not '0 armed']" "$C_Warning"
+        return 0
+    fi
+
+    for _u in "$_dir"/*.timer
+    do
+        [[ -e "$_u" ]] || continue
+        _total=$(( _total + 1 ))
+        local _n
+        _n=$(basename "$_u")
+        # swallow-ok: is-enabled exits non-zero for disabled/static/not-found; the
+        # failure IS the answer, and _state carries the classification either way.
+        # `show -p ... --value` rather than is-enabled/is-active: it exits 0 and writes
+        # nothing to stderr for a unit systemd has never heard of, so this reads the state
+        # with NO swallow at all. is-enabled would need `2>/dev/null || true` (two counted
+        # swallow sites) to say the same thing, and an unexplained swallow is the reason
+        # the swallow baseline exists.
+        _state=$(systemctl --user show -p UnitFileState --value "$_n")
+        case "$_state" in
+            enabled|enabled-runtime)
+                _armed=$(( _armed + 1 )); _armed_list+=" $_n"
+                if [[ "$(systemctl --user show -p ActiveState --value "$_n")" != "active" ]]
+                then
+                    _stalled=$(( _stalled + 1 )); _stalled_list+=" $_n"
+                fi
+                ;;
+            linked|linked-runtime)
+                _linked=$(( _linked + 1 )); _linked_list+=" $_n"
+                ;;
+            *)
+                # disabled / static / not-found / empty: the unit exists in the repo
+                # but systemd will not run it. Counted with the linked ones because
+                # from the operator's side the fault and the fix are the same.
+                _linked=$(( _linked + 1 )); _linked_list+=" $_n"
+                ;;
+        esac
+    done
+
+    if [[ $_total -eq 0 ]]
+    then
+        __tac_info "Timer arming" \
+            "[MANIFEST UNKNOWN — $_dir has no *.timer; this is not '0 armed']" "$C_Warning"
+        return 0
+    fi
+
+    if [[ $_armed -eq $_total ]]
+    then
+        __tac_info "Timer arming" \
+            "[armed $_armed of $_total]" "$C_Success"
+    else
+        __tac_info "Timer arming" \
+            "[armed $_armed of $_total — $_linked placed but not running]" "$C_Warning"
+    fi
+    if [[ -n "$_linked_list" ]]
+    then
+        printf '      not running:%s\n' "$_linked_list"
+    fi
+    if [[ $_stalled -gt 0 ]]
+    then
+        printf '      enabled but inactive:%s\n' "$_stalled_list"
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __oc_train_lane — the CUDA card's TRAINING lane, for `oc health`.
 #
 # Card UBC-GRPO-002 asks the console to show a long GPU training run in its health
@@ -437,6 +552,7 @@ function oc-health() {
             __oc_guard_patch_state
             __oc_vscode_pytest_log_state
             __oc_train_lane
+            __oc_timer_arming
         fi
         return "$_enhanced_rc"
     fi
@@ -557,6 +673,7 @@ function oc-health() {
     # training lane (see __oc_train_lane).
     __oc_vscode_pytest_log_state
     __oc_train_lane
+    __oc_timer_arming
 }
 
 # ---------------------------------------------------------------------------

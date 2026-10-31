@@ -1,6 +1,36 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 39
+#   v39 (2026-10-30): three §18.3 counters rose with v37/v38 and nothing re-baselined them,
+#   so the pre-push ratchet refused every push from this checkout — a gate doing its job on a
+#   style debt, not on the fix. Fixed the three rather than re-baselining: two __tac_info calls
+#   wrapped under 120 columns, a comment directly above `xo` (the definition had a blank line,
+#   which the counter reads as unattributed), and `return 4` in the tombstone path named, since
+#   a code other than 0/1 with no comment on the line is unreadable to the next editor.
+# Module Version: 38
+#   v38 (2026-10-29): corrects v37's third point, which claimed a tombstoned main simply
+#   cannot be reset.  Measured on a live gateway the same day: `sessions.reset` IS allowed
+#   when `allowRestartTombstoneReplacement === true && !entry.providerReview`
+#   (session-work-start, 2026.10.10-beta.4), and the reset service passes that flag only
+#   when `entry.archivedAt === undefined`.  So the deadlock is exactly the entry that is
+#   BOTH archived and tombstoned: it can never satisfy the condition, while the error's own
+#   advice ("Use /new or /reset") fails the same way.  `sessions.patch {archived:false}`
+#   THEN `sessions.reset`, in that order, cleared four wedged mains (doctor 4 -> 0) — the
+#   ordering __oc_purge_reset_main already performs, now pinned by a test.  `sessions.recover`
+#   remains the fallback when reset is still refused; it starts a successor and leaves the
+#   tombstone set (rc 4, reported as such, never as a repair).
+# Module Version: 37
+#   v37 (2026-10-29): `oc purge` names three things it used to get wrong.  (1) The dry run
+#   read ${OC_PURGE_RESET_MAIN-hal} while the real run read ${OC_PURGE_RESET_MAIN-all}, so
+#   with the variable UNSET the preview named one main and the run reset all fourteen; both
+#   arms now call `__oc_purge_reset_scope`, and the dry run lists every key it would reset.
+#   (2) Nothing counted unreadable stores, so a run that could not read them printed
+#   "Purge Complete" over its own errors — measured 2026-10-29 with sqlite3 absent, 14
+#   unreadable stores, rc 0.  `__oc_purge_store_census` now refuses BEFORE previewing or
+#   deleting, because a key list built on an unreadable store understates the blast radius.
+#   (3) A main left TOMBSTONED by a restart had no route out of purge.  The refusal it hits
+#   is narrower than first recorded — v38 below supersedes this paragraph.
 # Module Version: 36
 #   v36 (2026-10-24): `xo` WAITS for the stop instead of sampling it once — measured live,
 #   it read the unit as `activating` while its own stop sat queued behind an auto-restart,
@@ -82,7 +112,7 @@
 #   v22 (2026-10-23): `oc purge` now names the three things it used to overstate.  CRON
 #   sessions are KEPT (Wayne, 2026-10-23) and counted, so the roster read-back ignores them
 #   or every purge would fail over rows it deliberately kept.  Each agent's MAIN is kept, and
-#   the configured one (OC_PURGE_RESET_MAIN, default hal) is RESET through the gateway RPC
+#   every agent main (OC_PURGE_RESET_MAIN; unset = all) is RESET through the gateway RPC
 #   (`sessions.patch {archived:false}` then `sessions.reset`, both with expectedSessionId) so
 #   it comes back empty — `sessions delete` refuses a main.  A main whose recovery tombstone
 #   points at a successor the store no longer holds is REPAIRED the same way; purge deletes
@@ -141,12 +171,14 @@
 : "${C_Error:=}"
 : "${C_Success:=}"
 : "${C_Highlight:=}"
+: "${C_Warning:=}"
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_09C_OC_CORE_LOADED:-}" ]] && return 0
 __TAC_MOD_09C_OC_CORE_LOADED=1
 
+# `xo` — stop every OpenClaw process this box owns, then report what is still running.
 function xo() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot stop gateway]" "$C_Error"
@@ -705,6 +737,27 @@ function __oc_purge_rpc() {
     return 0
 }
 
+# __oc_purge_rpc_capture — as __oc_purge_rpc, but leaves the body in __OC_PURGE_RPC_OUT so a
+# caller can tell WHICH refusal it got.  The tombstone refusal is not a generic failure: it
+# has its own supported path, and treating it as "failed" hides the only remedy there is.
+function __oc_purge_rpc_capture() {
+    local _method="$1"
+    local _params="$2"
+    __OC_PURGE_RPC_OUT=""
+    if ! __OC_PURGE_RPC_OUT=$(timeout -k 15 120 openclaw gateway call "$_method" \
+        --params "$_params" --json 2>&1)
+    then
+        __oc_purge_stderr "$__OC_PURGE_RPC_OUT"
+        return 1
+    fi
+    if ! printf '%s\n' "$__OC_PURGE_RPC_OUT" | jq -e '.ok == true' >/dev/null 2>&1
+    then
+        __oc_purge_stderr "$__OC_PURGE_RPC_OUT"
+        return 1
+    fi
+    return 0
+}
+
 # __oc_purge_reset_main — reset one main session in place.  0 = reset and read back clean,
 # 3 = nothing to reset, 1 = failed.  `sessions delete` refuses a main, so the supported
 # path is patch (only when archived) then reset, each bounded by the store's session id.
@@ -745,7 +798,28 @@ function __oc_purge_reset_main() {
     fi
     _params=$(jq -cn --arg k "$_key" --arg a "$_agent" --arg s "$_sid" \
         '{key:$k,agentId:$a,expectedSessionId:$s}') || return 1
-    __oc_purge_rpc "sessions.reset" "$_params" || return 1
+    if ! __oc_purge_rpc_capture "sessions.reset" "$_params"
+    then
+        # A build that TOMBSTONES a main (restart recovery) refuses this reset with
+        # "ended during restart recovery. Use /new or /reset" — the reset is refused BY the
+        # tombstone, so retrying it is the one thing that cannot work.  `sessions.recover` is
+        # the supported replacement path: it starts a continuation in a NEW session.
+        # Measured 2026-10-29 on 2026.10.10-beta.4: recover returns ok and creates that
+        # successor, and the tombstone row REMAINS (the lane still reads `failed`, and the
+        # doctor's wedged count is unchanged).  So this returns 4 — successor started,
+        # tombstone still set — and NEVER reports a repair.
+        if [[ "$__OC_PURGE_RPC_OUT" == *"ended during restart recovery"* ]]
+        then
+            local _rec_params
+            _rec_params=$(jq -cn --arg k "$_key" '{key:$k}') || return 1
+            if __oc_purge_rpc "sessions.recover" "$_rec_params"
+            then
+                return 4   # 4 = successor started, tombstone left set
+            fi
+            return 1
+        fi
+        return 1
+    fi
     _state=$(__oc_purge_store_read "$_db" "
         select case when json_extract(entry_json,'\$.mainRestartRecovery') is null
             and json_extract(entry_json,'\$.archivedAt') is null
@@ -792,6 +866,45 @@ function __oc_purge_broken_tombstones() {
 }
 
 # oc-purge — see the header above for the order and what is no longer out of scope.
+# __oc_purge_reset_scope — the reset scope, derived in ONE place so the preview and the real
+# run cannot disagree.  Measured defect (2026-10-29): the dry run read
+# ${OC_PURGE_RESET_MAIN-hal} while the real run read ${OC_PURGE_RESET_MAIN-all}, so with the
+# variable UNSET the preview named one main and the run reset all fourteen.
+#   unset -> "all" (every main) · explicit empty -> "" (reset disabled) · "all" -> "all"
+#   any other value -> that agent's name
+function __oc_purge_reset_scope() {
+    printf '%s\n' "${OC_PURGE_RESET_MAIN-all}"
+}
+
+# __oc_purge_store_census — count readable agent stores, and FAIL when the census is
+# incomplete.  Every key list here starts from a store read, so an unreadable store makes the
+# delete list shorter and the dry run LESS alarming than the truth — the failure is silent in
+# the one direction that matters.  Measured 2026-10-29: with sqlite3 absent the dry run
+# printed 14 unreadable tombstones and still ended "Purge Complete", because nothing counted
+# the failures.  A banner is not evidence; this is the check that can refuse.
+function __oc_purge_store_census() {
+    local _db _total=0 _bad=0 _out=""
+    if ! command -v sqlite3 >/dev/null 2>&1
+    then
+        __tac_info "Stores" "[sqlite3 NOT FOUND - the store census cannot be read]" "$C_Error"
+        return 1
+    fi
+    for _db in "$OC_AGENTS"/*/agent/openclaw-agent.sqlite
+    do
+        [[ -f "$_db" ]] || continue
+        _total=$(( _total + 1 ))
+        if ! _out=$(timeout -k 10 30 sqlite3 "file:$_db?mode=ro" \
+            "select count(*) from sqlite_master;" 2>&1)
+        then
+            _bad=$(( _bad + 1 ))
+            __tac_info "Stores" "[unreadable] $_db" "$C_Error"
+            __oc_purge_stderr "$_out"
+        fi
+    done
+    __tac_info "Stores" "[$(( _total - _bad ))/$_total readable]" "$C_Dim"
+    (( _bad == 0 ))
+}
+
 function oc-purge() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot purge sessions]" "$C_Error"
@@ -807,12 +920,22 @@ function oc-purge() {
     local _dry_run=0
     [[ "${1:-}" == "--dry-run" ]] && _dry_run=1
 
+    # A key list built on an unreadable store understates what this command deletes, and the
+    # dry run is where that matters most: its job is to let the owner see the blast radius.
+    if ! __oc_purge_store_census
+    then
+        __tac_info "Purge" \
+            "[REFUSED - an agent store could not be read, so this run's blast radius would be UNDERSTATED]" \
+            "$C_Error"
+        return 1
+    fi
+
     # --dry-run reads only: it names the session KEYS and the directories, and it does
     # not touch the gateway.  The old code stopped the gateway before deciding it was a
     # dry run, which is a side effect the name denies.
     if (( _dry_run == 1 ))
     then
-        local _agent_dir _key _tb_recovered
+        local _agent_dir _key _tb_recovered _reset_scope _dry_key
         __tac_info "Sessions" "[WOULD DELETE every stored session except agent mains and cron]" "$C_Dim"
         __oc_purge_session_keys | grep -vE '(:main$|:cron:)' | sed 's/^/    /'
         while IFS= read -r _key
@@ -823,9 +946,26 @@ function oc-purge() {
                 *)          : ;;
             esac
         done < <(__oc_purge_session_keys)
-        if [[ -n "${OC_PURGE_RESET_MAIN-hal}" ]]
+        _reset_scope=$(__oc_purge_reset_scope)
+        if [[ -n "$_reset_scope" ]]
         then
-            __tac_info "Sessions" "[WOULD RESET - main left empty] agent:${OC_PURGE_RESET_MAIN-hal}:main" "$C_Dim"
+            if [[ "$_reset_scope" == "all" ]]
+            then
+                __tac_info "Sessions" "[WOULD RESET every agent main to empty]" "$C_Dim"
+            else
+                __tac_info "Sessions" "[WOULD RESET - main left empty] agent:$_reset_scope:main" "$C_Dim"
+            fi
+            while IFS= read -r _dry_key
+            do
+                [[ "$_dry_key" == *:main ]] || continue
+                if [[ "$_reset_scope" != "all" && "$_dry_key" != "agent:$_reset_scope:main" ]]
+                then
+                    continue
+                fi
+                __tac_info "Session" "[WOULD RESET] $_dry_key" "$C_Dim"
+            done < <(__oc_purge_session_keys | grep -E ':main$' | sort -u)
+        else
+            __tac_info "Sessions" "[reset DISABLED - OC_PURGE_RESET_MAIN is set and empty]" "$C_Dim"
         fi
         while IFS=$'\t' read -r _key _tb_recovered
         do
@@ -841,7 +981,7 @@ function oc-purge() {
         return 0
     fi
 
-    local _pruned=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0
+    local _pruned=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0 _tombstoned=0
     local _purge_left="" _counts=""
 
     # 1. A SERVING gateway is the precondition, not a stop.  The delete and the reset run
@@ -888,7 +1028,8 @@ function oc-purge() {
     #     archived) then reset, each bounded by the store's current session id and read
     #     back from the STORE.  `OC_PURGE_RESET_MAIN` narrows the scope to one agent when
     #     it names one; unset or `all` means every main.
-    local _reset_scope="${OC_PURGE_RESET_MAIN-all}" _reset_key="" _tb_key="" _tb_recovered=""
+    local _reset_scope="" _reset_key="" _tb_key="" _tb_recovered=""
+    _reset_scope=$(__oc_purge_reset_scope)
     local _rc=0
     # Unset = every main; an explicit EMPTY value disables the reset (the repair case uses
     # that to exercise the tombstone arm alone); any other value names one agent.
@@ -908,6 +1049,9 @@ function oc-purge() {
                 0) _resets=$(( _resets + 1 ))
                    __tac_info "Sessions" "[$_reset_key reset - main kept, transcript empty]" "$C_Dim" ;;
                 3) : ;;
+                4) _tombstoned=$(( _tombstoned + 1 ))
+                   __tac_info "Sessions" \
+                       "[$_reset_key TOMBSTONED - successor started, tombstone REMAINS]" "$C_Warning" ;;
                 *) _failed=$(( _failed + 1 ))
                    __tac_info "Sessions" "[FAILED to reset $_reset_key]" "$C_Error" ;;
             esac
@@ -926,6 +1070,8 @@ function oc-purge() {
             0) _repairs=$(( _repairs + 1 ))
                __tac_info "Sessions" "[$_tb_key repaired - tombstone pointed at missing $_tb_recovered]" "$C_Dim" ;;
             3) : ;;
+            4) _tombstoned=$(( _tombstoned + 1 ))
+               __tac_info "Sessions" "[$_tb_key TOMBSTONED - successor started, tombstone REMAINS]" "$C_Warning" ;;
             *) _failed=$(( _failed + 1 ))
                __tac_info "Sessions" "[FAILED to repair $_tb_key]" "$C_Error" ;;
         esac
@@ -970,6 +1116,10 @@ function oc-purge() {
     then
         _extra+=", $_repairs tombstone(s) repaired"
     fi
+    if (( _tombstoned > 0 ))
+    then
+        _extra+=", $_tombstoned main(s) TOMBSTONED (successor started, not reset)"
+    fi
     if (( _failed > 0 ))
     then
         __tac_info "Purge Complete" "[store reset, $_pruned orphan(s) pruned, $_failed FAILED]" "$C_Error"
@@ -977,6 +1127,13 @@ function oc-purge() {
         # printed "2 FAILED" and returned 0, so a caller (and the background task's
         # rc=0) read it as success — the exit code is what a caller actually sees.
         return 1
+    fi
+    # A tombstone is not a store failure — the delete and the prune landed — but it IS an
+    # unresolved lane, so the banner may not be the plain success colour.
+    if (( _tombstoned > 0 ))
+    then
+        __tac_info "Purge Complete" "[store reset, $_pruned orphan(s) pruned${_extra}]" "$C_Warning"
+        return 0
     fi
     __tac_info "Purge Complete" "[store reset, $_pruned orphan(s) pruned${_extra}]" "$C_Success"
 }

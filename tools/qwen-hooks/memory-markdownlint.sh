@@ -10,7 +10,7 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 #   v2 (2026-10-24): names the WRAPPED-OPERATOR trap in the hand-fix advice.  Measured: a note whose
 #   writer wrapped a formula left a continuation line beginning `+ 0 + 0.2·1.0 = 0.635`, and markdown
 #   (correctly) reads a line-initial `+` as a list marker, so MD004 fired on prose.  The danger is the
@@ -69,7 +69,21 @@ set -u
 QWEN_DIR="$HOME/.qwen"
 CONFIG="$QWEN_DIR/.markdownlint.jsonc"
 FIX_CONFIG="$QWEN_DIR/.markdownlint-fixable.jsonc"
-LINTER="/home/linuxbrew/.linuxbrew/bin/markdownlint"
+# Resolved, not hardcoded.  /home/linuxbrew/... is the x86 box's install; the arm64 box
+# has it at ~/.local/bin, so this hook told that box the linter was MISSING on every
+# turn — a false alarm that also disabled the check it exists to perform (measured
+# 2026-10-30).  PATH first, the old absolute path as the last resort, and the
+# missing-linter branch below still treats "nowhere" as a real failure rather than
+# silence.  TAC_MARKDOWNLINT overrides both, for a box with no PATH entry for it.
+if [[ -n "${TAC_MARKDOWNLINT:-}" ]]; then
+    LINTER="$TAC_MARKDOWNLINT"
+else
+    # No 2>/dev/null and no `|| true`: `command -v` keeps its own counsel when it finds
+    # nothing, and an `if` tests the status without swallowing anything.
+    if ! LINTER="$(command -v markdownlint)"; then
+        LINTER="/home/linuxbrew/.linuxbrew/bin/markdownlint"
+    fi
+fi
 STAMP_DIR="$QWEN_DIR/tmp"
 STAMP="$STAMP_DIR/memory-markdownlint.stamp"
 LIST="$STAMP_DIR/.memory-markdownlint.files.$$"
