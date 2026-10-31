@@ -521,7 +521,12 @@ meas_spread|meas_drift|meas_state|ctx_policy"
         _mk_row 4 "Too Large" "huge.gguf" "9.0G" "40.0" "agentic" "certified"
     } > "$reg"
 
-    export VRAM_TOTAL_BYTES=$(( 4 * 1024 * 1024 * 1024 ))
+    # Pin the recommender's VRAM ceiling.  VRAM_TOTAL_BYTES was the old lever, but
+    # __tac_vram_total_bytes now asks the card first and clamps to RAM on a
+    # unified-memory host (TAC_HOST_PROFILE_SHARED_MEMORY=1) — so on the ASUS box the
+    # exported constant was ignored and a 9 GB row read as fitting.  Stub the helper
+    # so the 80 % rule is tested against a known 4 GiB on every host.
+    __tac_vram_total_bytes() { printf '%d\n' $(( 4 * 1024 * 1024 * 1024 )); }
     run model-recommend coding
     [ "$status" -eq 0 ]
 
@@ -543,7 +548,12 @@ meas_spread|meas_drift|meas_state|ctx_policy"
 @test "integration: model-recommend prints the affinity policy it scored with" {
     local reg="$LLM_REGISTRY"
     _mk_row 1 "Plain Model" "plain.gguf" "2.0G" "12.0" "agentic" "certified" > "$reg"
-    export VRAM_TOTAL_BYTES=$(( 4 * 1024 * 1024 * 1024 ))
+    # Pin the recommender's VRAM ceiling.  VRAM_TOTAL_BYTES was the old lever, but
+    # __tac_vram_total_bytes now asks the card first and clamps to RAM on a
+    # unified-memory host (TAC_HOST_PROFILE_SHARED_MEMORY=1) — so on the ASUS box the
+    # exported constant was ignored and a 9 GB row read as fitting.  Stub the helper
+    # so the 80 % rule is tested against a known 4 GiB on every host.
+    __tac_vram_total_bytes() { printf '%d\n' $(( 4 * 1024 * 1024 * 1024 )); }
 
     run model-recommend coding
     [ "$status" -eq 0 ]
