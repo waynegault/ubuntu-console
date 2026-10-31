@@ -109,7 +109,6 @@ _remote_path() {
     case "$1" in
         gigabrain)     printf '%s' 'legendaryvibecoder/gigabrain' ;;
         lossless-claw) printf '%s' 'Martian-Engineering/lossless-claw' ;;
-        openstinger)   printf '%s' 'srikanthbellary/openstinger' ;;
     esac
 }
 
@@ -121,13 +120,12 @@ _advance_remote() {
     git -C "$_src" push -q origin main
 }
 
-# _scaffold_all — all three plugins present as clean clones, level with their
+# _scaffold_all — both plugins present as clean clones, level with their
 # remotes, so a single case can mutate just the one it is about.
 _scaffold_all() {
     local _pair
     for _pair in "gigabrain:$HOME/.openclaw/extensions/gigabrain" \
-                 "lossless-claw:$HOME/.openclaw/extensions/lossless-claw" \
-                 "openstinger:$HOME/.openclaw/vendor/openstinger"
+                 "lossless-claw:$HOME/.openclaw/extensions/lossless-claw"
     do
         _make_remote "$(_remote_path "${_pair%%:*}")" "${_pair%%:*}"
         _clone_plugin "${_pair%%:*}" "${_pair##*:}"
@@ -161,14 +159,13 @@ _run_plugins() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"LINE [7/20] Gigabrain Plugin [NOT INSTALLED]"* ]]
     [[ "$output" == *"LINE [8/20] Lossless-Claw Plugin [NOT INSTALLED]"* ]]
-    [[ "$output" == *"LINE [9/20] OpenStinger [NOT INSTALLED]"* ]]
     # The row used to claim "ALREADY UP TO DATE" in the SUCCESS colour here, which is
     # the one thing the case pinned: nothing was installed and nothing was updated, so
     # the summary now says what is true — and, by Wayne's call (2026-09-24), a plugin that
-    # is not installed colours the RUN too: three of them are three issues.
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [3 PLUGIN(S) NOT UPDATED]"* ]]
+    # is not installed colours the RUN too: two of them are two issues.
+    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [2 PLUGIN(S) NOT UPDATED]"* ]]
     run cat "$SANDBOX/err.txt"
-    [ "$output" = "3" ]
+    [ "$output" = "2" ]
     # On the SUMMARY row: a plugin that is present and level does print "ALREADY UP TO
     # DATE" as its own row, which is a different claim from the fleet's.
     [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
@@ -336,7 +333,7 @@ _run_plugins() {
     # The nameref: __plugin_drift_check must reach the CALLER's errCount, or a failed
     # repair would print a warning row and still let the run report zero issues.
     _scaffold_all
-    _advance_remote openstinger
+    _advance_remote gigabrain
     mkdir -p "$HOME/.openclaw/workspace/scripts"
     printf '#!/usr/bin/env bash\nexit 1\n' > "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
     chmod +x "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
@@ -362,8 +359,8 @@ _run_plugins() {
 
 @test "oc-plugin-update: a fleet that is already current reports NO UPDATES and exits 0" {
     # The counting bug at the boundary a user sees: 09e returned 0 for "up to date"
-    # in its own copy, so all three were counted and this run claimed
-    # "3 plugin(s) processed" while changing nothing.
+    # in its own copy, so both were counted and this run claimed
+    # "2 plugin(s) processed" while changing nothing.
     _scaffold_all
 
     oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null
@@ -422,7 +419,7 @@ _run_plugins() {
     # The command's OWN branch, where the shared helper is not involved at all: no
     # plugin directory exists, so each plugin is cloned fresh.  With no fixture remote
     # behind the rewritten URL every clone fails locally, which is the point — the run
-    # printed "[INSTALL FAILED]" three times and then exited 0, so a caller could not
+    # printed "[INSTALL FAILED]" twice and then exited 0, so a caller could not
     # tell a clean run from one that installed nothing.
     local rc=0
     oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null || rc=$?
@@ -430,10 +427,10 @@ _run_plugins() {
     [ "$rc" -ne 0 ]
     run cat "$SANDBOX/out.txt"
     [[ "$output" == *"[INSTALL FAILED]"* ]]
-    # All three, so the count aggregates rather than stopping at the first.
+    # Both plugins, so the count aggregates rather than stopping at the first.
     local _hits
     _hits="$(grep -c 'INSTALL FAILED' "$SANDBOX/out.txt")"
-    [ "$_hits" -eq 3 ]
+    [ "$_hits" -eq 2 ]
 }
 
 @test "oc-plugin-update: a plugin that is not a git checkout exits non-zero" {

@@ -2,7 +2,9 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 78
+# Module Version: 79
+#   v79 (2026-10-31): the R check also looks under "Program Files (x86)" (this box's R
+#   is 32-bit), and OpenStinger is removed from the plugin updater (no longer used).
 #   v78 (2026-10-31): two false issues from `up`:
 #   * the disk audit no longer flags the WSL linux-tools mount (/usr/lib/linux-tools/*),
 #     a fixed-size tools VHD that is 100% full by design;
@@ -664,9 +666,13 @@ function __up_r_packages() {
         then
             _rscript="Rscript"
         else
-            # WSL fallback: Windows R
+            # WSL fallback: Windows R — the 64-bit "Program Files" and the 32-bit
+            # "Program Files (x86)" install (this box's R lives in the latter).
             local _win_r
-            for _win_r in "/mnt/c/Program Files/R"/R-*/bin/x64/Rscript.exe; do
+            for _win_r in \
+                "/mnt/c/Program Files/R"/R-*/bin/x64/Rscript.exe \
+                "/mnt/c/Program Files (x86)/R"/R-*/bin/x64/Rscript.exe \
+                "/mnt/c/Program Files (x86)/R"/R-*/bin/Rscript.exe; do
                 [[ -x "$_win_r" ]] && _rscript="$_win_r"
             done
         fi
@@ -1001,7 +1007,7 @@ function __update_plugin() {
     return $?
 }
 
-# __plugin_drift_check <script> <openstinger_updated 0|1> <errcount nameref> — run the
+# __plugin_drift_check <script> <errcount nameref> — run the
 # post-update drift check after a plugin changed, and report it in the [10/20] row.
 # Extracted from __up_oc_plugins (2026-09-24), which drops that step from 92 to 71 code
 # lines — measured, NOT because it was over §18.3's 100-line mark (excluding comments had
@@ -1009,8 +1015,8 @@ function __update_plugin() {
 # caller's errCount by nameref, the idiom the __up_* steps already use.
 # ---------------------------------------------------------------------------
 function __plugin_drift_check() {
-    local _script="$1" _openstinger="$2"
-    local -n _pd_err="$3"
+    local _script="$1"
+    local -n _pd_err="$2"
     if [[ ! -x "$_script" ]]
     then
         __tac_line "[10/20] Post-Update Drift" "[SKIP - drift checker missing]" "$C_Dim"
@@ -1023,12 +1029,7 @@ function __plugin_drift_check() {
     fi
     if "$_script" --fix >/dev/null 2>&1
     then
-        if (( _openstinger == 1 ))
-        then
-            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED + OPENSTINGER HARDENING REAPPLIED]" "$C_Success"
-        else
-            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED]" "$C_Success"
-        fi
+        __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED]" "$C_Success"
         return 0
     fi
     __tac_line "[10/20] Post-Update Drift" "[FIX FAILED - run post-update-drift-check.sh --fix]" "$C_Warning"
@@ -1037,7 +1038,7 @@ function __plugin_drift_check() {
 
 # ---------------------------------------------------------------------------
 # __up_oc_plugins — [7-10/20] Update OpenClaw path-installed plugins.
-# Checks Gigabrain, Lossless-Claw, and OpenStinger for git updates,
+# Checks Gigabrain and Lossless-Claw for git updates,
 # then runs Post-Update Drift check if any plugin changed.
 # ---------------------------------------------------------------------------
 function __up_oc_plugins() {
@@ -1046,15 +1047,13 @@ function __up_oc_plugins() {
     local hours_left=""
 
     # [7/20] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
-    # Checks gigabrain, lossless-claw, and OpenStinger for git updates.
+    # Checks gigabrain and lossless-claw for git updates.
     # Offers interactive choice when local changes are detected.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
         local _rc=0
         local plugin_updated=0 plugin_failed=0 plugin_not_updated=0
-        local openstinger_updated=0
         local plugins_dir="$HOME/.openclaw/extensions"
-        local vendor_dir="$HOME/.openclaw/vendor"
         local post_update_check_script="$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
 
 
@@ -1082,23 +1081,14 @@ function __up_oc_plugins() {
             3) plugin_not_updated=$(( plugin_not_updated + 1 )); _up_err=$(( _up_err + 1 )) ;;
             *) ;;  # 1 = already current: nothing to count, and nothing to report
         esac
-        _rc=0
-        __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" \
-                        "[9/20] OpenStinger" "1" || _rc=$?
-        case "$_rc" in
-            0) plugin_updated=1; openstinger_updated=1 ;;
-            2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            3) plugin_not_updated=$(( plugin_not_updated + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            *) ;;  # 1 = already current: nothing to count, and nothing to report
-        esac
 
-        # If plugins changed (especially OpenStinger), validate and reapply OpenClaw's
-        # post-update customizations to prevent drift.  The block now lives in its own
-        # function: it was 21 nested lines of the same story (CLEAN / FIXED / FIX FAILED /
-        # CHECKER MISSING), and a named function is what makes that outcome testable.
+        # If a plugin changed, validate and reapply OpenClaw's post-update
+        # customizations to prevent drift.  The block now lives in its own function: it
+        # was 21 nested lines of the same story (CLEAN / FIXED / FIX FAILED / CHECKER
+        # MISSING), and a named function is what makes that outcome testable.
         if (( plugin_updated == 1 ))
         then
-            __plugin_drift_check "$post_update_check_script" "$openstinger_updated" _up_err
+            __plugin_drift_check "$post_update_check_script" _up_err
         fi
 
         # Set cooldown if any plugin was updated

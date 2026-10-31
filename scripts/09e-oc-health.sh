@@ -9,7 +9,9 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
+#   v33 (2026-10-31): oc-plugin-update no longer checks OpenStinger (it is no longer
+#   used), so the updater covers gigabrain and lossless-claw only.
 #   v32 (2026-10-30): new `__oc_timer_arming` row, in BOTH human branches, reporting whether
 #   this repo's systemd user timers are armed. ProArt read 0 of 10 for days with every automation
 #   that watches for a missing layer silent, because none of them looked at arming: install.sh
@@ -720,12 +722,11 @@ function oc-plugins() {
 # ---------------------------------------------------------------------------
 # oc-plugin-update — Update OpenClaw plugins from upstream git repos.
 # Usage: oc-plugin-update [plugin-id|--all]
-# Updates gigabrain, lossless-claw, and OpenStinger from their GitHub repos.
+# Updates gigabrain and lossless-claw from their GitHub repos.
 # ---------------------------------------------------------------------------
 function oc-plugin-update() {
     local plugin_id="${1:---all}"
     local plugins_dir="$HOME/.openclaw/extensions"
-    local vendor_dir="$HOME/.openclaw/vendor"
     local updated=0 plugin_errors=0
 
     __tac_header "OPENCLAW PLUGIN UPDATE" "open"
@@ -786,12 +787,6 @@ function oc-plugin-update() {
                 updated=$(( updated + 1 ))
             fi
             ;;
-        openstinger)
-            if update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
-            then
-                updated=$(( updated + 1 ))
-            fi
-            ;;
         --all|"")
             if update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
             then
@@ -801,14 +796,10 @@ function oc-plugin-update() {
             then
                 updated=$(( updated + 1 ))
             fi
-            if update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
-            then
-                updated=$(( updated + 1 ))
-            fi
             ;;
         *)
             __tac_info "Error" "Unknown plugin: $plugin_id" "$C_Error"
-            __tac_info "Usage" "oc-plugin-update [gigabrain|lossless-claw|openstinger|--all]" "$C_Dim"
+            __tac_info "Usage" "oc-plugin-update [gigabrain|lossless-claw|--all]" "$C_Dim"
             return 1
             ;;
     esac
