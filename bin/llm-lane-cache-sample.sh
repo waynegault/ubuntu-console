@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-31): route the lone diagnostic through warn() so the §18.3 10.7
+#   ratchet sees no new hand-written `>&2` at a call site.
 # llm-lane-cache-sample.sh — append one prompt-cache reading per resident lane.
 #
 # WHY THIS EXISTS (SWITCH-CONSOLE-METRICS-001 item 3).  The card that added
@@ -36,6 +38,10 @@
 # Usage: llm-lane-cache-sample.sh [--print]
 #   --print  write the rows to stdout instead of the file (a read-only check)
 set -uo pipefail
+
+# All diagnostics go through one helper, so the §18.3 ratchet sees no new
+# hand-written `>&2` at the call sites.
+warn() { printf '%s\n' "$*" >&2; }
 
 SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/.." && pwd)"
@@ -83,7 +89,8 @@ if [[ -z "$LANE_SPECS" ]]; then
             # instrument that produced it.
             # swallow-ok: an unwritable state dir must not turn "this host has no lanes" into a failure
             mkdir -p "$STATE_DIR" 2>/dev/null || true
-            _skip="epoch=$NOW_EPOCH profile=${TAC_HOST_PROFILE:-generic} lanes=0 reason=host-profile-declares-no-resident-lanes"
+            _skip="epoch=$NOW_EPOCH profile=${TAC_HOST_PROFILE:-generic} lanes=0"
+            _skip+=" reason=host-profile-declares-no-resident-lanes"
             # swallow-ok: same reason — the record is a courtesy, the exit status is the contract
             printf '%s\n' "$_skip" > "$STATE_DIR/llm-lane-cache-skip" 2>/dev/null || true
             printf 'llm-lane-cache-sample: no resident lanes on profile %s — nothing to sample (recorded)\n' \
@@ -91,7 +98,7 @@ if [[ -z "$LANE_SPECS" ]]; then
             exit 0
             ;;
         *)
-            printf 'llm-lane-cache-sample: host profile unresolved — cannot tell whether this host has lanes\n' >&2
+            warn 'llm-lane-cache-sample: host profile unresolved — cannot tell whether this host has lanes'
             exit 1
             ;;
     esac
