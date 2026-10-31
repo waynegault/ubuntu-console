@@ -25,7 +25,11 @@ ExecStart=%h/.local/bin/gpu-watch-selfcheck.sh
 # cold-start window on the 2026-10-11 16:28 boot).
 Environment=GPU_WATCH_SELFCHECK_READY_WAIT_S=600
 # Explicit PATH: the check reaches the `openclaw` CLI to read the automation's
-# state, and the default user-manager PATH does not carry the Linuxbrew bin dir
-# where `openclaw` resolves (/home/linuxbrew/.linuxbrew/bin), so a bare `openclaw`
-# would fail here and every run would report "unreadable".
-Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+# state, and the default user-manager PATH carries neither the Linuxbrew bin dir
+# nor ~/.npm-global/bin, so a bare `openclaw` fails here and every run reports
+# "unreadable". CORRECTED 2026-10-31: openclaw now resolves from
+# %h/.npm-global/bin (symlink to ../lib/node_modules/openclaw/openclaw.mjs); the
+# Linuxbrew entry is kept because it was the resolution point when this line was
+# written and a second install can move back. Measured failure this fixed: the
+# 18:03:40 run exited 2 with "could not read automation 6a1b0ada (rc=127)".
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
