@@ -2,7 +2,10 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 32
+# Module Version: 33
+#   v33 (2026-10-30): the GPU row prefers TAC_HOST_GPU_LABEL so a long vendor name
+#   (this box's nvidia-smi reports "NVIDIA RTX Spark N1X (6144-core Blackwell RTX
+#   GPU)") does not push the load/temperature off the truncated row.
 #   v32 (2026-10-30): render CPU / GPU, MEMORY and STORAGE in __dashboard_system_metrics,
 #   where their values are computed.  The dashboard split had moved the rows into
 #   __dashboard_gpu_llm, which read cpu/gpu0/gpu1/mem/mem_pct/disk as globals while they
@@ -165,6 +168,14 @@ function __dashboard_gpu_rows() {
     then
         IFS=',' read -r g_name g_temp g_util g_mem_u g_mem_t <<< "$gpu_raw"
         g_name="${g_name/ Laptop GPU/}"; g_name="${g_name# }"; g_name="${g_name% }"
+        # Prefer the host profile's short label so a long vendor string does not push
+        # the load/temperature off the truncated row (this box's nvidia-smi name is
+        # "NVIDIA RTX Spark N1X (6144-core Blackwell RTX GPU)").  A generic box with
+        # no profile falls back to the trimmed nvidia-smi name.
+        if [[ -n "${TAC_HOST_GPU_LABEL:-}" ]]
+        then
+            g_name="$TAC_HOST_GPU_LABEL"
+        fi
         gpu_display="${g_name} | ${g_util// /}% Load | ${g_temp// /}°C | ${g_mem_u// /} / ${g_mem_t// /} Mb"
     fi
     # GPU colour: <75% load=green, 75-90%=yellow, >90%=red

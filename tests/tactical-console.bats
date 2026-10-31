@@ -783,6 +783,20 @@ EOF
     [[ "$output" == *"CPU / GPU"*"CPU 42%"* ]]
 }
 
+@test "metrics: the GPU row prefers the short host label over the long vendor name" {
+    # The ASUS box's nvidia-smi name is 48 characters ("NVIDIA RTX Spark N1X
+    # (6144-core Blackwell RTX GPU)") and pushed the load/temperature off the
+    # truncated row.  The host profile's label must win so they stay visible.
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "NVIDIA RTX Spark N1X (6144-core Blackwell RTX GPU),64,35,3497,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "3D 31% | VDec 12%" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    export TAC_HOST_GPU_LABEL="RTX Spark N1X"
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RTX Spark N1X | 35% Load | 64°C"* ]]
+    [[ "$output" != *"6144-core Blackwell"* ]]
+}
+
 @test "metrics: GPU ENGINES claims Idle only when the GPU row agrees" {
     # Measured 2026-10-27 12:10 BST: the card was at 81% (Windows counters:
     # Cuda#1 91.24) while the row read "Idle".  The two rows are separate
