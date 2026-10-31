@@ -2,7 +2,12 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 17
+# Module Version: 18
+#   v18 (2026-10-31): __llm_lane_since drops the trailing zone token before `date -d`.
+#   systemd's ActiveEnterTimestamp is ALREADY local time, and the abbreviation is
+#   ambiguous: the uutils coreutils `date` on Ubuntu 26.04 reads "BST" as Bangladesh
+#   (+06) and shifts the hour.  Reformatting the local time without the abbreviation
+#   round-trips on both GNU and uutils date.
 #   v17 (2026-10-21): __llm_lanes_report keeps the state `systemctl is-active`
 #   PRINTS.  `|| state="unknown"` discarded it, because is-active prints
 #   "inactive" AND exits 3 for an inactive unit — so a down lane read as
@@ -516,8 +521,11 @@ function __llm_lane_since() {
         ts=$(systemctl --user show "$unit" -p ActiveEnterTimestamp --value 2>/dev/null) || ts=""
         if [[ -n "$ts" ]]
         then
+            # systemd's ActiveEnterTimestamp is ALREADY local time; the trailing zone
+            # abbreviation is what `date -d` mis-reads on the uutils coreutils (see the
+            # v18 note), so drop it and let date reformat the local time unchanged.
             # swallow-ok: an unparseable timestamp falls back to systemd's own text
-            _since=$(date -d "$ts" '+%Y-%m-%d %H:%M %Z' 2>/dev/null) || _since="$ts"
+            _since=$(date -d "${ts% *}" '+%Y-%m-%d %H:%M %Z' 2>/dev/null) || _since="$ts"
             printf 'since %s (server start)\n' "$_since"
             return 0
         fi
