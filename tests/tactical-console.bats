@@ -771,6 +771,18 @@ EOF
     [[ "$output" == *"3D 31% | VDec 12%"* ]]
 }
 
+@test "metrics: tactical_dashboard renders the measured CPU value in the CPU / GPU row" {
+    # cpu is a local of __dashboard_system_metrics; a dashboard split had moved the
+    # row into __dashboard_gpu_llm, which read it as a global and rendered "CPU %"
+    # with no number.  This pins the value reaching the row.
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "RTX 3050 Ti Laptop GPU,64,35,3497,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "3D 31% | VDec 12%" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CPU / GPU"*"CPU 42%"* ]]
+}
+
 @test "metrics: GPU ENGINES claims Idle only when the GPU row agrees" {
     # Measured 2026-10-27 12:10 BST: the card was at 81% (Windows counters:
     # Cuda#1 91.24) while the row read "Idle".  The two rows are separate
