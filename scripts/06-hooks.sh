@@ -2,7 +2,10 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-10-30): start __tac_preexec_fired at 1 so the preexec blank line does
+#   not fire during startup module sourcing — it was held and replayed after the
+#   banner, leaving a double blank line between the header and the first prompt.
 #   v12 (2026-10-11): the prompt's venv segment uses a parameter expansion instead of
 #   a `basename` subshell — one fewer fork on EVERY prompt of a (large) interactive
 #   shell.  Behaviour is unchanged.
@@ -148,7 +151,14 @@ then
     # room between the prompt and the result.  The __tac_preexec_fired guard ensures
     # the newline prints only once per interactive command (not again for each
     # pipeline segment, PROMPT_COMMAND, or subshell).
-    __tac_preexec_fired=0
+    #
+    # Initialised to 1 so the guard reads "already fired" through the module
+    # sourcing that follows this trap's installation: the first simple command
+    # there would otherwise emit a blank line into the startup-notice hold file,
+    # and replaying it after the banner put a second blank line between the
+    # header and the first prompt.  custom_prompt_command resets it to 0 on the
+    # first real prompt, where the preexec newline is wanted.
+    __tac_preexec_fired=1
     trap '[[ "$BASH_COMMAND" == "$PROMPT_COMMAND" || "$BASH_COMMAND" == custom_prompt_command ]] || \
           (( __tac_preexec_fired )) || { __tac_preexec_fired=1; echo; }' DEBUG
 fi

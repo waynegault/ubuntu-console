@@ -159,4 +159,32 @@ _line_of() {
     [[ "$output" == *"notice-on-stdout"* ]]
 }
 
+@test "preexec blank line: the guard starts armed, so startup sourcing stays silent" {
+    # 06-hooks installs a DEBUG trap that prints a blank line before each real
+    # command.  It is installed part-way through the module loop, so if its guard
+    # started at 0, the next module-sourcing command would emit a blank line into
+    # the startup hold file — and replaying that after the banner put a SECOND
+    # blank line between the header and the first prompt.
+    #
+    # Run in a child shell so the real trap cannot interfere with BATS's own
+    # traps.  PS1 is set so 06-hooks installs the trap at all; HISTFILE is
+    # emptied so custom_prompt_command's `history -a` has nothing to append.
+    run bash --noprofile --norc -c '
+        PS1="$ "
+        HISTFILE=
+        source "$1"
+        echo "STARTUP_GUARD=${__tac_preexec_fired}"
+        custom_prompt_command
+        echo "AFTER_RESET"
+    ' _ "$REPO_ROOT/scripts/06-hooks.sh"
+    [ "$status" -eq 0 ]
+
+    # No leading blank line before the marker: the guard was already armed.
+    [ "${lines[0]}" = "STARTUP_GUARD=1" ]
+    # After the first prompt resets the guard, the preexec blank line returns
+    # for the next real command — a double newline between the two markers.
+    # (BATS collapses empty lines out of `lines`, so assert on raw $output.)
+    [[ "$output" == $'STARTUP_GUARD=1\n\nAFTER_RESET' ]]
+}
+
 # end of file
