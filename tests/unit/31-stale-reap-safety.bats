@@ -42,6 +42,11 @@ setup() {
 
     # The step's inputs, sandboxed after the source so 01-constants.sh cannot win.
     export LLM_PORT=18099
+    # The protect-list guard iterates the HOST PROFILE's lane specs, but a box with no
+    # resident lanes (asus-n1n-rtx-spark) has an EMPTY list — the loop would run zero
+    # times and the fail-closed branch would never be reachable.  Pin one lane so the
+    # guard is exercised on every host.
+    export LLAMA_LANE_SPECS="test-lane|$LLM_PORT"
     export ACTIVE_LLM_FILE="$SANDBOX/llm-active"
     export ErrorLogPath="$SANDBOX/err.log"
 

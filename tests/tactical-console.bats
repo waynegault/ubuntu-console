@@ -143,6 +143,12 @@ _build_test_profile() {
     # need __tac_source_submodules from _startup-env.sh).
     cp "$REPO_ROOT/scripts/_module-list.sh" "$patched_scripts/_module-list.sh"
     cp "$REPO_ROOT/scripts/_startup-env.sh" "$patched_scripts/_startup-env.sh"
+    # 11e-llm-model.sh sources bin/_tac-bin-lib.sh by realpath from its OWN location, so
+    # the patched copy resolves it under $TAC_TEST_TMPDIR/bin — copy the helper there or
+    # the module fails to source and every path it defines (LLAMA_MODEL_DIR, QUANT_GUIDE)
+    # stays unset, reddening the constants cases.
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cp "$REPO_ROOT/bin/_tac-bin-lib.sh" "$TAC_TEST_TMPDIR/bin/_tac-bin-lib.sh"
     # Replace 13-init with a minimal stub — skip expensive runtime
     # side-effects (pwsh.exe bridge, loopback, sha256, completions)
     # that are irrelevant to unit tests.
@@ -2350,12 +2356,15 @@ EOF
     [[ -n "$ErrorLogPath" ]]
 }
 
-@test "constants: LLAMA_MODEL_DIR is under LLAMA_DRIVE_ROOT" {
-    [[ "$LLAMA_MODEL_DIR" == "$LLAMA_DRIVE_ROOT"* ]]
+@test "constants: LLAMA_MODEL_DIR is set" {
+    # The shape is a HOST PROFILE fact: intel derives $LLAMA_DRIVE_ROOT/active while
+    # asus names a FLAT $HOME/models store, so "under LLAMA_DRIVE_ROOT" is not a
+    # universal invariant — being set (a real path to size models against) is.
+    [[ -n "$LLAMA_MODEL_DIR" ]]
 }
 
-@test "constants: LLAMA_ARCHIVE_DIR is under LLAMA_DRIVE_ROOT" {
-    [[ "$LLAMA_ARCHIVE_DIR" == "$LLAMA_DRIVE_ROOT"* ]]
+@test "constants: LLAMA_ARCHIVE_DIR is set" {
+    [[ -n "$LLAMA_ARCHIVE_DIR" ]]
 }
 
 @test "constants: LLM_REGISTRY is set" {
@@ -2370,12 +2379,10 @@ EOF
     [[ -n "$TAC_CACHE_DIR" ]]
 }
 
-@test "constants: QUANT_GUIDE path is set" {
-    [[ -n "$QUANT_GUIDE" ]]
-}
-
-@test "constants: QUANT_GUIDE is under TACTICAL_REPO_ROOT" {
-    [[ "$QUANT_GUIDE" == "$TACTICAL_REPO_ROOT/"* ]]
+@test "constants: QUANT_GUIDE is empty (no guide) or a path under the repo root" {
+    # intel declares config/quant-guide.conf; asus declares none, so `""` is the
+    # meaningful "this host has no guide" value, not a defect to catch here.
+    [[ -z "$QUANT_GUIDE" || "$QUANT_GUIDE" == "$TACTICAL_REPO_ROOT/"* ]]
 }
 
 @test "constants: LOG_MAX_BYTES is numeric" {
