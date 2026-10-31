@@ -165,3 +165,45 @@ MOCK
     # The unit must not start or stop a lane: it is a read.
     ! grep -qE 'systemctl|llama-server' "$service" || { echo "service mutates lanes"; return 1; }
 }
+
+# ── The production lookup path: no injection, real host profile ───────────────
+# Every case above sets LLM_LANE_CACHE_SPECS, so until 2026-10-31 the branch that
+# actually runs in production had NO test — and it was broken: the sampler sourced
+# env.sh, which never applies the host profile, so the table was empty on every
+# host and the unit failed hourly with "no lane table". These three cases run the
+# real branch: they unset the injection and drive it with LLM_HOST_PROFILE.
+
+@test "sampler: real path — a profile that declares lanes is read, not assumed empty" {
+    unset LLM_LANE_CACHE_SPECS
+    export LLM_HOST_PROFILE=intel-xe-cuda
+    run bash "$SCRIPT" --print
+    [[ "$status" -eq 0 ]]
+    # Naming one known lane is the point: an empty table would also exit 0 here,
+    # and that is exactly the bug this case exists to separate from.
+    [[ "$output" == *"llama-xe-minicpm5-1b-chat.service"* ]] \
+        || { echo "profile lanes were not read: $output"; return 1; }
+    [[ ! -e "$STATE/llm-lane-cache-skip" ]] \
+        || { echo "a host WITH lanes recorded a no-lanes skip"; return 1; }
+}
+
+@test "sampler: real path — a matched profile with no lanes is a state, not a failure" {
+    unset LLM_LANE_CACHE_SPECS
+    export LLM_HOST_PROFILE=asus-n1n-rtx-spark
+    run bash "$SCRIPT"
+    [[ "$status" -eq 0 ]] || { echo "a host with no lanes failed the unit: $output"; return 1; }
+    [[ -e "$STATE/llm-lane-cache-skip" ]] \
+        || { echo "no skip record: absence of rows would be indistinguishable from never running"; return 1; }
+    grep -q 'lanes=0' "$STATE/llm-lane-cache-skip" || { echo "skip record does not name the count"; return 1; }
+    grep -q 'asus-n1n-rtx-spark' "$STATE/llm-lane-cache-skip" || { echo "skip record does not name the profile"; return 1; }
+    [[ ! -s "$LLM_LANE_CACHE_FILE" ]] || { echo "a no-lanes host wrote rows"; return 1; }
+}
+
+@test "sampler: real path — an unresolved profile is a failure, not a silent empty" {
+    unset LLM_LANE_CACHE_SPECS
+    export LLM_HOST_PROFILE=no-such-profile
+    run bash "$SCRIPT"
+    [[ "$status" -ne 0 ]] \
+        || { echo "unresolved profile exited 0 — an empty table then says nothing about the host"; return 1; }
+    [[ ! -e "$STATE/llm-lane-cache-skip" ]] \
+        || { echo "unresolved profile wrote a no-lanes record"; return 1; }
+}

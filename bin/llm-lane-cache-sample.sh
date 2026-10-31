@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # llm-lane-cache-sample.sh — append one prompt-cache reading per resident lane.
 #
 # WHY THIS EXISTS (SWITCH-CONSOLE-METRICS-001 item 3).  The card that added
@@ -46,20 +46,55 @@ NOW_EPOCH="${LLM_LANE_CACHE_NOW:-$(date +%s)}"
 PRINT_ONLY=0
 [[ "${1:-}" == "--print" ]] && PRINT_ONLY=1
 
-# The lane table lives in scripts/01-constants.sh.  Tests pass their own list
-# through LLM_LANE_CACHE_SPECS so they exercise this script without loading the
-# whole shell library; the unit runs the real one.
+# The lane table lives in the HOST PROFILE (config/hosts.d/<id>.conf), resolved and
+# applied by scripts/01-constants.sh.  Tests pass their own list through
+# LLM_LANE_CACHE_SPECS so they exercise this script without loading the shell library.
+#
+# MEASURED BUG, 2026-10-31.  This used to `source "$REPO_ROOT/env.sh"` and read
+# LLAMA_LANE_SPECS from it — but env.sh only sources scripts/_startup-env.sh and never
+# applies the host profile, so the table was EMPTY ON EVERY HOST and the unit failed
+# every hour with "no lane table".  The suite never caught it because it always injects
+# LLM_LANE_CACHE_SPECS: the branch that production actually takes had no test at all.
+# A test double that replaces the subject's input does not exercise its lookup.
 if [[ -n "${LLM_LANE_CACHE_SPECS:-}" ]]; then
     LANE_SPECS="$LLM_LANE_CACHE_SPECS"
+    PROFILE_STATE="injected"
 else
-    # shellcheck source=../env.sh
-    source "$REPO_ROOT/env.sh"
+    # shellcheck source=../scripts/01-constants.sh
+    source "$REPO_ROOT/scripts/01-constants.sh"
     LANE_SPECS="${LLAMA_LANE_SPECS:-}"
+    # matched=1 means a profile was found and it declares this table.  An EMPTY table
+    # on a matched profile is a legitimate host state ("no resident lanes here"), not
+    # a fault: this box's profile says so in as many words.  matched=0 means no profile
+    # could be chosen, and an empty table then says nothing about the host.
+    if [[ "${TAC_HOST_PROFILE_MATCHED:-0}" == "1" ]]; then
+        PROFILE_STATE="profile"
+    else
+        PROFILE_STATE="unresolved"
+    fi
 fi
 
 if [[ -z "$LANE_SPECS" ]]; then
-    printf 'llm-lane-cache-sample: no lane table (LLAMA_LANE_SPECS empty)\n'
-    exit 1
+    case "$PROFILE_STATE" in
+        profile)
+            # Nothing to sample, and that is TRUE of this host.  Exit 0 so the unit does
+            # not fail hourly, but leave a dated record — "no rows" alone is
+            # indistinguishable from "the sampler never ran", and a zero must name the
+            # instrument that produced it.
+            # swallow-ok: an unwritable state dir must not turn "this host has no lanes" into a failure
+            mkdir -p "$STATE_DIR" 2>/dev/null || true
+            _skip="epoch=$NOW_EPOCH profile=${TAC_HOST_PROFILE:-generic} lanes=0 reason=host-profile-declares-no-resident-lanes"
+            # swallow-ok: same reason — the record is a courtesy, the exit status is the contract
+            printf '%s\n' "$_skip" > "$STATE_DIR/llm-lane-cache-skip" 2>/dev/null || true
+            printf 'llm-lane-cache-sample: no resident lanes on profile %s — nothing to sample (recorded)\n' \
+                "${TAC_HOST_PROFILE:-generic}"
+            exit 0
+            ;;
+        *)
+            printf 'llm-lane-cache-sample: host profile unresolved — cannot tell whether this host has lanes\n' >&2
+            exit 1
+            ;;
+    esac
 fi
 
 HEADER=$'epoch\tiso\tunit\tport\tstatus\tcached\tprocessed\trate_pct\twindow'
