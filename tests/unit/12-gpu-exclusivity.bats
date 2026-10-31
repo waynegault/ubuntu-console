@@ -520,8 +520,8 @@ EOS
     "$artefact" &
     local _direct=$!
     local binname="tac-bin-$$-$RANDOM.sh"
-    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/$binname" || skip "cannot copy a binary here"
-    "$TAC_TEST_TMPDIR/$binname" 30 &
+    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/$binname" || skip "cannot copy a binary here"
+    "$TAC_TEST_TMPDIR/$binname" -c 'import time; time.sleep(30)' &
     local _compiled=$!
     sleep 0.4
 
@@ -553,14 +553,17 @@ source "$1"
 if __llm_proc_is_server "$2"; then echo LLAMA; else echo NOT; fi
 EOS
 
-    # A compiled llama.cpp binary, invoked under its own name.
-    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/llama-server" || skip "cannot copy a binary here"
-    "$TAC_TEST_TMPDIR/llama-server" 60 &
+    # A compiled llama.cpp binary, invoked under its own name.  python3 stands in
+    # for the artefact: on Ubuntu 26.04 `sleep` is a Rust-coreutils multi-call that
+    # refuses an unknown argv[0], while python3 is a standalone ELF that sleeps
+    # in-process, so /proc/PID/exe resolves to this copy and the process stays alive.
+    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/llama-server" || skip "cannot copy a binary here"
+    "$TAC_TEST_TMPDIR/llama-server" -c 'import time; time.sleep(60)' &
     local _backend=$!
     # A backend started through a differently-named LAUNCHER (the legacy symlink
     # shape): exe resolves to the real artefact, so it is still identified.
     ln -s "$TAC_TEST_TMPDIR/llama-server" "$TAC_TEST_TMPDIR/cuda-llama-server"
-    "$TAC_TEST_TMPDIR/cuda-llama-server" 60 &
+    "$TAC_TEST_TMPDIR/cuda-llama-server" -c 'import time; time.sleep(60)' &
     local _launcher=$!
     python3 -c 'import time; time.sleep(60)' llama_cpp.server &
     local _pybackend=$!
@@ -715,13 +718,15 @@ EOS
 # for the `so` probe.
 #
 # These drive the extracted foreign_apps_busy() with a stub nvidia-smi, so nothing
-# touches the GPU and the "server" is a copy of sleep carrying the right name.
+# touches the GPU and the "server" is a copy of python3 carrying the right name.
 _foreign_apps_fixture() {
     mkdir -p "$TAC_TEST_TMPDIR/bin" "$TAC_TEST_TMPDIR/allowed" "$TAC_TEST_TMPDIR/other"
     # Stand-ins for the two builds: the same binary NAME at different paths — the
-    # case a name-based match cannot separate.
-    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/allowed/llama-server"
-    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/other/llama-server"
+    # case a name-based match cannot separate.  python3 stands in for a real server
+    # binary (see the note on the `cp` above: `sleep` is a Rust-coreutils multi-call
+    # on Ubuntu 26.04 and refuses an unknown argv[0]).
+    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/allowed/llama-server"
+    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/other/llama-server"
 
     cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
 #!/usr/bin/env bash
@@ -752,7 +757,7 @@ EOS
 
 @test "gpu-exclusivity: a same-named server from another build path is FOREIGN" {
     _foreign_apps_fixture
-    "$TAC_TEST_TMPDIR/other/llama-server" 30 &
+    "$TAC_TEST_TMPDIR/other/llama-server" -c 'import time; time.sleep(30)' &
     local spid=$!
     run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
         LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
@@ -768,7 +773,7 @@ EOS
 
 @test "gpu-exclusivity: the sanctioned CUDA binary is skipped, not reported" {
     _foreign_apps_fixture
-    "$TAC_TEST_TMPDIR/allowed/llama-server" 30 &
+    "$TAC_TEST_TMPDIR/allowed/llama-server" -c 'import time; time.sleep(30)' &
     local spid=$!
     run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
         LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
@@ -781,9 +786,11 @@ EOS
 
 @test "gpu-exclusivity: a mere mention of llama-server in argv is FOREIGN" {
     _foreign_apps_fixture
-    # argv[0] is "llama-server" but the executable is sleep. The old comm/cmdline
-    # match skipped precisely this, which is how a mention hid a real resident.
-    bash -c 'exec -a llama-server sleep 30' &
+    # argv[0] is "llama-server" but the executable is python3 (a foreign binary). The
+    # old comm/cmdline match skipped precisely this, which is how a mention hid a real
+    # resident.  `sleep` cannot be the executable here: on Ubuntu 26.04 it is a
+    # Rust-coreutils multi-call that refuses an unknown argv[0] and would die at once.
+    bash -c 'exec -a llama-server python3 -c "import time; time.sleep(30)"' &
     local spid=$!
     run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
         LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
