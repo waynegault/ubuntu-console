@@ -91,3 +91,26 @@ extraPaths = ["scripts", "nas/butler/scripts", "stubs"]
 # In-repo stubs for the NAS runtime deps (paho, usb, bleak): absent from this
 # box, so stubs are the only way both checkers see the code here.
 stubPath = "stubs"
+
+[tool.ruff]
+# The repo's line discipline is 120 characters — tools/lint.sh §18.3's count ratchet
+# counts non-comment lines over 120, and tools/llama-cpp-inventory.sh states the same
+# limit.  There was NO [tool.ruff] config before this block (README §lint said so), so
+# `ruff check` ran on its DEFAULT rule set (E4, E7, E9, F).  line-length governs only
+# `ruff format` and the E501 rule — neither is in that default select — so setting it
+# here does NOT change what `ruff check` reports; it gives `ruff format` the repo's
+# real limit instead of ruff's 88 default.
+line-length = 120
+# mypy and pyright both target 3.14 (python_version / pythonVersion above); ruff formats
+# and upgrades toward the same interpreter.
+target-version = "py314"
+
+[tool.ruff.format]
+# A WHOLE-REPO `ruff format --check .` is deliberately NOT a CI gate: most of the repo's
+# Python files predate any formatter and would reformat today (measured 2026-10-31 — 105
+# files under ruff's default 88-column formatter).  Formatting converges INCREMENTALLY
+# instead: VS Code format-on-save, pre-commit's ruff-format on the staged set, and the
+# agent's post-edit hook ADVISORY on a single edited file.  This section makes that
+# output well-defined (double quotes, spaces) rather than depending on ruff's defaults.
+quote-style = "double"
+indent-style = "space"

@@ -1,0 +1,37 @@
+# pre-commit framework — Python quality at commit time.
+#
+# This runs ALONGSIDE the repo's own git hook (tools/hooks/pre-commit, installed via
+# `git config core.hooksPath tools/hooks`): that hook calls `pre-commit run` over the
+# staged files, so the shell/secret/module gates there AND the Python gates here all
+# fire on one commit.  `pre-commit` is optional — when the binary is absent (a fresh box
+# before `pip install pre-commit`) the step is skipped, and CI still runs the same
+# Python gates (see .github/workflows/ci.yml `python` job).
+#
+# Versions are pinned to match the venv and CI (ruff 0.15.20 — .github/ci-requirements.txt
+# and pyproject [tool.ruff]).  A bump is a deliberate change: move the pin HERE, in
+# ci-requirements.txt AND the venv together, then fix any new findings.
+
+repos:
+  # Lint + format, matching CI's `ruff check .` step.  `ruff-format` formats the STAGED
+  # files only (incremental): a whole-repo `ruff format --check .` is deliberately NOT a
+  # gate, because most of the repo's Python predates the formatter (see pyproject
+  # [tool.ruff]).  Formatting a file as it is touched is how the corpus converges.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+      - id: ruff-format
+
+  # Generic file hygiene.  mixed-line-ending lf mirrors the repo's no-carriage-return CI
+  # invariant; end-of-file-fixer and trailing-whitespace normalise files on the way in.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+      - id: mixed-line-ending
+        args: [--fix=lf]

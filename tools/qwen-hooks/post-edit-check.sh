@@ -93,13 +93,22 @@ line_of() {
 findings=""
 
 # ---------------------------------------------------------------- 1. Python lint
+# resolve_ruff — the ruff binary both Python scanners use: the project venv's pinned
+# ruff first, else whatever is on PATH.  Kept in one place so the lint and format
+# checks cannot drift on which ruff they run.
+resolve_ruff() {
+  if [ -n "${QWEN_PROJECT_DIR:-}" ] && [ -x "$QWEN_PROJECT_DIR/.venv/bin/ruff" ]; then
+    printf '%s' "$QWEN_PROJECT_DIR/.venv/bin/ruff"
+  elif command -v ruff >/dev/null 2>&1; then
+    command -v ruff
+  fi
+}
+
+# check_python — ruff lint on the edited file, falling back to a bare ast.parse
+# syntax probe when ruff is unavailable.
 check_python() {
   local f="$1" ruff="" py="" out="" cmd=""
-  if [ -n "${QWEN_PROJECT_DIR:-}" ] && [ -x "$QWEN_PROJECT_DIR/.venv/bin/ruff" ]; then
-    ruff="$QWEN_PROJECT_DIR/.venv/bin/ruff"
-  elif command -v ruff >/dev/null 2>&1; then
-    ruff="$(command -v ruff)"
-  fi
+  ruff="$(resolve_ruff)"
 
   if [ -n "$ruff" ]; then
     cmd="$ruff check --output-format=concise --quiet -- $f"
@@ -124,6 +133,20 @@ except SyntaxError as exc:
   while IFS= read -r line; do
     printf '    %s  [%s]\n' "$line" "$(tag_for "$(line_of "$line")")"
   done <<< "$out"
+}
+
+# -------------------------------------------------------------- 1b. ruff format
+# ADVISORY whole-file check: the repo is NOT globally ruff-formatted (`ruff format
+# --check .` would redden CI today — see pyproject [tool.ruff.format]), so the format
+# verdict is scoped to the single edited file and reported, never blocked.  Whole-file,
+# so it carries no line tag.
+check_format() {
+  local f="$1" ruff="" out=""
+  ruff="$(resolve_ruff)"
+  [[ -n "$ruff" ]] || return 0
+  out="$("$ruff" format --check --quiet -- "$f" 2>&1 | head -n 5)"
+  [[ -n "$out" ]] || return 0
+  printf 'ruff format (would reformat — whole file, reported not blocked):\n    %s\n' "$out"
 }
 
 # ------------------------------------------------- 2. risky defaults: shell + config
@@ -208,7 +231,10 @@ if [[ -n "$_range" ]]; then
 fi
 
 case "$file" in
-  *.py) findings+="$(check_python "$file")" ;;
+  *.py)
+    findings+="$(check_python "$file")"
+    findings+="$(check_format "$file")"
+    ;;
 esac
 
 case "$file" in

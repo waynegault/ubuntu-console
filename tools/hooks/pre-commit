@@ -74,6 +74,24 @@ if ! "$REPO_ROOT/tools/check-module-versions.sh" --staged; then
     rc=1
 fi
 
+# ── Staged .py quality (pre-commit framework) ──────────────────────────────
+# The Python gates live in .pre-commit-config.yaml, run here over the STAGED set so a
+# co-worker's in-flight file cannot refuse a commit that does not touch it (the same
+# staged-scoping as the swallow check above).  pre-commit is OPTIONAL: when the venv
+# binary is absent (a fresh box before `pip install pre-commit`) this step is skipped
+# rather than failing — the same ruff/mypy/pyright/pytest gates still run in CI.
+# ruff-format formats what it touches, so a commit that reformats a staged .py FAILS
+# here and asks you to re-stage — the intended incremental path to a formatted corpus.
+_pre_commit="$REPO_ROOT/.venv/bin/pre-commit"
+if [[ -x "$_pre_commit" ]]; then
+    echo "=== pre-commit: staged .py quality (pre-commit run) ==="
+    if ! "$_pre_commit" run; then
+        rc=1
+    fi
+else
+    echo "pre-commit: .venv/bin/pre-commit not found — Python gates skipped (CI still runs them)"
+fi
+
 # NOT HERE: the whole-repo guards.  tools/check-repo-boundaries.sh and the §18.3
 # count ratchet read the WORKING TREE, and this repo's tree is shared with other
 # agent sessions — a co-worker's unstaged edit would fail YOUR commit for a change

@@ -12,6 +12,20 @@
   "python-envs.globalSearchPaths": [
     "${workspaceFolder}/.venv"
   ],
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true,
+  "ruff.lineLength": 120,
+  "ruff.importStrategy": "fromEnvironment",
+  "ruff.path": [
+    "${workspaceFolder}/.venv/bin/ruff"
+  ],
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": true
+    }
+  },
   "qwen-code.provider": "api-key",
   "qwen-code.codingPlanRegion": "global"
 }
