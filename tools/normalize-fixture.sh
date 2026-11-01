@@ -92,7 +92,7 @@ normalize() {
     | tr -s ' '
 }
 
-case "${1:---}" in
+case "${1:--}" in
     -h|--help)  usage ;;
     --all)
         count=0
