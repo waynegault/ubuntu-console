@@ -119,7 +119,7 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 16
+# Module Version: 17
 #   v16 (2026-10-26): LANE 4 addresses the second Xe lane as
 #   llama-xe-llama32-3b-chat.service.  The unit's name still claimed the
 #   Qwen2.5-3B weights the 2026-10-02 bake-off replaced, so a reader following
@@ -143,7 +143,7 @@
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.14"
+VERSION="3.15"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -616,145 +616,177 @@ recover() {
     return 1
 }
 
+# lane_present <unit> — is this lane's unit installed on THIS host?
+#
+# v5.1 (2026-11-01): every lane below was written against a fixed four-lane box, and
+# when a unit is RETIRED the lane body does not stop — it probes a dead port, strikes,
+# calls recover(), and recover() spends 150s in wait_healthy on a port nobody serves.
+# Measured tonight: three absent units x 150s pushed one run past systemd's 300s
+# TimeoutStartUSec, so `llama-watchdog.service` itself went `failed (Result=timeout)`
+# — the SUPERVISOR failed because the things it supervises no longer exist. A lane
+# whose unit is `not-found` is not down; it is not installed, which is a policy answer
+# and not a fault, so it is skipped and never restarted. LoadState is the right field:
+# ActiveState reads `inactive` for absent and for stopped alike, so it cannot tell the
+# two apart — a "down" lane and a "does not exist" lane look identical there.
+lane_present() {
+    local load
+    # swallow-ok: an absent unit or a systemctl hiccup leaves `load` empty, and the
+    # -n test below then answers "no", which is the safe direction: a lane we cannot
+    # prove is installed is skipped rather than restarted. The error text adds nothing.
+    # No swallow needed: this is a READ, and the caller only asks "is it not-found".
+    # An absent unit exits non-zero with empty output, which the -n test below
+    # already answers as "not installed" — so nothing here hides a real failure.
+    load=$(systemctl --user show "${1}.service" -p LoadState --value)
+    [[ -n "$load" && "$load" != "not-found" ]]
+}
+
 # ============================================================
 # LANE 1: Xe llama-server — always-on
 # ============================================================
-xe_state=$(systemctl --user show "$XE_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-health "$XE_PORT"; xe_health=$?
-if (( xe_health == 0 )); then
-    strike_reset "$STRIKE_XE"
-elif [[ "$xe_state" == "activating" ]]; then
-    log "Xe unit activating — systemd handling recovery; skipping"
-    strike_reset "$STRIKE_XE"
-elif (( xe_health == 2 )); then
-    # 503 = process up, model still loading. Striking or bouncing a loading
-    # unit only lengthens the outage (and can trip the start-limit).
-    log "Xe unit still loading (503) — leaving alone"
-    strike_reset "$STRIKE_XE"
-elif bench_lock; then
-    log "Xe down but bench lock present — skipping restart (port may be claimed)"
+if ! lane_present "$XE_UNIT"; then
+        log "Xe lane not installed on this host (XE_UNIT unit absent) — skipping, not restarting"
 else
-    strike_inc "$STRIKE_XE"
-    s=$(strike_get "$STRIKE_XE")
-    log "Xe health check failed on :${XE_PORT} (unit=${xe_state:-unknown}, strike ${s}/2)"
-    if [[ "$s" -ge 2 ]]; then
-        if recover "$XE_UNIT" "$XE_PORT"; then strike_reset "$STRIKE_XE"; fi
+    xe_state=$(systemctl --user show "$XE_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+    health "$XE_PORT"; xe_health=$?
+    if (( xe_health == 0 )); then
+        strike_reset "$STRIKE_XE"
+    elif [[ "$xe_state" == "activating" ]]; then
+        log "Xe unit activating — systemd handling recovery; skipping"
+        strike_reset "$STRIKE_XE"
+    elif (( xe_health == 2 )); then
+        # 503 = process up, model still loading. Striking or bouncing a loading
+        # unit only lengthens the outage (and can trip the start-limit).
+        log "Xe unit still loading (503) — leaving alone"
+        strike_reset "$STRIKE_XE"
+    elif bench_lock; then
+        log "Xe down but bench lock present — skipping restart (port may be claimed)"
     else
-        log "Xe strike 1/2 — will restart if next check also fails"
+        strike_inc "$STRIKE_XE"
+        s=$(strike_get "$STRIKE_XE")
+        log "Xe health check failed on :${XE_PORT} (unit=${xe_state:-unknown}, strike ${s}/2)"
+        if [[ "$s" -ge 2 ]]; then
+            if recover "$XE_UNIT" "$XE_PORT"; then strike_reset "$STRIKE_XE"; fi
+        else
+            log "Xe strike 1/2 — will restart if next check also fails"
+        fi
     fi
-fi
 
+fi
 # ============================================================
 # LANE 2: CUDA card — llama-cuda-llama32-3b-chat — runs only while GPU free
 # ============================================================
-cuda_state=$(systemctl --user show "$CUDA_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-if cuda_suspended; then
-    # CUDA-only suspend: keep the CUDA lane down (and take it down if it is up).
-    # Strikes reset so a resumed lane does not inherit strikes accrued while it
-    # was deliberately stopped.
-    if [[ "$cuda_state" == "active" ]]; then
-        log "CUDA lane suspended — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)"
-        if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
-        then
-            log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
-        fi
-    else
-        log "CUDA lane suspended — held by live pid $(_tac_suspend_pid "$CUDA_SUSPEND_FILE"); not starting $CUDA_UNIT"
-    fi
-    # A suspend is its own deliberate stop; a stale GPU-busy marker must not
-    # survive it and explain away the first real death after a resume.
-    gpustop_clear
-    strike_reset "$STRIKE_CUDA"
-elif gpu_busy; then
-    # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
-    # Before acting on "busy", say WHICH busy this is when the gate failed closed
-    # for a driver-level reason (v3.13): the probe's own reason cannot distinguish
-    # "a workload holds the card" from "the driver is gone", and those need
-    # opposite responses from a human.  Rate-limited inside the helper (one probe
-    # per hold window), and read-only — the stop/start decisions stay here.
-    gpu_classify_driver_failclosed
-    if [[ "$cuda_state" == "active" ]]; then
-        log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
-        if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
-        then
-            log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
-        fi
-    fi
-    # Mark the stop as OURS, renewed on every busy tick.  Without this the next
-    # tick where the card frees sees a down unit and counts the stop as an
-    # UNEXPECTED death (v3.8), so three deliberate stops in an hour tripped the
-    # flap alert and the 30min cooling-off — leaving the CUDA tier offline on an
-    # idle card while the log blamed a dead lane that never died.
-    gpustop_mark
-    strike_reset "$STRIKE_CUDA"
-elif [[ "$cuda_state" == "active" ]]; then
-    # The lane is up, so any pending marker has served its purpose (or is stale).
-    gpustop_clear
-    health "$CUDA_PORT"; cuda_health=$?
-    if (( cuda_health == 0 )); then
-        strike_reset "$STRIKE_CUDA"
-    elif (( cuda_health == 2 )); then
-        # Still loading (503) — do not strike or restart the CUDA lane.
-        log "CUDA unit still loading (503) — leaving alone"
-        strike_reset "$STRIKE_CUDA"
-    else
-        strike_inc "$STRIKE_CUDA"
-        s=$(strike_get "$STRIKE_CUDA")
-        log "CUDA health check failed on :${CUDA_PORT} (unit=${cuda_state}, strike ${s}/2)"
-        if [[ "$s" -ge 2 ]]; then
-            if recover "$CUDA_UNIT" "$CUDA_PORT"; then strike_reset "$STRIKE_CUDA"; fi
-        fi
-    fi
-elif [[ "$cuda_state" == "activating" ]]; then
-    # systemd is already bringing the unit up (mirrors the Xe lane): issuing a
-    # start would act on a unit that is mid-start.
-    log "CUDA unit activating — systemd handling recovery; skipping"
-    gpustop_clear
-    strike_reset "$STRIKE_CUDA"
+if ! lane_present "$CUDA_UNIT"; then
+        log "CUDA lane not installed on this host (CUDA_UNIT unit absent) — skipping, not restarting"
 else
-    # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
-    if bench_lock; then
-        log "GPU free but bench lock present — not starting $CUDA_UNIT yet"
-    else
-        # Down with a free card is USUALLY an unexpected death (v3.8) — but not if
-        # WE stopped it for a foreign GPU owner and the card has since freed.  The
-        # marker is SINGLE-USE: consuming it here means it can explain exactly one
-        # restart and can never mask a genuine death afterwards.
-        if gpustop_active; then
-            log "GPU free; the stop was ours for a foreign owner — restarting $CUDA_UNIT without recording a flap"
-            gpustop_clear
+    cuda_state=$(systemctl --user show "$CUDA_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+    if cuda_suspended; then
+        # CUDA-only suspend: keep the CUDA lane down (and take it down if it is up).
+        # Strikes reset so a resumed lane does not inherit strikes accrued while it
+        # was deliberately stopped.
+        if [[ "$cuda_state" == "active" ]]; then
+            log "CUDA lane suspended — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)"
+            if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
+            then
+                log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
+            fi
         else
-            # An unexpected death: down, card free, nothing suspending us.  Count it
-            # BEFORE any recovery below so the alert and the action appear together.
-            flap_record "$FLAP_CUDA"
-            flap_alert "$CUDA_UNIT" "$FLAP_CUDA" "bin/gpu-busy.sh --json for a foreign GPU owner"
+            log "CUDA lane suspended — held by live pid $(_tac_suspend_pid "$CUDA_SUSPEND_FILE"); not starting $CUDA_UNIT"
         fi
-        if flap_hold_active; then
-            log "CUDA lane held down after repeated flaps — not starting $CUDA_UNIT (cooling-off; delete $FLAP_HOLD_FILE to lift it early)"
-        elif (( $(flap_count "$FLAP_CUDA") >= FLAP_THRESHOLD )); then
-            # At the threshold the restart STOPS.  A lane dying every few minutes is
-            # either being evicted by something outside our control or is broken; in
-            # both cases another context cycle makes it worse, not better.
-            flap_hold_enter
-        else
-            if [[ "$cuda_state" == "failed" ]]; then
-                systemctl --user reset-failed "$CUDA_UNIT.service" 2>/dev/null || true
+        # A suspend is its own deliberate stop; a stale GPU-busy marker must not
+        # survive it and explain away the first real death after a resume.
+        gpustop_clear
+        strike_reset "$STRIKE_CUDA"
+    elif gpu_busy; then
+        # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
+        # Before acting on "busy", say WHICH busy this is when the gate failed closed
+        # for a driver-level reason (v3.13): the probe's own reason cannot distinguish
+        # "a workload holds the card" from "the driver is gone", and those need
+        # opposite responses from a human.  Rate-limited inside the helper (one probe
+        # per hold window), and read-only — the stop/start decisions stay here.
+        gpu_classify_driver_failclosed
+        if [[ "$cuda_state" == "active" ]]; then
+            log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
+            if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
+            then
+                log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
             fi
-            log "GPU free and $CUDA_UNIT not active — starting CUDA lane"
-            if systemctl --user start "$CUDA_UNIT.service" 2>/dev/null; then
-                if wait_healthy "$CUDA_PORT" 150; then
-                    log "CUDA lane healthy on :${CUDA_PORT}"
-                else
-                    log "CUDA lane started but not healthy on :${CUDA_PORT} within 150s"
-                fi
-            else
-                log "Failed to start $CUDA_UNIT"
-            fi
+        fi
+        # Mark the stop as OURS, renewed on every busy tick.  Without this the next
+        # tick where the card frees sees a down unit and counts the stop as an
+        # UNEXPECTED death (v3.8), so three deliberate stops in an hour tripped the
+        # flap alert and the 30min cooling-off — leaving the CUDA tier offline on an
+        # idle card while the log blamed a dead lane that never died.
+        gpustop_mark
+        strike_reset "$STRIKE_CUDA"
+    elif [[ "$cuda_state" == "active" ]]; then
+        # The lane is up, so any pending marker has served its purpose (or is stale).
+        gpustop_clear
+        health "$CUDA_PORT"; cuda_health=$?
+        if (( cuda_health == 0 )); then
             strike_reset "$STRIKE_CUDA"
+        elif (( cuda_health == 2 )); then
+            # Still loading (503) — do not strike or restart the CUDA lane.
+            log "CUDA unit still loading (503) — leaving alone"
+            strike_reset "$STRIKE_CUDA"
+        else
+            strike_inc "$STRIKE_CUDA"
+            s=$(strike_get "$STRIKE_CUDA")
+            log "CUDA health check failed on :${CUDA_PORT} (unit=${cuda_state}, strike ${s}/2)"
+            if [[ "$s" -ge 2 ]]; then
+                if recover "$CUDA_UNIT" "$CUDA_PORT"; then strike_reset "$STRIKE_CUDA"; fi
+            fi
+        fi
+    elif [[ "$cuda_state" == "activating" ]]; then
+        # systemd is already bringing the unit up (mirrors the Xe lane): issuing a
+        # start would act on a unit that is mid-start.
+        log "CUDA unit activating — systemd handling recovery; skipping"
+        gpustop_clear
+        strike_reset "$STRIKE_CUDA"
+    else
+        # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
+        if bench_lock; then
+            log "GPU free but bench lock present — not starting $CUDA_UNIT yet"
+        else
+            # Down with a free card is USUALLY an unexpected death (v3.8) — but not if
+            # WE stopped it for a foreign GPU owner and the card has since freed.  The
+            # marker is SINGLE-USE: consuming it here means it can explain exactly one
+            # restart and can never mask a genuine death afterwards.
+            if gpustop_active; then
+                log "GPU free; the stop was ours for a foreign owner — restarting $CUDA_UNIT without recording a flap"
+                gpustop_clear
+            else
+                # An unexpected death: down, card free, nothing suspending us.  Count it
+                # BEFORE any recovery below so the alert and the action appear together.
+                flap_record "$FLAP_CUDA"
+                flap_alert "$CUDA_UNIT" "$FLAP_CUDA" "bin/gpu-busy.sh --json for a foreign GPU owner"
+            fi
+            if flap_hold_active; then
+                log "CUDA lane held down after repeated flaps — not starting $CUDA_UNIT (cooling-off; delete $FLAP_HOLD_FILE to lift it early)"
+            elif (( $(flap_count "$FLAP_CUDA") >= FLAP_THRESHOLD )); then
+                # At the threshold the restart STOPS.  A lane dying every few minutes is
+                # either being evicted by something outside our control or is broken; in
+                # both cases another context cycle makes it worse, not better.
+                flap_hold_enter
+            else
+                if [[ "$cuda_state" == "failed" ]]; then
+                    systemctl --user reset-failed "$CUDA_UNIT.service" 2>/dev/null || true
+                fi
+                log "GPU free and $CUDA_UNIT not active — starting CUDA lane"
+                if systemctl --user start "$CUDA_UNIT.service" 2>/dev/null; then
+                    if wait_healthy "$CUDA_PORT" 150; then
+                        log "CUDA lane healthy on :${CUDA_PORT}"
+                    else
+                        log "CUDA lane started but not healthy on :${CUDA_PORT} within 150s"
+                    fi
+                else
+                    log "Failed to start $CUDA_UNIT"
+                fi
+                strike_reset "$STRIKE_CUDA"
+            fi
         fi
     fi
-fi
 
+fi
 # ============================================================
 # LANE 3: CPU — llama-cpu-qwen25-3b-chat — the chain's tail, no card
 # ============================================================
@@ -765,32 +797,36 @@ fi
 # the process after a kill, but systemd stops trying once the unit trips
 # StartLimitBurst and parks it in `failed`, which is exactly the state this tier
 # was found in after its four kills, with nothing left to lift it.
-cpu_state=$(systemctl --user show "$CPU_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-health "$CPU_PORT"; cpu_health=$?
-if (( cpu_health == 0 )); then
-    strike_reset "$STRIKE_CPU"
-elif [[ "$cpu_state" == "activating" ]]; then
-    log "CPU unit activating — systemd handling recovery; skipping"
-    strike_reset "$STRIKE_CPU"
-elif (( cpu_health == 2 )); then
-    log "CPU unit still loading (503) — leaving alone"
-    strike_reset "$STRIKE_CPU"
-elif bench_lock; then
-    log "CPU down but bench lock present — skipping restart"
+if ! lane_present "$CPU_UNIT"; then
+        log "CPU lane not installed on this host (CPU_UNIT unit absent) — skipping, not restarting"
 else
-    strike_inc "$STRIKE_CPU"
-    s=$(strike_get "$STRIKE_CPU")
-    # An unexpected death: down, not mid-start, not loading, nothing holding us off.
-    flap_record "$FLAP_CPU"
-    flap_alert "$CPU_UNIT" "$FLAP_CPU" "the unit journal for the signaller (this lane holds no card, so a GPU sweep cannot explain it)"
-    log "CPU health check failed on :${CPU_PORT} (unit=${cpu_state:-unknown}, strike ${s}/2)"
-    if [[ "$s" -ge 2 ]]; then
-        if recover "$CPU_UNIT" "$CPU_PORT"; then strike_reset "$STRIKE_CPU"; fi
+    cpu_state=$(systemctl --user show "$CPU_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+    health "$CPU_PORT"; cpu_health=$?
+    if (( cpu_health == 0 )); then
+        strike_reset "$STRIKE_CPU"
+    elif [[ "$cpu_state" == "activating" ]]; then
+        log "CPU unit activating — systemd handling recovery; skipping"
+        strike_reset "$STRIKE_CPU"
+    elif (( cpu_health == 2 )); then
+        log "CPU unit still loading (503) — leaving alone"
+        strike_reset "$STRIKE_CPU"
+    elif bench_lock; then
+        log "CPU down but bench lock present — skipping restart"
     else
-        log "CPU strike 1/2 — will restart if next check also fails"
+        strike_inc "$STRIKE_CPU"
+        s=$(strike_get "$STRIKE_CPU")
+        # An unexpected death: down, not mid-start, not loading, nothing holding us off.
+        flap_record "$FLAP_CPU"
+        flap_alert "$CPU_UNIT" "$FLAP_CPU" "the unit journal for the signaller (this lane holds no card, so a GPU sweep cannot explain it)"
+        log "CPU health check failed on :${CPU_PORT} (unit=${cpu_state:-unknown}, strike ${s}/2)"
+        if [[ "$s" -ge 2 ]]; then
+            if recover "$CPU_UNIT" "$CPU_PORT"; then strike_reset "$STRIKE_CPU"; fi
+        else
+            log "CPU strike 1/2 — will restart if next check also fails"
+        fi
     fi
-fi
 
+fi
 # ============================================================
 # LANE 4: Xe (second lane) — llama-xe-llama32-3b-chat — always-on, same card as LANE 1
 # ============================================================
@@ -801,34 +837,38 @@ fi
 # is again the whole question, with the bench lock as the one gate.  The unit ran
 # enabled with Restart=always and still sat `failed` for 22h because StartLimitBurst
 # (6 in 600s) parks it and nothing lifted it — the same gap LANE 3 exists to close.
-xe3b_state=$(systemctl --user show "$XE3B_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-health "$XE3B_PORT"; xe3b_health=$?
-if (( xe3b_health == 0 )); then
-    strike_reset "$STRIKE_XE3B"
-elif [[ "$xe3b_state" == "activating" ]]; then
-    log "Xe3B unit activating — systemd handling recovery; skipping"
-    strike_reset "$STRIKE_XE3B"
-elif (( xe3b_health == 2 )); then
-    log "Xe3B unit still loading (503) — leaving alone"
-    strike_reset "$STRIKE_XE3B"
-elif bench_lock; then
-    log "Xe3B down but bench lock present — skipping restart"
+if ! lane_present "$XE3B_UNIT"; then
+        log "Xe3B lane not installed on this host (XE3B_UNIT unit absent) — skipping, not restarting"
 else
-    strike_inc "$STRIKE_XE3B"
-    s=$(strike_get "$STRIKE_XE3B")
-    # An unexpected death: down, not mid-start, not loading, no bench holding us off.
-    # The hint names the two sweeps on record for this box; a clean stop (success/0) is
-    # what a hosted bench or a VRAM sweep looks like, and neither is a fault in the lane.
-    flap_record "$FLAP_XE3B"
-    flap_alert "$XE3B_UNIT" "$FLAP_XE3B" "docs/llm.md's bench-vs-lane note (a hosted bench session or a VRAM sweep stops lanes by name)"
-    log "Xe3B health check failed on :${XE3B_PORT} (unit=${xe3b_state:-unknown}, strike ${s}/2)"
-    if [[ "$s" -ge 2 ]]; then
-        if recover "$XE3B_UNIT" "$XE3B_PORT"; then strike_reset "$STRIKE_XE3B"; fi
+    xe3b_state=$(systemctl --user show "$XE3B_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+    health "$XE3B_PORT"; xe3b_health=$?
+    if (( xe3b_health == 0 )); then
+        strike_reset "$STRIKE_XE3B"
+    elif [[ "$xe3b_state" == "activating" ]]; then
+        log "Xe3B unit activating — systemd handling recovery; skipping"
+        strike_reset "$STRIKE_XE3B"
+    elif (( xe3b_health == 2 )); then
+        log "Xe3B unit still loading (503) — leaving alone"
+        strike_reset "$STRIKE_XE3B"
+    elif bench_lock; then
+        log "Xe3B down but bench lock present — skipping restart"
     else
-        log "Xe3B strike 1/2 — will restart if next check also fails"
+        strike_inc "$STRIKE_XE3B"
+        s=$(strike_get "$STRIKE_XE3B")
+        # An unexpected death: down, not mid-start, not loading, no bench holding us off.
+        # The hint names the two sweeps on record for this box; a clean stop (success/0) is
+        # what a hosted bench or a VRAM sweep looks like, and neither is a fault in the lane.
+        flap_record "$FLAP_XE3B"
+        flap_alert "$XE3B_UNIT" "$FLAP_XE3B" "docs/llm.md's bench-vs-lane note (a hosted bench session or a VRAM sweep stops lanes by name)"
+        log "Xe3B health check failed on :${XE3B_PORT} (unit=${xe3b_state:-unknown}, strike ${s}/2)"
+        if [[ "$s" -ge 2 ]]; then
+            if recover "$XE3B_UNIT" "$XE3B_PORT"; then strike_reset "$STRIKE_XE3B"; fi
+        else
+            log "Xe3B strike 1/2 — will restart if next check also fails"
+        fi
     fi
-fi
 
+fi
 # Assert the window invariant on every lane that is up (2026-09-14).  This is
 # the check that would have caught the registry's parallel=16 dividing every
 # served window, and that catches a --fit or --parallel drift on a unit.

@@ -81,11 +81,32 @@ op="${1:-}"; shift || true
 case "$op" in
     show)
         unit="${1:-}"
+        # v5.1: answer by the PROPERTY asked for, not by the unit alone. The watchdog
+        # now probes LoadState to decide whether a lane is installed at all, and the
+        # old mock returned an ActiveState string for any -p argument — so a
+        # LoadState query would have read "inactive" and every lane would have looked
+        # present, making the skip tests pass without exercising the skip.
+        # Walk the args properly: -p takes the NEXT argument as the property name.
+        # (An earlier version used a two-state flag inside one case arm, where the
+        # [[ ]] test short-circuited before the assignment and only the assignment
+        # to `got` ever ran, so the property was always reported as ActiveState and
+        # the skip test could never see not-found.)
+        prop="ActiveState"
+        prev=""
+        for a in "$@"; do
+            if [[ "$prev" == "-p" ]]; then prop="$a"; fi
+            prev="$a"
+        done
         case "$unit" in
-            *cuda*)        cat "$SYSTEMCTL_MOCK_STATE/cuda_state" 2>/dev/null || echo "inactive" ;;
-            *cpu*)         cat "$SYSTEMCTL_MOCK_STATE/cpu_state" 2>/dev/null || echo "inactive" ;;
-            *llama-xe-llama32-3b*) cat "$SYSTEMCTL_MOCK_STATE/xe3b_state" 2>/dev/null || echo "inactive" ;;
-            *)             cat "$SYSTEMCTL_MOCK_STATE/xe_state" 2>/dev/null || echo "inactive" ;;
+            *cuda*)        base=cuda ;;
+            *cpu*)         base=cpu ;;
+            *llama-xe-llama32-3b*) base=xe3b ;;
+            *)             base=xe ;;
+        esac
+        # load_<lane> absent -> live default "loaded"; present in a test -> its value.
+        case "$prop" in
+            LoadState) cat "$SYSTEMCTL_MOCK_STATE/load_${base}" 2>/dev/null || echo "${LOADSTATE_DEFAULT:-loaded}" ;;
+            *)         cat "$SYSTEMCTL_MOCK_STATE/${base}_state" 2>/dev/null || echo "inactive" ;;
         esac
         ;;
     restart)
@@ -916,6 +937,53 @@ setup() {
     [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps")" -eq 4 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
     [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaphold" ]]
+}
+
+@test "integration: a lane whose unit is NOT INSTALLED is skipped, not restarted" {
+    # The live defect, 2026-11-01 00:22Z: three of the four lanes named units this box
+    # does not have. The lane bodies did not care — they probed a dead port, struck,
+    # and called recover(), which spends 150s in wait_healthy on a port nobody serves.
+    # Three of those blew systemd's start budget and `llama-watchdog.service` itself
+    # was reported `failed (Result=timeout)`. LoadState is the field that can tell
+    # "not installed" from "stopped": both read `inactive` in ActiveState.
+    rm -f "$WATCHDOG_MOCK_STATE"/*_state
+    echo "not-found" > "$WATCHDOG_MOCK_STATE/load_xe"
+    echo "not-found" > "$WATCHDOG_MOCK_STATE/load_cuda"
+    echo "not-found" > "$WATCHDOG_MOCK_STATE/load_cpu"
+    echo "not-found" > "$WATCHDOG_MOCK_STATE/load_xe3b"
+    # Nothing is up, so every lane would strike and restart if the skip were missing.
+    printf '1\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
+    printf '1\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
+    printf '1\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.strikes"
+    printf '1\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.strikes"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe lane not installed on this host"* ]]
+    [[ "$output" == *"CPU lane not installed on this host"* ]]
+    [[ "$output" == *"Xe3B lane not installed on this host"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    # Strikes must not accrue against a unit that does not exist: an absent lane is a
+    # policy answer, and a counter climbing on it would eventually read as a sick lane.
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes")" == "1" ]]
+}
+
+@test "integration: NEGATIVE ARM — an installed lane that is DOWN still restarts" {
+    # Without this, the skip test above is equally consistent with a watchdog that
+    # cannot restart anything at all. The skip must be conditional on LoadState, so
+    # flipping only that one field has to restore the old behaviour.
+    rm -f "$WATCHDOG_MOCK_STATE"/*_state
+    echo "loaded" > "$WATCHDOG_MOCK_STATE/load_xe"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/xe_state"
+    printf '1\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Restart issued: llama-xe-minicpm5-1b-chat"* ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
 # end of file

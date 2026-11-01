@@ -10,3 +10,13 @@ After=network.target
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/llama-watchdog.sh
+# TimeoutStartUSec: oneshot default is 90s, and the watchdog's own worst case is far
+# past that — up to four lanes, each strike-2 recovery waiting 150s in wait_healthy,
+# plus a 5s curl per health probe.  Measured 2026-11-01 00:22Z: a run was killed
+# mid-recovery (Terminating -> stop-sigterm timeout -> SIGKILL) at the 300s it had
+# inherited from an old drop-in, which read as "watchdog.service failed".  The
+# supervisor was working; its budget was shorter than the work it had already been
+# told to do.  The absent-unit skip above removes three of those 150s waits on this
+# box, but a box with four live lanes and every one of them sick still needs the
+# headroom, so the budget is stated rather than inherited.
+TimeoutStartSec=600
