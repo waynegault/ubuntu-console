@@ -60,7 +60,9 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-11-01): derive_rows skips embedding models (arch field 6 contains
+#   "embedding") — they have no generation to measure, so the plan never owes them a run.
 #   v23 (2026-10-20): v22 polish, from a self-review.  The empty-plan message said "every row is
 #   certified and unflagged", which became FALSE once `unacceptable` existed as a terminal state;
 #   it now says "certified or terminal".  And the streak-file write is checked: a failed write
@@ -363,6 +365,7 @@ report_parked() {
 derive_rows() {
     awk -F'|' -v nq="$NEW_QUANTS" -v parked="$PARKED_ROWS" '
         $1 ~ /^[0-9]+$/ && NF > 1 {
+            if (tolower($6) ~ /embedding/) next
             if (parked != "" && $3 ~ ("^(" parked ")$")) next
             t = $17 + 0; p = $25 + 0
             # A ruled NEW QUANT stays in BY NAME - but only while it is not certified (v6).  Pinning it

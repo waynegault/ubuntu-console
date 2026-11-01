@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-01): the --all-but-done / --all scope skips embedding models (arch field 6
+#   contains "embedding", e.g. gemma-embedding) — they have no generation to measure.
 #   v8 (2026-11-01): the post-stop free-VRAM wait bound is ${LLAMA_GPU_FREE_THRESHOLD_MIB:-800}
 #   instead of a hardcoded 800, so a box whose driver reserves more than 800 MiB names its own bound.
 #   v6 (2026-10-15): the halt classes are distinguished.  A spent cycle budget is
@@ -67,8 +69,21 @@ LOGDIR="$HOME/.llm/autotune-logs"
 mkdir -p "$LOGDIR"
 
 case "${1:-}" in
-    --all-but-done) shift; mapfile -t ROWS < <(awk -F'|' '$1 ~ /^[0-9]+$/ && $18 != "yes" {print $3}' "$REGISTRY" | sort) ;;
-    --all)          shift; mapfile -t ROWS < <(awk -F'|' '$1 ~ /^[0-9]+$/ {print $3}' "$REGISTRY" | sort) ;;
+    # Embedding models (arch field 6, e.g. gemma-embedding) have no generation to
+    # measure, so the sweep skips them instead of burning a row on a probe that can
+    # only fail.
+    --all-but-done)
+        shift
+        mapfile -t ROWS < <(awk -F'|' '
+            $1 ~ /^[0-9]+$/ && $18 != "yes" && tolower($6) !~ /embedding/ {print $3}
+        ' "$REGISTRY" | sort)
+        ;;
+    --all)
+        shift
+        mapfile -t ROWS < <(awk -F'|' '
+            $1 ~ /^[0-9]+$/ && tolower($6) !~ /embedding/ {print $3}
+        ' "$REGISTRY" | sort)
+        ;;
     '')             echo "usage: $(basename "$0") <row|file>... | --all-but-done | --all" >&2; exit 2 ;;
     *)              ROWS=("$@") ;;
 esac

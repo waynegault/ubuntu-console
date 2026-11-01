@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-11-01): the default scope (no explicit rows) skips embedding models (arch
+#   field 6 contains "embedding") — they have no generation to measure.
 #   v23 (2026-10-20): a degraded paravirtualization (TAC_LOAD_DEGRADED=1) refuses at startup
 #   with exit 5 — the row script already checked it, but this batch discarded env.sh's report
 #   and ran against a card it could not attribute.  And the row engine now runs from
@@ -112,7 +114,9 @@ source "$_SELF_DIR/../bin/_tac-bin-lib.sh"
 # after it).  Numbers are still accepted from the caller — autotune-model.sh resolves
 # them once and then works from the file name throughout.
 if [ $# -eq 0 ]; then
-    MODELS=$(awk -F'|' '$1 ~ /^[0-9]+$/ && $18 != "yes" {print $3}' "$LLM_REGISTRY" | sort | tr '\n' ' ')
+    MODELS=$(awk -F'|' '
+        $1 ~ /^[0-9]+$/ && $18 != "yes" && tolower($6) !~ /embedding/ {print $3}
+    ' "$LLM_REGISTRY" | sort | tr '\n' ' ')
 else
     MODELS="$*"
 fi

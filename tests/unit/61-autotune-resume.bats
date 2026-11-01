@@ -159,6 +159,28 @@ teardown() {
     ! grep -qE '^[0-9]+$' "$TAC_RESUME_PLAN"
 }
 
+@test "autotune-resume: an embedding model (arch contains 'embedding') is never owed a run" {
+    # An embedding model has no generation to measure, so derive_rows must skip it even
+    # when it reads autotuned != yes — otherwise the sweep burns a row on a probe that
+    # can only fail (measured 2026-11-01: embeddinggemma's arch is gemma-embedding).
+    {
+        _row 1 generation.gguf 2.00 no 0.00
+        _row 2 embedding.gguf  1.00 no 0.00
+    } > "$TAC_RESUME_REGISTRY"
+    # Flip column 6 (arch) to the embedding arch; everything else stays as _row built it.
+    awk -F'|' 'BEGIN { OFS = "|" } $1 == 2 { $6 = "gemma-embedding" } { print }' "$TAC_RESUME_REGISTRY" \
+        > "$TAC_RESUME_REGISTRY.tmp" && mv "$TAC_RESUME_REGISTRY.tmp" "$TAC_RESUME_REGISTRY"
+    : > "$TAC_RESUME_MODEL_DIR/generation.gguf"
+    : > "$TAC_RESUME_MODEL_DIR/embedding.gguf"
+
+    run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+
+    # The generation row is owed and planned; the embedding row is skipped.
+    grep -q '^generation.gguf$' "$TAC_RESUME_PLAN"
+    ! grep -q '^embedding.gguf$' "$TAC_RESUME_PLAN"
+}
+
 @test "autotune-resume: a SCOPE row survives the derivation, and a CERTIFIED new quant is not re-run" {
     # v6.  The derivation answers "what is the REGISTRY owed?", and because every registry row reads
     # autotuned=yes it answers "nothing" - so a hand-written plan was re-derived away one boot after it
