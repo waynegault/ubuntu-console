@@ -1102,7 +1102,6 @@ Both modes parse the server `timings` block (`prompt_per_second`, `predicted_per
 
 **The measurement columns (40-44) a certified row now carries.** `meas_load`/`meas_n` are the box load at certification and the sample count (5); `meas_state` is `certified` or `indicative`, and **`indicative` means the number is not trustworthy as a property of the model**, for either of two independent reasons: the box was CONTENDED when it was taken (load above the core count — the run refuses to write that by default; `--allow-contended` records it), or its `meas_drift_pct` — the spread of the SAME config measured at a second POSITION — exceeded the cache-ram probe's 25% hazard bound.
 
-
 ```json
 {
   "messages": [{
