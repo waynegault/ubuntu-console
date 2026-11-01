@@ -154,7 +154,11 @@ stub_uname() {
     # up asus-n1n-rtx-spark, whose lane table is empty on purpose ("its own are not
     # named yet"), so the case read 0 lines and called a correct empty table a defect —
     # measured 2026-10-30.  A case about a profile has to say which profile.
-    run bash -c 'LLM_HOST_PROFILE=intel-xe-cuda source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
+    # An inherited LLAMA_LANE_SPECS is dropped for the same reason tests/unit/23 does
+    # it: `:=` never overrides an exported variable, so the case would judge the
+    # caller's environment instead of the profile.  Measured 2026-11-01 — a shell that
+    # had exported the other profile's table made this case read 2 lanes and fail.
+    run env -u LLAMA_LANE_SPECS bash -c 'LLM_HOST_PROFILE=intel-xe-cuda source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
         _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
     [ "$(printf '%s\n' "$output" | grep -c .)" -eq 5 ]

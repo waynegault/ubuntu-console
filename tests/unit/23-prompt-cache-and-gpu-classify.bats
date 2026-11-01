@@ -391,9 +391,11 @@ EOS
 # can drift silently.  The counters are the serving stack's own evidence that a
 # prefix-cache regression happened; a reader that printed 0 for an unreadable
 # endpoint would hide exactly that.
-_LANE_SPECS='llama-cuda-qwen3coder-30b-chat.service|18087
-llama-cuda-embeddinggemma-embed.service|18080
-llama-cpu-qwen3coder-30b-chat.service|18086'
+_LANE_SPECS='llama-xe-minicpm5-1b-chat.service|18081
+llama-xe-embeddinggemma-embed.service|18080
+llama-xe-llama32-3b-chat.service|18085
+llama-cuda-llama32-3b-chat.service|18083
+llama-cpu-qwen25-3b-chat.service|18084'
 
 @test "metrics: every resident lane unit passes --metrics on its loopback listener" {
     local spec unit port u exec_line count status=0
