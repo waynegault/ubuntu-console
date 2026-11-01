@@ -236,7 +236,6 @@ auth-profile `keyRef` alone does not, because the sweep's preserve set is
 | Config path | Env var |
 | --- | --- |
 | `models.providers.deepseek.apiKey` | `DEEPSEEK_API_KEY` |
-| `models.providers.ollama.apiKey` | `OLLAMA_API_KEY` |
 | `models.providers.openai.apiKey` | `OPENAI_API_KEY` |
 | `models.providers.anthropic.apiKey` | `ANTHROPIC_API_KEY` |
 | `models.providers.groq.apiKey` | `GROQ_API_KEY` |
@@ -291,19 +290,25 @@ SecretRef write.
 
 | Config path | Env var |
 | --- | --- |
-| `gateway.auth.token` | `OPENCLAW_GATEWAY_TOKEN` |
 | `gateway.controlUi.github.token` | `GH_TOKEN` |
 | `talk.providers.elevenlabs.apiKey` | `ELEVENLABS_API_KEY` |
 
-`gateway.auth.mode` is explicitly `password`, and stays so: the resolved mode
-takes `authConfig.mode` before any token, so naming the token here does not flip
-the auth mode — it makes the sweep preserve the token instead of deleting it.
+`gateway.auth.token` is deliberately **absent** from this table. Since
+2026-11-01 it is a store-backed SecretRef
+(`{"source":"store","provider":"default","id":"OPENCLAW_GATEWAY_TOKEN"}`), and
+`oc token` resolves it from the state DB; `gateway.auth.mode` is whatever the
+config declares (`token` on this box). An env-backed ref here would be a
+regression, not a mapping: the unit's `OPENCLAW_SERVICE_MANAGED_ENV_KEYS` no
+longer carries the name, so the Gateway's startup sweep would delete the key the
+ref names. `oc-refresh-keys` therefore un-imports `OPENCLAW_GATEWAY_TOKEN` — it
+unsets it in its own process and no longer merges it into the bridge cache, so a
+terminal that exported it before the migration cannot put it back.
 `talk.providers.<provider>` is the documented shape for a speech provider
 (`docs/nodes/talk*.md`), and the elevenlabs plugin's own `configSchema` has no
 field of its own (`additionalProperties: false`, no properties), so that is the
 only place its key can be named.
 
-27 mappings in total. Keep this list in step with `entries` in
+25 mappings in total. Keep this list in step with `entries` in
 `scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source,
 and `tests/unit/15-secret-ref-paths.bats` validates every path in it against the
 real config schema.

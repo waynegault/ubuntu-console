@@ -198,6 +198,47 @@ CFG
     [[ "$output" != *QWEN_TOKEN_PLAN_API_KEY* ]]
 }
 
+@test "oc-refresh-keys does not re-import a retired OPENCLAW_GATEWAY_TOKEN from the caller (2026-11-01)" {
+    # Criterion: gateway.auth.token is a STORE-backed SecretRef since 2026-11-01 12:12, and
+    # the unit's OPENCLAW_SERVICE_MANAGED_ENV_KEYS no longer carries the name, so the token is
+    # NOT an env credential. What this catches: the step-2a Linux-side merge re-importing the
+    # name from a terminal opened before the migration, and __oc_apply_secret_refs (whose
+    # embedded Python reads THIS process's environment, not only the cache) then rewriting the
+    # store ref as an env ref — the one channel the Gateway's startup sweep deletes.
+    mkdir -p "$HOME/.openclaw"
+    cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
+{
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": {"source": "store", "provider": "default", "id": "OPENCLAW_GATEWAY_TOKEN"}
+    }
+  }
+}
+CFG
+    # A patch must happen, or the payload assertion below proves nothing. GEMINI_API_KEY is
+    # the positive control and is unrelated to the token.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key'"
+    export GEMINI_API_KEY="test-gemini-key"
+    export OPENCLAW_GATEWAY_TOKEN="stale-shell-value"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # The stale export reaches neither the bridge cache nor its canonical name list...
+    run grep -c '^export OPENCLAW_GATEWAY_TOKEN=' "$TAC_CACHE_DIR/tac_win_api_keys"
+    [ "$output" -eq 0 ]
+    run grep -c '^OPENCLAW_GATEWAY_TOKEN$' "$TAC_CACHE_DIR/tac_win_api_key_names"
+    [ "$output" -eq 0 ]
+
+    # ...and no SecretRef write names the field, so the store-backed ref stands.
+    [ -f "$OC_MOCK_PATCH_FILE" ]
+    run grep -F '"GEMINI_API_KEY"' "$OC_MOCK_PATCH_FILE"
+    [ "$status" -eq 0 ]
+    run grep -F 'OPENCLAW_GATEWAY_TOKEN' "$OC_MOCK_PATCH_FILE"
+    [ "$status" -ne 0 ]
+}
+
 @test "oc-refresh-keys skips gateway restart and NAS export when nothing changed" {
     __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret' 'GEMINI_API_KEY=test-gemini-key'"
     export GEMINI_API_KEY="test-gemini-key"

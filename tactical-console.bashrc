@@ -279,9 +279,10 @@ fi
 # (that refreshes /dev/shm/tac_win_api_keys): systemd imports this file into the
 # user manager at start, and 21 of its ~30 keys have no other source, so it is
 # their sole provider -- do not delete it. Source it as well so env-backed
-# gateway SecretRefs (OPENCLAW_GATEWAY_PASSWORD/OPENCLAW_GATEWAY_TOKEN) resolve
-# for CLI commands even when the /dev/shm bridge cache is stale or pwsh is
-# unavailable at shell start.
+# gateway SecretRefs (OPENCLAW_GATEWAY_PASSWORD) resolve for CLI commands even
+# when the /dev/shm bridge cache is stale or pwsh is unavailable at shell start.
+# OPENCLAW_GATEWAY_TOKEN is NOT one of these: gateway.auth.token is a store-backed
+# SecretRef since 2026-11-01, and `oc refresh-keys` unsets any stale export of it.
 if [[ -f "$HOME/.config/environment.d/90-openclaw.conf" ]]; then
     set -a
     source "$HOME/.config/environment.d/90-openclaw.conf"

@@ -121,7 +121,17 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 61
+# Module Version: 62
+#   v62 (2026-11-01): OPENCLAW_GATEWAY_TOKEN is RETIRED as a bridged env credential. At 12:12
+#   today `gateway.auth.token` became a STORE-backed SecretRef
+#   ({source:"store", provider:"default", id:"OPENCLAW_GATEWAY_TOKEN"}), and the unit's
+#   OPENCLAW_SERVICE_MANAGED_ENV_KEYS no longer carries the name. The refresh could still put
+#   the env value back two ways: the step-2a Linux-side merge re-imported it from a terminal
+#   opened before the migration, and the SecretRef table (whose embedded Python reads THIS
+#   process's environment, not the cache) then rewrote the store ref as an env ref — the one
+#   channel the Gateway's startup sweep deletes. The merge no longer names it, oc-refresh-keys
+#   UNSETS it in its own process, and the table has no gateway.auth.token row. Wayne's hand-back
+#   caveat ("unset it in every old terminal") is therefore handled in code, not by the operator.
 #   v60 (2026-10-23): the SecretRef table no longer OVERWRITES a provider apiKey that names a
 #   declared auth profile (auth.profiles). Measured that evening: a run with DEEPSEEK_API_KEY
 #   exported rewrote models.providers.deepseek.apiKey from "deepseek:manual" to the env ref,
@@ -1101,10 +1111,13 @@ entries = [
     # import was putting back. Each field below was validated against the real schema with
     # `openclaw config patch --dry-run` on a throwaway empty config — the same oracle
     # tests/unit/15-secret-ref-paths.bats runs, so a row that drifts from the schema fails there:
-    #   gateway.auth.token      the Gateway's own token. Its auth.mode is explicitly "password"
-    #                           (and stays that way: finalizeResolvedGatewayAuth takes
-    #                           authConfig.mode before any token), so naming the token here does
-    #                           not flip the auth mode — it makes the sweep preserve it.
+    #   gateway.auth.token      NO ROW, DELIBERATELY (v62, 2026-11-01). The token is a
+    #                           STORE-backed SecretRef now, and a row here rewrites that field
+    #                           as an env ref — the channel the sweep deletes, because the
+    #                           unit's OPENCLAW_SERVICE_MANAGED_ENV_KEYS no longer carries the
+    #                           name. The 2026-10-01 rationale for this row (env ref keeps the
+    #                           sweep from deleting a key the login shell supplied) no longer
+    #                           applies: the value is in the secret store, not an env surface.
     #   talk.providers.elevenlabs.apiKey
     #                           elevenlabs is a talk/speech provider (docs/nodes/talk*.md:
     #                           "the matching talk.providers.<provider> configuration"); the
@@ -1120,7 +1133,6 @@ entries = [
     #                           the sweep stops deleting it and the manager-env push carries it.
     #                           Measured 2026-10-09: `openclaw models list --provider
     #                           qwen-token-plan` resolves 15 models, Auth yes.
-    ("gateway.auth.token", "OPENCLAW_GATEWAY_TOKEN"),
     ("talk.providers.elevenlabs.apiKey", "ELEVENLABS_API_KEY"),
     ("models.providers.qwen-token-plan.apiKey", "QWEN_TOKEN_PLAN_API_KEY"),
 ]
@@ -2411,6 +2423,14 @@ function oc-refresh-keys() {
     local _canonical_names="$TAC_CACHE_DIR/tac_win_api_key_names"
     local _prev_cache="$TAC_CACHE_DIR/tac_win_api_keys.prev"
 
+    # OPENCLAW_GATEWAY_TOKEN is RETIRED as a bridged env credential (v62, 2026-11-01):
+    # gateway.auth.token is a STORE-backed SecretRef now, and the unit no longer manages the
+    # name. A terminal opened before the migration still exports it, and __oc_apply_secret_refs
+    # reads THIS process's environment (not only the cache) — left in place, the stale export
+    # rewrites the store ref as an env ref, which the Gateway's startup sweep deletes. Clean the
+    # caller's environment here rather than asking the operator to unset it in every old shell.
+    unset OPENCLAW_GATEWAY_TOKEN
+
     # 1. Pull matching vars from Windows User environment.
     #    Preserve last-good values so a pwsh.exe outage can't change the var set.
     [[ -f "$cache" ]] && cp "$cache" "$_prev_cache" 2>/dev/null || true
@@ -2426,7 +2446,7 @@ function oc-refresh-keys() {
     # 2a. pwsh.exe succeeded — merge Linux-side vars and persist the canonical
     #     key-name set (used to keep the fallback var set identical).
     if [[ -f "$cache" ]]; then
-        for _lk in CONTEXT7_API_KEY DEVIN_API_KEY OPENCLAW_GATEWAY_TOKEN; do
+        for _lk in CONTEXT7_API_KEY DEVIN_API_KEY; do
             [[ -n "${!_lk:-}" ]] || continue
             grep -q "^export ${_lk}=" "$cache" 2>/dev/null && continue
             printf 'export %s=%q\n' "$_lk" "${!_lk}" >> "$cache"
