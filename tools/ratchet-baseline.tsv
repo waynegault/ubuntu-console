@@ -1,6 +1,16 @@
 # docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh
 # id<TAB>count.  A count may FALL freely; raising one is a deliberate act.
 #
+# 2026-11-01 (latest): 8.1.8 286 -> 287 — bin/gpu-busy.sh gained ONE 200-char line in
+# 43c8c55c ("a test runner holding no device memory is not a GPU tenant"): the
+# `_cmdline=$(tr …)` probe carries its `# swallow-ok: <reason>` marker INLINE, which is
+# what pushes it past 120.
+#   That marker is also accepted "on the line above" (tools/contracts_checkers/swallows.py),
+#   so moving it there would shorten the line and return this count to 286 — the cheaper
+#   fix, left undone here because the instruction was to re-baseline (Wayne, 2026-11-01).
+#   Verified the same day: 43c8c55c is the ONLY commit in HEAD~5..HEAD whose added-minus-
+#   removed long-line count differs (+1/-0), and this change-set adds none.
+#
 # 2026-11-01 (later): 8.1.8 288 -> 286 — the three bridge-fallback `__tac_info` lines in 09d
 # v66 were each over 120 characters and are now wrapped across two lines. No rise.
 # 2026-11-01: 8.1.8 289 -> 288 — 09d v64 replaced the three long `_patch=`/`_applied=`/
@@ -198,7 +208,7 @@
 4.2.6	9
 4.3.6	31
 6.7	107
-8.1.8	286
+8.1.8	287
 9.5	118
 9.7	80
 10.4	51
