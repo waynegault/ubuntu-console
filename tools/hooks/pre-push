@@ -35,6 +35,16 @@
 #   invocation whatever the tree looks like — so a worktree left by a hook killed with SIGKILL is removed
 #   by the next push rather than lingering: this hook must never leak a worktree per push.
 #
+#   CONCURRENT PUSHES (fixed 2026-11-01, measured the same day): the sweep above removed EVERY worktree
+#   matching WT_PREFIX, with no way to tell a killed hook's leftovers from a worktree a concurrent push
+#   from another lane was still reading — so two lanes pushing at once meant whichever started second
+#   deleted the other's worktree mid-gate, and the victim's gates failed with "No such file or
+#   directory" for files that plainly exist at HEAD (measured: tools/count-ratchet.sh,
+#   tools/docs-sync-check.sh, scripts/check_ci_status.py, then `fatal: … is not a working tree` at
+#   cleanup, which reads as a red CONTENT verdict and is not one). Each push now writes its PID to
+#   `<parent>/.pre-push-owner` BEFORE the worktree exists, and the sweep skips any worktree whose owner
+#   is still alive. A dead PID, or no marker at all (a killed v1 hook's leftovers), is still removed.
+#
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks.  Install with
 # `git config core.hooksPath <repo>/tools/hooks`; install.sh does that, and
 # docs/inspection.md documents the convention.
@@ -50,6 +60,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WT_PREFIX="ubuntu-console-pre-push."
+# The owner marker lives in the worktree's PARENT, not inside it: a file inside would be untracked content
+# in the tree the gates read, and `tree_matches_head` exists precisely to refuse that.
+WT_OWNER=".pre-push-owner"
 WT_ROOT=""
 WT=""
 GATE_ROOT="$REPO_ROOT"
@@ -84,10 +97,27 @@ trap cleanup EXIT INT TERM HUP
 sweep_stale_worktrees() {
     local _path=""
     local _parent=""
+    local _owner=""
     git -C "$REPO_ROOT" worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r _path; do
         case "$_path" in
             # Only our own prefix: a lane's hand-made worktree is not ours to remove.
             */"$WT_PREFIX"*)
+                _parent="$(dirname "$_path")"
+                # A LIVE owner means a push is running there RIGHT NOW. Another lane pushing from this
+                # shared tree is normal, and removing its worktree makes its gates fail on files that
+                # exist at HEAD (2026-11-01). A dead PID, or no marker at all (a killed older hook's
+                # leftovers), still falls through to the removal below.
+                # Read and test without redirections: `$(< file)` needs no `cat`, and a PID's presence in
+                # /proc is a liveness test that is silent when false. Both keep this hook's unclassified
+                # swallow count at the baseline instead of adding two more sites to explain.
+                _owner=""
+                if [[ -r "$_parent/$WT_OWNER" ]]; then
+                    _owner="$(< "$_parent/$WT_OWNER")"
+                fi
+                if [[ "$_owner" =~ ^[0-9]+$ ]] && [[ -d "/proc/$_owner" ]]; then
+                    echo "pre-push: keeping a worktree owned by the live push (pid $_owner): $_path" >&2
+                    continue
+                fi
                 echo "pre-push: removing a worktree left by an interrupted hook: $_path" >&2
                 if ! git -C "$REPO_ROOT" worktree remove --force "$_path" >&2; then
                     echo "pre-push: WARNING: could not remove $_path" >&2
@@ -149,6 +179,9 @@ else
     echo "pre-push: a push sends the COMMIT and CI judges it — so the gates judge HEAD, not your tree."
     WT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/${WT_PREFIX}XXXXXX")"
     WT="$WT_ROOT/wt"
+    # Claim it BEFORE it exists: the next push's sweep runs `git worktree list`, so a marker written after
+    # `worktree add` would leave a window in which a concurrent sweep sees a worktree with no owner.
+    printf '%s\n' "$$" > "$WT_ROOT/$WT_OWNER"
     if ! git -C "$REPO_ROOT" worktree add --detach "$WT" HEAD >&2; then
         echo "pre-push: REFUSING: could not materialise HEAD in a temporary worktree, and a verdict on the" >&2
         echo "pre-push: working tree is NOT a verdict on the commit. Fix the temp-dir problem (${TMPDIR:-/tmp})" >&2
