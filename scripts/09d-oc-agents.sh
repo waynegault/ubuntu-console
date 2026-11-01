@@ -121,7 +121,16 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 64
+# Module Version: 65
+#   v65 (2026-11-01): the table no longer maps a provider block the config does not have. Measured
+#   at 13:54 GMT, on the first live refresh after v64: the config dropped
+#   models.providers.{openai,openrouter,fireworks} (each carried `models: []`, so no model selected
+#   it) and the next refresh would have written all three apiKey env refs straight back — three
+#   rows, every path NULL — which re-grows the env-name set that v64 now treats as a reason to
+#   restart the Gateway. The table's own criterion is "every provider a model is selected FROM";
+#   a missing block selects nothing, so the row is skipped (counted in `skipped`) until the
+#   provider is declared again. The measured state that prompted it: 20 env refs in the config
+#   against the 23-name marker, the three missing names being exactly those providers.
 #   v64 (2026-11-01): a REFUSED SecretRef patch now names its cause, and the env report stops
 #   counting rows that were never written. Measured at 13:2x GMT on a run that printed
 #   "config refs: 0 applied, 3 skipped, 1 failed" beside "24 injected": `openclaw config patch
@@ -1210,6 +1219,18 @@ for path, var in entries:
     if isinstance(current, str) and current in profiles:
         skipped += 1
         continue
+    # A provider block that does not exist is NOT a provider to map back into existence.
+    # Measured 2026-11-01 13:54 GMT: the config dropped models.providers.{openai,openrouter,
+    # fireworks} — each carried `models: []`, i.e. NO model selected it — and the next refresh
+    # would have written all three env refs straight back (3 rows, every path NULL). The table's
+    # own criterion is "EVERY provider a model is selected FROM", and since v64 a re-grown
+    # env-name set is what justifies a Gateway restart, so a dropped provider must not come back
+    # through this table. A provider re-declared later (block present) is mapped on that run.
+    if path.startswith("models.providers.") and path.endswith(".apiKey"):
+        _providers = (cfg.get("models") or {}).get("providers") if isinstance(cfg, dict) else None
+        if not isinstance(_providers, dict) or path.split(".")[2] not in _providers:
+            skipped += 1
+            continue
     set_path(patch, path, ref)
     changed += 1
     changed_paths.append(path)

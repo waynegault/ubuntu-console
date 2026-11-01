@@ -917,6 +917,31 @@ CFG
     [ "$output" -eq 0 ]
 }
 
+@test "oc-refresh-keys maps a provider that exists and does NOT resurrect one the config dropped (2026-11-01)" {
+    # Criterion (v65): a models.providers.<id> apiKey ref is written only where the provider block
+    # EXISTS — the table maps providers "a model is selected from", and a missing block selects
+    # nothing. What this catches: the measured churn. At 13:54 GMT the config dropped
+    # {openai,openrouter,fireworks} (each `models: []`), the next refresh would have written all
+    # three env refs back (3 rows, every path NULL), and since v64 the re-grown env-name set is
+    # what justifies a Gateway restart — so the dropped providers would cost a restart each time.
+    mkdir -p "$HOME/.openclaw"
+    cat > "$HOME/.openclaw/openclaw.json" <<'CFG'
+{"models": {"providers": {"deepseek": {"models": [{"id": "deepseek-chat"}]}}}}
+CFG
+    export OPENAI_API_KEY="test-openai-key"
+    export DEEPSEEK_API_KEY="test-deepseek-key"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # Positive control: the provider that exists is still mapped.
+    run grep -F '"deepseek": {"apiKey": {"source": "env", "provider": "default", "id": "DEEPSEEK_API_KEY"' "$OC_MOCK_PATCH_FILE"
+    [ "$status" -eq 0 ]
+    # The dropped provider is not re-created by the table.
+    run grep -F 'openai' "$OC_MOCK_PATCH_FILE"
+    [ "$status" -ne 0 ]
+}
+
 # --- the GitHub CLI credential surface (2026-09-23) -------------------------
 # gh prefers GH_TOKEN/GITHUB_TOKEN over any stored credential; with no token in
 # its environment it asks the system credential store, and that ask is what
