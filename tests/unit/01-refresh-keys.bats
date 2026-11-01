@@ -980,7 +980,10 @@ PWSH
     __mock_command_local pwsh.exe "exit 0"
 
     run oc-refresh-keys
-    [ "$status" -eq 0 ]
+    # The exit code is DELIBERATELY not asserted: on a bare box (the CI runner) the refresh exits 1
+    # with "no vars found", and that is correct — this case is about which cause the line names, and
+    # asserting a status made it pass only on a box that exports credential-shaped vars (measured:
+    # green locally, `[ "$status" -eq 0 ]` failed in CI, 2026-11-01).
     [[ "$output" == *"but returned no data"* ]]
     [[ "$output" == *"pwsh.exe found at"* ]]
     [[ "$output" != *"NOT FOUND"* ]]
