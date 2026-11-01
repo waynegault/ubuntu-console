@@ -986,6 +986,24 @@ PWSH
     [[ "$output" != *"NOT FOUND"* ]]
 }
 
+@test "oc-refresh-keys retries a pwsh.exe that answers nothing yet — the boot race (2026-11-01)" {
+    # Criterion (v67): a pwsh.exe that EXISTS but returns nothing is retried, because the
+    # once-per-boot unit runs one second after boot and interop may not answer yet. What this
+    # catches: both of that day's boot runs bridged 0 keys with no way to tell a missing shim from an
+    # interop that was not ready — a single attempt makes a slow-starting interop permanent for the
+    # whole session (the cache is then empty until an interactive refresh).
+    local _counter="$TAC_TEST_TMPDIR/pwsh_calls"
+    __mock_command_local pwsh.exe "n=\$(cat '$_counter' 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > '$_counter'; if (( n >= 2 )); then printf '%s\\n' 'RETRY_KEY=from-the-second-call'; fi; exit 0"
+    # The retry sleeps between attempts; stub it so the case is about the READ, not the wall clock.
+    sleep() { :; }
+    export OC_PWSH_ATTEMPTS=3
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"1 variable(s) imported"* ]]
+    [ "$(cat "$_counter")" -ge 2 ]
+}
+
 # --- the GitHub CLI credential surface (2026-09-23) -------------------------
 # gh prefers GH_TOKEN/GITHUB_TOKEN over any stored credential; with no token in
 # its environment it asks the system credential store, and that ask is what

@@ -121,6 +121,14 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
+# Module Version: 67
+#   v67 (2026-11-01): the bridge retries a pwsh.exe that is PRESENT but not answering yet. The
+#   once-per-boot unit runs one second after boot (measured start 06:20:00, its message at
+#   06:20:01), and a single 20 s attempt that returns nothing ends the bridge for that whole
+#   session — the cache is then empty until an interactive refresh. Three attempts two seconds
+#   apart (OC_PWSH_ATTEMPTS overrides) cost nothing when the first one answers, which is the
+#   normal case everywhere except the boot that prompted this. The give-up line now names the
+#   attempt count, so "no data" and "never asked" stay distinguishable in the error log.
 # Module Version: 66
 #   v66 (2026-11-01): the Windows bridge resolves pwsh.exe by its KNOWN LOCATION, and its fallback
 #   says WHY it fell back. Measured: `systemctl --user show-environment` at 14:30 printed PATH as the
@@ -1037,25 +1045,43 @@ function __bridge_windows_api_keys() {
     # earlier narrower pattern silently missed: OPENCLAW_WEB_SEARCH_KEY,
     # MICROSOFT_CLIENT_ID, HERE_NOW_API. Non-credential vars (Path, TEMP,
     # TMP, NODE_OPTIONS, OneDrive*, Chocolatey*, *DIR, *HOME) stay excluded.
-    local raw
     # 20s, not 5s: a cold pwsh.exe start plus the User-env enumeration has been
     # measured at 3-10s over WSL interop, and a 5s cap silently returned a
     # truncated variable set (partial cache) instead of failing cleanly.
-    # SC2016: PowerShell payload (see the ockeys loop above) — `$($_.Key)` must
-    # not be expanded by bash.
-    # shellcheck disable=SC2016
-    raw=$(timeout 20 "$_pwsh_bin" -NoProfile -NonInteractive -Command '
-        [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
-        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD|_KEY$|_SECRET|_CLIENT_ID$|_API$)" } |
-        ForEach-Object { "$($_.Key)=$($_.Value)" }
-    ' 2>/dev/null | tr -d '\r')
+    #
+    # BOUNDED RETRY (v67, measured 2026-11-01): the once-per-boot unit runs ONE SECOND after boot,
+    # and WSL interop is not always answering by then — both of that day's boot runs bridged 0 keys,
+    # and their log could not say whether pwsh was missing or merely not ready. Three attempts, two
+    # seconds apart, cost nothing on a healthy call (the first attempt succeeds and the loop exits)
+    # and cover the boot race. OC_PWSH_ATTEMPTS overrides the count for a test or a slower host.
+    local raw="" _attempt=0 _attempts="${OC_PWSH_ATTEMPTS:-3}"
+    while (( _attempt < _attempts ))
+    do
+        _attempt=$(( _attempt + 1 ))
+        # SC2016: PowerShell payload (see the ockeys loop above) — `$($_.Key)` must
+        # not be expanded by bash.
+        # shellcheck disable=SC2016
+        raw=$(timeout 20 "$_pwsh_bin" -NoProfile -NonInteractive -Command '
+            [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
+            Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD|_KEY$|_SECRET|_CLIENT_ID$|_API$)" } |
+            ForEach-Object { "$($_.Key)=$($_.Value)" }
+        ' 2>/dev/null | tr -d '\r')
+        if [[ -n "$raw" ]]
+        then
+            break
+        fi
+        if (( _attempt < _attempts ))
+        then
+            sleep 2
+        fi
+    done
 
     if [[ -z "$raw" ]]
     then
         if [[ ! -f "$_warn_once_file" ]]
         then
             printf '%s\n' "$(date +%s)" > "$_warn_once_file" 2>/dev/null || true
-            echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe returned no data; bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
+            echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe returned no data after $_attempt attempt(s); bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
         fi
         return 0
     fi
