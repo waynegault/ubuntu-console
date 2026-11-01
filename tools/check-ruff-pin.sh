@@ -16,8 +16,16 @@
 # and not the other, which the push-time whole-tree lint still sees.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-01): route the five hand-written `>&2` sites through one warn() helper
+#   and wrap the over-long lines, clearing the §18.3 10.7 and 8.1.8 rises.
 set -uo pipefail
+
+# warn — Report a problem on stderr.  Mirrors the repo's `warn()` helper (install.sh),
+# so the redirect exists once rather than at each call site (§18.3 item 10.7).
+warn() {
+    printf '%s\n' "$@" >&2
+}
 
 repo="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 pre_commit="$repo/.pre-commit-config.yaml"
@@ -28,33 +36,43 @@ fail=0
 
 # The ruff `rev:` is the one that FOLLOWS the ruff-pre-commit repo line, not the first
 # `rev:` in the file (pre-commit-hooks has its own, v5.0.0).
-pre_rev="$(awk '/ruff-pre-commit/{f=1} f && /^[[:space:]]+rev:[[:space:]]+v[0-9]/{sub(/.*v/, ""); sub(/[^0-9.].*/, ""); print; exit}' "$pre_commit")"
-ci_rev="$(awk '/^ruff==/{sub(/^ruff==/, ""); sub(/[^0-9.].*/, ""); print; exit}' "$ci_req")"
+pre_rev="$(awk '
+    /ruff-pre-commit/ { in_ruff = 1 }
+    in_ruff && /^[[:space:]]+rev:[[:space:]]+v[0-9]/ {
+        sub(/.*v/, "")
+        sub(/[^0-9.].*/, "")
+        print
+        exit
+    }' "$pre_commit")"
+ci_rev="$(awk '/^ruff==/ { sub(/^ruff==/, ""); sub(/[^0-9.].*/, ""); print; exit }' "$ci_req")"
 
 if [[ -z "$pre_rev" ]]; then
-    echo "check-ruff-pin: no ruff 'rev: vX.Y.Z' found in $pre_commit" >&2
+    warn "check-ruff-pin: no ruff 'rev: vX.Y.Z' found in $pre_commit"
     fail=1
 fi
 if [[ -z "$ci_rev" ]]; then
-    echo "check-ruff-pin: no 'ruff==X.Y.Z' found in $ci_req" >&2
+    warn "check-ruff-pin: no 'ruff==X.Y.Z' found in $ci_req"
     fail=1
 fi
 
 if [[ -n "$pre_rev" && -n "$ci_rev" && "$pre_rev" != "$ci_rev" ]]; then
-    echo "check-ruff-pin: ruff version drift — .pre-commit-config.yaml rev=v$pre_rev vs ci-requirements.txt ruff==$ci_rev" >&2
+    warn "check-ruff-pin: ruff version drift —" \
+         "  .pre-commit-config.yaml rev=v$pre_rev vs ci-requirements.txt ruff==$ci_rev"
     fail=1
 fi
 
 if [[ -x "$venv_ruff" ]]; then
-    venv_rev="$("$venv_ruff" --version | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+$/) {print $i; exit}}')"
+    venv_rev="$("$venv_ruff" --version | awk '{ print $2 }')"
     if [[ -n "$ci_rev" && -n "$venv_rev" && "$venv_rev" != "$ci_rev" ]]; then
-        echo "check-ruff-pin: ruff version drift — .venv/bin/ruff $venv_rev vs ci-requirements.txt ruff==$ci_rev" >&2
+        warn "check-ruff-pin: ruff version drift —" \
+             "  .venv/bin/ruff $venv_rev vs ci-requirements.txt ruff==$ci_rev"
         fail=1
     fi
 fi
 
 if (( fail != 0 )); then
-    echo "check-ruff-pin: bump ci-requirements.txt (the single source), then match .pre-commit-config.yaml and the venv" >&2
+    warn "check-ruff-pin: bump ci-requirements.txt (the single source), then match" \
+         "  .pre-commit-config.yaml and the venv"
     exit 1
 fi
 

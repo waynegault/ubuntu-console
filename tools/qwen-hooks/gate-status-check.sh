@@ -7,7 +7,8 @@
 # clears the marker itself — only a real PASS does that.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-01): `[ -f ]` -> `[[ -f ]]`, clearing the §18.3 6.7 rise.
 #   v1 (2026-10-31): moved from a bare, unversioned file in ~/.qwen/hooks/ into
 #   tools/qwen-hooks/ so it is reviewed and diffed beside the other hooks; no
 #   behaviour change.
@@ -15,7 +16,7 @@
 set -uo pipefail
 
 marker="$HOME/.qwen/debug/qwen-gate-FAILED"
-[ -f "$marker" ] || exit 0
+[[ -f "$marker" ]] || exit 0
 
 echo "qwen-gate FAILED — the store suite is red."
 sed -n '1,12p' "$marker"
