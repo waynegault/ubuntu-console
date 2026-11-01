@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 41
+# Module Version: 42
+#   v42 (2026-11-01): comment-only.  Every `return N` the `oc token` resolver emits now
+#   names its meaning at the line, because the §18.3 9.7 counter counted all seven as
+#   unexplained and the committed baseline was seven below the tree.
 #   v41 (2026-11-01): new `oc token` — prints the gateway token and copies it to the
 #   Windows clipboard.  It RESOLVES `gateway.auth.token` rather than reading it as a
 #   string: since 2026-11-01 12:12 the value is a SecretRef ({source:"store", id:
@@ -472,15 +475,15 @@ def main() -> int:
         with open(cfg_path, encoding="utf-8") as fh:
             cfg = json.load(fh)
     except OSError:
-        return 2
+        return 2   # 2 = the gateway config could not be read
     except ValueError:
-        return 3
+        return 3   # 3 = the gateway config is not valid JSON
     ref = ((cfg.get("gateway") or {}).get("auth") or {}).get("token")
     if isinstance(ref, str):
         sys.stdout.write(ref)
         return 0
     if not isinstance(ref, dict):
-        return 4
+        return 4   # 4 = gateway.auth.token is neither a resolved string nor a reference object
     source, name = ref.get("source"), ref.get("id")
     if source == "env" and name:
         value = os.environ.get(name)
@@ -500,7 +503,7 @@ def main() -> int:
         if value:
             sys.stdout.write(value)
             return 0
-        return 5
+        return 5   # 5 = the referenced env var is unset and absent from the fallback env files
     if source == "store" and name:
         db = os.environ.get("OPENCLAW_STATE_DB") or os.path.expanduser(
             "~/.openclaw/state/openclaw.sqlite"
@@ -515,13 +518,13 @@ def main() -> int:
             ).fetchone()
             con.close()
         except sqlite3.Error:
-            return 6
+            return 6   # 6 = the state DB could not be opened or queried
         if row and row[0]:
             value = row[0].decode("utf-8", "replace") if isinstance(row[0], bytes) else row[0]
             sys.stdout.write(value)
             return 0
-        return 7
-    return 8
+        return 7   # 7 = the store holds no live entry for that name
+    return 8   # 8 = the ref's source is neither "env" nor "store"
 
 
 sys.exit(main())
