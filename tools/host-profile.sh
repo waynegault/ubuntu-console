@@ -28,7 +28,10 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-01): four more profile-owned facts join the clear/export set —
+#   LLAMA_CUDA_LANE_UNIT, LLAMA_GPU_FREE_THRESHOLD_MIB, LLM_AUTOTUNE_BASELINE_GAP_MAX and
+#   LLAMA_CUDA_SERVER_BIN — so the heavy-job re-exec no longer drops them.
 #   v3 (2026-10-30): the model store's shape and the memory model are profile facts —
 #   TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT (a bind mount vs a plain directory) and
 #   TAC_HOST_PROFILE_SHARED_MEMORY (the card's memory is the system pool).  Both are
@@ -253,7 +256,8 @@ tac_host_profile_selected() {
 # the values an operator is told to export.
 tac_host_profile_apply() {
     local _id _file _facts _arch _cuda _render
-    unset LLAMA_LANE_SPECS LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
+    unset LLAMA_LANE_SPECS LLAMA_CUDA_LANE_UNIT LLAMA_GPU_FREE_THRESHOLD_MIB \
+          LLM_AUTOTUNE_BASELINE_GAP_MAX LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
           VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
           TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
           TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT \
@@ -289,7 +293,9 @@ tac_host_profile_apply() {
     TAC_HOST_PROFILE_MATCHED=1
     export TAC_HOST_PROFILE TAC_HOST_PROFILE_MATCHED
     export LLAMA_DRIVE_ROOT LLAMA_GPU_LAYERS LLAMA_FIT_TARGET_MB \
-           LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLM_SERVICE_PORT \
+           LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLAMA_CUDA_LANE_UNIT \
+           LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
+           LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
            LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
            TAC_HOST_PRIMARY_LANE VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL \
            TAC_HOST_IGPU_LABEL TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \

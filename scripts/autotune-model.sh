@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 85
+# Module Version: 86
+#   v86 (2026-11-01): the measured server binary is LLAMA_CUDA_SERVER_BIN (default build/bin)
+#   instead of LLAMA_SERVER_BIN — this box's CUDA build is build-cuda, not a unified build/bin.
 #   v85 (2026-10-20): TWO FAIL-OPEN GATES CLOSED.  (1) The VRAM baseline read defaulted to
 #   4096/3965 when nvidia-smi could not answer, so an unreadable card produced a 131 MiB
 #   "gap", passed the 800 MiB bound, and the run certified against a baseline the card never
@@ -622,7 +624,7 @@ echo "  start:  ${START_TS}"
 echo ""
 START_EPOCH=$(date +%s)
 
-LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
+LLAMA_BIN="${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
 
 # ── Workload scoring payload (AUTOTUNE-001) ─────────────────────────────────
 # The scoring payload is built from the selected workload's SPEC-DEC-006

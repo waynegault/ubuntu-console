@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-11-01): the post-stop free-VRAM wait bound is ${LLAMA_GPU_FREE_THRESHOLD_MIB:-800}
+#   instead of a hardcoded 800, so a box whose driver reserves more than 800 MiB names its own bound.
 #   v6 (2026-10-15): the halt classes are distinguished.  A spent cycle budget is
 #   exit 4 (the designed end of one boot's measuring, and the only halt a restart
 #   resumes); exit 3 is the OTHER adapter stop — a stall with the budget unspent,
@@ -105,7 +107,7 @@ systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 # an occupied card and burn rows on a refused VRAM baseline.  The order is what makes the
 # bound satisfiable: the suspend hold is taken and the lane stopped ABOVE, so our own
 # ~3.4 GiB is gone by the time this runs.
-if ! _tac_gpu_wait_used_below 800 90 2; then
+if ! _tac_gpu_wait_used_below "${LLAMA_GPU_FREE_THRESHOLD_MIB:-800}" 90 2; then
     # The wait logged the last reading (or that the card was unreadable) and did not
     # proceed.  ABORT rather than launch — the EXIT trap above releases the hold.
     echo "=== ABORT: the card did not free after the lane stop — NOT launching the batch" \
