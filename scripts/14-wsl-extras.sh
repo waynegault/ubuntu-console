@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 11
 # 14. WSL EXTRAS & STARTUP HELPERS
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
@@ -39,6 +39,10 @@ function __tac_install_shim() {
 # __tac_install_pwsh_shims — install the PowerShell wrappers (idempotent).
 # Defined outside the interactive guard so it can be exercised directly; it is
 # only CALLED from the interactive section below.
+# PowerShell 7 on this box is the Store (MSIX) package — the per-machine path
+# /mnt/c/Program Files/PowerShell/7/pwsh.exe does not exist, so `pwsh` and
+# `pwsh.exe` point at the app-execution-alias .../WindowsApps/pwsh.exe (stable
+# across Store updates; the package-hash subfolder changes on every update).
 function __tac_install_pwsh_shims() {
     # PowerShell wrappers so WSL shells can reliably call Windows PowerShell / pwsh.
     if [[ ! -x "$HOME/.local/bin/powershell.exe" ]]; then
@@ -52,7 +56,10 @@ EOF
         mkdir -p "$HOME/.local/bin"
         __tac_install_shim "$HOME/.local/bin/pwsh" <<'EOF'
 #!/usr/bin/env bash
-exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
+# PowerShell 7 on this box is the Store (MSIX) package; the per-machine path
+# /mnt/c/Program Files/PowerShell/7/pwsh.exe does not exist. Use the stable
+# app-execution-alias (survives Store updates; the package-hash subfolder does not).
+exec '/mnt/c/Users/wayne/AppData/Local/Microsoft/WindowsApps/pwsh.exe' "$@"
 EOF
     fi
     # The bridge (__bridge_windows_api_keys / ockeys / oc-refresh-keys) resolves
@@ -63,7 +70,10 @@ EOF
         mkdir -p "$HOME/.local/bin"
         __tac_install_shim "$HOME/.local/bin/pwsh.exe" <<'EOF'
 #!/usr/bin/env bash
-exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
+# PowerShell 7 on this box is the Store (MSIX) package; the per-machine path
+# /mnt/c/Program Files/PowerShell/7/pwsh.exe does not exist. Use the stable
+# app-execution-alias (survives Store updates; the package-hash subfolder does not).
+exec '/mnt/c/Users/wayne/AppData/Local/Microsoft/WindowsApps/pwsh.exe' "$@"
 EOF
     fi
 }
