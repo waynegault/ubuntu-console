@@ -1,0 +1,81 @@
+# install-profile: asus-n1n-rtx-spark
+#
+# llama-cpu-heartbeat-qwen25-3b-chat.service — the SMALL CPU tier used as the
+# heartbeat fallback on this box.
+#
+# WHY IT EXISTS (2026-11-01, Wayne's ruling "option c"): heartbeats were moved to
+# the local CUDA lane, but `heartbeat.model` is a plain string with no fallback
+# list, so a heartbeat only gets a ladder by inheriting the agent's `model`. A
+# ladder that fails over to the 30B CPU tier (:18086) was priced and rejected:
+# that unit is `MemoryMax=30G` against ~21G available with 4G of swap already in
+# use, and a 30B CPU turn is slow enough to hit a heartbeat's own timeout — a
+# fallback that times out is not a fallback. A 3B Q4 costs ~2G resident and
+# finishes a turn.
+#
+# PORT 18088: 18080 embeddings, 18087 CUDA chat, 18086 the disabled 30B CPU tier,
+# and 18084 is another host's qwen25 lane (`llama-cpu-qwen25-3b-chat.service`,
+# /mnt/m/active — not this box). Kept out of 18084 on purpose.
+#
+# WHY A SECOND 3B UNIT rather than a marker change on that one: a unit carries ONE
+# `# install-profile`, and the two boxes serve the same model from different stores
+# (`/mnt/m/active` there, `~/models/active` here) on different ports.  Re-pointing
+# the existing unit would un-ship the XPS15's lane; marking it `any` would link it
+# everywhere.  The cost of the duplicate is two ExecStart lines to keep in step.
+#
+# CARD: none (CPU-only)   MODEL: Qwen2.5-3B-Instruct (Q4_K_M)   FUNCTION: serving
+#
+# NOT CERTIFIED: `~/models/active/models.conf` is the generated, autotune-certified
+# registry; this lane has no row there and should not get a hand-written one. If it
+# is ever to be benched/certified, that is the autotune path in this repo.
+#
+# And, like the 30B CPU tier, it is deliberately absent from this profile's
+# LLAMA_LANE_SPECS: the watchdog supervises the card lanes, `Restart=always`
+# supervises this one.  Adding it to the lane table would have the watchdog
+# manage a unit it has no card logic for.
+[Unit]
+Description=llama.cpp server — CPU tier, Qwen2.5-3B-Instruct, heartbeat fallback (port 18088)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+# No ExecStartPre GPU clear, and none is wanted: a CPU-only build links neither
+# libcuda nor libOpenCL, so it takes no card and no card sweep can match it
+# (bin/llama-gpu-clear.sh reaps by /proc/PID/exe over build/, build-cuda*/,
+# build-opencl*/ and xe-llama-server — none of which is build-cpu/).  The
+# absolute binary path is used rather than ~/.local/bin/llama-cpu-server so the
+# lane starts even if install.sh has not linked the wrapper on a fresh host.
+#
+# --ctx-size 8192: a heartbeat turn, not long-context work.  Deliberately the same
+# figure as the 18084 tier on the same model — the registry row's 47104 is a CUDA
+# result and would size a KV cache past MemoryMax here.
+# --threads 8: the figure measured flat for THIS model on this class of core
+# (pp512 unchanged, tg64 33.1 at 8 vs 31.7 at 12); more threads buy nothing.
+# --batch-size 256 / --ubatch-size 128: smaller than llama.cpp's 2048/512 so a
+# prefill's graph stays inside MemoryMax — the same trap that drove RSS to 32 GiB
+# on the 30B tier, at this tier's much smaller scale.
+# --cache-ram 0 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
+# MiB of host RAM for the prompt cache — larger than this unit's MemoryMax — and
+# nothing budgets it.  0 is explicit-disable; tests/unit/23-*.bats pins this
+# literal to LLAMA_CACHE_RAM_MB's default in scripts/01-constants.sh.
+# --jinja: Qwen2.5's tool-call template is Jinja; without it llama.cpp guesses and
+# tool calls arrive malformed — the same failure that made the 30B tier's first run
+# unusable.
+# --metrics (SWITCH-CONSOLE-METRICS-001): llama.cpp's Prometheus counters on the
+# SAME loopback listener; --host 127.0.0.1 is the only bind.
+ExecStart=/home/wayne/llama.cpp/build-cpu/bin/llama-server -m /home/wayne/models/active/qwen2.5-3b-instruct-q4_k_m.gguf --alias qwen2.5-3b-instruct --port 18088 --host 127.0.0.1 --ctx-size 8192 --batch-size 256 --ubatch-size 128 --threads 8 --parallel 1 --cache-ram 0 --jinja --metrics
+# always rather than on-failure: this family of CPU tiers was killed four times by
+# direct signals with no systemd "Stopping" line (see the 18084 unit), and with
+# on-failure a clean exit is never undone.  `always` still honours an explicit
+# `systemctl --user stop`, so maintenance works.
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+# Weights ~2 GiB (2,104,932,768 bytes) + a small 8k KV: High is where reclaim
+# starts, Max is the kill line, both well above the working set.
+MemoryHigh=4G
+MemoryMax=6G
+
+[Install]
+WantedBy=default.target
