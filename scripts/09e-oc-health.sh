@@ -9,7 +9,10 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-11-01): oc-plugin-update checks no plugin now — Gigabrain and
+#   Lossless-Claw are retired like OpenStinger was, so the command reports that
+#   nothing is path-installed.
 #   v34 (2026-10-31): remove the `oc-stinger` command entirely — OpenStinger is no
 #   longer used, so its start/stop/status management is gone too.
 #   v33 (2026-10-31): oc-plugin-update no longer checks OpenStinger (it is no longer
@@ -724,104 +727,13 @@ function oc-plugins() {
 # ---------------------------------------------------------------------------
 # oc-plugin-update — Update OpenClaw plugins from upstream git repos.
 # Usage: oc-plugin-update [plugin-id|--all]
-# Updates gigabrain and lossless-claw from their GitHub repos.
+# Every path-installed plugin (OpenStinger, Gigabrain, Lossless-Claw) was retired,
+# so there is nothing to update here; the command reports that and stays.
 # ---------------------------------------------------------------------------
 function oc-plugin-update() {
-    local plugin_id="${1:---all}"
-    local plugins_dir="$HOME/.openclaw/extensions"
-    local updated=0 plugin_errors=0
-
     __tac_header "OPENCLAW PLUGIN UPDATE" "open"
-
-    update_plugin() {
-        local id="$1" repo_url="$2" target_dir="$3"
-        local plugin_dir="$target_dir/$id"
-
-        if [[ ! -d "$plugin_dir" ]]
-        then
-            # Not installed — clone fresh
-            __tac_info "$id" "[INSTALLING from $repo_url]" "$C_Success"
-            if git clone --depth 1 "$repo_url" "$plugin_dir" 2>&1
-            then
-                __tac_line "$id" "[INSTALLED]" "$C_Success"
-                return 0
-            else
-                __tac_line "$id" "[INSTALL FAILED]" "$C_Error"
-                plugin_errors=$(( plugin_errors + 1 ))
-                return 1
-            fi
-        elif [[ -d "$plugin_dir/.git" ]]
-        then
-            # Git checkout — the shared helper owns this case (08-maintenance.sh,
-            # loaded before this module).  It refuses a checkout that has local
-            # changes (this copy used to pull into one), validates the fetch, prints
-            # the remote's own error on failure, and reports 0 changed / 1 benign /
-            # 2 FAILED.  Returning 0 only for a real change is what makes the `updated`
-            # count below true — this copy counted an already-up-to-date plugin as
-            # updated, because its own "up to date" path also returned 0.
-            local _rc=0
-            __update_plugin "$plugin_dir" "$repo_url" "$id" 0 || _rc=$?
-            if (( _rc == 2 ))
-            then
-                plugin_errors=$(( plugin_errors + 1 ))
-            fi
-            [[ "$_rc" -eq 0 ]]
-        else
-            # Not a git repo — offer to reinstall
-            __tac_line "$id" "[REINSTALL REQUIRED]" "$C_Warning"
-            __tac_info "  Reason" "Not a git repository" "$C_Dim"
-            __tac_info "  Action" "Run: rm -rf '$plugin_dir' && oc-plugin-update $id" "$C_Dim"
-            plugin_errors=$(( plugin_errors + 1 ))
-            return 1
-        fi
-    }
-
-    case "$plugin_id" in
-        gigabrain)
-            if update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
-            then
-                updated=$(( updated + 1 ))
-            fi
-            ;;
-        lossless-claw)
-            if update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
-            then
-                updated=$(( updated + 1 ))
-            fi
-            ;;
-        --all|"")
-            if update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
-            then
-                updated=$(( updated + 1 ))
-            fi
-            if update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
-            then
-                updated=$(( updated + 1 ))
-            fi
-            ;;
-        *)
-            __tac_info "Error" "Unknown plugin: $plugin_id" "$C_Error"
-            __tac_info "Usage" "oc-plugin-update [gigabrain|lossless-claw|--all]" "$C_Dim"
-            return 1
-            ;;
-    esac
-
-    __tac_divider
-    if (( updated > 0 ))
-    then
-        __tac_line "Update Status" "[$updated plugin(s) processed]" "$C_Success"
-        __tac_info "Note" "Run 'openclaw plugins doctor' to verify" "$C_Dim"
-    else
-        __tac_line "Update Status" "[NO UPDATES]" "$C_Dim"
-    fi
+    __tac_line "Update Status" "[NO PATH-INSTALLED PLUGINS - all retired]" "$C_Dim"
     __tac_footer
-    # The command fails when it could not do what it was asked, and there are three
-    # ways that happens: the shared helper reports FAILED (its rc 2), a fresh clone
-    # fails, and the directory exists but is not a git checkout (REINSTALL REQUIRED).
-    # Only the first was counted, so the other two printed a failure and then exited
-    # 0 — the one shape a script calling this cannot detect.  A benign no-op (the
-    # helper's rc 1, or a plugin already current) stays a success.
-    (( plugin_errors == 0 ))
 }
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,12 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 80
+# Module Version: 81
+#   v81 (2026-11-01): the R step feeds Rscript via stdin (`-`) instead of a multi-line
+#   `-e` argument (WSL interop drops a multi-line arg to a Windows .exe — Rscript exits
+#   5, no output — so the step read [FAILED] every run); and the plugin updater drops its
+#   last two plugins, Gigabrain and Lossless-Claw (retired like OpenStinger was), so
+#   [10/20] reads "[NONE - path-installed plugins retired]" instead of flagging them.
 #   v80 (2026-11-01): sysinfo no longer hardcodes the "iGPU"/"CUDA" labels or a
 #   two-GPU layout.  It renders an accelerator segment only when that accelerator is
 #   actually present — the host profile's TAC_HOST_PROFILE_XE for the Intel Xe iGPU,
@@ -691,17 +696,21 @@ function __up_r_packages() {
             # Run update - binary only (no compilation required)
             # This skips packages that need gcc/g++ (Rtools)
             local update_output
-            update_output=$(timeout 180 "$_rscript" -e "
-                options(repos = c(CRAN = 'https://cloud.r-project.org'))
-                pkgs <- old.packages()
-                if (is.null(pkgs)) {
-                    cat('NONE')
-                } else {
-                    cat('HAS_UPDATES')
-                    # Update binary packages only (no compilation)
-                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, type = 'both')
-                }
-            " 2>&1)
+            # R is read from stdin (`-`), not a multi-line `-e`: WSL interop drops a
+            # multi-line argument to a Windows Rscript.exe (it exits 5, no output), so
+            # the old `-e "<multi-line>"` form read as [FAILED] on every run.
+            update_output=$(timeout 180 "$_rscript" - 2>&1 <<'RSCRIPT'
+options(repos = c(CRAN = 'https://cloud.r-project.org'))
+pkgs <- old.packages()
+if (is.null(pkgs)) {
+    cat('NONE')
+} else {
+    cat('HAS_UPDATES')
+    # Update binary packages only (no compilation)
+    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, type = 'both')
+}
+RSCRIPT
+            )
 
             if [[ "$update_output" == *"HAS_UPDATES"* ]]
             then
@@ -1046,88 +1055,23 @@ function __plugin_drift_check() {
 }
 
 # ---------------------------------------------------------------------------
-# __up_oc_plugins — [7-10/20] Update OpenClaw path-installed plugins.
-# Checks Gigabrain and Lossless-Claw for git updates,
-# then runs Post-Update Drift check if any plugin changed.
+# __up_oc_plugins — [10/20] OpenClaw path-installed plugins.
+# OpenStinger, Gigabrain and Lossless-Claw were all retired, so there is nothing
+# left to pull.  The row stays (and keeps the [10/20] phase number) instead of
+# renumbering every later step; the per-plugin [7/20] and [8/20] rows are gone
+# with the plugins.
 # ---------------------------------------------------------------------------
 function __up_oc_plugins() {
     local now="$1" force_mode="$2"
-    local -n _up_err="$3"
     local hours_left=""
 
-    # [7/20] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
-    # Checks gigabrain and lossless-claw for git updates.
-    # Offers interactive choice when local changes are detected.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
-        local _rc=0
-        local plugin_updated=0 plugin_failed=0 plugin_not_updated=0
-        local plugins_dir="$HOME/.openclaw/extensions"
-        local post_update_check_script="$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
-
-
-        # Update each plugin, counting the helper's rc: 0 changed · 1 already current ·
-        # 2 FAILED (also counted as an issue for the run) · 3 not updated and not
-        # current.  Until 2026-09-24 this was `if __update_plugin ...; then
-        # plugin_updated=1; fi`, which collapsed all of 1/2/3 into "nothing updated" —
-        # so a fleet with NO plugin installed, and one whose update FAILED, both ended
-        # in the success-coloured "[ALREADY UP TO DATE]" row.
-        _rc=0
-        __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" \
-                        "[7/20] Gigabrain Plugin" "1" || _rc=$?
-        case "$_rc" in
-            0) plugin_updated=1 ;;
-            2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            3) plugin_not_updated=$(( plugin_not_updated + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            *) ;;  # 1 = already current: nothing to count, and nothing to report
-        esac
-        _rc=0
-        __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" \
-                        "[8/20] Lossless-Claw Plugin" "1" || _rc=$?
-        case "$_rc" in
-            0) plugin_updated=1 ;;
-            2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            3) plugin_not_updated=$(( plugin_not_updated + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            *) ;;  # 1 = already current: nothing to count, and nothing to report
-        esac
-
-        # If a plugin changed, validate and reapply OpenClaw's post-update
-        # customizations to prevent drift.  The block now lives in its own function: it
-        # was 21 nested lines of the same story (CLEAN / FIXED / FIX FAILED / CHECKER
-        # MISSING), and a named function is what makes that outcome testable.
-        if (( plugin_updated == 1 ))
-        then
-            __plugin_drift_check "$post_update_check_script" _up_err
-        fi
-
-        # Set cooldown if any plugin was updated
-        if (( plugin_updated == 1 ))
-        then
-            __set_cooldown "oc_plugins" "$now"
-        fi
-
-        # One row, in order of what a reader needs to know.  "Already up to date" is
-        # reserved for the case where every plugin is present, ours, and level; a
-        # failure outranks it, and a plugin that is missing or was left alone says so
-        # instead of claiming a clean fleet.  BOTH an uninstalled and a failed plugin count
-        # into errCount (Wayne's call, 2026-09-24): the run should carry the colour, not a
-        # row the reader has to notice.
-        if (( plugin_failed > 0 ))
-        then
-            __tac_line "[10/20] OpenClaw Plugins" "[${plugin_failed} UPDATE(S) FAILED]" "$C_Warning"
-        elif (( plugin_not_updated > 0 ))
-        then
-            __tac_line "[10/20] OpenClaw Plugins" "[${plugin_not_updated} PLUGIN(S) NOT UPDATED]" "$C_Warning"
-        elif (( plugin_updated == 1 ))
-        then
-            __tac_line "[10/20] OpenClaw Plugins" "[PLUGINS UPDATED]" "$C_Success"
-        else
-            __tac_line "[10/20] OpenClaw Plugins" "[ALREADY UP TO DATE]" "$C_Success"
-        fi
+        __tac_line "[10/20] OpenClaw Plugins" "[NONE - path-installed plugins retired]" "$C_Dim"
+        __set_cooldown "oc_plugins" "$now"
     else
         __tac_line "[10/20] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
-
 }
 
 # ---------------------------------------------------------------------------

@@ -1,23 +1,13 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Unit — the [7/20] OpenClaw plugin update step: its OUTCOMES, pinned
+# Unit — the retired OpenClaw path-installed plugin update step
 # ==============================================================================
-# WHY THIS EXISTS (2026-09-24): `__update_plugin` was defined INSIDE
-# `__up_oc_plugins` and torn down with `unset -f` at the end of that call, so it could
-# not be called directly.  These cases drive the REAL outer function — the same
-# boundary the unattended `up` path uses — which is also why the step needed a net
-# before the de-duplication with 09e's `update_plugin` (same three plugins, different
-# missing-directory policy) could be attempted safely.  The helper is MODULE SCOPE
-# now, so its exit contract is asserted directly as well (case 7).
-#
-# These assertions are the CURRENT behaviour, deliberately: a safety net for the
-# refactor, not a spec to argue with.  One outcome was worth knowing about rather than
-# trusting, and has since been fixed: when a plugin was simply MISSING the step ended
-# with the success-coloured `[ALREADY UP TO DATE]`, because the summary counted
-# "updated" and nothing else — a missing plugin and a FAILED update were
-# indistinguishable from a clean fleet.  The helper now separates rc 1 (current) from
-# rc 3 (not updated, and not current), and the summary row names whichever needs
-# attention (cases 1, 2 and 8 pin all three).
+# WHY THIS EXISTS: OpenStinger, Gigabrain and Lossless-Claw were all retired, so
+# `up`'s [10/20] step and `oc-plugin-update` no longer pull anything.  This suite
+# pins the two honest reports (the step's "retired" row and the command's
+# "no path-installed plugins" row), and keeps the `__update_plugin` helper's exit
+# contract — the helper stays module scope so a future path-installed plugin can
+# reuse it, and these cases are what a new caller can rely on.
 #
 # HERMETIC: HOME is a temp dir, and each plugin is a real clone of a local BARE
 # repo whose path contains the remote pattern the module expects, so the update
@@ -120,7 +110,7 @@ _advance_remote() {
     git -C "$_src" push -q origin main
 }
 
-# _scaffold_all — both plugins present as clean clones, level with their
+# _scaffold_all — both plugin fixtures present as clean clones, level with their
 # remotes, so a single case can mutate just the one it is about.
 _scaffold_all() {
     local _pair
@@ -132,116 +122,37 @@ _scaffold_all() {
     done
 }
 
-# _run_plugins — call the real step.  NOT under `run` and NOT in a subshell: this
-# suite runs under errexit, and the step's own errexit-safety is part of what is
-# being pinned.  Output is written to a file and read back, the idiom
-# tests/unit/26-docker-prune.bats uses for the same reason.
-#
-# stdin comes from /dev/null ON PURPOSE.  The step's local-changes branch keys on
-# `[[ -t 0 ]]`: bats hands the test the invoking terminal, so WITHOUT this
-# redirection a case that has local changes blocks on `read -r _choice` waiting for
-# a menu selection — measured 2026-09-24, it hung past 90s and only the outer
-# `timeout` ended it.  Redirecting also states the intent plainly: these cases are
-# about the NON-interactive path, which is the one `up` takes from a service or any
-# non-terminal caller.  The interactive branch itself is not reachable from a
-# non-tty harness, so it is not characterised here.
-_run_plugins() {
+# ── The retired step ─────────────────────────────────────────────────────────
+# `__up_oc_plugins` no longer pulls anything, so it must report that honestly and
+# must NOT colour the run as an issue — a clean fleet is a clean run.
+
+@test "plugins: the step reports retired and adds no issue" {
     local err=0
     __up_oc_plugins "$(date +%s)" 1 err > "$SANDBOX/out.txt" 2>&1 < /dev/null
-    # Recorded, not discarded: whether the step coloured the RUN is an assertion now, and
-    # a local that dies with the function cannot be read by the case.
-    printf '%s\n' "$err" > "$SANDBOX/err.txt"
+
+    [ "$err" -eq 0 ]
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [NONE - path-installed plugins retired]"* ]]
+    # The per-plugin rows are gone with the plugins; nothing may re-add them.
+    [[ "$output" != *"LINE [7/20]"* ]]
+    [[ "$output" != *"LINE [8/20]"* ]]
 }
 
-@test "plugins: a missing plugin reports NOT INSTALLED, and the summary says so" {
-    _run_plugins
+@test "oc-plugin-update: reports no path-installed plugins and exits 0" {
+    oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null
+
     run cat "$SANDBOX/out.txt"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"LINE [7/20] Gigabrain Plugin [NOT INSTALLED]"* ]]
-    [[ "$output" == *"LINE [8/20] Lossless-Claw Plugin [NOT INSTALLED]"* ]]
-    # The row used to claim "ALREADY UP TO DATE" in the SUCCESS colour here, which is
-    # the one thing the case pinned: nothing was installed and nothing was updated, so
-    # the summary now says what is true — and, by Wayne's call (2026-09-24), a plugin that
-    # is not installed colours the RUN too: two of them are two issues.
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [2 PLUGIN(S) NOT UPDATED]"* ]]
-    run cat "$SANDBOX/err.txt"
-    [ "$output" = "2" ]
-    # On the SUMMARY row: a plugin that is present and level does print "ALREADY UP TO
-    # DATE" as its own row, which is a different claim from the fleet's.
-    [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
+    [[ "$output" == *"LINE Update Status [NO PATH-INSTALLED PLUGINS - all retired]"* ]]
 }
 
-@test "plugins: a directory that is not a git checkout is reported as local, not updated" {
-    _scaffold_all
-    rm -rf "$HOME/.openclaw/extensions/gigabrain/.git"
-
-    _run_plugins
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [7/20] Gigabrain Plugin [INSTALLED (local)]"* ]]
-    # One plugin cannot be updated (it is not a checkout) while the other two are level,
-    # and the summary reports the one that needs attention rather than the two that do
-    # not: "ALREADY UP TO DATE" here would hide the plugin nobody can pull.
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [1 PLUGIN(S) NOT UPDATED]"* ]]
-    [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
-    run cat "$SANDBOX/err.txt"
-    [ "$output" = "1" ]
-}
-
-@test "plugins: a checkout of a foreign remote is skipped, not pulled" {
-    _scaffold_all
-    _make_remote other-org/other-plugin foreign
-    _clone_from other-org/other-plugin "$HOME/.openclaw/extensions/gigabrain"
-
-    _run_plugins
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [7/20] Gigabrain Plugin [SKIP - custom remote]"* ]]
-}
-
-@test "plugins: a checkout behind its remote is updated, and the step reports UPDATED" {
-    _scaffold_all
-    _advance_remote gigabrain
-
-    _run_plugins
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [7/20] Gigabrain Plugin [UPDATED]"* ]]
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [PLUGINS UPDATED]"* ]]
-    # The pull really happened: the clone is level with the remote again.
-    run git -C "$HOME/.openclaw/extensions/gigabrain" rev-list --count HEAD..origin/HEAD
-    [ "$output" = "0" ]
-}
-
-@test "plugins: a checkout level with its remote is left alone" {
-    _scaffold_all
-
-    _run_plugins
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [7/20] Gigabrain Plugin [ALREADY UP TO DATE]"* ]]
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
-    # Three plugins, present and level: a clean run, and it must stay CLEAN — the
-    # not-installed counting above must not make every healthy run look like an issue.
-    run cat "$SANDBOX/err.txt"
-    [ "$output" = "0" ]
-}
-
-@test "plugins: local changes with no terminal are skipped, never discarded" {
-    _scaffold_all
-    printf 'local edit\n' >> "$HOME/.openclaw/extensions/gigabrain/file.txt"
-
-    _run_plugins
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [7/20] Gigabrain Plugin [SKIP - has local changes]"* ]]
-    # Skipping must not have touched the working tree.
-    run cat "$HOME/.openclaw/extensions/gigabrain/file.txt"
-    [[ "$output" == *"local edit"* ]]
-}
+# ── The helper's contract, kept for a future path-installed plugin ──────────
 
 @test "plugins: the helper's exit contract is 0 changed, 1 current, 2 failed, 3 not updated" {
     # The helper is module scope, so its exit code can be asserted directly — and it
-    # MUST be, because these are the distinctions the two callers depend on: both count
-    # updates from rc 0, only 2 is an error to surface, and only 1 lets a caller report
-    # "up to date".  Each call is written `... || rc=$?` on purpose: capturing a
-    # non-zero rc means the call must sit in a `||` list, where errexit does not abort
-    # the case.
+    # MUST be, because these are the distinctions any future caller will depend on.
+    # Each call is written `... || rc=$?` on purpose: capturing a non-zero rc means
+    # the call must sit in a `||` list, where errexit does not abort the case.
     _scaffold_all
     local rc
 
@@ -275,9 +186,8 @@ _run_plugins() {
     [[ "$output" == *"[CHECK FAILED - fetch]"* ]]
     [[ "$output" == *"absent/Martian-Engineering"* ]]
 
-    # 3 — not updated, and NOT because it is current.  These are the cases that used to
-    # return the same code as "already up to date", which is how a summary could report a
-    # clean fleet while nothing was installed.
+    # 3 — not updated, and NOT because it is current: a missing path, a directory that
+    # is not a checkout, and the user's own local changes are all not ours to move.
     rc=0
     __update_plugin "$SANDBOX/not-installed" \
         "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
@@ -295,96 +205,6 @@ _run_plugins() {
     [ "$rc" -eq 3 ]   # the user's local changes are not ours to discard
     run cat "$HOME/.openclaw/extensions/gigabrain/file.txt"
     [[ "$output" == *"local edit"* ]]
-}
-
-@test "plugins: a failed update is reported as failed, and counted as an issue" {
-    # The step's own accounting: rc 2 is an ISSUE for the whole `up` run, so it reaches
-    # the final "[COMPLETED WITH N ISSUE(S)]" line instead of only a per-plugin row.
-    _scaffold_all
-    git -C "$HOME/.openclaw/extensions/lossless-claw" \
-        remote set-url origin "$SANDBOX/absent/Martian-Engineering/lossless-claw.git"
-
-    local err=0
-    __up_oc_plugins "$(date +%s)" 1 err > "$SANDBOX/out.txt" 2>&1 < /dev/null
-
-    [ "$err" -eq 1 ]
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [8/20] Lossless-Claw Plugin [CHECK FAILED - fetch]"* ]]
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [1 UPDATE(S) FAILED]"* ]]
-    [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
-}
-
-@test "plugins: a changed plugin runs the drift check, and a clean one says CLEAN" {
-    _scaffold_all
-    _advance_remote gigabrain
-    mkdir -p "$HOME/.openclaw/workspace/scripts"
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
-    chmod +x "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
-
-    _run_plugins
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [10/20] Post-Update Drift [CLEAN]"* ]]
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [PLUGINS UPDATED]"* ]]
-    run cat "$SANDBOX/err.txt"
-    [ "$output" = "0" ]
-}
-
-@test "plugins: a drift check that --fix cannot repair is an issue for the run" {
-    # The nameref: __plugin_drift_check must reach the CALLER's errCount, or a failed
-    # repair would print a warning row and still let the run report zero issues.
-    _scaffold_all
-    _advance_remote gigabrain
-    mkdir -p "$HOME/.openclaw/workspace/scripts"
-    printf '#!/usr/bin/env bash\nexit 1\n' > "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
-    chmod +x "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
-
-    _run_plugins
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"LINE [10/20] Post-Update Drift [FIX FAILED - run post-update-drift-check.sh --fix]"* ]]
-    run cat "$SANDBOX/err.txt"
-    [ "$output" = "1" ]
-}
-
-# ── The COMMAND, not just the helper ───────────────────────────────────────────
-# Everything above pins the step through __up_oc_plugins.  These run the real
-# `oc-plugin-update` the way a user does, because the delegation in 09e is exactly
-# the wiring a helper-only test cannot see: proving __update_plugin behaves says
-# nothing about whether the command calls it correctly, nor about the count and the
-# exit code it derives from the reply.
-#
-# The positive cases call the command as a PLAIN STATEMENT on purpose — this suite
-# runs under errexit, so surviving the call IS the assertion that it exited 0.
-# Only the failure case wraps it, because there the non-zero code is the thing
-# under test.
-
-@test "oc-plugin-update: a fleet that is already current reports NO UPDATES and exits 0" {
-    # The counting bug at the boundary a user sees: 09e returned 0 for "up to date"
-    # in its own copy, so both were counted and this run claimed
-    # "2 plugin(s) processed" while changing nothing.
-    _scaffold_all
-
-    oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null
-
-    run cat "$SANDBOX/out.txt"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"LINE Update Status [NO UPDATES]"* ]]
-}
-
-@test "oc-plugin-update: the command renders the SHARED helper's vocabulary" {
-    # This is the delegation itself, and it is assertable hermetically: 09e's own copy
-    # of this logic said "[SKIP - different remote]"; only the shared helper says
-    # "[SKIP - custom remote]", and it also prints the Current/Expected pair that used
-    # to live only in 09e.  Seeing those on the command's output is proof the command
-    # routed through the helper rather than keeping a private copy.
-    _scaffold_all
-
-    oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null
-
-    run cat "$SANDBOX/out.txt"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"[SKIP - custom remote]"* ]]
-    [[ "$output" != *"[SKIP - different remote]"* ]]
-    [[ "$output" == *"INFO   Expected https://github.com/legendaryvibecoder/gigabrain.git"* ]]
 }
 
 @test "plugins: an update whose dependency install fails is reported as failed" {
@@ -415,47 +235,4 @@ _run_plugins() {
     [[ "$output" == *"[UPDATED]"* ]]
 }
 
-@test "oc-plugin-update: a failing fresh clone exits non-zero, not 0" {
-    # The command's OWN branch, where the shared helper is not involved at all: no
-    # plugin directory exists, so each plugin is cloned fresh.  With no fixture remote
-    # behind the rewritten URL every clone fails locally, which is the point — the run
-    # printed "[INSTALL FAILED]" twice and then exited 0, so a caller could not
-    # tell a clean run from one that installed nothing.
-    local rc=0
-    oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null || rc=$?
-
-    [ "$rc" -ne 0 ]
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"[INSTALL FAILED]"* ]]
-    # Both plugins, so the count aggregates rather than stopping at the first.
-    local _hits
-    _hits="$(grep -c 'INSTALL FAILED' "$SANDBOX/out.txt")"
-    [ "$_hits" -eq 2 ]
-}
-
-@test "oc-plugin-update: a plugin that is not a git checkout exits non-zero" {
-    # The same gap one branch over: the directory is present but is not a checkout, so
-    # the command prints [REINSTALL REQUIRED] and tells the user what to do — and then
-    # returned 0.  A non-zero exit is what makes it actionable from a script.
-    mkdir -p "$HOME/.openclaw/extensions/gigabrain"
-
-    local rc=0
-    oc-plugin-update gigabrain > "$SANDBOX/out.txt" 2>&1 < /dev/null || rc=$?
-
-    [ "$rc" -ne 0 ]
-    run cat "$SANDBOX/out.txt"
-    [[ "$output" == *"[REINSTALL REQUIRED]"* ]]
-}
-
-# LIMIT, stated rather than left implied: the command path's UPDATE and FAILURE
-# branches are not exercised here, and cannot be hermetically.  09e passes a full
-# `https://github.com/...` URL as the remote pattern, so a checkout only matches it
-# when `git remote get-url origin` returns that URL — and the only way to serve one
-# locally is `url.*.insteadOf`, which git applies when READING the url as well, so the
-# checkout always reports the rewritten local path (measured 2026-09-24: both attempts
-# landed on "[SKIP - custom remote]" instead of the fetch).  Those branches are
-# therefore pinned one level down, by the helper's own cases above (0/1/2, including a
-# remote that cannot be read).  Covering them at the command level needs a real remote.
-# The two cases directly above ARE command-level: neither needs a checkout the command
-# can match, because a missing directory is cloned and a non-checkout is refused before
-# any fetch.
+# end of file
