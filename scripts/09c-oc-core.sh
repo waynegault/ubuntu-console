@@ -1,6 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 40
+#   v40 (2026-11-01): the no-arg `oc` reference now names `export-keys-nas`
+#   (the case statement already routed it — the printed reference never did).
 # Module Version: 39
 #   v39 (2026-10-30): three §18.3 counters rose with v37/v38 and nothing re-baselined them,
 #   so the pre-push ratchet refused every push from this checkout — a gate doing its job on a
@@ -332,6 +335,7 @@ function oc() {
         printf '  %-20s %s\n' "restart-check" "Can WSL restart now? Names what would be interrupted"
         printf '  %-20s %s\n' "failover"     "Cloud LLM fallback (on|off|status)"
         printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys; sync SecretRefs"
+        printf '  %-20s %s\n' "export-keys-nas" "Export bridged API keys to the NAS"
         printf '  %-20s %s\n' "rotate-secrets" "Rotate checklist + optional bash log sanitization"
         # 'trust-sync' command removed
         printf '%s\n' ""

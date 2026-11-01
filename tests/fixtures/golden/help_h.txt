@@ -1,9 +1,10 @@
 [H[2J[3J[38;5;30m╔══════════════════════════════════════════════════════════════════════════════╗[0m
-[38;5;30m║[0m[90m Bash v5.3[0m                        [96mHELP INDEX[0m                           [90mv10.360[0m[38;5;30m║[0m
+[38;5;30m║[0m[90m Bash v5.3[0m                        [96mHELP INDEX[0m                           [90mv11.433[0m[38;5;30m║[0m
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                                    SYSTEM                                    [0m[38;5;30m║[0m
 [38;5;30m║  [96mm[37m                      Open Tactical Dashboard with live system stats       [38;5;30m║[0m
 [38;5;30m║  [96mh[37m                      Display this command reference                       [38;5;30m║[0m
+[38;5;30m║  [96mcontextual-help[37m        Show commands for the current context (auto)         [38;5;30m║[0m
 [38;5;30m║  [96mup[37m                     Run 20-step system maintenance                       [38;5;30m║[0m
 [38;5;30m║  [96msysinfo[37m                One-line summary: CPU, RAM, disk, GPU                [38;5;30m║[0m
 [38;5;30m║  [96mget-ip[37m                 Show WSL and WAN IP addresses                        [38;5;30m║[0m
@@ -24,13 +25,17 @@
 [38;5;30m║  [96mso[37m                     Start the OpenClaw gateway                           [38;5;30m║[0m
 [38;5;30m║  [96mxo[37m                     Stop the OpenClaw gateway                            [38;5;30m║[0m
 [38;5;30m║  [96moc restart[37m             Full gateway restart                                 [38;5;30m║[0m
+[38;5;30m║  [96moc restart-check[37m       Can WSL restart now? (0 safe, 1 not safe, 2 unknown) [38;5;30m║[0m
 [38;5;30m║  [96moc gs[37m                  Gateway deep health probe                            [38;5;30m║[0m
+[38;5;30m║  [96mstatus[37m                 Quick OpenClaw status                                [38;5;30m║[0m
 [38;5;30m║  [96moc status[37m              Full gateway status --all                            [38;5;30m║[0m
 [38;5;30m║  [96moc health[37m              Gateway health probe                                 [38;5;30m║[0m
 [38;5;30m║  [96moc tail[37m                Live-tail gateway logs (Ctrl-C)                      [38;5;30m║[0m
 [38;5;30m║  [96moc v[37m                   Print OpenClaw CLI version                           [38;5;30m║[0m
 [38;5;30m║  [96moc update[37m              Update OpenClaw CLI                                  [38;5;30m║[0m
 [38;5;30m║  [96moc tui[37m                 Launch OpenClaw TUI                                  [38;5;30m║[0m
+[38;5;30m║  [96mocui[37m                   Open OpenClaw Control UI in browser                  [38;5;30m║[0m
+[38;5;30m║  [96mtriage[37m                 OpenClaw diagnostics handoff (Qwen Code agent)       [38;5;30m║[0m
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                         OPENCLAW — AGENTS & SESSIONS                         [0m[38;5;30m║[0m
 [38;5;30m║  [96mos[37m                     List active sessions                                 [38;5;30m║[0m
@@ -39,7 +44,8 @@
 [38;5;30m║  [96moc stop[37m                Delete agent by ID                                   [38;5;30m║[0m
 [38;5;30m║  [96moc mem-index[37m           Rebuild vector memory index                          [38;5;30m║[0m
 [38;5;30m║  [96moc memory-search[37m       Semantic memory search                               [38;5;30m║[0m
-[38;5;30m║  [96moc purge[37m               Stop gateway and clear all agent sessions            [38;5;30m║[0m
+[38;5;30m║  [96moc purge[37m               Reset sessions (mains/cron kept); empty hal main     [38;5;30m║[0m
+[38;5;30m║  [96mocchat [sessionKey][37m    Open chat page for a session in browser              [38;5;30m║[0m
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                           OPENCLAW — CONFIG & LOGS                           [0m[38;5;30m║[0m
 [38;5;30m║  [96moc conf[37m                Open openclaw.json in VS Code                        [38;5;30m║[0m
@@ -61,6 +67,7 @@
 [38;5;30m║  [96moc failover[37m            Cloud LLM fallback (on|off)                          [38;5;30m║[0m
 [38;5;30m║  [96moc refresh-keys[37m        Re-import keys; sync SecretRefs                      [38;5;30m║[0m
 [38;5;30m║  [96moc rotate-secrets[37m      Rotate exposed secrets                               [38;5;30m║[0m
+[38;5;30m║  [96moc export-keys-nas[37m     Export bridged API keys to the NAS                   [38;5;30m║[0m
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                         OPENCLAW — DATA & EXTENSIONS                         [0m[38;5;30m║[0m
 [38;5;30m║  [96moc wk[37m                  Change to workspace                                  [38;5;30m║[0m
@@ -70,11 +77,14 @@
 [38;5;30m║  [96moc cron[37m                Manage scheduled tasks                               [38;5;30m║[0m
 [38;5;30m║  [96moc skills[37m              Show skill modules                                   [38;5;30m║[0m
 [38;5;30m║  [96moc plugins[37m             Manage plugins                                       [38;5;30m║[0m
+[38;5;30m║  [96moc-plugin-update [id|--all]                                                 [38;5;30m║[0m
+[38;5;30m║[0m                         [37mUpdate OpenClaw plugins (gigabrain, lossless-claw)   [38;5;30m║[0m
 [38;5;30m║  [96moc usage[37m               Token/cost stats (7d)                                [38;5;30m║[0m
 [38;5;30m║  [96moc channels[37m            Messaging channels                                   [38;5;30m║[0m
 [38;5;30m║  [96moc browser[37m             Headless browser                                     [38;5;30m║[0m
 [38;5;30m║  [96moc nodes[37m               Compute nodes                                        [38;5;30m║[0m
 [38;5;30m║  [96moc sandbox[37m             Code sandboxes                                       [38;5;30m║[0m
+[38;5;30m║  [96mwacli[37m                  WhatsApp CLI wrapper (auto-injects --store)          [38;5;30m║[0m
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                          OPENCLAW — LLM INTEGRATION                          [0m[38;5;30m║[0m
 [38;5;30m║  [96moc local-llm[37m           Register local llama.cpp                             [38;5;30m║[0m
@@ -84,14 +94,6 @@
 [38;5;30m║  [96moc g[37m                   Launch operational graph browser (overview/topics/fil[38;5;30m║[0m
 [38;5;30m║[0m                         [37mes/semantic/raw)                                     [38;5;30m║[0m
 [38;5;30m║  [96moc unittest[37m            Run OpenClaw structural + protocol tests             [38;5;30m║[0m
-[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
-[38;5;30m║[0m[33m                               GOG — GOOGLE CLI                               [0m[38;5;30m║[0m
-[38;5;30m║  [96mgog-status[37m             Show auth/config status and accounts                 [38;5;30m║[0m
-[38;5;30m║  [96mgog-login <email>[37m      Authorize and store refresh token                    [38;5;30m║[0m
-[38;5;30m║  [96mgog-logout <email>[37m     Remove stored credentials                            [38;5;30m║[0m
-[38;5;30m║  [96mgog-version[37m            Print gog version                                    [38;5;30m║[0m
-[38;5;30m║  [96mgog-help[37m               Show full gog help reference                         [38;5;30m║[0m
-[38;5;30m║  [96mgog <command>[37m          Run gog commands directly                            [38;5;30m║[0m
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                            LLM — MODEL MANAGEMENT                            [0m[38;5;30m║[0m
 [38;5;30m║  [96mwake[37m                   Lock GPU persistence mode                            [38;5;30m║[0m
@@ -107,8 +109,12 @@
 [38;5;30m║  [96mmodel use N[37m            Start model #N                                       [38;5;30m║[0m
 [38;5;30m║  [96mmodel stop[37m             Stop llama-server                                    [38;5;30m║[0m
 [38;5;30m║  [96mmodel status[37m           Show running models                                  [38;5;30m║[0m
+[38;5;30m║  [96mmodel lanes[37m            Per-lane prompt-cache hit rate                       [38;5;30m║[0m
 [38;5;30m║  [96mmodel doctor[37m           Validate setup                                       [38;5;30m║[0m
+[38;5;30m║  [96mmodel ctx-check[37m        Check the observed context profile                   [38;5;30m║[0m
 [38;5;30m║  [96mmodel recommend[37m        Rank models for VRAM                                 [38;5;30m║[0m
+[38;5;30m║  [96mmodel-recommend [use-case]                                                  [38;5;30m║[0m
+[38;5;30m║[0m                         [37mRecommend models by use case                         [38;5;30m║[0m
 [38;5;30m║  [96mmodel info N[37m           Show model #N details                                [38;5;30m║[0m
 [38;5;30m║  [96mmodel autotune N[37m       Tune no-oom/max-ctx/max-tps profile                  [38;5;30m║[0m
 [38;5;30m║  [96mmodel bench [MODEL...][37m Benchmark all or selected models                     [38;5;30m║[0m
@@ -120,6 +126,7 @@
 [38;5;30m║  [96mmodel delete N[37m         Delete model #N                                      [38;5;30m║[0m
 [38;5;30m║  [96mmodel archive N[37m        Archive model #N                                     [38;5;30m║[0m
 [38;5;30m║  [96mmodel download[37m         Download from HuggingFace                            [38;5;30m║[0m
+[38;5;30m║  [96mmodel register-trained[37m Register a trained model with eval provenance        [38;5;30m║[0m
 [38;5;30m║  [96mserve N[37m                Alias for model use N                                [38;5;30m║[0m
 [38;5;30m║  [96mhalt[37m                   Stop llama-server                                    [38;5;30m║[0m
 [38;5;30m║  [96mmlogs[37m                  Open llama-server log                                [38;5;30m║[0m
@@ -137,6 +144,7 @@
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                                GIT & PROJECTS                                [0m[38;5;30m║[0m
 [38;5;30m║  [96mmkproj <n>[37m             Scaffold Python project                              [38;5;30m║[0m
+[38;5;30m║  [96minv[37m                    Enter investigator project and run its CLI           [38;5;30m║[0m
 [38;5;30m║  [96mcommit: <msg>[37m          Commit with message                                  [38;5;30m║[0m
 [38;5;30m║  [96mcommit[37m                 Auto-commit + push                                   [38;5;30m║[0m
 [38;5;30m║  [96mcop[37m                    Copilot CLI session                                  [38;5;30m║[0m
@@ -147,4 +155,5 @@
 [38;5;30m║[0m[33m                                 DIAGNOSTICS                                  [0m[38;5;30m║[0m
 [38;5;30m║  [96mbashrc_diagnose[37m        Health check                                         [38;5;30m║[0m
 [38;5;30m║  [96mbashrc_dryrun[37m          Syntax-check profile                                 [38;5;30m║[0m
+[38;5;30m║  [96munittest[37m               Run repo unit/integration tests (BATS + pytest)      [38;5;30m║[0m
 [38;5;30m╚══════════════════════════════════════════════════════════════════════════════╝[0m

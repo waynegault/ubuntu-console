@@ -1,9 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ Bash {{VERSION}} HELP INDEX v10.360║
+║ Bash {{VERSION}} HELP INDEX {{VERSION}}║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ SYSTEM ║
 ║ m Open Tactical Dashboard with live system stats ║
 ║ h Display this command reference ║
+║ contextual-help Show commands for the current context (auto) ║
 ║ up Run 20-step system maintenance ║
 ║ sysinfo One-line summary: CPU, RAM, disk, GPU ║
 ║ get-ip Show WSL and WAN IP addresses ║
@@ -24,13 +25,17 @@
 ║ so Start the OpenClaw gateway ║
 ║ xo Stop the OpenClaw gateway ║
 ║ oc restart Full gateway restart ║
+║ oc restart-check Can WSL restart now? (0 safe, 1 not safe, 2 unknown) ║
 ║ oc gs Gateway deep health probe ║
+║ status Quick OpenClaw status ║
 ║ oc status Full gateway status --all ║
 ║ oc health Gateway health probe ║
 ║ oc tail Live-tail gateway logs (Ctrl-C) ║
 ║ oc v Print OpenClaw CLI version ║
 ║ oc update Update OpenClaw CLI ║
 ║ oc tui Launch OpenClaw TUI ║
+║ ocui Open OpenClaw Control UI in browser ║
+║ triage OpenClaw diagnostics handoff (Qwen Code agent) ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ OPENCLAW — AGENTS & SESSIONS ║
 ║ os List active sessions ║
@@ -39,7 +44,8 @@
 ║ oc stop Delete agent by ID ║
 ║ oc mem-index Rebuild vector memory index ║
 ║ oc memory-search Semantic memory search ║
-║ oc purge Stop gateway and clear all agent sessions ║
+║ oc purge Reset sessions (mains/cron kept); empty hal main ║
+║ occhat [sessionKey] Open chat page for a session in browser ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ OPENCLAW — CONFIG & LOGS ║
 ║ oc conf Open openclaw.json in VS Code ║
@@ -61,6 +67,7 @@
 ║ oc failover Cloud LLM fallback (on|off) ║
 ║ oc refresh-keys Re-import keys; sync SecretRefs ║
 ║ oc rotate-secrets Rotate exposed secrets ║
+║ oc export-keys-nas Export bridged API keys to the NAS ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ OPENCLAW — DATA & EXTENSIONS ║
 ║ oc wk Change to workspace ║
@@ -70,11 +77,14 @@
 ║ oc cron Manage scheduled tasks ║
 ║ oc skills Show skill modules ║
 ║ oc plugins Manage plugins ║
+║ oc-plugin-update [id|--all] ║
+║ Update OpenClaw plugins (gigabrain, lossless-claw) ║
 ║ oc usage Token/cost stats (7d) ║
 ║ oc channels Messaging channels ║
 ║ oc browser Headless browser ║
 ║ oc nodes Compute nodes ║
 ║ oc sandbox Code sandboxes ║
+║ wacli WhatsApp CLI wrapper (auto-injects --store) ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ OPENCLAW — LLM INTEGRATION ║
 ║ oc local-llm Register local llama.cpp ║
@@ -84,14 +94,6 @@
 ║ oc g Launch operational graph browser (overview/topics/fil║
 ║ es/semantic/raw) ║
 ║ oc unittest Run OpenClaw structural + protocol tests ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║ GOG — GOOGLE CLI ║
-║ gog-status Show auth/config status and accounts ║
-║ gog-login <email> Authorize and store refresh token ║
-║ gog-logout <email> Remove stored credentials ║
-║ gog-version Print gog version ║
-║ gog-help Show full gog help reference ║
-║ gog <command> Run gog commands directly ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ LLM — MODEL MANAGEMENT ║
 ║ wake Lock GPU persistence mode ║
@@ -107,8 +109,12 @@
 ║ model use N Start model #N ║
 ║ model stop Stop llama-server ║
 ║ model status Show running models ║
+║ model lanes Per-lane prompt-cache hit rate ║
 ║ model doctor Validate setup ║
+║ model ctx-check Check the observed context profile ║
 ║ model recommend Rank models for VRAM ║
+║ model-recommend [use-case] ║
+║ Recommend models by use case ║
 ║ model info N Show model #N details ║
 ║ model autotune N Tune no-oom/max-ctx/max-tps profile ║
 ║ model bench [MODEL...] Benchmark all or selected models ║
@@ -120,6 +126,7 @@
 ║ model delete N Delete model #N ║
 ║ model archive N Archive model #N ║
 ║ model download Download from HuggingFace ║
+║ model register-trained Register a trained model with eval provenance ║
 ║ serve N Alias for model use N ║
 ║ halt Stop llama-server ║
 ║ mlogs Open llama-server log ║
@@ -137,6 +144,7 @@
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ GIT & PROJECTS ║
 ║ mkproj <n> Scaffold Python project ║
+║ inv Enter investigator project and run its CLI ║
 ║ commit: <msg> Commit with message ║
 ║ commit Auto-commit + push ║
 ║ cop Copilot CLI session ║
@@ -147,4 +155,5 @@
 ║ DIAGNOSTICS ║
 ║ bashrc_diagnose Health check ║
 ║ bashrc_dryrun Syntax-check profile ║
+║ unittest Run repo unit/integration tests (BATS + pytest) ║
 ╚══════════════════════════════════════════════════════════════════════════════╝

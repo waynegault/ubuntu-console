@@ -2,7 +2,11 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-11-01): the help index now names every user-facing command the profile
+#   exports — added contextual-help, status, ocui, occhat, triage, oc restart-check,
+#   oc export-keys-nas, oc-plugin-update, wacli, model lanes, model ctx-check,
+#   model register-trained, model-recommend, inv and unittest.
 #   v33 (2026-10-30): the GPU row prefers TAC_HOST_GPU_LABEL so a long vendor name
 #   (this box's nvidia-smi reports "NVIDIA RTX Spark N1X (6144-core Blackwell RTX
 #   GPU)") does not push the load/temperature off the truncated row.
@@ -665,6 +669,7 @@ function tactical_help() {
     printf "${C_BoxBg}║${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$__ls" "$__title" "$__rs"
     __hRow "m" "Open Tactical Dashboard with live system stats"
     __hRow "h" "Display this command reference"
+    __hRow "contextual-help" "Show commands for the current context (auto)"
     __hRow "up" "Run 20-step system maintenance"
     __hRow "sysinfo" "One-line summary: CPU, RAM, disk, GPU"
     __hRow "get-ip" "Show WSL and WAN IP addresses"
@@ -686,13 +691,17 @@ function tactical_help() {
         __hRow "so" "Start the OpenClaw gateway"
         __hRow "xo" "Stop the OpenClaw gateway"
         __hRow "oc restart" "Full gateway restart"
+        __hRow "oc restart-check" "Can WSL restart now? (0 safe, 1 not safe, 2 unknown)"
         __hRow "oc gs" "Gateway deep health probe"
+        __hRow "status" "Quick OpenClaw status"
         __hRow "oc status" "Full gateway status --all"
         __hRow "oc health" "Gateway health probe"
         __hRow "oc tail" "Live-tail gateway logs (Ctrl-C)"
         __hRow "oc v" "Print OpenClaw CLI version"
         __hRow "oc update" "Update OpenClaw CLI"
         __hRow "oc tui" "Launch OpenClaw TUI"
+        __hRow "ocui" "Open OpenClaw Control UI in browser"
+        __hRow "triage" "OpenClaw diagnostics handoff (Qwen Code agent)"
 
         __hSection "OPENCLAW — AGENTS & SESSIONS"
         __hRow "os" "List active sessions"
@@ -702,6 +711,7 @@ function tactical_help() {
         __hRow "oc mem-index" "Rebuild vector memory index"
         __hRow "oc memory-search" "Semantic memory search"
         __hRow "oc purge" "Reset sessions (mains/cron kept); empty hal main"
+        __hRow "occhat [sessionKey]" "Open chat page for a session in browser"
 
         __hSection "OPENCLAW — CONFIG & LOGS"
         __hRow "oc conf" "Open openclaw.json in VS Code"
@@ -723,6 +733,7 @@ function tactical_help() {
         __hRow "oc failover" "Cloud LLM fallback (on|off)"
         __hRow "oc refresh-keys" "Re-import keys; sync SecretRefs"
         __hRow "oc rotate-secrets" "Rotate exposed secrets"
+        __hRow "oc export-keys-nas" "Export bridged API keys to the NAS"
 
         __hSection "OPENCLAW — DATA & EXTENSIONS"
         __hRow "oc wk" "Change to workspace"
@@ -732,11 +743,13 @@ function tactical_help() {
         __hRow "oc cron" "Manage scheduled tasks"
         __hRow "oc skills" "Show skill modules"
         __hRow "oc plugins" "Manage plugins"
+        __hRow "oc-plugin-update [id|--all]" "Update OpenClaw plugins (gigabrain, lossless-claw)"
         __hRow "oc usage" "Token/cost stats (7d)"
         __hRow "oc channels" "Messaging channels"
         __hRow "oc browser" "Headless browser"
         __hRow "oc nodes" "Compute nodes"
         __hRow "oc sandbox" "Code sandboxes"
+        __hRow "wacli" "WhatsApp CLI wrapper (auto-injects --store)"
 
         __hSection "OPENCLAW — LLM INTEGRATION"
         __hRow "oc local-llm" "Register local llama.cpp"
@@ -770,8 +783,11 @@ function tactical_help() {
     __hRow "model use N" "Start model #N"
     __hRow "model stop" "Stop llama-server"
     __hRow "model status" "Show running models"
+    __hRow "model lanes" "Per-lane prompt-cache hit rate"
     __hRow "model doctor" "Validate setup"
+    __hRow "model ctx-check" "Check the observed context profile"
     __hRow "model recommend" "Rank models for VRAM"
+    __hRow "model-recommend [use-case]" "Recommend models by use case"
     __hRow "model info N" "Show model #N details"
     __hRow "model autotune N" "Tune no-oom/max-ctx/max-tps profile"
     __hRow "model bench [MODEL...]" "Benchmark all or selected models"
@@ -783,6 +799,7 @@ function tactical_help() {
     __hRow "model delete N" "Delete model #N"
     __hRow "model archive N" "Archive model #N"
     __hRow "model download" "Download from HuggingFace"
+    __hRow "model register-trained" "Register a trained model with eval provenance"
     __hRow "serve N" "Alias for model use N"
     __hRow "halt" "Stop llama-server"
     __hRow "mlogs" "Open llama-server log"
@@ -800,6 +817,7 @@ function tactical_help() {
 
     __hSection "GIT & PROJECTS"
     __hRow "mkproj <n>" "Scaffold Python project"
+    __hRow "inv" "Enter investigator project and run its CLI"
     __hRow "commit: <msg>" "Commit with message"
     __hRow "commit" "Auto-commit + push"
     __hRow "cop" "Copilot CLI session"
@@ -810,6 +828,7 @@ function tactical_help() {
     __hSection "DIAGNOSTICS"
     __hRow "bashrc_diagnose" "Health check"
     __hRow "bashrc_dryrun" "Syntax-check profile"
+    __hRow "unittest" "Run repo unit/integration tests (BATS + pytest)"
 
     __tac_footer
 }
