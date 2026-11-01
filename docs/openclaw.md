@@ -315,12 +315,19 @@ real config schema.
 
 The refresh prints **one** line classifying the bridged keys, because they can be
 in four different states and only two of them need attention: *injected* (an
-env-backed ref exists, or this run is writing one), *waiting for a consumer*
+env-backed ref exists **after** this run's write), *waiting for a consumer*
 (nothing in the config references it yet, but a surface carries it — not an
 error), **not injectable** (the config references it from a non-env source such
 as `store`, which no env var can ever fill), and **on no surface** (bridged, but
 named by no config ref and present on neither the unit's `EnvironmentFile`, the
 `environment.d` drop-in nor the user-manager env — readable by nothing).
+
+The count follows the WRITE, not the intent: `openclaw config patch` is
+all-or-nothing, so a refused patch leaves every row unwritten and the line says
+so (2026-11-01 — before that, a refused batch printed "24 injected" beside
+"1 failed", counting rows that never landed). A refusal also prints the CLI's own
+sentence under the count it explains, naming the ref it could not resolve and
+why, so `1 failed` is never a number with no cause.
 
 The last two are named, because each needs a decision. *Not injectable* is named
 with its path and source, and the refresh never rewrites such a ref itself — a

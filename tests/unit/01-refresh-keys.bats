@@ -834,6 +834,89 @@ CFG
     [ "$output" -eq 0 ]
 }
 
+@test "oc-refresh-keys names a REFUSED SecretRef patch instead of reporting a bare count (2026-11-01)" {
+    # Criterion (v64): the CLI's own sentence reaches the operator and "N injected" counts only
+    # refs that exist. What this catches: the pre-v64 shape — `... >/dev/null 2>&1` plus
+    # `_failed=$_applied` — which printed "1 failed" beside "1 injected" for a row that was
+    # never written, and left no record of WHICH ref the patch refused.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key'"
+    __mock_command_local openclaw "if [ \"\$*\" = 'config patch --stdin' ]; then cat > \"$OC_MOCK_PATCH_FILE\"; printf '%s\\n' 'Dry run failed: 1 SecretRef assignment(s) could not be resolved.' '- env:default:GEMINI_API_KEY -> Environment variable \"GEMINI_API_KEY\" is missing or empty.' >&2; exit 1; fi; echo \"OPENCLAW_CALL: \$*\" >> \"$OC_MOCK_LOG\"; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # Still a failure, and now the CLI's own words are under the count it explains. The count
+    # itself follows the caller's exported keys (the harness inherits them), so the shape is what
+    # is pinned here — "0 applied" beside a failure can never read as a success.
+    [[ "$output" == *"failed | auth profiles"* ]]
+    [[ "$output" == *"0 applied"* ]]
+    [[ "$output" == *"SecretRef write"* ]]
+    [[ "$output" == *"env:default:GEMINI_API_KEY"* ]]
+    [[ "$output" == *"missing or empty"* ]]
+    # The write did not land, so the row must NOT be counted as injected — and it is on no
+    # surface, which the failed variant says by name.
+    [[ "$output" == *"0 injected"* ]]
+    [[ "$output" != *"1 injected"* ]]
+    [[ "$output" == *"NOT applied"* ]]
+    [[ "$output" == *"ON NO SURFACE"* ]]
+    [[ "$output" == *": GEMINI_API_KEY"* ]]
+}
+
+@test "oc-refresh-keys restarts a SERVING gateway whose phase aged out of the window (2026-11-01)" {
+    # Criterion (v64): an UNKNOWN phase on a unit older than __so_gateway_phase's 15-minute
+    # window is absence of evidence, not a start in flight. What this catches: the pre-v64
+    # shape, which spent the whole 120 s bound and then declined to restart a gateway that had
+    # been serving for 34 minutes — so the env it had just pushed never reached the process.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key'"
+    __so_gateway_phase() { printf 'unknown\n'; }
+    sleep() { :; }
+    # 1 s after boot: older than the classifier's 900 s window by any margin.
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *ActiveEnterTimestampMonotonic*) echo 1000000;; *is-active*) echo active;; esac; exit 0"
+    : > "$SYSTEMCTL_LOG"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"restart issued"* ]]
+    [[ "$output" != *"not stacking a restart"* ]]
+    run grep -c 'restart --no-block' "$SYSTEMCTL_LOG"
+    [ "$output" -ge 1 ]
+}
+
+@test "oc-refresh-keys still HOLDS an unknown-phase gateway whose start age is UNKNOWN" {
+    # Control for the v64 exemption (it must not widen to "no evidence = safe to restart"):
+    # with no monotonic start stamp — no user bus, an older systemd, a silent mock — the age is
+    # unknown and the conservative hold has to survive. This catches the exemption firing on an
+    # unreadable clock, which would restart a gateway mid-cold-start, exactly what v55 prevents.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key'"
+    __so_gateway_phase() { printf 'unknown\n'; }
+    sleep() { :; }
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *is-active*) echo active;; esac; exit 0"
+    : > "$SYSTEMCTL_LOG"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not stacking a restart"* ]]
+    run grep -c 'restart --no-block' "$SYSTEMCTL_LOG"
+    [ "$output" -eq 0 ]
+}
+
+@test "oc-refresh-keys does NOT restart a DRAINING gateway just because it is old" {
+    # The safety half of the same exemption: a NAMED phase is evidence at ANY age. A gateway up
+    # for days that began draining a minute ago must not be restarted on top of its drain — the
+    # collision that left openclaw.sqlite in "offline maintenance" (2026-10-17).
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key'"
+    __so_gateway_phase() { printf 'draining\n'; }
+    sleep() { :; }
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *ActiveEnterTimestampMonotonic*) echo 1000000;; *is-active*) echo active;; esac; exit 0"
+    : > "$SYSTEMCTL_LOG"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not stacking a restart"* ]]
+    run grep -c 'restart --no-block' "$SYSTEMCTL_LOG"
+    [ "$output" -eq 0 ]
+}
+
 # --- the GitHub CLI credential surface (2026-09-23) -------------------------
 # gh prefers GH_TOKEN/GITHUB_TOKEN over any stored credential; with no token in
 # its environment it asks the system credential store, and that ask is what

@@ -121,7 +121,24 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 63
+# Module Version: 64
+#   v64 (2026-11-01): a REFUSED SecretRef patch now names its cause, and the env report stops
+#   counting rows that were never written. Measured at 13:2x GMT on a run that printed
+#   "config refs: 0 applied, 3 skipped, 1 failed" beside "24 injected": `openclaw config patch
+#   --stdin >/dev/null 2>&1` threw the CLI's own sentence away (its shape, read back with
+#   `--dry-run`: "Dry run failed: 1 SecretRef assignment(s) could not be resolved. -
+#   env:default:<NAME> -> Environment variable \"<NAME>\" is missing or empty."), `_failed` was
+#   set to the count of INTENDED writes rather than of failing refs, and the batch is
+#   all-or-nothing so one bad row blocks every other. Both fields are now captured, the CLI's
+#   output is printed under the count it explains, and the planner renders TWO messages — the
+#   run prints the one its outcome justifies. Second half, the same pass: the gateway pre-state
+#   treated `unknown` as "still starting". __so_gateway_phase reads a 15-minute window, so a
+#   gateway up 34 min and LISTENing on 127.0.0.1:18789 classified `unknown`, the step spent its
+#   whole 120 s bound and then declined to restart, and the env it had just pushed never reached
+#   the running process (its /proc/<pid>/environ still held the old values). The unit's own
+#   ActiveEnterTimestampMonotonic now settles an UNKNOWN phase older than that window; a NAMED
+#   phase still holds at any age, so a long-lived gateway that just began draining is not
+#   restarted on top of.
 #   v63 (2026-11-01): `oc export-keys-nas` read the remote file's mode with `2>&1` on
 #   the ssh call, so ssh's own stderr entered the read-back. Measured at the terminal:
 #   OpenSSH 10.2p1 warns on EVERY connection that the NAS's sshd negotiates no
@@ -1057,6 +1074,9 @@ function __oc_apply_secret_refs() {
     # validated write) — and skip the patch entirely when nothing changed, so a
     # no-op refresh performs no config writes at all.
     local _patch_info _patch _applied=0 _skipped=0 _failed=0
+    # _patch_err keeps the CLI's own words for the report below; the two message variants are
+    # rendered by the planner so the caller prints the one the outcome justifies.
+    local _patch_err="" _env_msg="" _env_msg_ok="" _env_msg_failed=""
     _patch_info=$("${TAC_PYTHON:-python3}" - <<'PYEOF'
 import json, os, subprocess, sys
 entries = [
@@ -1167,6 +1187,9 @@ except Exception as exc:
     print(f"[tac] warning: could not read openclaw.json ({exc}); patching from an empty config", file=sys.stderr)
 
 patch, changed, skipped = {}, 0, 0
+# The paths this run means to write, named on a refused patch: the CLI's own message names
+# the ref it could not resolve, and this names the rows that did not land because of it.
+changed_paths = []
 profiles = ((cfg.get("auth") or {}).get("profiles") or {}) if isinstance(cfg, dict) else {}
 
 for path, var in entries:
@@ -1189,6 +1212,7 @@ for path, var in entries:
         continue
     set_path(patch, path, ref)
     changed += 1
+    changed_paths.append(path)
 
 # 2026-09-22: name the credentials the config REFERENCES but this table does not
 # map. A ref that is not env-backed (source "store", or an older shape) reaches no
@@ -1222,9 +1246,14 @@ def _collect(node, prefix=""):
             _collect(value, "{}[{}]".format(prefix, i))
 
 _collect(cfg)
-# The table is about to make these env-backed, so count them as injected rather
-# than reporting the pre-patch state (the staleness fixed in the reorder earlier).
-refs_env |= {var for _, var in entries if os.environ.get(var)}
+# TWO sets, because the report is now printed AFTER the write.  refs_cfg is what the
+# config RESOLVES NOW; refs_write is what this run's table is about to write.  A failed
+# patch writes NOTHING — the batch is all-or-nothing — so counting its rows as injected
+# is the "feedback without persistence" shape: measured 2026-11-01, "24 injected" was
+# printed beside "1 failed", where the honest figure was 23.
+refs_cfg = set(refs_env)
+refs_write = {var for _, var in entries if os.environ.get(var)}
+refs_env |= refs_write
 bridged = set()
 _cache_file = os.path.join(os.environ.get("TAC_CACHE_DIR", "/dev/shm"), "tac_win_api_keys")
 try:
@@ -1236,15 +1265,9 @@ try:
                     bridged.add(_nm)
 except OSError as _exc:
     print("[tac] gateway env: cannot read the bridge cache ({})".format(_exc), file=sys.stderr)
+env_msg_ok = env_msg_failed = ""
 if bridged:
-    _injected = len(bridged & refs_env)
     _gaps = sorted({(v, p, s) for (v, p, s) in refs_other if v in bridged})
-    _waiting = len(bridged - refs_env - {v for v, _p, _s in refs_other})
-    _msg = "[tac] gateway env: {} injected, {} waiting for a consumer".format(_injected, _waiting)
-    if _gaps:
-        _msg += " -- NOT injectable (config refs with a NON-env source): " + ", ".join(
-            "{}@{} (source {})".format(v, p, s) for v, p, s in _gaps
-        )
 
     # 2026-10-01 (Wayne): NAME the credentials placed on NO surface, rather than counting them.
     # "waiting for a consumer" and "placed nowhere" are different states: a key no config ref
@@ -1297,25 +1320,86 @@ if bridged:
             _manager_surface = "no surface at all (user-manager env AND the recorded push set are unreadable: {})".format(_exc2)
             _manager_names = set()
 
-    _placed_surfaces = (refs_env
-                        | {v for v, _p, _s in refs_other}
-                        | _surface_names("~/.openclaw/gateway.systemd.env")
-                        | _surface_names("~/.config/environment.d/90-openclaw.conf")
-                        | _manager_names)
-    _unplaced = sorted(bridged - _placed_surfaces)
-    if _unplaced:
-        _msg += (" -- ON NO SURFACE (bridged, but named by no config ref and present on neither the unit "
-                 "EnvironmentFile, the environment.d drop-in, nor {}): {}".format(_manager_surface, ", ".join(_unplaced)))
-    print(_msg, file=sys.stderr)
-print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped}))
+    _surface_files = (_surface_names("~/.openclaw/gateway.systemd.env")
+                      | _surface_names("~/.config/environment.d/90-openclaw.conf"))
+
+    def _render_env_msg(_refs, _note=""):
+        """One line per OUTCOME, from one place: the caller prints the variant that
+        matches what the write actually did. `_refs` is the env-ref set that exists
+        afterwards, so a refused patch renders the state it left behind."""
+        _placed = _refs | {v for v, _p, _s in refs_other} | _surface_files | _manager_names
+        _unplaced = sorted(bridged - _placed)
+        _out = "{} injected, {} waiting for a consumer".format(
+            len(bridged & _refs), len(bridged - _refs - {v for v, _p, _s in refs_other}))
+        if _gaps:
+            _out += " -- NOT injectable (config refs with a NON-env source): " + ", ".join(
+                "{}@{} (source {})".format(v, p, s) for v, p, s in _gaps)
+        if _unplaced:
+            _out += (" -- ON NO SURFACE (bridged, but named by no config ref and present on neither the unit "
+                     "EnvironmentFile, the environment.d drop-in, nor {}): {}".format(_manager_surface, ", ".join(_unplaced)))
+        return _out + _note
+
+    # The write is all-or-nothing, so the failed variant counts only what the config
+    # already resolved and says plainly that the rows this run meant to write did not land.
+    _failed_note = ""
+    if changed:
+        _failed_note = " -- {} config ref write(s) NOT applied ({})".format(
+            changed,
+            ", ".join(changed_paths[:6]) + ("…(+{})".format(len(changed_paths) - 6) if len(changed_paths) > 6 else ""))
+    env_msg_ok = _render_env_msg(refs_env)
+    env_msg_failed = _render_env_msg(refs_cfg, _failed_note)
+print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped,
+                  "changed_paths": changed_paths,
+                  "env_msg_ok": env_msg_ok, "env_msg_failed": env_msg_failed}))
 PYEOF
 )
-    _patch=$(printf '%s' "$_patch_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.dumps(json.load(sys.stdin)['patch']))" 2>/dev/null)
-    _applied=$(printf '%s' "$_patch_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.load(sys.stdin)['changed'])" 2>/dev/null)
-    _skipped=$(printf '%s' "$_patch_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.load(sys.stdin)['skipped'])" 2>/dev/null)
-    if (( _applied > 0 )) && ! printf '%s' "$_patch" | openclaw config patch --stdin >/dev/null 2>&1; then
-        _failed=$_applied
-        _applied=0
+    # ONE reader for the plan and BOTH report variants (three subprocesses did this before,
+    # and even then the report could not describe the outcome). The message is chosen AFTER
+    # the write, because only then is "N injected" a statement about what exists.
+    local -a _plan=()
+    mapfile -t _plan < <(printf '%s' "$_patch_info" | "${TAC_PYTHON:-python3}" -c '
+import json, sys
+_d = json.load(sys.stdin)
+print(json.dumps(_d["patch"]))
+print(_d["changed"])
+print(_d["skipped"])
+print(_d["env_msg_ok"])
+print(_d["env_msg_failed"])
+')
+    if (( ${#_plan[@]} != 5 ))
+    then
+        # Reported, never written: an empty patch piped to `config patch` fails for a reason
+        # that has nothing to do with the config, and would read as one.
+        __tac_info "Syncing OpenClaw SecretRefs" "[the SecretRef plan could not be read — NO config write attempted]" "$C_Error"
+        _failed=1
+        _patch_err="the plan could not be read (see the error above)"
+    else
+        _patch="${_plan[0]}" _applied="${_plan[1]}" _skipped="${_plan[2]}"
+        _env_msg_ok="${_plan[3]}" _env_msg_failed="${_plan[4]}"
+        if (( _applied > 0 ))
+        then
+            # CAPTURE the CLI, never discard it: it names the ref it refused and why
+            # ("env:default:<NAME> -> Environment variable … is missing or empty"), and the
+            # batch is all-or-nothing, so one bad row explains every row that did not land.
+            # Measured 2026-11-01: this line read "1 failed" with that sentence thrown away
+            # by `>/dev/null 2>&1`, and no record of which ref it was survived anywhere.
+            if _patch_err=$(printf '%s' "$_patch" | openclaw config patch --stdin 2>&1)
+            then
+                _env_msg="$_env_msg_ok"
+            else
+                _failed=$_applied
+                _applied=0
+                _env_msg="$_env_msg_failed"
+            fi
+        else
+            _env_msg="$_env_msg_ok"
+        fi
+        # One row, printed once, through the same helper as every other line in this report —
+        # the planner no longer writes to stderr, which also keeps the bare `>&2` count flat.
+        if [[ -n "$_env_msg" ]]
+        then
+            __tac_info "Gateway env" "[$_env_msg]" "$C_Dim"
+        fi
     fi
 
     # ================================================================
@@ -1460,6 +1544,18 @@ PYEOF
     if (( _failed > 0 ))
     then
         __tac_info "Syncing OpenClaw SecretRefs" "[config refs: $_applied applied, $_skipped skipped, $_failed failed | auth profiles: $_auth_applied writes]" "$C_Warning"
+        # Every line the CLI printed, under the count it explains: one unresolved ref is never
+        # reduced to a number again (2026-11-01). The first line rides the labelled row and the
+        # rest continue under it, so the ref name and the reason stay together.
+        local _why_line _why_label="SecretRef write"
+        while IFS= read -r _why_line
+        do
+            if [[ -n "$_why_line" ]]
+            then
+                __tac_info "$_why_label" "[$_why_line]" "$C_Error"
+                _why_label=""
+            fi
+        done <<< "$_patch_err"
     elif (( _applied > 0 || _auth_applied > 0 ))
     then
         __tac_info "Syncing OpenClaw SecretRefs" "[config refs: $_applied applied, $_skipped skipped | auth profiles: $_auth_applied writes]" "$C_Success"
@@ -2647,6 +2743,37 @@ function oc-refresh-keys() {
         # two MainThread processes holding openclaw.sqlite in offline maintenance, and the next two
         # starts were refused.  Converge FIRST, on the same log authority the post-restart wait
         # uses.
+        #
+        # v64: an EMPTY phase is not evidence of a start either.  __so_gateway_phase reads a
+        # 15-minute journal window, so a gateway that has been serving longer than that has had its
+        # lifecycle lines aged out and reads exactly like one that never reached them.  Measured
+        # 2026-11-01 13:27 GMT: a gateway active since 12:56:38 (34 min) and LISTENing on
+        # 127.0.0.1:18789 classified `unknown`, so this step spent the whole 120 s bound waiting for
+        # a start that had finished half an hour earlier and then declined to restart — the env it
+        # had just pushed never reached the running process, and the row still read "still starting".
+        # The unit's own start age settles it, and only for an UNKNOWN phase: a named phase
+        # (`starting`, `draining`, `degraded`) is evidence and holds whatever the age, because a
+        # long-lived gateway that began draining a moment ago is still draining.
+        local _phase_window=900 _pre_age="" _pre_settled=0 _enter_us _now_us
+        if [[ "$_pre_state" == "active" ]]
+        then
+            # `--value` answers 0 for an inactive unit, and an absent or unreadable field leaves
+            # the age UNKNOWN — which keeps the conservative hold below rather than guessing.
+            _enter_us=$(systemctl --user show -p ActiveEnterTimestampMonotonic --value openclaw-gateway.service 2>/dev/null)
+            if [[ "$_enter_us" =~ ^[0-9]+$ ]] && (( _enter_us > 0 ))
+            then
+                # /proc/uptime's first field is SECONDS WITH A FRACTION ("49990.84 960643.87"),
+                # so it must be truncated before any integer test — the version that did not was
+                # measured reading no age at all, which is the bug this whole branch exists for.
+                read -r _now_us _ < /proc/uptime
+                _now_us="${_now_us%%.*}"
+                if [[ "$_now_us" =~ ^[0-9]+$ ]] && (( _now_us * 1000000 > _enter_us ))
+                then
+                    _pre_age=$(( (_now_us * 1000000 - _enter_us) / 1000000 ))
+                    (( _pre_age > _phase_window )) && _pre_settled=1
+                fi
+            fi
+        fi
         if [[ "$_pre_state" == "active" ]]
         then
             for (( _i = 0; _i < _gw_wait && SECONDS < _gw_deadline; _i++ ))
@@ -2654,13 +2781,27 @@ function oc-refresh-keys() {
                 # swallow-ok: the phase reader is a log parser; an empty read means "phase unknown", which the non-converged row below reports
                 _pre_phase=$(__so_gateway_phase openclaw-gateway.service 2>/dev/null)
                 [[ "$_pre_phase" == "running" ]] && break
+                # A SETTLED unit gets ONE read, not a wait: its lifecycle lines predate the
+                # classifier's window, so there is no start to converge on — but the read still
+                # catches a `draining` phase, which must never be restarted on top of. Measured
+                # design slip the same day: skipping the read along with the wait turned an old
+                # draining gateway into a restart target.
+                [[ "$_pre_settled" == "1" ]] && break
                 sleep 1
             done
+        fi
+        # The classifier's own word for "no lifecycle line in the window" is `unknown` — absence of
+        # evidence, not evidence of a start.  Normalise it to empty so the branch below can tell a
+        # NAMED phase from nothing at all.
+        if [[ "$_pre_phase" == "unknown" ]]
+        then
+            _pre_phase=""
         fi
         if [[ "$_pre_state" == "activating" || "$_pre_state" == "deactivating" ]]
         then
             __tac_info "Gateway" "[already $_pre_state — not stacking a restart; env is applied]" "$C_Warning"
-        elif [[ "$_pre_state" == "active" && "$_pre_phase" != "running" ]]
+        elif [[ "$_pre_state" == "active" && "$_pre_phase" != "running" ]] \
+             && [[ -n "$_pre_phase" || "$_pre_settled" == "0" ]]
         then
             # NEVER STACK, whatever the phase: a start that has not converged inside the bound is
             # left alone rather than restarted on top of.  The env is already in the manager, so the
