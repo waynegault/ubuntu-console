@@ -55,6 +55,12 @@ StartLimitBurst=6
 # The launcher shim defaults to build/bin (the retired Intel build); this box's
 # CUDA 13.4.3 build lives at build-cuda, so Environment names it for the shim.
 Environment=LLAMA_CUDA_SERVER_BIN=%h/llama.cpp/build-cuda/bin/llama-server
+# --metrics (SWITCH-CONSOLE-METRICS-001): serves llama.cpp's Prometheus counters on
+# the SAME listener as the embeddings API.  --host 127.0.0.1 is the only bind, so
+# /metrics is loopback-only — never a wider interface.
+# REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
+# (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
+# CARD: SWITCH-CONSOLE-METRICS-001
 ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/embeddinggemma-300M-Q8_0.gguf --alias embeddinggemma --port 18080 --host 127.0.0.1 --ctx-size 2048 --batch-size 8192 --ubatch-size 8192 --threads 8 --parallel 1 --cache-ram 0 --embeddings --pooling mean --metrics -ngl 99
 # 320 MB of weights; the memory ceiling here is about bounding a bug, not about capacity.
 Restart=always

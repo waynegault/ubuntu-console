@@ -391,11 +391,9 @@ EOS
 # can drift silently.  The counters are the serving stack's own evidence that a
 # prefix-cache regression happened; a reader that printed 0 for an unreadable
 # endpoint would hide exactly that.
-_LANE_SPECS='llama-xe-minicpm5-1b-chat.service|18081
-llama-xe-embeddinggemma-embed.service|18080
-llama-xe-llama32-3b-chat.service|18085
-llama-cuda-llama32-3b-chat.service|18083
-llama-cpu-qwen25-3b-chat.service|18084'
+_LANE_SPECS='llama-cuda-qwen3coder-30b-chat.service|18087
+llama-cuda-embeddinggemma-embed.service|18080
+llama-cpu-qwen3coder-30b-chat.service|18086'
 
 @test "metrics: every resident lane unit passes --metrics on its loopback listener" {
     local spec unit port u exec_line count status=0
@@ -421,13 +419,18 @@ llama-cpu-qwen25-3b-chat.service|18084'
     [[ "$status" -eq 0 ]] || return 1
 }
 
-@test "metrics: the host profile's lane table is the same five units and ports as the units" {
+@test "metrics: the host profile's lane table is the same units and ports as the units" {
     # `model lanes` iterates LLAMA_LANE_SPECS, which the HOST PROFILE declares (this
     # box's lanes are a property of this box, not of the architecture).  If the table
     # drifted from the units it would either drop a lane from the report or query a
     # port nobody serves — both silent.
     local table
-    table=$(bash -c 'source "$1"; printf "%s\n" "${LLAMA_LANE_SPECS:-}"' _ \
+    # The assertion is about the FILE, so the inherited value is dropped: a process
+    # launched from a shell that exported this table carries a SNAPSHOT of it, and
+    # `:=` will not override an exported variable.  Measured 2026-11-01 — the agent
+    # shell's env held the pre-edit two-lane value and this case failed against a
+    # profile that reads correctly.
+    table=$(env -u LLAMA_LANE_SPECS bash -c 'source "$1"; printf "%s\n" "${LLAMA_LANE_SPECS:-}"' _ \
             "$REPO_ROOT/config/hosts.d/intel-xe-cuda.conf")
     [[ -n "$table" ]] || { echo "FAIL: the host profile declares no LLAMA_LANE_SPECS"; return 1; }
     [[ "$(printf '%s\n' "$table" | sort)" == "$(printf '%s\n' "$_LANE_SPECS" | sort)" ]] \
