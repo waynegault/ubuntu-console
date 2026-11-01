@@ -826,6 +826,36 @@ EOF
     [[ "$output" == *"GPU ENGINES  :: "*"Idle"* ]]
 }
 
+@test "metrics: sysinfo renders accelerators from the host profile facts" {
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "NVIDIA RTX Spark N1X (6144-core Blackwell RTX GPU),64,35,3497,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "Idle" > "$TAC_CACHE_DIR/tac_gpu_engines"
+
+    # Single NVIDIA card, no Intel Xe (the ASUS arm64 box): the discrete segment
+    # carries the profile's short label and no iGPU segment is printed.
+    export TAC_HOST_PROFILE_XE=0
+    export TAC_HOST_CUDA=1
+    export TAC_HOST_GPU_LABEL="RTX Spark N1X"
+    unset TAC_HOST_IGPU_LABEL
+    run sysinfo
+    [ "$status" -eq 0 ]
+    local stripped
+    __strip_ansi "$output" stripped
+    [[ "$stripped" == *"RTX Spark N1X: 35%/64°C"* ]]
+    [[ "$stripped" != *"iGPU"* ]]
+
+    # Intel box: both accelerators, each with its own profile label.  The iGPU is
+    # utilisation only (no temperature exists for it); the discrete card has both.
+    export TAC_HOST_PROFILE_XE=1
+    export TAC_HOST_IGPU_LABEL="Intel Xe"
+    export TAC_HOST_GPU_LABEL="RTX 3050 Ti"
+    run sysinfo
+    [ "$status" -eq 0 ]
+    __strip_ansi "$output" stripped
+    [[ "$stripped" == *"Intel Xe: 6%"* ]]
+    [[ "$stripped" == *"RTX 3050 Ti: 35%/64°C"* ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. PURE CALCULATION FUNCTIONS (llama.cpp)
 # ─────────────────────────────────────────────────────────────────────────────

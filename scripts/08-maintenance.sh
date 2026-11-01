@@ -2,7 +2,16 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 79
+# Module Version: 80
+#   v80 (2026-11-01): sysinfo no longer hardcodes the "iGPU"/"CUDA" labels or a
+#   two-GPU layout.  It renders an accelerator segment only when that accelerator is
+#   actually present — the host profile's TAC_HOST_PROFILE_XE for the Intel Xe iGPU,
+#   the runtime-detected TAC_HOST_CUDA for the discrete NVIDIA card — and labels each
+#   with the profile's short name (TAC_HOST_IGPU_LABEL / TAC_HOST_GPU_LABEL).  The data
+#   mapping is corrected too: the iGPU shows utilisation alone (no temperature exists
+#   for it), the discrete card shows util+temp from nvidia-smi.  On the single-GPU ASUS
+#   arm64 box this printed the RTX Spark card as a phantom "iGPU" and a "CUDA: 0%"
+#   beside it.
 #   v79 (2026-10-31): the R check also looks under "Program Files (x86)" (this box's R
 #   is 32-bit), and OpenStinger is removed from the plugin updater (no longer used).
 #   v78 (2026-10-31): two false issues from `up`:
@@ -2394,42 +2403,22 @@ function copy_path() {
 function sysinfo() {
     local host_raw
     host_raw=$(__get_host_metrics)
-    local cpu gpu0 gpu1
-    IFS='|' read -r cpu gpu0 gpu1 <<< "$host_raw"
+    local cpu gpu0
+    IFS='|' read -r cpu gpu0 _ <<< "$host_raw"
     # Ensure numeric values for arithmetic (guard against stale/malformed cache)
     [[ "$cpu"  =~ ^[0-9]+$ ]] || cpu=0
     [[ "$gpu0" =~ ^[0-9]+$ ]] || gpu0=0
-    [[ "$gpu1" =~ ^[0-9]+$ ]] || gpu1=0
     local mem_used mem_total mem_pct
     read -r mem_used mem_total mem_pct \
         <<< "$(free -m | awk 'NR==2{printf "%.1f %.1f %d", $3/1024, $2/1024, $3*100/$2}')"
     local disk
     disk=$(df -h / | awk 'NR==2{print $4}' | sed 's/\([0-9.]\)G/\1 Gb/;s/\([0-9.]\)M/\1 Mb/')
-    local gpu_raw
-    gpu_raw=$(__get_gpu)
-    local gpu_info="N/A" gpu_color=$C_Dim
-    if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." ]]
-    then
-        local _g_name g_temp g_util _g_mu _g_mt
-        IFS=',' read -r _g_name g_temp g_util _g_mu _g_mt <<< "$gpu_raw"
-        # Strip whitespace from nvidia-smi CSV fields
-        g_util=${g_util// /}
-        # Strip trailing % sign for numeric comparison
-        g_util=${g_util%%%}
-        # Strip whitespace from temperature
-        g_temp=${g_temp// /}
-        gpu_info="${g_util}%/${g_temp}${DEGREE}C"
-        gpu_color=$(__threshold_color "$g_util")
-    fi
     # CPU colour
     local cpu_color
     cpu_color=$(__threshold_color "$cpu")
     # Memory colour
     local mem_color
     mem_color=$(__threshold_color "$mem_pct")
-    # GPU1 colour (same thresholds as CPU/GPU0)
-    local gpu1_color
-    gpu1_color=$(__threshold_color "$gpu1")
     # Design tokens are already ANSI-C quoted ($'\e[…]'), so echo -e is
     # unnecessary. Using printf avoids any accidental backslash interpretation.
     # Build the sysinfo line in segments for readability.
@@ -2437,8 +2426,45 @@ function sysinfo() {
     _sysline+="${C_Dim}CPU:${C_Reset} ${cpu_color}${cpu}%${C_Reset} "
     _sysline+="${C_Dim}RAM:${C_Reset} ${mem_color}${mem_used} / ${mem_total} Gb${C_Reset} "
     _sysline+="${C_Dim}Disk:${C_Reset} ${disk} "
-    _sysline+="${C_Dim}iGPU:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} "
-    _sysline+="${C_Dim}CUDA:${C_Reset} ${gpu1_color}${gpu1}%${C_Reset}"
+
+    # Integrated GPU (Intel Xe): rendered only when the host profile declares one
+    # (TAC_HOST_PROFILE_XE).  Its load is gpu0 from the host-metrics probe; there is
+    # no temperature reading for the iGPU (nvidia-smi covers the discrete card only),
+    # so this segment is utilisation alone.
+    if [[ "${TAC_HOST_PROFILE_XE:-0}" == "1" ]]
+    then
+        local igpu_color
+        igpu_color=$(__threshold_color "$gpu0")
+        _sysline+="${C_Dim}${TAC_HOST_IGPU_LABEL:-iGPU}:${C_Reset} ${igpu_color}${gpu0}%${C_Reset} "
+    fi
+
+    # Discrete GPU (NVIDIA/CUDA): rendered only when one is actually present
+    # (TAC_HOST_CUDA is the runtime-detected fact, not a profile claim).  Its load
+    # and temperature come from __get_gpu (nvidia-smi), the only probe with a temp.
+    if [[ "${TAC_HOST_CUDA:-0}" == "1" ]]
+    then
+        local gpu_raw
+        gpu_raw=$(__get_gpu)
+        local gpu_info="N/A" gpu_color=$C_Dim
+        if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." ]]
+        then
+            local _g_name g_temp g_util _g_mu _g_mt
+            IFS=',' read -r _g_name g_temp g_util _g_mu _g_mt <<< "$gpu_raw"
+            # Strip whitespace from nvidia-smi CSV fields
+            g_util=${g_util// /}
+            # Strip trailing % sign for numeric comparison
+            g_util=${g_util%%%}
+            # Strip whitespace from temperature
+            g_temp=${g_temp// /}
+            gpu_info="${g_util}%/${g_temp}${DEGREE}C"
+            gpu_color=$(__threshold_color "$g_util")
+        fi
+        _sysline+="${C_Dim}${TAC_HOST_GPU_LABEL:-GPU}:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} "
+    fi
+
+    # Drop the one trailing space left by the last appended segment, so the line
+    # ends cleanly whether or not any accelerator segment was appended.
+    _sysline="${_sysline% }"
     printf '%s\n' "$_sysline"
 }
 

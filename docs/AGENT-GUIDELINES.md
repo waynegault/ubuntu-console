@@ -120,7 +120,7 @@ These normally open VS Code; with `--read` they output content to stdout:
 |---------|-------------|
 | `tac-exec gpu-status` | GPU info (NVIDIA detail) |
 | `tac-exec get-ip` | WSL IP + external WAN IP |
-| `tac-exec sysinfo` | One-line: CPU / RAM / Disk / iGPU / CUDA |
+| `tac-exec sysinfo` | One-line: CPU / RAM / Disk, then each GPU present (profile-labelled) |
 
 ---
 
