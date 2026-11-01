@@ -403,6 +403,33 @@ CFG
     [ ! -f "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" ]
 }
 
+@test "oc-export-keys-nas reads the mode from stdout only, so an ssh stderr warning cannot fail it" {
+    # WHAT THIS CATCHES: the mode read-back capturing `2>&1`, which folded ssh's
+    # stderr into the mode value — measured 2026-11-01, OpenSSH 10.2 against the
+    # NAS's sshd: "[uploaded but mode ** WARNING: connection is not using a
+    # post-quantum key exchange algorithm. …, not 600]" on a file that WAS 600,
+    # reported on every run and leaving the mirror permanently unmarked.
+    # The criterion is ssh's own documented behaviour: the warning goes to stderr,
+    # the remote command's mode goes to stdout.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GLOWMARKT_PASSWORD=glow-value'"
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    __mock_command_local ssh "cat > /dev/null; printf '%s\\n' '** WARNING: connection is not using a post-quantum key exchange algorithm.' '** This session may be vulnerable to \"store now, decrypt later\" attacks.' >&2; echo 600; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run oc-export-keys-nas
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"name(s) ->"* ]]
+    [[ "$output" != *"not 600"* ]]
+    [ -f "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" ]
+}
+
 @test "oc-export-keys-nas --dry-run names, and uploads nothing" {
     # The review step: the imported set is inspectable before it reaches the NAS.
     __mock_command_local pwsh.exe "printf '%s\\n' 'GLOWMARKT_PASSWORD=glow-value' 'UNREAD_API_KEY=unread-value'"

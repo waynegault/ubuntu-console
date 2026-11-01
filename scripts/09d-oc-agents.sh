@@ -121,7 +121,16 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 62
+# Module Version: 63
+#   v63 (2026-11-01): `oc export-keys-nas` read the remote file's mode with `2>&1` on
+#   the ssh call, so ssh's own stderr entered the read-back. Measured at the terminal:
+#   OpenSSH 10.2p1 warns on EVERY connection that the NAS's sshd negotiates no
+#   post-quantum key exchange ("** WARNING: connection is not using a post-quantum key
+#   exchange algorithm…"), so the check reported "[uploaded but mode ** WARNING: …,
+#   not 600]" on a file that WAS 600 — every run, with the mirror never marked synced.
+#   stdout only now carries the mode; stderr stays with ssh, which prints the warning
+#   where it belongs and keeps a real connection error visible. The NAS-side remedy
+#   (upgrade its sshd to a PQ-capable OpenSSH) is not something this box can do.
 #   v62 (2026-11-01): OPENCLAW_GATEWAY_TOKEN is RETIRED as a bridged env credential. At 12:12
 #   today `gateway.auth.token` became a STORE-backed SecretRef
 #   ({source:"store", provider:"default", id:"OPENCLAW_GATEWAY_TOKEN"}), and the unit's
@@ -1924,7 +1933,14 @@ function oc-export-keys-nas() {
         if [[ "$_cache_hash" == "$_prev_nas_hash" ]]
         then
             _nas_skipped=1
-        elif _remote_out=$("${_nas_ssh[@]}" "$(__oc_nas_upload_cmd "$_nas_collectors_env")" < "$_nas_tmp" 2>&1)
+        # STDOUT ONLY. The remote command's sole stdout is the mode, and stderr is
+        # where ssh talks to the user: since OpenSSH 10 the client warns on every
+        # connection that the NAS's sshd negotiates no post-quantum key exchange, so
+        # `2>&1` folded three warning lines into the value and this check reported
+        # "[uploaded but mode ** WARNING: …, not 600]" on a file that was 600. Left
+        # unredirected, the warning is printed by ssh where it belongs and a real
+        # connection error stays visible too.
+        elif _remote_out=$("${_nas_ssh[@]}" "$(__oc_nas_upload_cmd "$_nas_collectors_env")" < "$_nas_tmp")
         then
             # The mode is a read-back, not an assumption: the file carries
             # credentials, and the previous version left it 644 (world-readable).
