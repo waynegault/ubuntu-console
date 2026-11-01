@@ -1001,7 +1001,9 @@ one (`model autotune N --workload agentic`).
 
 - `oc-local-llm` configures OpenClaw to route agent requests through your
   local `llama-server` instead of a cloud provider, saving API costs.
-- `oc-sync-models` syncs the local model registry with OpenClaw's model scan.
+- `oc-sync-models` refreshes OpenClaw's hosted model catalog (`openclaw models refresh`).
+  It no longer scans OpenRouter's free models; `oc ms` lists the configured providers and
+  their endpoints instead.
 - `oc-failover on` enables automatic fallback to a cloud provider when the
   local LLM is offline (requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`).
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Thin wrapper — delegates to 'ocms' via tac-exec. NOT live status; use `model status`.
+# Thin wrapper — delegates to 'ocms' via tac-exec. Lists OpenClaw's providers and
+# endpoints; the local llama lanes are `model status`.
 set -euo pipefail
 _tac_bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "$_tac_bin_dir/tac-exec" ocms "$@"

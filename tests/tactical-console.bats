@@ -3021,6 +3021,113 @@ EOF
     declare -f oc-sync-models >/dev/null
 }
 
+# ── `oc ms` (ocms) — the provider-endpoint table, added v36 (2026-11-01) ──────
+# Before v36 `oc ms` ran `openclaw models scan --no-probe | grep -v openrouter/`,
+# an OpenRouter-only scan whose every row begins `openrouter/`: the grep deleted
+# all of them, so the table printed a header and no rows, and a provider's
+# endpoint (DeepSeek's in particular) could never appear.  These cases fix the
+# output contract: a row per configured provider, its endpoint, and its
+# credential's SHAPE only.
+_ocms_fixture() {  # <path>
+    cat > "$1" <<'JSON'
+{
+  "auth": { "profiles": { "deepseek:manual": { "kind": "api" } } },
+  "models": {
+    "providers": {
+      "deepseek": {
+        "baseUrl": "https://api.deepseek.com",
+        "apiKey": { "source": "env", "id": "DEEPSEEK_API_KEY" },
+        "models": [
+          { "id": "deepseek-flash", "contextWindow": 1000000 },
+          { "id": "deepseek-v4-pro", "contextWindow": 1000000 }
+        ]
+      },
+      "openrouter": {
+        "apiKey": { "source": "env", "id": "OPENROUTER_API_KEY" },
+        "models": []
+      },
+      "p-profile": {
+        "baseUrl": "https://profile.example/v1",
+        "apiKey": "deepseek:manual",
+        "models": []
+      },
+      "p-literal": {
+        "baseUrl": "https://literal.example/v1",
+        "apiKey": "REDACTME-not-a-real-key",
+        "models": []
+      }
+    }
+  }
+}
+JSON
+}
+
+@test "openclaw: oc ms lists each provider's endpoint from openclaw.json" {
+    export OPENCLAW_CONFIG_PATH="$TAC_TEST_TMPDIR/ocms-providers.json"
+    _ocms_fixture "$OPENCLAW_CONFIG_PATH"
+
+    run ocms
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"https://api.deepseek.com"* ]]
+    [[ "$output" == *"env:DEEPSEEK_API_KEY"* ]]
+    [[ "$output" == *"deepseek-flash (1000)k"* ]]
+    # An unset baseUrl is labelled, never printed as an empty cell that reads as
+    # "no endpoint".
+    [[ "$output" == *"(provider default)"* ]]
+}
+
+@test "openclaw: oc ms prints a credential's shape, never its value" {
+    export OPENCLAW_CONFIG_PATH="$TAC_TEST_TMPDIR/ocms-secrets.json"
+    _ocms_fixture "$OPENCLAW_CONFIG_PATH"
+
+    run ocms
+    [ "$status" -eq 0 ]
+    # A declared profile ref is named ...
+    [[ "$output" == *"profile:deepseek:manual"* ]]
+    # ... and a string that is NOT a declared profile is withheld, not echoed.
+    [[ "$output" == *"(withheld)"* ]]
+    [[ "$output" != *"REDACTME-not-a-real-key"* ]]
+}
+
+@test "openclaw: oc ms reports a missing config instead of an empty table" {
+    export OPENCLAW_CONFIG_PATH="$TAC_TEST_TMPDIR/absent.json"
+
+    run ocms
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NO CONFIG"* ]]
+}
+
+@test "openclaw: oc sync-models reports a failed catalog refresh and returns non-zero" {
+    local stub="$TAC_TEST_TMPDIR/openclaw-stub"
+    mkdir -p "$stub"
+    cat > "$stub/openclaw" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "catalog refresh refused: state DB in maintenance" >&2
+exit 3
+STUB
+    chmod +x "$stub/openclaw"
+
+    PATH="$stub:$PATH" run oc-sync-models
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"catalog refresh refused"* ]]
+    [[ "$output" == *"REFRESH FAILED"* ]]
+}
+
+@test "openclaw: oc sync-models returns 0 only when the refresh succeeded" {
+    local stub="$TAC_TEST_TMPDIR/openclaw-stub-ok"
+    mkdir -p "$stub"
+    cat > "$stub/openclaw" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' '{"ok":true}'
+exit 0
+STUB
+    chmod +x "$stub/openclaw"
+
+    PATH="$stub:$PATH" run oc-sync-models
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"REFRESHED FROM OPENCLAW"* ]]
+}
+
 @test "openclaw: oc-browser function is defined" {
     declare -f oc-browser >/dev/null
 }

@@ -4,12 +4,22 @@
 # them:
 #   SC2153 / SC2154  variables assigned in an earlier-loaded module (LLM_PORT
 #                    comes from 01-constants.sh); the graph sees both sides
-#   SC2119 / SC2120  `ocms` forwards "$@" to oc-sync-models, so it "references
-#                    arguments" by design, and the graph sees its callers
+#   SC2119 / SC2120  used to fire on `ocms` forwarding "$@" to oc-sync-models; since
+#                    v36 ocms takes no arguments, so the case is gone
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 35
+# Module Version: 36
+#   v36 (2026-11-01): `oc ms` (ocms) now LISTS the configured model providers and their
+#   endpoints, read from openclaw.json. It used to alias oc-sync-models, which ran
+#   `openclaw models scan --no-probe --yes | grep -v openrouter/` — an OpenRouter-FREE
+#   scan whose every row begins `openrouter/`, so the grep removed all of them and the
+#   command printed a header, no rows, and "[SYNCED WITH OPENCLAW]" for a sync that
+#   --no-probe explicitly does not write. DeepSeek could never appear: it is a provider
+#   (baseUrl https://api.deepseek.com), not an OpenRouter model. The scan is dropped;
+#   oc-sync-models now refreshes the hosted catalog (`openclaw models refresh`) and
+#   reports its real exit status. oc-diag's [3/5] step shows the provider table instead
+#   of the old scan output, and its now-dead probe-session cleanup is gone.
 #   v35 (2026-11-01): oc-plugin-update checks no plugin now — Gigabrain and
 #   Lossless-Claw are retired like OpenStinger was, so the command reports that
 #   nothing is path-installed.
@@ -943,19 +953,89 @@ function oc-local-llm() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-sync-models — Sync the local model registry with OpenClaw's model scan.
+# oc-sync-models — Refresh OpenClaw's hosted model catalog.
 # ---------------------------------------------------------------------------
+# Until v36 this ran `openclaw models scan --no-probe --yes | grep -v openrouter/`.
+# That command scans OpenRouter's FREE models and nothing else (its own --help:
+# "Scan OpenRouter free models for tools + images"), and every row it emits begins
+# `openrouter/` — so the grep deleted all of them and the command printed a column
+# header, zero rows, and a "[SYNCED WITH OPENCLAW]" line for a sync that --no-probe
+# explicitly does not write. It never read or wrote models.conf either.
 function oc-sync-models() {
-    # Scan all configured providers except OpenRouter (free tier has no tool support)
-    # Use grep to filter out any openrouter lines as fallback
-    openclaw models scan --no-probe --yes 2>&1 | grep -v "openrouter/"
-    __tac_info "Model Registry" "[SYNCED WITH OPENCLAW]" "$C_Success"
+    local out
+    if out=$(openclaw models refresh --json 2>&1)
+    then
+        __tac_info "Model Catalog" "[REFRESHED FROM OPENCLAW]" "$C_Success"
+        return 0
+    fi
+    __oc_note "$out"
+    __tac_info "Model Catalog" "[REFRESH FAILED]" "$C_Error"
+    return 1
 }
 
-# ocms — Alias for oc-sync-models (oc ms shorthand)
 # ---------------------------------------------------------------------------
+# ocms — List every model provider OpenClaw is configured with, and the endpoint
+# each one posts to (`oc ms`).
+# ---------------------------------------------------------------------------
+# Read from openclaw.json rather than through `openclaw config get`: that call takes
+# the state DB's read admission, so it answers "state/openclaw.sqlite is undergoing
+# offline maintenance" during exactly the windows this is consulted in (measured
+# 2026-11-01 while another session ran `openclaw doctor --fix`).
+#
+# Only the credential's SHAPE is printed — an env ref's VARIABLE NAME, or the name of
+# a declared auth profile — never a key value. A string apiKey is printed as a profile
+# name only when auth.profiles declares it; anything else is withheld.
 function ocms() {
-    oc-sync-models "$@"
+    local cfg="${OPENCLAW_CONFIG_PATH:-$OC_ROOT/openclaw.json}"
+    local shown="${cfg/#$HOME/~}"
+    if [[ ! -f "$cfg" ]]
+    then
+        __tac_info "Model Providers" "[NO CONFIG: $shown]" "$C_Warning"
+        return 1
+    fi
+
+    local rows
+    if ! rows=$(jq -r '
+        . as $root
+        | ($root.models.providers // {}) | to_entries[]
+        | [
+            .key,
+            (if (.value.baseUrl // "") == "" then "(provider default)" else .value.baseUrl end),
+            (.value.apiKey
+             | if type == "object" then ((.source // "?") + ":" + (.id // "?"))
+               elif type == "string" then
+                   (if ($root.auth.profiles // {})[.] != null then "profile:" + .
+                    else "(withheld)" end)
+               else "none" end),
+            ((.value.models // []) | length),
+            ((.value.models // [])
+             | map(.id + ((.contextWindow // 0) as $c
+                          | if ($c | type) == "number" and $c > 0
+                            then " (\($c / 1000 | floor))k" else "" end))
+             | join(", "))
+          ] | @tsv' "$cfg" 2>&1)
+    then
+        __oc_note "[ocms] could not read models.providers from $shown: $rows"
+        __tac_info "Model Providers" "[UNREADABLE: $shown]" "$C_Error"
+        return 1
+    fi
+
+    if [[ -z "$rows" ]]
+    then
+        __tac_info "Model Providers" "[NONE CONFIGURED: $shown]" "$C_Warning"
+        return 1
+    fi
+
+    printf '%-20s %-6s %-28s %s\n' "PROVIDER" "MODELS" "KEY" "ENDPOINT"
+    local provider endpoint key count models
+    while IFS=$'\t' read -r provider endpoint key count models
+    do
+        printf '%-20s %-6s %-28s %s\n' "$provider" "$count" "$key" "$endpoint"
+        [[ -n "$models" ]] && printf '  %s\n' "$models"
+    done <<< "$rows"
+    printf '%s\n' "${C_Dim}  source: $shown — \"(provider default)\" means baseUrl is unset and"
+    printf '%s\n' "  the bundled provider catalog supplies the endpoint.${C_Reset}"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1132,19 +1212,9 @@ function oc-diag() {
     echo ""
 
     printf '%s\n' "${C_Highlight}[3/5] Model Provider Status${C_Reset}"
-    # Run model status check, then clean up probe files it creates
-    ocms 2>&1 | grep -v "\[agent/embedded\]\|context overflow\|error=402" | head -n 25
-
-    # Clean up probe session files created by ocms (they are temporary)
-    local probe_count=0
-    for f in "$OC_AGENTS/main/sessions"/probe-*.jsonl
-    do
-        [[ -f "$f" ]] && rm -f "$f" && probe_count=$(( probe_count + 1 ))
-    done 2>/dev/null
-    if (( probe_count > 0 ))
-    then
-        printf '\n  %s\n' "${C_Info}● Cleaned up $probe_count temporary probe session files${C_Reset}"
-    fi
+    # Since v36 the provider table is a plain read of openclaw.json, so this step needs
+    # neither the Gateway nor the state DB and also works during a maintenance window.
+    ocms 2>&1 || __oc_note "[oc-diag] provider table unavailable — continuing to the env dump"
     echo ""
 
     printf '%s\n' "${C_Highlight}[4/5] Environment Variables${C_Reset}"

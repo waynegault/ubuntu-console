@@ -2,7 +2,9 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 35
+# Module Version: 36
+#   v36 (2026-11-01): `oc ms` lists provider endpoints and keys (it no longer runs the
+#   OpenRouter scan), and `oc sync-models` refreshes the hosted model catalog.
 #   v35 (2026-11-01): oc-plugin-update's help line says the path-installed plugins
 #   (Gigabrain/Lossless-Claw/OpenStinger) are retired rather than that it updates them.
 #   v34 (2026-11-01): the help index now names every user-facing command the profile
@@ -720,7 +722,7 @@ function tactical_help() {
         __hRow "oc config" "Read/write config keys (get|set)"
         __hRow "oc env" "Show OpenClaw environment vars"
         __hRow "oc keys" "List Windows API keys bridged"
-        __hRow "oc ms" "Probe model provider endpoints"
+        __hRow "oc ms" "List provider endpoints and keys"
         __hRow "oc doc-fix" "Run doctor --fix in a Gateway window"
         __hRow "oc logs" "Open runtime log in VS Code"
         __hRow "le" "40-line log tail"
@@ -755,7 +757,7 @@ function tactical_help() {
 
         __hSection "OPENCLAW — LLM INTEGRATION"
         __hRow "oc local-llm" "Register local llama.cpp"
-        __hRow "oc sync-models" "Sync models.conf"
+        __hRow "oc sync-models" "Refresh the hosted model catalog"
 
         __hSection "OPENCLAW — TOOLS"
         __hRow "oc g" "Launch operational graph browser (overview/topics/files/semantic/raw)"

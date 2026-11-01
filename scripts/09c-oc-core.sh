@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 42
+# Module Version: 43
+#   v43 (2026-11-01): the dispatcher's help lines for `ms` and `sync-models` describe what
+#   those commands now do — `oc ms` lists provider endpoints (no OpenRouter scan), and
+#   `oc sync-models` refreshes the hosted model catalog.
 #   v42 (2026-11-01): comment-only.  Every `return N` the `oc token` resolver emits now
 #   names its meaning at the line, because the §18.3 9.7 counter counted all seven as
 #   unexplained and the committed baseline was seven below the tree.
@@ -333,7 +336,7 @@ function oc() {
         printf '  %-20s %s\n' "token"        "Print the gateway token and copy it to the clipboard"
         printf '  %-20s %s\n' "env"          "Dump all OC and LLM env variables"
         printf '  %-20s %s\n' "keys"         "List Windows API keys bridged to WSL"
-        printf '  %-20s %s\n' "ms"           "Probe model provider endpoints"
+        printf '  %-20s %s\n' "ms"           "List provider endpoints and keys"
         printf '  %-20s %s\n' "doc-fix"      "Run doctor --fix in a Gateway window"
         printf '  %-20s %s\n' "log-dir"      "cd to the OpenClaw logs folder"
         printf '  %-20s %s\n' "logs"         "Open runtime log in VS Code"
@@ -365,7 +368,7 @@ function oc() {
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}LLM Integration${C_Reset}"
         printf '  %-20s %s\n' "local-llm"    "Register local llama.cpp as provider"
-        printf '  %-20s %s\n' "sync-models"  "Sync models.conf with OC provider scan"
+        printf '  %-20s %s\n' "sync-models"  "Refresh OpenClaw's hosted model catalog"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Tools${C_Reset}"
         printf '  %-20s %s\n' "unittest"     "Run OpenClaw structural + protocol unit tests"

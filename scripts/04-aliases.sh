@@ -2,7 +2,8 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-11-01): the ocms ownership note no longer says it aliases oc-sync-models.
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -439,9 +440,9 @@ function status() {
     export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-}"
     openclaw status
 }
-# ocms lives in 09e-oc-health.sh (beside oc-sync-models, which it aliases). It
-# was previously defined here too; that second definition shadowed nothing but
-# confused ownership, so it was removed in favour of the single canonical one.
+# ocms lives in 09e-oc-health.sh. It was previously defined here too; that second
+# definition shadowed nothing but confused ownership, so it was removed in favour of
+# the single canonical one.
 
 # ---- GitHub Copilot CLI ----
 alias '??'='copilot -p'

@@ -383,7 +383,7 @@ per-agent SQLite stores are migrated separately via
 | `oc-config` | Get/set config values: `oc-config get <key>`, `oc-config set <key> <val>` |
 | `oc-env` | Dump all OC and LLM environment variables in a box-drawn panel |
 | `ockeys` | Show Windows API keys and their WSL visibility status |
-| `ocms` | Probe model provider status |
+| `ocms` | List each configured provider's endpoint, key shape and models (read from `openclaw.json`) |
 | `oc-diag` | 5-point diagnostic: doctor, gateway, models, env vars, recent logs |
 | `oc-doctor-local` | Validate the full local OpenClaw + llama.cpp path end-to-end. Supports `--json` and `--plain`. |
 | `oc-sec` | Deep security audit: `openclaw security audit --deep` |
@@ -416,7 +416,7 @@ per-agent SQLite stores are migrated separately via
 | `wacli` | WhatsApp CLI wrapper. Automatically injects `--store ~/.openclaw/store/wacli` unless `--store` is already provided. Passes all arguments through. |
 | `oc-failover` | Cloud fallback: `oc-failover on`, `off`, `status` |
 | `oc-local-llm` | Bind OpenClaw's model provider to local llama.cpp |
-| `oc-sync-models` | Sync model registry with OpenClaw scan |
+| `oc-sync-models` | Refresh OpenClaw's hosted model catalog (`openclaw models refresh`) |
 | `oc-trust-sync` | Record current `oc-llm-sync.sh` SHA256 hash as trusted |
 
 ## Knowledge Graph (`oc g` / `kgraph`)
