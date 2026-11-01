@@ -160,12 +160,16 @@ stub_uname() {
     [[ "$output" == *"18084"* ]]
 }
 
-@test "the arm64 box's profile declares no lanes this box owns" {
-    # Criterion: the arm64 box's models are its own, so no lane unit from this box
-    # may be claimed there.  Catches: a lane table inherited across boxes, which
-    # would report ports nothing on that machine can bind as broken lanes.
-    run bash -c 'HOSTTYPE=aarch64; source "$1"; printf "[%s]\n" "$LLAMA_LANE_SPECS"' \
+@test "the arm64 box's profile declares its own two lanes, not this box's" {
+    # Criterion: each box's lane table is its own.  The arm64 box serves two CUDA
+    # lanes (Qwen3-Coder-30B chat + embeddinggemma embeddings); it must not claim this
+    # box's five Xe/CUDA/CPU units, whose model files do not exist there.
+    run bash -c 'HOSTTYPE=aarch64; source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
         _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
-    [ "$output" = "[]" ]
+    [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]
+    [[ "$output" == *"llama-cuda-qwen3coder-30b-chat.service|18087"* ]]
+    [[ "$output" == *"llama-cuda-embeddinggemma-embed.service|18080"* ]]
+    [[ "$output" != *"llama-xe-"* ]]
+    [[ "$output" != *"llama-cpu-qwen25"* ]]
 }

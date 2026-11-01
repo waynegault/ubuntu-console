@@ -119,7 +119,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-11-01): the lane set is read from the HOST PROFILE
+#   (LLAMA_LANE_SPECS, tools/host-profile.sh) instead of four hardcoded units.  The
+#   gated (GPU-suspendable) lane is the profile's LLAMA_CUDA_LANE_UNIT and keeps the
+#   "cuda" marker namespace; every other lane is always-on via supervise_always_on,
+#   with per-unit strike/flap files.  A box with no resident lanes is a no-op; an
+#   unresolvable profile exits 1.  This is what lets the arm64 box's two CUDA lanes
+#   (chat + embedding) be supervised instead of reported "not installed".
 #   v18 (2026-11-01): wrap the over-long "CUDA lane suspended" log line to fit the
 #   120-column bound (§18.3 item 8.1.8) — text only, the message is unchanged.
 #   v16 (2026-10-26): LANE 4 addresses the second Xe lane as
@@ -145,7 +152,7 @@
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.15"
+VERSION="3.16"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -184,39 +191,53 @@ else
 fi
 
 # -- Shared constants --
+# The resident lanes come from the HOST PROFILE (config/hosts.d/<id>.conf), not a
+# hardcoded list: a lane names a specific GGUF file on ONE box, so it is a property
+# of the box.  This script reads LLAMA_LANE_SPECS ("unit|port", one per line)
+# exactly as `model lanes` and the cache sampler do.  Under systemd the unit's own
+# environment carries no profile, so it is resolved here (tools/host-profile.sh).
+#
+# Test seam: LLAMA_WATCHDOG_LANE_SPECS (and LLAMA_WATCHDOG_CUDA_LANE_UNIT) inject
+# the table directly so the integration suite stays hermetic without resolving the
+# host profile — the same seam llm-lane-cache-sample.sh uses (LLM_LANE_CACHE_SPECS).
+if [[ -n "${LLAMA_WATCHDOG_LANE_SPECS:-}" ]]; then
+    LANE_SPECS="$LLAMA_WATCHDOG_LANE_SPECS"
+    CUDA_LANE_UNIT="${LLAMA_WATCHDOG_CUDA_LANE_UNIT%.service}"
+    PROFILE_MATCHED=1
+else
+    # shellcheck source=tools/host-profile.sh
+    source "$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)/tools/host-profile.sh"
+    tac_host_profile_apply   # an unresolvable profile leaves TAC_HOST_PROFILE_MATCHED unset; the check below catches it
+    LANE_SPECS="${LLAMA_LANE_SPECS:-}"
+    CUDA_LANE_UNIT="${LLAMA_CUDA_LANE_UNIT%.service}"
+    PROFILE_MATCHED="${TAC_HOST_PROFILE_MATCHED:-0}"
+fi
+if [[ "$PROFILE_MATCHED" != "1" ]]; then
+    log "WARNING: host profile unresolved — cannot determine which lanes to supervise"
+    exit 1
+fi
+if [[ -z "${LANE_SPECS:-}" ]]; then
+    log "no resident lanes declared on profile ${TAC_HOST_PROFILE:-generic} — nothing to supervise"
+    exit 0
+fi
 # Canonical port default kept in the LLM_SERVICE_PORT=... form the cross-script
-# contract check parses; the lanes alias it below.
+# contract check parses; the lanes themselves are read from LANE_SPECS below.
 LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
-XE_PORT="$LLM_SERVICE_PORT"
-# Card-first unit names (see docs/llm.md's card map).  Kept suffix-less because
-# systemd resolves a bare name to its .service, and these are used both as
-# `systemctl` arguments and in log lines.
-XE_UNIT="llama-xe-minicpm5-1b-chat"
-CUDA_PORT="${LLM_CUDA_PORT:-18083}"
-CUDA_UNIT="llama-cuda-llama32-3b-chat"
-# The CPU tier (v3.10) holds no card — it is the tail of the chain — so it takes
-# no gpu_busy/suspend gate, but it is bench-lock aware like the Xe lane.
-CPU_PORT="${LLM_CPU_PORT:-18084}"
-CPU_UNIT="llama-cpu-qwen25-3b-chat"
-# The second Xe lane (v3.11).  Card-first sibling of XE_UNIT: same Xe/OpenCL card,
-# different model, so it takes the Xe lane's shape rather than the CUDA lane's.
-XE3B_PORT="${LLM_XE3B_PORT:-18085}"
-XE3B_UNIT="llama-xe-llama32-3b-chat"
-STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
+# The gated (GPU-suspendable) lane is the one the autotune/bench wrappers suspend.
+# Its strike/flap/hold/suspend markers keep the historical "cuda" namespace so the
+# suspend marker's name stays shared with bin/bench-rows.sh,
+# scripts/run-autotune-batch.sh and friends.  CUDA_UNIT and CUDA_PORT are set inside
+# supervise_cuda_lane() from the lane it is handed.
+CUDA_UNIT=""
+CUDA_PORT=""
 STRIKE_CUDA="$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
-STRIKE_CPU="$WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.strikes"
-STRIKE_XE3B="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.strikes"
 # CUDA flap detection (v3.8).  One epoch-seconds stamp per unexpected CUDA-lane
 # death, pruned to FLAP_WINDOW_S; nothing else reads this file.  Env-overridable
 # like the strike/lock paths so the integration suite can sandbox it — a flap
 # count that leaked between test cases would make the warnings untrustworthy.
 FLAP_CUDA="${LLAMA_WATCHDOG_CUDA_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps}"
-# The CPU lane's own counter.  Same rolling window and threshold; no hold file —
-# see the v3.10 note in the header for why the CUDA cooling-off must not be copied.
-FLAP_CPU="${LLAMA_WATCHDOG_CPU_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.flaps}"
-# The second Xe lane's counter.  Same rolling window and threshold; no hold file —
-# see the v3.11 note in the header for why the CUDA cooling-off must not be copied.
-FLAP_XE3B="${LLAMA_WATCHDOG_XE3B_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps}"
+# Each always-on lane gets its own counter file, derived from its unit name in
+# supervise_always_on() below — no fixed per-lane names here any more.
 FLAP_WINDOW_S="${LLAMA_WATCHDOG_FLAP_WINDOW_S:-3600}"
 FLAP_THRESHOLD="${LLAMA_WATCHDOG_FLAP_THRESHOLD:-3}"
 # Cooling-off after repeated flaps (v3.9).  Every restart is a CUDA context create/
@@ -643,43 +664,66 @@ lane_present() {
 }
 
 # ============================================================
-# LANE 1: Xe llama-server — always-on
+# Lane helpers — the lane set comes from the host profile (LLAMA_LANE_SPECS).
 # ============================================================
-if ! lane_present "$XE_UNIT"; then
-        log "Xe lane not installed on this host (XE_UNIT unit absent) — skipping, not restarting"
-else
-    xe_state=$(systemctl --user show "$XE_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-    health "$XE_PORT"; xe_health=$?
-    if (( xe_health == 0 )); then
-        strike_reset "$STRIKE_XE"
-    elif [[ "$xe_state" == "activating" ]]; then
-        log "Xe unit activating — systemd handling recovery; skipping"
-        strike_reset "$STRIKE_XE"
-    elif (( xe_health == 2 )); then
+# lane_key <unit> — the per-lane tag for the strike/flap files.  "llama-xe-..." ->
+# "xe-..."; the gated lane does not use this (it keeps the "cuda" namespace).
+lane_key() {
+    local u="${1%.service}"
+    printf '%s\n' "${u#llama-}"
+}
+
+# supervise_always_on <unit> <port> — the Xe/CPU/second-Xe shape: always-on, no GPU
+# gate, bench-lock aware, 2-strike recovery, and its own flap counter (the v3.8
+# lesson — a silently-restarted lane reads exactly like one that never missed a
+# beat).  No cooling-off hold: that guards the dxgkrnl leak from repeated CUDA
+# context cycles, and a non-CUDA lane has no such cost.
+supervise_always_on() {
+    local unit="$1" port="$2" key state h s
+    key="$(lane_key "$unit")"
+    local strike_file="$WATCHDOG_STRIKE_DIR/llama-watchdog-$key.strikes"
+    local flap_file="$WATCHDOG_STRIKE_DIR/llama-watchdog-$key.flaps"
+    if ! lane_present "$unit"; then
+        log "$unit not installed on this host — skipping, not restarting"
+        return 0
+    fi
+    state=$(systemctl --user show "$unit.service" -p ActiveState --value 2>/dev/null || true)
+    health "$port"; h=$?
+    if (( h == 0 )); then
+        strike_reset "$strike_file"
+    elif [[ "$state" == "activating" ]]; then
+        log "$unit activating — systemd handling recovery; skipping"
+        strike_reset "$strike_file"
+    elif (( h == 2 )); then
         # 503 = process up, model still loading. Striking or bouncing a loading
         # unit only lengthens the outage (and can trip the start-limit).
-        log "Xe unit still loading (503) — leaving alone"
-        strike_reset "$STRIKE_XE"
+        log "$unit still loading (503) — leaving alone"
+        strike_reset "$strike_file"
     elif bench_lock; then
-        log "Xe down but bench lock present — skipping restart (port may be claimed)"
+        log "$unit down but bench lock present — skipping restart"
     else
-        strike_inc "$STRIKE_XE"
-        s=$(strike_get "$STRIKE_XE")
-        log "Xe health check failed on :${XE_PORT} (unit=${xe_state:-unknown}, strike ${s}/2)"
+        strike_inc "$strike_file"
+        s=$(strike_get "$strike_file")
+        # An unexpected death: down, not mid-start, not loading, no bench holding us off.
+        flap_record "$flap_file"
+        flap_alert "$unit" "$flap_file" "the unit journal for the signaller"
+        log "$unit health check failed on :${port} (unit=${state:-unknown}, strike ${s}/2)"
         if [[ "$s" -ge 2 ]]; then
-            if recover "$XE_UNIT" "$XE_PORT"; then strike_reset "$STRIKE_XE"; fi
+            if recover "$unit" "$port"; then strike_reset "$strike_file"; fi
         else
-            log "Xe strike 1/2 — will restart if next check also fails"
+            log "$unit strike 1/2 — will restart if next check also fails"
         fi
     fi
-
-fi
+}
 # ============================================================
-# LANE 2: CUDA card — llama-cuda-llama32-3b-chat — runs only while GPU free
+# The gated lane — the profile's LLAMA_CUDA_LANE_UNIT.  Runs only while GPU free.
 # ============================================================
-if ! lane_present "$CUDA_UNIT"; then
+supervise_cuda_lane() {
+    CUDA_UNIT="$1"; CUDA_PORT="$2"
+    if ! lane_present "$CUDA_UNIT"; then
         log "CUDA lane not installed on this host (CUDA_UNIT unit absent) — skipping, not restarting"
-else
+        return 0
+    fi
     cuda_state=$(systemctl --user show "$CUDA_UNIT.service" -p ActiveState --value 2>/dev/null || true)
     if cuda_suspended; then
         # CUDA-only suspend: keep the CUDA lane down (and take it down if it is up).
@@ -788,97 +832,31 @@ else
             fi
         fi
     fi
-
-fi
+}
 # ============================================================
-# LANE 3: CPU — llama-cpu-qwen25-3b-chat — the chain's tail, no card
+# Dispatch — one lane per LLAMA_LANE_SPECS entry, from the host profile.
+# The gated lane (LLAMA_CUDA_LANE_UNIT) takes supervise_cuda_lane; every other
+# lane is always-on.  The former LANE 1/3/4 bodies are supervise_always_on above.
 # ============================================================
-# Deliberately the same shape as the Xe lane (always-on, 2-strike, bench-lock
-# aware) and not the CUDA lane's: there is no card to gate on, no VRAM to free
-# and no foreign owner to defer to, so "is it up?" is the whole question.  What
-# this lane exists for is the case systemd CANNOT cover — Restart=always returns
-# the process after a kill, but systemd stops trying once the unit trips
-# StartLimitBurst and parks it in `failed`, which is exactly the state this tier
-# was found in after its four kills, with nothing left to lift it.
-if ! lane_present "$CPU_UNIT"; then
-        log "CPU lane not installed on this host (CPU_UNIT unit absent) — skipping, not restarting"
-else
-    cpu_state=$(systemctl --user show "$CPU_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-    health "$CPU_PORT"; cpu_health=$?
-    if (( cpu_health == 0 )); then
-        strike_reset "$STRIKE_CPU"
-    elif [[ "$cpu_state" == "activating" ]]; then
-        log "CPU unit activating — systemd handling recovery; skipping"
-        strike_reset "$STRIKE_CPU"
-    elif (( cpu_health == 2 )); then
-        log "CPU unit still loading (503) — leaving alone"
-        strike_reset "$STRIKE_CPU"
-    elif bench_lock; then
-        log "CPU down but bench lock present — skipping restart"
+while IFS='|' read -r _unit _port
+do
+    [[ -n "$_unit" ]] || continue
+    _unit="${_unit%.service}"
+    if [[ -n "$CUDA_LANE_UNIT" && "$_unit" == "$CUDA_LANE_UNIT" ]]; then
+        supervise_cuda_lane "$_unit" "$_port"
     else
-        strike_inc "$STRIKE_CPU"
-        s=$(strike_get "$STRIKE_CPU")
-        # An unexpected death: down, not mid-start, not loading, nothing holding us off.
-        flap_record "$FLAP_CPU"
-        flap_alert "$CPU_UNIT" "$FLAP_CPU" "the unit journal for the signaller (this lane holds no card, so a GPU sweep cannot explain it)"
-        log "CPU health check failed on :${CPU_PORT} (unit=${cpu_state:-unknown}, strike ${s}/2)"
-        if [[ "$s" -ge 2 ]]; then
-            if recover "$CPU_UNIT" "$CPU_PORT"; then strike_reset "$STRIKE_CPU"; fi
-        else
-            log "CPU strike 1/2 — will restart if next check also fails"
-        fi
+        supervise_always_on "$_unit" "$_port"
     fi
+done <<< "$LANE_SPECS"
 
-fi
-# ============================================================
-# LANE 4: Xe (second lane) — llama-xe-llama32-3b-chat — always-on, same card as LANE 1
-# ============================================================
-# LANE 1's shape, deliberately, and not the CUDA lane's: this unit is on the SAME
-# Xe/OpenCL card as LANE 1, so the gpu_busy/suspend gate is the wrong question — it
-# asks whether the NVIDIA card is free, and a lane that never touches that card
-# cannot be deferred to by it.  There is no VRAM to free here either, so "is it up?"
-# is again the whole question, with the bench lock as the one gate.  The unit ran
-# enabled with Restart=always and still sat `failed` for 22h because StartLimitBurst
-# (6 in 600s) parks it and nothing lifted it — the same gap LANE 3 exists to close.
-if ! lane_present "$XE3B_UNIT"; then
-        log "Xe3B lane not installed on this host (XE3B_UNIT unit absent) — skipping, not restarting"
-else
-    xe3b_state=$(systemctl --user show "$XE3B_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-    health "$XE3B_PORT"; xe3b_health=$?
-    if (( xe3b_health == 0 )); then
-        strike_reset "$STRIKE_XE3B"
-    elif [[ "$xe3b_state" == "activating" ]]; then
-        log "Xe3B unit activating — systemd handling recovery; skipping"
-        strike_reset "$STRIKE_XE3B"
-    elif (( xe3b_health == 2 )); then
-        log "Xe3B unit still loading (503) — leaving alone"
-        strike_reset "$STRIKE_XE3B"
-    elif bench_lock; then
-        log "Xe3B down but bench lock present — skipping restart"
-    else
-        strike_inc "$STRIKE_XE3B"
-        s=$(strike_get "$STRIKE_XE3B")
-        # An unexpected death: down, not mid-start, not loading, no bench holding us off.
-        # The hint names the two sweeps on record for this box; a clean stop (success/0) is
-        # what a hosted bench or a VRAM sweep looks like, and neither is a fault in the lane.
-        flap_record "$FLAP_XE3B"
-        flap_alert "$XE3B_UNIT" "$FLAP_XE3B" "docs/llm.md's bench-vs-lane note (a hosted bench session or a VRAM sweep stops lanes by name)"
-        log "Xe3B health check failed on :${XE3B_PORT} (unit=${xe3b_state:-unknown}, strike ${s}/2)"
-        if [[ "$s" -ge 2 ]]; then
-            if recover "$XE3B_UNIT" "$XE3B_PORT"; then strike_reset "$STRIKE_XE3B"; fi
-        else
-            log "Xe3B strike 1/2 — will restart if next check also fails"
-        fi
-    fi
-
-fi
 # Assert the window invariant on every lane that is up (2026-09-14).  This is
 # the check that would have caught the registry's parallel=16 dividing every
 # served window, and that catches a --fit or --parallel drift on a unit.
-window_check "$XE_UNIT" "$XE_PORT"
-window_check "$CUDA_UNIT" "$CUDA_PORT"
-window_check "$CPU_UNIT" "$CPU_PORT"
-window_check "$XE3B_UNIT" "$XE3B_PORT"
+while IFS='|' read -r _unit _port
+do
+    [[ -n "$_unit" ]] || continue
+    window_check "${_unit%.service}" "$_port"
+done <<< "$LANE_SPECS"
 
 exit 0
 

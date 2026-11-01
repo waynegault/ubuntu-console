@@ -159,15 +159,27 @@ selected_with() {
     [ "$output" = "intel-xe-cuda|5|4294967296|quant-guide.conf" ]
 }
 
-@test "applying the arm64 profile claims no lanes and no quant ratings" {
+@test "applying the arm64 profile claims its two CUDA lanes and no quant ratings" {
     # Catches: the 4 GB quant guide (which auto-archives on `model scan`) or this
     # box's lanes being applied on a machine they do not describe.
     run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
-        bash -c 'source "$1"; tac_host_profile_apply; printf "%s|[%s]|[%s]|%s\n" \
-            "$TAC_HOST_PROFILE" "$LLAMA_LANE_SPECS" "$QUANT_GUIDE" "$VRAM_TOTAL_BYTES_FALLBACK"' \
-        _ "$LIB"
+        bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s|%s|%s\n" \
+            "$TAC_HOST_PROFILE" "$(printf "%s\n" "$LLAMA_LANE_SPECS" | grep -c .)" \
+            "${QUANT_GUIDE:-}" "$VRAM_TOTAL_BYTES_FALLBACK"' _ "$LIB"
     [ "$status" -eq 0 ]
-    [ "$output" = "asus-n1n-rtx-spark|[]|[]|0" ]
+    [ "$output" = "asus-n1n-rtx-spark|2||0" ]
+}
+
+@test "the arm64 profile exports its production lane and service port" {
+    # Catches: LLM_SERVICE_PORT / TAC_HOST_PRIMARY_LANE falling back to the generic
+    # 18081 (the OLD Xe MiniCPM lane) on a box whose production lane is the CUDA
+    # Qwen3-Coder-30B — the drift where `oc health` warned "LLM port 18081 not
+    # listening" on a healthy box, and nothing in the suite caught it.
+    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s\n" \
+            "$LLM_SERVICE_PORT" "$TAC_HOST_PRIMARY_LANE"' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "18087|llama-cuda-qwen3coder-30b-chat.service" ]
 }
 
 @test "an unmatched host keeps generic defaults and says so once" {
@@ -206,10 +218,10 @@ install_stub_env() {
     [ ! -e "$unit_dir/llama-cuda-llama32-3b-chat.service" ]
     [ ! -e "$unit_dir/llama-cpu-qwen25-3b-chat.service" ]
     # ...while a shared unit that must exist on every box is still installed.  The
-    # watchdog is NOT one: it supervises this box's lanes by name, so it travels with
-    # them and must be absent here too.
+    # watchdog is now profile-agnostic — it reads LLAMA_LANE_SPECS at run time — so it
+    # installs on every box rather than travelling with one box's hardcoded lanes.
     [ -e "$unit_dir/llm-lane-cache-sample.service" ]
-    [ ! -e "$unit_dir/llama-watchdog.service" ]
+    [ -e "$unit_dir/llama-watchdog.service" ]
 }
 
 @test "the installer removes a stale lane link that belongs to another profile" {

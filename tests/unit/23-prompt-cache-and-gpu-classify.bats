@@ -154,6 +154,10 @@ setup() {
     export LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$SANDBOX/cuda.suspend"
     export LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE="$SANDBOX/cuda.gpustop"
     export LLAMA_WATCHDOG_GPU_CLASSIFY_FILE="$SANDBOX/cuda.gpuclassify"
+    # Inject the lane table through the watchdog's test seam (the host profile is
+    # never resolved): just the gated CUDA lane these cases exercise.
+    export LLAMA_WATCHDOG_LANE_SPECS="llama-cuda-llama32-3b-chat.service|18083"
+    export LLAMA_WATCHDOG_CUDA_LANE_UNIT="llama-cuda-llama32-3b-chat.service"
     # The classifier override is per-case (the "missing classifier" case sets it).
     unset LLAMA_WATCHDOG_GPU_CHECK
     # The hold WINDOW is deliberately left unset: the default must be the file's

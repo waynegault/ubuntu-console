@@ -25,9 +25,10 @@ notes:
   - 'COVERAGE — what this file deliberately does NOT declare (stated, not silent).
     The /dev/shm state below is the cross-handler set that the PowerShell port and
     the drift checker care about; it is not every file in /dev/shm.  NOT declared:
-    the Xe, CPU and Xe3b lane counterparts of the watchdog counters
-    (llama-watchdog-xe.strikes, -cpu.strikes, -xe3b.strikes, -cpu.flaps,
-    -xe3b.flaps, and their .gpustop/.flaphold variants), which are lane-local with
+    the per-lane always-on watchdog counters, now keyed by UNIT name
+    (llama-watchdog-xe-minicpm5-1b-chat.strikes/.flaps,
+    -cpu-qwen25-3b-chat.strikes/.flaps, -xe-llama32-3b-chat.strikes/.flaps, and the
+    equivalent for any further lane), which are lane-local with
     a single producer and a single consumer; /dev/shm/llama-watchdog-guard.pause,
     which an OPERATOR creates (the watchdog only tests for it, so it has no source
     producer to check); /dev/shm/tac_win_api_keys and tac_pwsh_bridge_warned (§9),

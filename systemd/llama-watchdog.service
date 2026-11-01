@@ -1,9 +1,9 @@
 [Unit]
-# install-profile: intel-xe-cuda
-# HOST PROFILE: llama-watchdog.sh supervises THIS box's four lanes by name, port and
-# model (XE_UNIT / CUDA_UNIT / ... in the script).  A box with a different lane set
-# must not run a supervisor aimed at absent units, so the watchdog ships with the
-# lanes it watches; a box with no lanes gets none until its own watchdog exists.
+# install-profile: any
+# HOST PROFILE: llama-watchdog.sh supervises whatever lanes the box's host profile
+# declares (LLAMA_LANE_SPECS, read at run time via tools/host-profile.sh).  It is
+# no longer hardcoded to one box's units, so one unit serves every profile; a box
+# with no resident lanes logs "nothing to supervise" and exits 0.
 Description=Llama Server Health Watchdog
 After=network.target
 
