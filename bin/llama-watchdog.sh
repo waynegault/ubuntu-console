@@ -119,7 +119,9 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 17
+# Module Version: 18
+#   v18 (2026-11-01): wrap the over-long "CUDA lane suspended" log line to fit the
+#   120-column bound (§18.3 item 8.1.8) — text only, the message is unchanged.
 #   v16 (2026-10-26): LANE 4 addresses the second Xe lane as
 #   llama-xe-llama32-3b-chat.service.  The unit's name still claimed the
 #   Qwen2.5-3B weights the 2026-10-02 bake-off replaced, so a reader following
@@ -690,7 +692,8 @@ else
                 log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
             fi
         else
-            log "CUDA lane suspended — held by live pid $(_tac_suspend_pid "$CUDA_SUSPEND_FILE"); not starting $CUDA_UNIT"
+            log "CUDA lane suspended — held by live pid $(_tac_suspend_pid "$CUDA_SUSPEND_FILE");" \
+                " not starting $CUDA_UNIT"
         fi
         # A suspend is its own deliberate stop; a stale GPU-busy marker must not
         # survive it and explain away the first real death after a resume.
