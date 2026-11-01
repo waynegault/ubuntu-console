@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-11-01): the LLAMA_SERVER_BIN fallback names build-cuda/, not build/ —
+#   this box has no build/ tree, so an unset environment resolved to nothing and the
+#   probe exited FATAL before measuring.  Same defect as bin/llama-cuda-server.
 #   v17 (2026-10-23): the RESULT summary names arm B's ACTUAL budget.  Measured: a
 #   `--cache-ram-mb 768` sizing run printed "ARM B (--cache-ram 0)" and a 512 run
 #   printed the same, because the label was a literal in _summarise_py while the value
@@ -347,7 +350,7 @@ LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
 # __base_from_unit; the default keeps the row-based runs unchanged.
 NEEDS_CUDA_CARD=1
 HEALTH="http://127.0.0.1:${PORT}"
-LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
+LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build-cuda/bin/llama-server}"
 [[ -x "$LLAMA_BIN" ]] || { warn "FATAL: no llama-server at $LLAMA_BIN"; exit 1; }
 
 OUT_DIR="$OPT_OUT"

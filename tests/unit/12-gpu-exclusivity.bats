@@ -304,7 +304,11 @@ EOS
 # so.
 @test "gpu-exclusivity: each launcher's build default agrees with 01-constants' LLAMA_ROOT" {
     # 01-constants: AI_STORAGE_ROOT=$HOME, LLAMA_ROOT=$AI_STORAGE_ROOT/llama.cpp,
-    # LLAMA_CUDA_SERVER_BIN=$LLAMA_SERVER_BIN ($LLAMA_ROOT/build/bin/llama-server),
+    # and the CUDA tree is whichever of build-cuda/ and build/ holds llama-server;
+    # it resolves to build-cuda/ on a box built that way (this one — measured
+    # 2026-11-01, build/ does not exist here).  The launcher's own fallback names
+    # build-cuda/ for the same reason: before that, an environment without
+    # LLAMA_CUDA_SERVER_BIN set pointed the CUDA lane at nothing.
     # LLAMA_XE_SERVER_BIN=$LLAMA_ROOT/build-opencl/bin/llama-server,
     # LLAMA_CPU_SERVER_BIN=$LLAMA_ROOT/build-cpu/bin/llama-server.
     local cuda_default xe_default cpu_default
@@ -314,7 +318,7 @@ EOS
 
     [[ -n "$cuda_default" && -n "$xe_default" && -n "$cpu_default" ]] \
         || { echo "FAIL: could not read a build default from a launcher"; return 1; }
-    [[ "$cuda_default" == "$HOME/llama.cpp/build/bin/llama-server" ]] \
+    [[ "$cuda_default" == "$HOME/llama.cpp/build-cuda/bin/llama-server" ]] \
         || { echo "CUDA launcher default '$cuda_default' != 01-constants' LLAMA_CUDA_SERVER_BIN"; return 1; }
     [[ "$xe_default" == "$HOME/llama.cpp/build-opencl/bin/llama-server" ]] \
         || { echo "Xe launcher default '$xe_default' != 01-constants' LLAMA_XE_SERVER_BIN"; return 1; }
@@ -323,6 +327,38 @@ EOS
     # would die at the next bench or autotune drain (see bin/llama-cpu-server).
     [[ "$cpu_default" == "$HOME/llama.cpp/build-cpu/bin/llama-server" ]] \
         || { echo "CPU launcher default '$cpu_default' != 01-constants' LLAMA_CPU_SERVER_BIN"; return 1; }
+}
+
+# The test above compares two spellings of a path, so it agrees with itself: every
+# literal can name a directory that does not exist and it still passes.  These two
+# cases source the real constants against a throwaway HOME and assert which tree
+# they name, which is the behaviour that broke (measured 2026-11-01).
+@test "gpu-exclusivity: 01-constants names build-cuda when that is the tree present" {
+    local root="$TAC_TEST_TMPDIR/home"
+    mkdir -p "$root/llama.cpp/build-cuda/bin"
+    : > "$root/llama.cpp/build-cuda/bin/llama-server"
+    chmod +x "$root/llama.cpp/build-cuda/bin/llama-server"
+
+    run env -i HOME="$root" PATH="$PATH" bash -c \
+        'source "$1"; printf "%s" "$LLAMA_SERVER_BIN"' _ "$REPO_ROOT/scripts/01-constants.sh"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "$root/llama.cpp/build-cuda/bin/llama-server" ] \
+        || { echo "FAIL: LLAMA_SERVER_BIN resolved to '$output', not the build-cuda tree that exists"; return 1; }
+}
+
+@test "gpu-exclusivity: 01-constants still names build when only that tree exists" {
+    local root="$TAC_TEST_TMPDIR/home-legacy"
+    mkdir -p "$root/llama.cpp/build/bin"
+    : > "$root/llama.cpp/build/bin/llama-server"
+    chmod +x "$root/llama.cpp/build/bin/llama-server"
+
+    run env -i HOME="$root" PATH="$PATH" bash -c \
+        'source "$1"; printf "%s" "$LLAMA_SERVER_BIN"' _ "$REPO_ROOT/scripts/01-constants.sh"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "$root/llama.cpp/build/bin/llama-server" ] \
+        || { echo "FAIL: a box built at build/ must keep LLAMA_SERVER_BIN there, got '$output'"; return 1; }
 }
 
 # A lane that named a historical forwarding shim (or the other card's launcher)

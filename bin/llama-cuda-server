@@ -18,10 +18,29 @@ set -uo pipefail
 # It is repeated rather than sourced on purpose: bin/ launchers are standalone and
 # must not depend on the console's module tree (an ExecStartPre or a lane start
 # cannot assume a fully sourced shell).
-_bin="${LLAMA_CUDA_SERVER_BIN:-/home/wayne/llama.cpp/build/bin/llama-server}"
+#
+# The tree is build-cuda/, not build/: build/ was the unified tree in the
+# 2026-09 runtime audit, and this box rebuilt as build-cuda/ — measured
+# 2026-11-01, build/ does not exist here, so this fallback named nothing and
+# only environments carrying LLAMA_CUDA_SERVER_BIN could serve the card.
+_bin="${LLAMA_CUDA_SERVER_BIN:-/home/wayne/llama.cpp/build-cuda/bin/llama-server}"
+_historical=/home/wayne/llama.cpp/build/bin/llama-server
+
+# §18.3 item 10.7: diagnostics go to stderr through ONE helper, not ad-hoc redirects.
+_note() { printf 'llama-cuda-server: %s\n' "$*" >&2; }
+
+# Fall back to the historical tree only when the caller named no binary, and
+# SAY SO: a launcher that quietly serves a build other than the one it names is
+# what made "which build serves this card?" unanswerable before.
+if [[ ! -x "$_bin" && -z "${LLAMA_CUDA_SERVER_BIN:-}" && -x "$_historical" ]]; then
+    _note "build-cuda missing; serving the historical $_historical"
+    _bin="$_historical"
+fi
 
 if [[ ! -x "$_bin" ]]; then
-    echo "llama-cuda-server: CUDA build not executable: $_bin" >&2
+    _note "CUDA build not executable: $_bin"
+    _note "remedy: set LLAMA_CUDA_SERVER_BIN to the CUDA llama-server binary"
+    _note "looked for: /home/wayne/llama.cpp/build-cuda/bin/llama-server, $_historical"
     exit 1
 fi
 

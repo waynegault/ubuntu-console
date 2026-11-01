@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-01): the LLAMA_SERVER_BIN fallback names build-cuda/, not build/ — this
+#   box has no build/ tree, so an unset environment pointed the measurement at a
+#   nonexistent binary.  Same defect as bin/llama-cuda-server.
 #   v8 (2026-10-02): prompt-sets is loaded through the shared sub-module loader, which
 #   reports a missing/failing module instead of swallowing it (card f5bf87bc).
 #===============================================================================
@@ -92,7 +95,7 @@ echo "spec-dec crossover — ${name} (${file}, ${size})"
 echo "  ctx=${CTX} batch=${BATCH}/${U_BATCH} threads=${TUNE_THREADS} block=${BLOCK_SIZE}"
 echo "  parallel list: ${PARALLEL_LIST}  requests/level: ${REQUESTS}  max_tokens: ${MAX_TOKENS}"
 
-LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
+LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build-cuda/bin/llama-server}"
 WORKDIR="/tmp/spec-crossover-$$"
 mkdir -p "$WORKDIR"
 

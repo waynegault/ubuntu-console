@@ -2,7 +2,13 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 48
+# Module Version: 49
+#   v49 (2026-11-01): LLAMA_SERVER_BIN names the CUDA tree that EXISTS.  It was pinned
+#   to $LLAMA_ROOT/build, which this box no longer has (measured 2026-11-01: build/
+#   absent, build-cuda/ serving), so every consumer without LLAMA_CUDA_SERVER_BIN set
+#   — bin/llama-cuda-server's own fallback, autotune, the spec-dec crossover,
+#   cache-ram-probe — resolved to a path with no binary and only environments loading
+#   the host profile could serve the card.
 #   v48 (2026-11-01): the registry and tool state are decoupled.  LLM_STATE_DIR
 #   (default ~/.llm) is the tool-state home — default-model pointer, bench TSVs,
 #   autotune logs, backups — and LLM_REGISTRY / LLM_DEFAULT_FILE now derive from it.
@@ -255,7 +261,15 @@ then
     LLAMA_DRIVE_SIZE=$LLAMA_DRIVE_FALLBACK_BYTES
 fi
 export LLAMA_DRIVE_SIZE
-export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
+# The CUDA tree has been named both build/ (the unified tree the 2026-09 runtime
+# audit measured) and build-cuda/ (how this box builds it now).  Name the tree
+# that EXISTS: measured 2026-11-01, build/ held nothing while build-cuda/ served
+# the card, so every consumer without LLAMA_CUDA_SERVER_BIN set — autotune, the
+# spec-dec crossover, cache-ram-probe — pointed at a path with no binary in it.
+_LLAMA_CUDA_TREE="$LLAMA_ROOT/build-cuda"
+[[ -x "$_LLAMA_CUDA_TREE/bin/llama-server" ]] || _LLAMA_CUDA_TREE="$LLAMA_ROOT/build"
+export LLAMA_SERVER_BIN="$_LLAMA_CUDA_TREE/bin/llama-server"
+unset _LLAMA_CUDA_TREE
 # The launcher builds.  This is the single place that answers "which build serves
 # which card": bin/llama-cuda-server, bin/llama-xe-server and bin/llama-cpu-server
 # read these, and their own fallbacks name this file.  CUDA derives from

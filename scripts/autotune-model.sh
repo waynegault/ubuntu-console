@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 86
+# Module Version: 87
+#   v87 (2026-11-01): the LLAMA_CUDA_SERVER_BIN fallback was still build/bin, which does
+#   not exist on this box — an unset environment therefore pointed the run at nothing and
+#   the same defect reached bin/llama-cuda-server, 01-constants, the spec-dec crossover and
+#   cache-ram-probe.  All four now name build-cuda/, and 01-constants resolves whichever of
+#   the two trees actually holds llama-server.
 #   v86 (2026-11-01): the measured server binary is LLAMA_CUDA_SERVER_BIN (default build/bin)
 #   instead of LLAMA_SERVER_BIN — this box's CUDA build is build-cuda, not a unified build/bin.
 #   v85 (2026-10-20): TWO FAIL-OPEN GATES CLOSED.  (1) The VRAM baseline read defaulted to
@@ -624,7 +629,7 @@ echo "  start:  ${START_TS}"
 echo ""
 START_EPOCH=$(date +%s)
 
-LLAMA_BIN="${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
+LLAMA_BIN="${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build-cuda/bin/llama-server}"
 
 # ── Workload scoring payload (AUTOTUNE-001) ─────────────────────────────────
 # The scoring payload is built from the selected workload's SPEC-DEC-006
