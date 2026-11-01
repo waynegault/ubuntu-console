@@ -35,12 +35,14 @@ setup() {
     fi
     FIX="$BATS_TEST_TMPDIR/home"
     mkdir -p "$FIX/.qwen/memories" "$FIX/.qwen/tmp"
-    # Only MD049: the fixer's contract is emphasis style, and a tight rule set keeps the case honest
-    # (a failure here cannot be some other rule's fix leaking in).
+    # MD049 for the emphasis fixer, plus the two shape rules its v5 fixers claim (MD041/MD032).  The
+    # set stays explicit so a failure here cannot be some other rule's fix leaking in.
     cat > "$FIX/.qwen/.markdownlint.jsonc" <<'JSONC'
 {
   "default": false,
-  "MD049": true
+  "MD049": true,
+  "MD041": true,
+  "MD032": true
 }
 JSONC
 }
@@ -93,6 +95,60 @@ lint() {
     run run_hook
     [ "$status" -eq 0 ]
     [ -z "$output" ]
+}
+
+# ── the SHAPE fixers (v5) ───────────────────────────────────────────────────────────────────
+# The expectations come from markdownlint's own contracts, not from the fixer: MD041 wants the first
+# line of the document to be a top-level heading, and this store's convention makes that heading the
+# frontmatter's `name:` value; MD032 wants a list surrounded by blank lines.  The two refusal cases
+# exist because the narrowness IS the design — repairing a shape the extractor did not produce would
+# silence a real rendering defect, so the fixer must leave the note byte-identical and name it.
+
+@test "memory lint hook: a note with no H1 gets one taken from its frontmatter name (MD041)" {
+    printf -- '---\nname: Fixture note title\n---\n\nProse with no heading.\n' \
+        > "$FIX/.qwen/memories/note.md"
+    [ -n "$(lint)" ]      # the fixture really violates MD041 before the fix
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"FIXED the missing H1"* ]]
+    [[ "$(cat "$FIX/.qwen/memories/note.md")" == *"# Fixture note title"* ]]
+    [ -z "$(lint)" ]
+}
+
+@test "memory lint hook: a note whose frontmatter has no name is REFUSED, not given an H1" {
+    printf -- '---\ntype: project\n---\n\nProse without a name field.\n' \
+        > "$FIX/.qwen/memories/note.md"
+    before="$(sha256sum "$FIX/.qwen/memories/note.md")"
+    [ -n "$(lint)" ]
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"REFUSED to fix MD041"* ]]
+    # Byte-identical: a refusal that still wrote something would be the silent-failure shape.
+    [ "$(sha256sum "$FIX/.qwen/memories/note.md")" = "$before" ]
+    # ...and the finding is still reported, not dropped by the re-lint of the files that were fixed.
+    [[ "$output" == *"MD041"* ]]
+}
+
+@test "memory lint hook: a list under a bold lead-in gets its blank line (MD032)" {
+    printf -- '---\nname: n\n---\n\n# N\n\n**What changed:**\n- one item\n' \
+        > "$FIX/.qwen/memories/note.md"
+    [ -n "$(lint)" ]
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"FIXED the blank line MD032"* ]]
+    [ -z "$(lint)" ]
+}
+
+@test "memory lint hook: a wrapped formula read as a list is REFUSED (MD032 stays visible)" {
+    printf -- '---\nname: n\n---\n\n# N\n\nThe total is the sum of the parts\n+ 0 + 0.2 = 0.2 of them.\n' \
+        > "$FIX/.qwen/memories/note.md"
+    before="$(sha256sum "$FIX/.qwen/memories/note.md")"
+    [ -n "$(lint)" ]
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"REFUSED to fix MD032"* ]]
+    [ "$(sha256sum "$FIX/.qwen/memories/note.md")" = "$before" ]
+    [[ "$output" == *"MD032"* ]]
 }
 
 # end of file

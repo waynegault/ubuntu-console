@@ -10,7 +10,18 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-11-01): FIXES two more shapes the extractor keeps re-creating — MD041 (no H1) and MD032
+#   (a list not surrounded by blank lines) — narrowly, and refuses everything else.  The writer patch
+#   ALREADY states both rules (clauses (2) and (3), see bin/qwen-memory-style-patch.sh), and a note
+#   the extractor wrote the same day carried neither with that payload applied, so the prompt route
+#   is exhausted for this class as it is for emphasis.  MD032 is repaired only for the pattern it
+#   emits (a lone bold lead-in directly above a list); a wrapped formula read as a list marker is
+#   REFUSED, because inserting a blank line there would silence a real rendering defect.  MD041 takes
+#   the H1 from the note's own frontmatter `name:` and refuses when there is none.  The re-lint now
+#   KEEPS the findings for notes a fixer did not touch, so a refusal cannot be swallowed by a clean
+#   verdict on the repaired ones, and the MD049 refusal path's own diagnosis is no longer written to
+#   the discarded temp file (it reached nobody since v1).
 #   v2 (2026-10-24): names the WRAPPED-OPERATOR trap in the hand-fix advice.  Measured: a note whose
 #   writer wrapped a formula left a continuation line beginning `+ 0 + 0.2·1.0 = 0.635`, and markdown
 #   (correctly) reads a line-initial `+` as a list marker, so MD004 fired on prose.  The danger is the
@@ -164,7 +175,7 @@ fix_emphasis() {
                             col = cc[j] + 0
                             ch = substr($0, col, 1)
                             if (ch != wrong) {
-                                printf "line %d col %d: expected %s, found %s\n", NR, col, wrong, ch
+                                printf "line %d col %d: expected %s, found %s\n", NR, col, wrong, ch > "/dev/stderr"
                                 bad = 1
                                 next
                             }
@@ -189,6 +200,140 @@ fix_emphasis() {
                 rm -f "$tmp" "$tmp.refused"
             fi
         done
+}
+
+# ── the SHAPE fixers (MD041 / MD032) ────────────────────────────────────────────────────────
+# Both rules are stated in the writer patch already (clauses (2) and (3)), and the extractor still
+# emits notes without them, so this is the same exhaustion that moved emphasis here.  The repairs
+# are deliberately NARROWER than the rules: only the shapes the extractor produces are touched, and
+# everything else is refused and NAMED, which keeps a genuine finding visible.
+#
+# MD032 is repaired ONLY for a lone bold lead-in line (`**What changed:**`) directly above a list.
+# A general MD032 fixer would be unsafe: a wrapped formula beginning `+ 0 + …` is READ as a list
+# item, so inserting a blank line there would silence a real rendering defect while the arithmetic
+# still read wrongly.  That shape is refused, by name and line.
+# shape_refuse — say why a cited note was left alone, naming note, rule and reason.
+shape_refuse() {   # shape_refuse <note> <rule> <reason>
+    echo "memory-markdownlint: REFUSED to fix $2 in $1 — ${3:-the fixer could not identify the shape}."
+}
+
+# shape_fm_name — the frontmatter's 'name:' value, empty when the note carries none.
+shape_fm_name() {  # shape_fm_name <note>
+    awk '
+        NR == 1 && $0 != "---" { exit }
+        NR > 1 && $0 == "---" { exit }
+        NR > 1 && /^name:[[:space:]]/ { sub(/^name:[[:space:]]*/, ""); print; exit }
+    ' "$1"
+}
+
+# fix_md032 — insert the blank line MD032 asks for, but ONLY above the extractor's own lead-in shape.
+fix_md032() {  # fix_md032 <note> <cited line>
+    note="$1"
+    cited="$2"
+    tmp="$note.md032-fix.$$"
+    if awk -v cited="$cited" '
+        { line[NR] = $0 }
+        END {
+            why = ""
+            if (cited < 2 || cited > NR)
+                why = sprintf("cited line %d is outside the file", cited)
+            else if (line[cited] !~ /^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]/)
+                why = sprintf("line %d does not begin with a list marker", cited)
+            else if (line[cited - 1] ~ /^[[:space:]]*$/)
+                why = sprintf("line %d is already blank, so the report was stale", cited - 1)
+            else if (line[cited - 1] !~ /^\*\*[^*]+\*\*:?[[:space:]]*$/)
+                why = sprintf("line %d is not a lone bold lead-in, so the marker may be wrapped prose", cited - 1)
+            if (why != "") {
+                print why > "/dev/stderr"
+                exit 4   # 4 = this note does not carry the shape this fixer owns: refuse it
+            }
+            for (i = 1; i < cited; i++) print line[i]
+            print ""
+            for (i = cited; i <= NR; i++) print line[i]
+        }
+    ' "$note" > "$tmp" 2>"$tmp.why"; then
+        mv "$tmp" "$note"
+        rm -f "$tmp.why"
+        echo "memory-markdownlint: FIXED the blank line MD032 asks for above line $cited of $note."
+        printf '%s\n' "$note" >> "$FIXED_LIST"
+    else
+        shape_refuse "$note" MD032 "$(sed -n '1p' "$tmp.why")"
+        rm -f "$tmp" "$tmp.why"
+    fi
+}
+
+# fix_md041 — add the H1 the store's convention takes from the note's own frontmatter name.
+fix_md041() {  # fix_md041 <note>
+    note="$1"
+    title="$(shape_fm_name "$note")"
+    if [[ -z "$title" ]]; then
+        shape_refuse "$note" MD041 "its frontmatter carries no 'name:' to take the H1 from"
+        return
+    fi
+    tmp="$note.md041-fix.$$"
+    if awk -v title="$title" '
+        { line[NR] = $0 }
+        END {
+            why = ""
+            if (line[1] != "---") {
+                why = "the file does not open with frontmatter"
+            } else {
+                endfm = 0
+                for (i = 2; i <= NR; i++) if (line[i] == "---") { endfm = i; break }
+                if (!endfm) {
+                    why = "its frontmatter never closes"
+                } else {
+                    first = 0
+                    for (i = endfm + 1; i <= NR; i++)
+                        if (line[i] !~ /^[[:space:]]*$/) { first = i; break }
+                    if (!first)
+                        why = "it has no content line below the frontmatter"
+                    else if (line[first] ~ /^#[[:space:]]/)
+                        why = sprintf("line %d already opens with an H1, so the report was stale", first)
+                }
+            }
+            if (why != "") {
+                print why > "/dev/stderr"
+                exit 4   # 4 = this note does not carry the shape this fixer owns: refuse it
+            }
+            for (i = 1; i <= endfm; i++) print line[i]
+            print ""
+            print "# " title
+            print ""
+            for (i = first; i <= NR; i++) print line[i]
+        }
+    ' "$note" > "$tmp" 2>"$tmp.why"; then
+        mv "$tmp" "$note"
+        rm -f "$tmp.why"
+        echo "memory-markdownlint: FIXED the missing H1 in $note (MD041, from its frontmatter name)."
+        printf '%s\n' "$note" >> "$FIXED_LIST"
+    else
+        shape_refuse "$note" MD041 "$(sed -n '1p' "$tmp.why")"
+        rm -f "$tmp" "$tmp.why"
+    fi
+}
+
+# shape_cites — the report's cites for one rule as "<note> <line>", HIGHER line first within a note,
+# because an MD032 fix inserts a line and would shift every cite below it.
+shape_cites() {  # shape_cites <rule>
+    printf '%s\n' "$report" | grep -F " error $1/" |
+        sed -nE 's/^([^:]+):([0-9]+)(:[0-9]+)? error .*/\1 \2/p' |
+        sort -k1,1 -k2,2nr
+}
+
+# fix_shape — drive both repairs; MD041 last because it inserts lines too, though it ignores its cite.
+fix_shape() {
+    for rule in MD032 MD041; do
+        shape_cites "$rule" | while read -r note cited; do
+            [[ -n "$note" ]] || continue
+            [[ -f "$note" ]] || continue
+            case "$rule" in
+                # shape_cites selects only these two rules, so no other arm is reachable.
+                MD032) fix_md032 "$note" "$cited" ;;
+                MD041) fix_md041 "$note" ;;
+            esac
+        done
+    done
 }
 
 # collect_all — every note in scope, used when there is no stamp yet.
@@ -239,12 +384,19 @@ rm -f "$LIST.keep"
 if printf '%s\n' "$report" | grep -qF 'MD049'; then
     fix_emphasis
 fi
+if printf '%s\n' "$report" | grep -qE 'MD041/|MD032/'; then
+    fix_shape
+fi
 
-# Re-lint the notes the fixer touched, so the verdict below describes the tree AS IT NOW IS rather
-# than the tree it was.  A fix that is not re-measured is a claim, not a result.
+# Re-lint the notes a fixer touched, so the verdict below describes the tree AS IT NOW IS rather
+# than the tree it was.  A fix that is not re-measured is a claim, not a result.  Findings for notes
+# NO fixer touched are KEPT: otherwise a refusal would be replaced by a clean re-lint of the notes
+# that were repaired, and the defect would drop out of the verdict while still sitting on disk.
 if [[ -s "$FIXED_LIST" ]]; then
-    report="$(xargs -d '\n' -a "$FIXED_LIST" "$LINTER" --config "$CONFIG" 2>&1)"
+    relint="$(xargs -d '\n' -a "$FIXED_LIST" "$LINTER" --config "$CONFIG" 2>&1)"
     status=$?
+    kept="$(printf '%s\n' "$report" | grep -vF -f "$FIXED_LIST")"
+    report="${kept}${relint}"
 fi
 rm -f "$FIXED_LIST"
 
