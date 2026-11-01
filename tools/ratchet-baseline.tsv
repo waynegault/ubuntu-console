@@ -179,12 +179,21 @@
 # the +1 that remains is that helper's OWN definition line — the irreducible
 # corpus-growth site this counter's header documents.  6.7 and 8.1.8 rises from the same
 # files were FIXED at source (`[[ ]]` and line wrapping), not re-baselined.
+# 2026-11-01 (later, same day): 8.1.8 292 -> 289 and 9.5 119 -> 118 TIGHTENED by hand to the
+# tree's own counts, because both rows sat ABOVE it — a baseline above the tree is a raised
+# floor, and the slack would let the next few long lines read as a `fell` instead of a rise.
+# Neither fall is mine, attributed per file against the last re-baseline: 8.1.8's -3 is
+# bin/autotune-rows.sh 1 -> 0 and bin/llama-watchdog.sh 10 -> 8 (wrapped log lines), and 9.5's
+# -1 is scripts/09e-oc-health.sh gaining a comment above a definition.  The ONE long line this
+# session added to tools/qwen-hooks/memory-markdownlint.sh was WRAPPED at source rather than
+# baselined (131 characters -> two lines), which is why 8.1.8 reads 289 and not 290.
+# Hand edit, never --update: the tool rewrites this file without its comments.
 4.2.4	20
 4.2.6	9
 4.3.6	31
 6.7	107
-8.1.8	292
-9.5	119
+8.1.8	289
+9.5	118
 9.7	80
 10.4	51
 10.7	228

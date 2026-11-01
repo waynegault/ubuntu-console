@@ -10,7 +10,10 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-11-01): the v6 refusal message ran to 131 characters, over §18.3 item 8.1.8's 120-column
+#   bound, so it is wrapped across a continuation instead of being absorbed by the ratchet baseline.
+#   Behaviour is identical; the wrapped form still matches the suite's `REFUSED to fix emphasis` glob.
 #   v6 (2026-11-01): every fixer CHECKS its own write.  All three printed "FIXED …" after an
 #   unchecked `mv`, which is a success message with no write behind it whenever the repaired
 #   copy cannot be moved into place (a read-only note directory, an immutable file).  The
@@ -198,7 +201,8 @@ fix_emphasis() {
                     printf '%s\n' "$note" >> "$FIXED_LIST"
                 else
                     # A FIXED line here would be a success message with no write behind it.
-                    echo "memory-markdownlint: REFUSED to fix emphasis in $note — the repaired copy could not be moved into place."
+                    echo "memory-markdownlint: REFUSED to fix emphasis in $note —" \
+                        "the repaired copy could not be moved into place."
                 fi
                 rm -f "$tmp" "$tmp.refused"
             else
