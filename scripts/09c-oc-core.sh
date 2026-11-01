@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 41
+#   v41 (2026-11-01): new `oc token` — prints the gateway token and copies it to the
+#   Windows clipboard.  It RESOLVES `gateway.auth.token` rather than reading it as a
+#   string: since 2026-11-01 12:12 the value is a SecretRef ({source:"store", id:
+#   OPENCLAW_GATEWAY_TOKEN}), so the old `node -e require(...).gateway.auth.token`
+#   one-liner would print an object.  Handles a plaintext string and env/store refs.
 # Module Version: 40
 #   v40 (2026-11-01): the no-arg `oc` reference now names `export-keys-nas`
 #   (the case statement already routed it — the printed reference never did).
@@ -321,6 +327,7 @@ function oc() {
         printf '%s\n' "${C_Highlight}Config & Logs${C_Reset}"
         printf '  %-20s %s\n' "conf"         "Open openclaw.json in VS Code"
         printf '  %-20s %s\n' "config"       "Get/set config keys (get|set|unset)"
+        printf '  %-20s %s\n' "token"        "Print the gateway token and copy it to the clipboard"
         printf '  %-20s %s\n' "env"          "Dump all OC and LLM env variables"
         printf '  %-20s %s\n' "keys"         "List Windows API keys bridged to WSL"
         printf '  %-20s %s\n' "ms"           "Probe model provider endpoints"
@@ -395,6 +402,7 @@ function oc() {
         # Config & Logs
         conf)          occonf "$@" ;;
         config)        oc-config "$@" ;;
+        token)         oc-token "$@" ;;
         env)           oc-env "$@" ;;
         keys)          ockeys "$@" ;;
         ms)            ocms "$@" ;;
@@ -437,6 +445,109 @@ function oc() {
             return 1
             ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# oc-token — Print the gateway token and copy it to the Windows clipboard.
+# `gateway.auth.token` is resolved, not read raw: it is a plaintext string in older
+# configs, and a SecretRef since 2026-11-01 12:12 ({source:"store", id:
+# OPENCLAW_GATEWAY_TOKEN}), for which `openclaw config get` redacts the value and
+# `openclaw secrets store get` refuses (secret-kind entries are write-only).  The env
+# branch reads the gateway's own EnvironmentFile; the store branch reads the team-scoped
+# row out of the state DB read-only.  Exit 1 on an unresolvable token or a refused copy.
+# ---------------------------------------------------------------------------
+function oc-token() {
+    local cfg="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+    local token rc=0
+    token=$("${TAC_PYTHON:-python3}" - "$cfg" <<'PY'
+import json
+import os
+import sqlite3
+import sys
+
+
+def main() -> int:
+    cfg_path = sys.argv[1]
+    try:
+        with open(cfg_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except OSError:
+        return 2
+    except ValueError:
+        return 3
+    ref = ((cfg.get("gateway") or {}).get("auth") or {}).get("token")
+    if isinstance(ref, str):
+        sys.stdout.write(ref)
+        return 0
+    if not isinstance(ref, dict):
+        return 4
+    source, name = ref.get("source"), ref.get("id")
+    if source == "env" and name:
+        value = os.environ.get(name)
+        if value is None:
+            for filename in ("gateway.systemd.env", ".env"):
+                full = os.path.join(os.path.expanduser("~/.openclaw"), filename)
+                try:
+                    with open(full, encoding="utf-8") as fh:
+                        for line in fh:
+                            if line.startswith(name + "="):
+                                value = line.rstrip("\n").split("=", 1)[1]
+                                break
+                except OSError:
+                    continue
+                if value is not None:
+                    break
+        if value:
+            sys.stdout.write(value)
+            return 0
+        return 5
+    if source == "store" and name:
+        db = os.environ.get("OPENCLAW_STATE_DB") or os.path.expanduser(
+            "~/.openclaw/state/openclaw.sqlite"
+        )
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2.0)
+            row = con.execute(
+                "select value from secret_store_entries "
+                "where scope_kind='team' and name=? and deleted_at_ms is null "
+                "order by updated_at_ms desc limit 1",
+                (name,),
+            ).fetchone()
+            con.close()
+        except sqlite3.Error:
+            return 6
+        if row and row[0]:
+            value = row[0].decode("utf-8", "replace") if isinstance(row[0], bytes) else row[0]
+            sys.stdout.write(value)
+            return 0
+        return 7
+    return 8
+
+
+sys.exit(main())
+PY
+) || rc=$?
+    if [[ $rc -ne 0 || -z "$token" ]]
+    then
+        __tac_info "Token" "[could not resolve gateway.auth.token (rc=$rc)]" "$C_Error"
+        return 1
+    fi
+    printf '%s\n' "$token"
+    local clip=""
+    if command -v clip.exe >/dev/null
+    then
+        clip="clip.exe"
+    elif [[ -x /mnt/c/Windows/System32/clip.exe ]]
+    then
+        clip="/mnt/c/Windows/System32/clip.exe"
+    fi
+    if [[ -n "$clip" ]] && printf '%s' "$token" | "$clip"
+    then
+        __tac_info "Clipboard" "[gateway token copied]" "$C_Success"
+        return 0
+    fi
+    __tac_info "Clipboard" "[COPY FAILED - clip.exe unavailable or refused]" "$C_Error"
+    return 1
 }
 
 # ---------------------------------------------------------------------------
