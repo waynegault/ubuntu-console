@@ -34,6 +34,19 @@ CLEAR="$REPO_ROOT/bin/llama-gpu-clear.sh"
 # extracts it from there and compares it with the module's copy.
 BIN_LIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
 
+# Every stand-in "server" in this file is a COPY of python3 carrying the right binary
+# name — the case a name-based match cannot separate from a real one.  A copy of a
+# RELOCATED CPython cannot find its stdlib from the copy's own path: measured
+# 2026-11-01 on this box, python3 is /Python/bin/python3 with prefix
+# /Python/cpython-3.14.10-linux-aarch64-gnu, so every copy died "Failed to import
+# encodings module" and the probe then reported whatever ELSE was resident.  Derive the
+# prefix once and export it; a system python3 resolves its own, so this is a no-op there.
+_python_stand_in() {  # _python_stand_in <dest>
+    cp "$(command -v python3)" "$1" || return 1
+    PYTHONHOME="$("$(command -v python3)" -c 'import sys; print(sys.prefix)')"
+    export PYTHONHOME
+}
+
 setup() {
     TAC_TEST_TMPDIR="$(mktemp -d)"
     export TAC_TEST_TMPDIR
@@ -374,6 +387,8 @@ EOS
         llama-cuda-qwen3coder-30b-chat.service
         llama-cuda-embeddinggemma-embed.service
         llama-cpu-qwen25-3b-chat.service
+        llama-cpu-qwen3coder-30b-chat.service
+        llama-cpu-heartbeat-qwen25-3b-chat.service
     )
     local u launcher
 
@@ -384,7 +399,13 @@ EOS
                               || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
             llama-cuda-*) [[ "$launcher" == */llama-cuda-server ]] \
                               || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
-            llama-cpu-*)  [[ "$launcher" == */llama-cpu-server ]] \
+            # A CPU lane may name the CPU build directly.  bin/llama-cpu-server is the
+            # convention, but the heartbeat tier documents why it does not use the
+            # wrapper ("so the lane starts even if install.sh has not linked the wrapper
+            # on a fresh host"), and the 30B tier names the same binary.  Both forms
+            # still pin the CPU card — a llama-cpu-* unit running the CUDA or Xe build
+            # fails here, which is what this case exists to catch.
+            llama-cpu-*)  [[ "$launcher" == */llama-cpu-server || "$launcher" == */build-cpu/bin/llama-server ]] \
                               || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
         esac
     done
@@ -558,7 +579,7 @@ EOS
     "$artefact" &
     local _direct=$!
     local binname="tac-bin-$$-$RANDOM.sh"
-    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/$binname" || skip "cannot copy a binary here"
+    _python_stand_in "$TAC_TEST_TMPDIR/$binname" || skip "cannot copy a binary here"
     "$TAC_TEST_TMPDIR/$binname" -c 'import time; time.sleep(30)' &
     local _compiled=$!
     sleep 0.4
@@ -595,7 +616,7 @@ EOS
     # for the artefact: on Ubuntu 26.04 `sleep` is a Rust-coreutils multi-call that
     # refuses an unknown argv[0], while python3 is a standalone ELF that sleeps
     # in-process, so /proc/PID/exe resolves to this copy and the process stays alive.
-    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/llama-server" || skip "cannot copy a binary here"
+    _python_stand_in "$TAC_TEST_TMPDIR/llama-server" || skip "cannot copy a binary here"
     "$TAC_TEST_TMPDIR/llama-server" -c 'import time; time.sleep(60)' &
     local _backend=$!
     # A backend started through a differently-named LAUNCHER (the legacy symlink
@@ -632,13 +653,21 @@ EOS
 # the 2026-09-15 re-tune burned two rows on exactly that).  It therefore names the
 # lane a second time, and the two names must be the one unit.
 @test "gpu-exclusivity: the re-tune wrapper and the watchdog name the same CUDA lane" {
-    local from_wrapper from_watchdog
+    local from_wrapper
     from_wrapper=$(sed -nE 's/.*LLAMA_CUDA_LANE_UNIT:-([^}]*)\}.*/\1/p' "$REPO_ROOT/scripts/retune-band-chunk.sh")
-    from_watchdog=$(sed -nE 's/^CUDA_UNIT="([^"]*)".*/\1/p' "$REPO_ROOT/bin/llama-watchdog.sh")
-    [[ -n "$from_wrapper" && -n "$from_watchdog" ]] \
-        || { echo "FAIL: could not read a lane name (wrapper='$from_wrapper' watchdog='$from_watchdog')"; return 1; }
-    [[ "${from_wrapper%.service}" == "$from_watchdog" ]] \
-        || { echo "drifted: wrapper '${from_wrapper%.service}' vs watchdog '$from_watchdog'"; return 1; }
+    [[ -n "$from_wrapper" ]] \
+        || { echo "FAIL: the re-tune wrapper names no CUDA lane default"; return 1; }
+
+    # The watchdog used to carry its OWN `CUDA_UNIT="…"` literal, and this case existed
+    # to keep the two spellings equal.  It now DERIVES the lane from the same
+    # LLAMA_CUDA_LANE_UNIT variable the wrapper defaults (bin/llama-watchdog.sh), which
+    # is the stronger guarantee — provided nothing reintroduces a second literal.  That
+    # reintroduction is what this case catches now; measured 2026-11-01, when the old
+    # literal-against-literal assertion could only report an empty match.
+    grep -q 'CUDA_LANE_UNIT="${LLAMA_CUDA_LANE_UNIT' "$REPO_ROOT/bin/llama-watchdog.sh" \
+        || { echo "FAIL: the watchdog no longer derives its lane from LLAMA_CUDA_LANE_UNIT"; return 1; }
+    ! grep -qE '^CUDA_UNIT="[^"]+"' "$REPO_ROOT/bin/llama-watchdog.sh" \
+        || { echo "FAIL: a hardcoded CUDA_UNIT literal is back in the watchdog (the wrapper's default: $from_wrapper)"; return 1; }
 }
 
 # run-autotune-batch.sh's footer is where a failed row used to disappear: it sliced
@@ -763,8 +792,8 @@ _foreign_apps_fixture() {
     # case a name-based match cannot separate.  python3 stands in for a real server
     # binary (see the note on the `cp` above: `sleep` is a Rust-coreutils multi-call
     # on Ubuntu 26.04 and refuses an unknown argv[0]).
-    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/allowed/llama-server"
-    cp "$(command -v python3)" "$TAC_TEST_TMPDIR/other/llama-server"
+    _python_stand_in "$TAC_TEST_TMPDIR/allowed/llama-server" || return 1
+    _python_stand_in "$TAC_TEST_TMPDIR/other/llama-server" || return 1
 
     cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
 #!/usr/bin/env bash
@@ -782,9 +811,14 @@ EOS
     # therefore carries both helpers, in the order the real file defines them.
     awk '/^_sanctioned_exes\(\)/,/^}/'      "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
     awk '/^_is_sanctioned_exe\(\)/,/^}/'    "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
+    # foreign_apps_busy() skips a resident with no device memory through this helper
+    # (43c8c55c), so it has to travel with the extract; missing it made the extract
+    # report every resident as foreign ("_is_non_gpu_resident: command not found").
+    awk '/^_is_non_gpu_resident\(\)/,/^}/'  "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
     awk '/^foreign_apps_busy\(\)/,/^}/'     "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
     grep -q 'foreign_apps_busy' "$TAC_TEST_TMPDIR/fab.sh"
     grep -q '_is_sanctioned_exe' "$TAC_TEST_TMPDIR/fab.sh"
+    grep -q '_is_non_gpu_resident' "$TAC_TEST_TMPDIR/fab.sh"
 
     cat > "$TAC_TEST_TMPDIR/fab-probe.sh" <<'EOS'
 set -uo pipefail
