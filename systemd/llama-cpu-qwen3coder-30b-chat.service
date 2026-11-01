@@ -1,4 +1,12 @@
-# install-profile: intel-xe-cuda
+# install-profile: asus-n1n-rtx-spark
+# This box's artefact, and NOT a resident lane: config/hosts.d/asus-n1n-rtx-spark.conf
+# keeps it out of the lane table on purpose ("the CPU tier … is DELIBERATELY not
+# listed — that unit is disabled here, so the watchdog must not try to start it"),
+# and it is installed-but-disabled here (measured 2026-11-01: is-enabled=disabled,
+# is-active=inactive).  The marker still names THIS box, because it decides LINKING,
+# not supervision: `intel-xe-cuda` — which this line said until 2026-11-01 — would
+# have shipped the lane to the XPS15, and no marker at all reads as `any` and links
+# it everywhere.  Kept in the repo because it is a real artefact even while off.
 [Unit]
 # CARD: none (CPU-only)   MODEL: Qwen3-Coder-30B-A3B-Instruct (Q4_K_M)   FUNCTION: serving
 # The local tier that replaces the hosted API as heartbeat primary (Wayne's ruling
