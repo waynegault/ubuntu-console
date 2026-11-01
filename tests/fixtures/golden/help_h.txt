@@ -1,5 +1,5 @@
 [H[2J[3J[38;5;30m╔══════════════════════════════════════════════════════════════════════════════╗[0m
-[38;5;30m║[0m[90m Bash v5.3[0m                        [96mHELP INDEX[0m                           [90mv11.433[0m[38;5;30m║[0m
+[38;5;30m║[0m[90m Bash v5.3[0m                        [96mHELP INDEX[0m                           [90mv11.439[0m[38;5;30m║[0m
 [38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
 [38;5;30m║[0m[33m                                    SYSTEM                                    [0m[38;5;30m║[0m
 [38;5;30m║  [96mm[37m                      Open Tactical Dashboard with live system stats       [38;5;30m║[0m
@@ -78,7 +78,7 @@
 [38;5;30m║  [96moc skills[37m              Show skill modules                                   [38;5;30m║[0m
 [38;5;30m║  [96moc plugins[37m             Manage plugins                                       [38;5;30m║[0m
 [38;5;30m║  [96moc-plugin-update [id|--all]                                                 [38;5;30m║[0m
-[38;5;30m║[0m                         [37mUpdate OpenClaw plugins (gigabrain, lossless-claw)   [38;5;30m║[0m
+[38;5;30m║[0m                         [37mReport path-installed plugin status (all retired)    [38;5;30m║[0m
 [38;5;30m║  [96moc usage[37m               Token/cost stats (7d)                                [38;5;30m║[0m
 [38;5;30m║  [96moc channels[37m            Messaging channels                                   [38;5;30m║[0m
 [38;5;30m║  [96moc browser[37m             Headless browser                                     [38;5;30m║[0m

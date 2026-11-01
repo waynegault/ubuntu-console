@@ -2,7 +2,9 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-11-01): oc-plugin-update's help line says the path-installed plugins
+#   (Gigabrain/Lossless-Claw/OpenStinger) are retired rather than that it updates them.
 #   v34 (2026-11-01): the help index now names every user-facing command the profile
 #   exports — added contextual-help, status, ocui, occhat, triage, oc restart-check,
 #   oc export-keys-nas, oc-plugin-update, wacli, model lanes, model ctx-check,
@@ -743,7 +745,7 @@ function tactical_help() {
         __hRow "oc cron" "Manage scheduled tasks"
         __hRow "oc skills" "Show skill modules"
         __hRow "oc plugins" "Manage plugins"
-        __hRow "oc-plugin-update [id|--all]" "Update OpenClaw plugins (gigabrain, lossless-claw)"
+        __hRow "oc-plugin-update [id|--all]" "Report path-installed plugin status (all retired)"
         __hRow "oc usage" "Token/cost stats (7d)"
         __hRow "oc channels" "Messaging channels"
         __hRow "oc browser" "Headless browser"

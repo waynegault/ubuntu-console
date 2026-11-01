@@ -78,7 +78,7 @@
 ║ oc skills Show skill modules ║
 ║ oc plugins Manage plugins ║
 ║ oc-plugin-update [id|--all] ║
-║ Update OpenClaw plugins (gigabrain, lossless-claw) ║
+║ Report path-installed plugin status (all retired) ║
 ║ oc usage Token/cost stats (7d) ║
 ║ oc channels Messaging channels ║
 ║ oc browser Headless browser ║
