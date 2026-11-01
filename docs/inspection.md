@@ -2277,7 +2277,7 @@ GraphNode requires `id`; GraphEdge canonicalises `from`/`to` → `source`/`targe
 
 Check `.github/workflows/ci.yml`
 
-`python` job runs ruff lint + pytest on Python 3.12
+`python` job runs ruff lint + pytest on Python 3.14
 
 11.12
 

@@ -48,7 +48,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install Python toolchain
         run: |
@@ -116,7 +116,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install Python toolchain
         run: |
@@ -185,7 +185,7 @@ jobs:
         # RUN here rather than skip.  Same pinned toolchain the `python` and nightly jobs use.
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install Python toolchain
         run: |
@@ -366,7 +366,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install dependencies
         run: |
@@ -381,11 +381,10 @@ jobs:
         run: ruff check .
 
       - name: Mypy
-        # The repo requires mypy after any Python change, but CI never ran it — the
-        # gap card 50cef401 records.  The interpreter is CI's python 3.12 while
-        # pyproject targets 3.14; mypy is a static checker and targets the version in
-        # the config regardless of the interpreter it runs under (verified 2026-10-02
-        # in a python-3.12 venv holding only the CI dependency set).
+        # The repo requires mypy after any Python change.  The interpreter now matches
+        # pyproject's 3.14 target — gap card 50cef401 closed 2026-11-01: ruff format,
+        # targeting py314, emits PEP 758 `except A, B:` syntax that the 3.12 interpreter
+        # could not parse, which reddened this step from 5826d470 until CI moved to 3.14.
         run: mypy
 
       - name: Pyright (nas/ only)
@@ -448,7 +447,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install dependencies
         run: |
