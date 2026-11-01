@@ -60,6 +60,18 @@ setup_file() {
     cat > "$HOME/.local/bin/gpu-busy.sh" <<'MOCK'
 #!/usr/bin/env bash
 # Mirrors the real contract: exit 0 = FREE, exit 1 = BUSY (JSON on stdout).
+# `busy_once` models a probe that fails once and recovers: the FIRST call answers
+# busy, every later one answers free.  Absent, the answer is constant.
+if [[ -f "$MOCK_STATE/busy_once" ]]
+then
+    n=$(( $(cat "$MOCK_STATE/busy_once") + 1 ))
+    echo "$n" > "$MOCK_STATE/busy_once"
+    if (( n > 1 ))
+    then
+        echo '{"busy":false,"reasons":[]}'
+        exit 0
+    fi
+fi
 if [[ -f "$MOCK_STATE/busy" ]]
 then
     printf '{"busy":true,"reasons":["%s"]}\n' "$(cat "$MOCK_STATE/gpu_reason" 2>/dev/null)"
@@ -138,6 +150,9 @@ teardown_file() {
 
 setup() {
     export PATH="$MOCK_BIN:$PATH"
+    # The driver-level re-probe (v3.14) sleeps between attempts; keep the suite fast
+    # without changing what is exercised — the attempt count is still the default.
+    export GPU_REPROBE_SLEEP_S=0
     rm -f "$MOCK_STATE"/*
     rm -f "$SANDBOX/wd.lock" "$SANDBOX/llm-bench.lock" "$SANDBOX/cuda.suspend" \
           "$SANDBOX/cuda.gpustop" "$SANDBOX/cuda.gpuclassify" 2>/dev/null || true
@@ -624,6 +639,49 @@ JSON
     grep -q 'stop llama-cuda-llama32-3b-chat.service' "$MOCK_STATE/systemctl.log"
     # And it never actuates: the classifier's run adds no systemctl verb of its own.
     [[ "$(grep -c 'stop ' "$MOCK_STATE/systemctl.log")" -eq 1 ]]
+}
+
+@test "gpu-classify: a driver-level blip does not park a running lane once a re-probe finds it free" {
+    # The failure this catches: one transient nvidia-smi miss takes the CUDA lane and
+    # its VRAM down, although the very next probe answers free — measured three times
+    # in 18 minutes on 2026-11-01, twice within 2.5 minutes of a start.
+    rm -f "$MOCK_STATE/classify-calls"
+    touch "$MOCK_STATE/busy"
+    printf '%s\n' "nvidia-smi-unavailable" > "$MOCK_STATE/gpu_reason"
+    # busy only on the FIRST call; the re-probe answers free.
+    echo 0 > "$MOCK_STATE/busy_once"
+    cat > "$MOCK_STATE/gpu_check.json" <<'JSON'
+{"state":"unavailable","reason":"NVML: GPU access blocked by the operating system (rc=255)","smi_rc":255,"devices":0,"window_min":30,"dxg_failures":3,"wsl_crashes":2}
+JSON
+
+    run "$WATCHDOG"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"re-probe found the card FREE"* ]] \
+        || { echo "the blip was acted on instead of re-probed: $output"; return 1; }
+    if [[ -f "$MOCK_STATE/systemctl.log" ]] && grep -q 'stop llama-cuda' "$MOCK_STATE/systemctl.log"
+    then
+        echo "the lane was stopped after the card answered free"; return 1
+    fi
+    # The stop marker must not survive a deferred stop either, or the next free tick
+    # reads a marker with no stop behind it.
+    [[ ! -f "$SANDBOX/cuda.gpustop" ]]
+}
+
+@test "gpu-classify: a driver fault that persists still parks the lane" {
+    # The negative control for the case above: the re-probe must not become a way to
+    # keep a lane on a card that never answers free.
+    rm -f "$MOCK_STATE/classify-calls"
+    touch "$MOCK_STATE/busy"
+    printf '%s\n' "nvidia-smi-unavailable" > "$MOCK_STATE/gpu_reason"
+    cat > "$MOCK_STATE/gpu_check.json" <<'JSON'
+{"state":"unavailable","reason":"NVML: GPU access blocked by the operating system (rc=255)","smi_rc":255,"devices":0,"window_min":30,"dxg_failures":3,"wsl_crashes":2}
+JSON
+
+    run "$WATCHDOG"
+
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+    grep -q 'stop llama-cuda-llama32-3b-chat.service' "$MOCK_STATE/systemctl.log"
 }
 
 @test "gpu-classify: the verdict says the card is in use when the driver still answers" {

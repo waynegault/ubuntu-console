@@ -111,6 +111,14 @@
 #   cooling-off window (LLAMA_WATCHDOG_GPU_CLASSIFY_WINDOW_S, default FLAP_HOLD_S) and
 #   the existing hold-marker shape rather than inventing a second rate limit.  Read-only
 #   with respect to lanes: actuation is unchanged and stays here.
+# v3.14 (2026-11-01): a DRIVER-level fail-closed no longer parks a RUNNING lane on one
+#   sample.  Measured that day: the lane was stopped three times in 18 minutes, two of
+#   them within ~2.5 minutes of starting, every one [probe: nvidia-smi-unavailable] --
+#   and `nvidia-smi -L` answered on three manual runs straight afterwards.  The gate is
+#   still fail-CLOSED, and this only defers the STOP: when the reason is driver-level and
+#   a re-probe (GPU_REPROBE_ATTEMPTS x GPU_REPROBE_SLEEP_S) finds the card FREE, the stop
+#   is skipped and the gpustop marker cleared; if the re-probe stays busy or unreadable,
+#   the stop happens exactly as before.  The START path is untouched.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -119,7 +127,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 19
+# Module Version: 21
+#   v21 (2026-11-01): a driver-level fail-closed no longer parks a RUNNING lane on one
+#   probe.  See the v3.14 history entry above for the measurement and the boundary
+#   (the start gate stays fail-closed; only the STOP is deferred, and only while a
+#   re-probe can still prove the card free).  First written as v20 in this same
+#   change-set; the module-version gate compares against HEAD, so folding a follow-up
+#   edit (a split log line and this helper's comment) into an unpushed commit needs a
+#   second bump.
 #   v19 (2026-11-01): the lane set is read from the HOST PROFILE
 #   (LLAMA_LANE_SPECS, tools/host-profile.sh) instead of four hardcoded units.  The
 #   gated (GPU-suspendable) lane is the profile's LLAMA_CUDA_LANE_UNIT and keeps the
@@ -526,6 +541,34 @@ gpu_driver_failclosed() {
     [[ "$GPU_BUSY_REASONS" == *nvidia-smi-unavailable* ]]
 }
 
+# Re-probe dials (v3.14): how many attempts, and how far apart.
+GPU_REPROBE_ATTEMPTS=${GPU_REPROBE_ATTEMPTS:-2}
+GPU_REPROBE_SLEEP_S=${GPU_REPROBE_SLEEP_S:-5}
+
+# gpu_reprobe_free — 0 when a DRIVER-level fail-closed is contradicted by a
+# re-probe, so one transient nvidia-smi miss does not park a running lane.
+#
+# WHY (measured 2026-11-01): the lane was stopped three times in 18 minutes, two of
+# them within ~2.5 minutes of starting, every one with [probe: nvidia-smi-unavailable]
+# — while `nvidia-smi -L` answered on three manual runs immediately afterwards.  The
+# fault was the probe being intermittently unavailable, not a workload on the card.
+#
+# The gate itself stays fail-CLOSED: a card we cannot prove free is never STARTED, and
+# this helper only ever defers a STOP.  Anything other than an explicit free answer
+# keeps BUSY, so a probe that stays unreadable still parks the lane — after N attempts.
+gpu_reprobe_free() {
+    local i j rc
+    for ((i = 1; i <= GPU_REPROBE_ATTEMPTS; i++)); do
+        sleep "$GPU_REPROBE_SLEEP_S"
+        j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null)  # swallow-ok: a failed re-probe keeps the BUSY verdict
+        rc=$?
+        if (( rc == 0 )) && [[ "$j" == *'"busy":false'* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # gpu_classify_due — 0 when this tick may run the classifier (no hold, an
 # unreadable hold, or an expired one).
 gpu_classify_due() {
@@ -751,20 +794,32 @@ supervise_cuda_lane() {
         # opposite responses from a human.  Rate-limited inside the helper (one probe
         # per hold window), and read-only — the stop/start decisions stay here.
         gpu_classify_driver_failclosed
-        if [[ "$cuda_state" == "active" ]]; then
-            log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
-            if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
-            then
-                log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
+        # A DRIVER-level fail-closed is the one "busy" that can be a probe blip
+        # rather than a workload, and it must not park a running lane on a single
+        # sample (v3.14 — see gpu_reprobe_free's header for the 2026-11-01
+        # measurement).  Only the STOP is deferred here; the start gate below is
+        # untouched and still fails closed.
+        if gpu_driver_failclosed && [[ "$cuda_state" == "active" ]] && gpu_reprobe_free; then
+            _msg="GPU reported busy driver-level [probe: $GPU_BUSY_REASONS]"
+            log "$_msg but a re-probe found the card FREE — not stopping $CUDA_UNIT"
+            gpustop_clear
+            strike_reset "$STRIKE_CUDA"
+        else
+            if [[ "$cuda_state" == "active" ]]; then
+                log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
+                if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
+                then
+                    log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
+                fi
             fi
+            # Mark the stop as OURS, renewed on every busy tick.  Without this the next
+            # tick where the card frees sees a down unit and counts the stop as an
+            # UNEXPECTED death (v3.8), so three deliberate stops in an hour tripped the
+            # flap alert and the 30min cooling-off — leaving the CUDA tier offline on an
+            # idle card while the log blamed a dead lane that never died.
+            gpustop_mark
+            strike_reset "$STRIKE_CUDA"
         fi
-        # Mark the stop as OURS, renewed on every busy tick.  Without this the next
-        # tick where the card frees sees a down unit and counts the stop as an
-        # UNEXPECTED death (v3.8), so three deliberate stops in an hour tripped the
-        # flap alert and the 30min cooling-off — leaving the CUDA tier offline on an
-        # idle card while the log blamed a dead lane that never died.
-        gpustop_mark
-        strike_reset "$STRIKE_CUDA"
     elif [[ "$cuda_state" == "active" ]]; then
         # The lane is up, so any pending marker has served its purpose (or is stale).
         gpustop_clear
