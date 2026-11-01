@@ -942,6 +942,50 @@ CFG
     [ "$status" -ne 0 ]
 }
 
+@test "oc-refresh-keys finds pwsh.exe when PATH is the boot unit's, with no ~/.local/bin (2026-11-01)" {
+    # Criterion (v66): the bridge resolves pwsh.exe by its KNOWN location, not only by PATH.
+    # What this catches: the measured boot. The once-per-boot unit inherits the systemd USER
+    # MANAGER's PATH — distro dirs only, no ~/.local/bin — while pwsh.exe is the app-execution-alias
+    # shim at ~/.local/bin/pwsh.exe, so `command -v pwsh.exe` failed 1 s after boot on every boot:
+    # "pwsh.exe unavailable — using last-good env (3 vars)", and the Gateway started with no bridged
+    # credentials while a login shell imported 47.
+    mkdir -p "$HOME/.local/bin"
+    cat > "$HOME/.local/bin/pwsh.exe" <<'PWSH'
+#!/usr/bin/env bash
+printf '%s\n' 'UNIT_PATH_KEY=from-the-shim'
+PWSH
+    chmod +x "$HOME/.local/bin/pwsh.exe"
+
+    # The mocks stay first (so nothing real is touched), then exactly the distro dirs a user unit
+    # gets: no ~/.local/bin, and no pwsh.exe anywhere on PATH.
+    local _saved_path="$PATH"
+    export PATH="$MOCK_BIN_DIR:/usr/local/bin:/usr/bin:/bin"
+    run command -v pwsh.exe
+    [ "$status" -ne 0 ]
+    run oc-refresh-keys
+    export PATH="$_saved_path"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"variable(s) imported"* ]]
+    [[ "$output" == *"1 variable(s) imported"* ]]
+    [[ "$output" != *"pwsh.exe unavailable"* ]]
+    [[ "$output" != *"pwsh.exe not found"* ]]
+}
+
+@test "oc-refresh-keys says WHICH pwsh failure fired, not just 'unavailable' (2026-11-01)" {
+    # Criterion (v66): the fallback names its cause. What this catches: the message that made two
+    # real boots undiagnosable — "pwsh.exe unavailable" was printed for three different states
+    # (not found / found but interop returned nothing / no cache yet), so the journal could not say
+    # whether to fix a PATH or the interop. Here pwsh.exe EXISTS and exits 0 with no output.
+    __mock_command_local pwsh.exe "exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"but returned no data"* ]]
+    [[ "$output" == *"pwsh.exe found at"* ]]
+    [[ "$output" != *"NOT FOUND"* ]]
+}
+
 # --- the GitHub CLI credential surface (2026-09-23) -------------------------
 # gh prefers GH_TOKEN/GITHUB_TOKEN over any stored credential; with no token in
 # its environment it asks the system credential store, and that ask is what

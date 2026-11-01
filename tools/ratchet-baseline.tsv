@@ -1,6 +1,8 @@
 # docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh
 # id<TAB>count.  A count may FALL freely; raising one is a deliberate act.
 #
+# 2026-11-01 (later): 8.1.8 288 -> 286 — the three bridge-fallback `__tac_info` lines in 09d
+# v66 were each over 120 characters and are now wrapped across two lines. No rise.
 # 2026-11-01: 8.1.8 289 -> 288 — 09d v64 replaced the three long `_patch=`/`_applied=`/
 # `_skipped=` one-liners (each a single reader of the planner's JSON) with ONE `mapfile`
 # block whose lines are short. The rise this file exists to resist is unchanged: the new
@@ -196,7 +198,7 @@
 4.2.6	9
 4.3.6	31
 6.7	107
-8.1.8	288
+8.1.8	286
 9.5	118
 9.7	80
 10.4	51

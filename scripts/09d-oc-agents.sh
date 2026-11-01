@@ -121,7 +121,20 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 65
+# Module Version: 66
+#   v66 (2026-11-01): the Windows bridge resolves pwsh.exe by its KNOWN LOCATION, and its fallback
+#   says WHY it fell back. Measured: `systemctl --user show-environment` at 14:30 printed PATH as the
+#   distro dirs only (/usr/local/sbin:...:/usr/local/games) — no ~/.local/bin — while pwsh.exe is the
+#   app-execution-alias shim at ~/.local/bin/pwsh.exe; by 14:45 the manager PATH had a VS Code-shaped
+#   value (something outside this repo imports it), so a mid-session shell finds the shim while the
+#   once-per-boot unit does not. Both boot runs (Oct 31 23:46:55 and Nov 01 06:20:01) reported 0
+#   injected, and their message could not distinguish the three states that print it: NOT FOUND,
+#   found-but-interop-returned-nothing, and no-cache-yet. So __oc_pwsh_exe tries PATH, then
+#   ~/.local/bin/pwsh.exe, then the per-machine PowerShell 7 path (used by the bridge's guard and
+#   call, the refresh's step 1, and `ockeys`, which used to print "NO API-KEY / TOKEN VARS FOUND"
+#   when it had merely failed to launch the reader), and each fallback now names its own cause so
+#   the next boot is diagnosable from its log. NOTE, for the next boot: if it still reports the
+#   found-but-no-data cause, the remaining fault is WSL interop at +1 s and NOT this resolution.
 #   v65 (2026-11-01): the table no longer maps a provider block the config does not have. Measured
 #   at 13:54 GMT, on the first live refresh after v64: the config dropped
 #   models.providers.{openai,openrouter,fireworks} (each carried `models: []`, so no model selected
@@ -674,6 +687,15 @@ function oc-agent-use() {
 function ockeys() {
     printf '%s\n' "${C_Highlight}API Keys & Tokens (Windows Environment → WSL):${C_Reset}"
     local found=0
+    # Resolved, not `command -v`: the same PATH gap that broke the boot unit applies to any caller
+    # whose PATH lacks ~/.local/bin, and an unresolved read here printed "NO API-KEY / TOKEN VARS
+    # FOUND" — a claim about Windows, made on a failure to launch the reader.
+    local _pwsh_bin=""
+    if ! _pwsh_bin=$(__oc_pwsh_exe)
+    then
+        __tac_info "Windows User Env" "[pwsh.exe not found (PATH, ~/.local/bin) — cannot read the Windows environment]" "$C_Error"
+        return 1
+    fi
     # SC2016: the `-Command` payload inside this loop is PowerShell, not bash —
     # `$($_.Key)` must reach pwsh unexpanded, so the single quoting is correct.
     # shellcheck disable=SC2016
@@ -695,7 +717,7 @@ function ockeys() {
             printf '%s\n' "  ${C_Dim}$name${C_Reset}  $masked  $oc_visible"
             found=$(( found + 1 ))
         fi
-    done < <(timeout 20 pwsh.exe -NoProfile -Command '
+    done < <(timeout 20 "$_pwsh_bin" -NoProfile -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
     if (( found == 0 ))
@@ -929,6 +951,35 @@ function __ocdoc_fix_contain() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_pwsh_exe — print an absolute path to pwsh.exe, or return 1.
+#
+# `command -v pwsh.exe` alone is WRONG for the once-per-boot unit, and was measured
+# that way on every boot: the unit inherits the systemd USER MANAGER's PATH, which on
+# this box is the distro set only (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:
+# /bin:/usr/games:/usr/local/games) — no ~/.local/bin — while pwsh.exe is the
+# app-execution-alias shim installed at ~/.local/bin/pwsh.exe. So the unit printed
+# "pwsh.exe unavailable — using last-good env (3 vars)" at 06:20:01, one second after
+# boot, and the Gateway started with no bridged credentials, while the same command in a
+# login shell imported 47. Nothing about WSL interop was wrong; the shim was never on the
+# unit's PATH. Resolving the known location makes the boot path independent of how the
+# caller's PATH was built (unit, cron, agent shell), which is the same class of fix as
+# the gh shim's.
+# ---------------------------------------------------------------------------
+function __oc_pwsh_exe() {
+    local _cand=""
+    _cand=$(command -v pwsh.exe 2>/dev/null) && { printf '%s\n' "$_cand"; return 0; }
+    for _cand in "$HOME/.local/bin/pwsh.exe" "/mnt/c/Program Files/PowerShell/7/pwsh.exe"
+    do
+        if [[ -x "$_cand" ]]
+        then
+            printf '%s\n' "$_cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # __bridge_windows_api_keys — Import Windows User environment variables
 # containing API_KEY or TOKEN into the WSL environment.
 # Uses a /dev/shm cache (TTL 3600s = 1h) to avoid a slow pwsh call on
@@ -958,11 +1009,14 @@ function __bridge_windows_api_keys() {
         return 0
     fi
 
-    # Stateful downgrade: if pwsh.exe is unavailable, warn once per session.
-    if ! command -v pwsh.exe >/dev/null 2>&1
+    # Stateful downgrade: if pwsh.exe cannot be FOUND, warn once per session. Resolved through
+    # __oc_pwsh_exe, not `command -v`: the systemd user manager's PATH has no ~/.local/bin, so the
+    # once-per-boot unit could never find the shim and reported the bridge downgraded on every boot.
+    local _pwsh_bin=""
+    if ! _pwsh_bin=$(__oc_pwsh_exe)
     then
         printf '%s\n' "$(date +%s)" > "$_warn_once_file" 2>/dev/null || true
-        echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe unavailable; bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
+        echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe not found (PATH, ~/.local/bin); bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
         return 0
     fi
 
@@ -990,7 +1044,7 @@ function __bridge_windows_api_keys() {
     # SC2016: PowerShell payload (see the ockeys loop above) — `$($_.Key)` must
     # not be expanded by bash.
     # shellcheck disable=SC2016
-    raw=$(timeout 20 pwsh.exe -NoProfile -NonInteractive -Command '
+    raw=$(timeout 20 "$_pwsh_bin" -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
         Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD|_KEY$|_SECRET|_CLIENT_ID$|_API$)" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
@@ -2567,13 +2621,23 @@ function oc-refresh-keys() {
     # 1. Pull matching vars from Windows User environment.
     #    Preserve last-good values so a pwsh.exe outage can't change the var set.
     [[ -f "$cache" ]] && cp "$cache" "$_prev_cache" 2>/dev/null || true
-    if command -v pwsh.exe >/dev/null 2>&1; then
+    # Resolved, never `command -v`: the boot unit's environment has no ~/.local/bin on PATH — see
+    # __oc_pwsh_exe. The NOTE is kept because "pwsh.exe unavailable" was printed by every fallback
+    # below for three different causes (not found / found but interop failed / no cache yet), so a
+    # boot could not be diagnosed from its own log. Measured 2026-11-01: two boot runs, and the
+    # message could not say which case either of them was.
+    local _oc_pwsh_note="" _oc_pwsh_bin=""
+    if _oc_pwsh_bin=$(__oc_pwsh_exe); then
         rm -f "$cache" "${TAC_CACHE_DIR:-/dev/shm}/tac_pwsh_bridge_warned"
         __bridge_windows_api_keys
         if [[ -f "$cache" ]]; then
             count=$(grep -c '^export ' "$cache" || true)
             __tac_info "Reading Windows User environment" "[$count variable(s) imported]" "$C_Success"
+        else
+            _oc_pwsh_note="pwsh.exe found at $_oc_pwsh_bin but returned no data (WSL interop)"
         fi
+    else
+        _oc_pwsh_note="pwsh.exe NOT FOUND (no PATH entry, nothing at ~/.local/bin/pwsh.exe)"
     fi
 
     # 2a. pwsh.exe succeeded — merge Linux-side vars and persist the canonical
@@ -2607,7 +2671,8 @@ function oc-refresh-keys() {
         # shellcheck source=/dev/null
         source "$cache" 2>/dev/null
         count=$(grep -c '^export ' "$cache" || true)
-        __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using last-good env ($count vars)]" "$C_Warning"
+        __tac_info "Reading Windows User environment" \
+            "[using last-good env ($count vars) — ${_oc_pwsh_note:-pwsh.exe unavailable}]" "$C_Warning"
 
     else
         # No canonical list yet (first run) — scan the Linux env with the
@@ -2631,9 +2696,11 @@ function oc-refresh-keys() {
             # shellcheck source=/dev/null
             source "$cache" 2>/dev/null
             grep -oE '^export [A-Z0-9_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
-            __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using Linux env vars ($count exported)]" "$C_Warning"
+            __tac_info "Reading Windows User environment" \
+                "[using Linux env vars ($count exported) — ${_oc_pwsh_note:-pwsh.exe unavailable}]" "$C_Warning"
         else
-            __tac_info "Reading Windows User environment" "[no vars found — pwsh.exe unavailable and no Linux fallback vars set]" "$C_Warning"
+            __tac_info "Reading Windows User environment" \
+                "[no vars found — ${_oc_pwsh_note:-pwsh.exe unavailable} and no Linux fallback vars set]" "$C_Warning"
             return 1
         fi
     fi
