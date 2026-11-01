@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.8.0 (2026-11-01: a resident that cannot be a GPU workload is not a tenant.
+#          Measured 19:22:01 — a VS Code pytest run in another workspace
+#          (…/investigator/.venv/bin/python … run_pytest_script.py) imported torch, which
+#          opens /dev/dxg, so WSL nvidia-smi listed its pid as a compute app with
+#          `used_gpu_memory [N/A]` and no device memory. The probe called it foreign-app and
+#          llama-watchdog STOPPED llama-cuda-qwen3coder-30b-chat mid-request (task 11693, an
+#          81k-token prompt in flight), then SIGKILLed it after a stop-sigterm timeout —
+#          Result=timeout, port 18087 dead and the default model lane gone.
+#          The class is now stated ONCE, in _is_non_gpu_resident(), and read by BOTH
+#          foreign_apps_busy() and sanctioned_residents_only(): exempting it from the foreign
+#          probe alone would not have saved the lane, because the same resident also stopped
+#          sanctioned_residents_only() from suppressing the utilisation heuristic, and a
+#          serving server pins util far past the 15% threshold.
 # Version: 1.5.0 (2026-09-21: the declared-workload check proves the artefact is
 #          being EXECUTED, not merely NAMED — identity from /proc/PID/exe (or comm
 #          when exe is another user's and unreadable), plus an argv element that is
@@ -34,7 +47,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 10
+# Module Version: 11
 # Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
 #          SCRIPT the interpreter was GIVEN — the argv element immediately after an
 #          interpreter — not any element that merely names it.  A CI lint job's file list
@@ -149,6 +162,31 @@ _is_sanctioned_exe() {
     return 1
 }
 
+# 0 (TRUE) when this resident CANNOT be a GPU workload, whatever nvidia-smi says about
+# it. Two members of the class, both identified by the command line that launched them
+# (their /proc/PID/exe is an interpreter, so the exe cannot tell them apart):
+#
+#   * an OpenClaw embedding worker (node/python) — a declared consumer, not a tenant;
+#   * a TEST RUNNER. Importing torch opens /dev/dxg and makes the kernel list the
+#     process as a CUDA compute app with used_gpu_memory [N/A] on this WSL host, at
+#     0 MiB of device memory. Measured 2026-11-01: a VS Code pytest run was read as
+#     "a foreign app holds the card" while our own lane served an 81k-token prompt, and
+#     the watchdog stopped that lane. A process holding no device memory is not the
+#     tenant the watchdog frees VRAM for.
+#
+# Read by foreign_apps_busy() AND sanctioned_residents_only(). Skipping it in the
+# foreign probe alone leaves the lane condemned by the utilisation heuristic, which is
+# only suppressed when EVERY remaining resident is a sanctioned server.
+_is_non_gpu_resident() {
+    local _pid="$1" _cmdline
+    _cmdline=$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null || true)  # swallow-ok: a resident that exited mid-probe has no cmdline, and an absent one must read "not exempt", never abort the probe
+    case "$_cmdline" in
+        *memory-core-local-embedding-worker*) return 0 ;;
+        *run_pytest_script.py*|*" -m pytest"*|*"/pytest "*) return 0 ;;
+    esac
+    return 1
+}
+
 # 0 (TRUE) when nvidia-smi lists at least one compute app and EVERY one of them is a
 # sanctioned server binary; 1 otherwise (an unsanctioned resident, an unreadable
 # /proc, or no listing at all).
@@ -171,13 +209,14 @@ sanctioned_residents_only() {
         # A resident that exits mid-probe leaves an unreadable exe; empty is "not
         # proven ours", which this caller treats as foreign (fail-closed).
         exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)  # swallow-ok: race -> foreign
+        _is_non_gpu_resident "$pid" && continue
         _is_sanctioned_exe "$exe" || return 1
     done <<< "${smi_out:-}"
     (( seen ))
 }
 
 foreign_apps_busy() {
-    local pid comm cmdline exe smi_out smi_rc _a
+    local pid comm exe smi_out smi_rc _a
     # When the driver/NVML blocks GPU access, nvidia-smi exits non-zero AND prints
     # its error text on STDOUT. Without this guard that text was read as a pid,
     # yielding the nonsense reason "foreign-app pid=Failed to initialize NVML...".
@@ -204,18 +243,15 @@ foreign_apps_busy() {
         [[ "$pid" =~ ^[0-9]+$ ]] || continue
         [[ "$pid" == "$$" ]] && continue
         comm=$(cat "/proc/$pid/comm" 2>/dev/null || echo "")
-        cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || echo "")
         # A sanctioned server holding the card is expected: skip only if the
         # RESOLVED binary is one of the two above, so a same-named server from any
         # other build path stays foreign and still reports busy.
         exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
         _is_sanctioned_exe "$exe" && continue
-        # OpenClaw embedding workers are a node/python process, so their exe is an
-        # interpreter rather than the worker itself: they are identified by the
-        # name in the command line that launched them.
-        case "$cmdline" in
-            *memory-core-local-embedding-worker*) continue ;;
-        esac
+        # Interpreter-based residents that cannot be a GPU workload (an embedding
+        # worker, a test runner) are identified by the command line that launched
+        # them — their exe is the interpreter, which says nothing about the role.
+        _is_non_gpu_resident "$pid" && continue
         REASONS+=("foreign-app pid=$pid $comm exe=${exe:-unreadable}")
         return 0
     done <<< "$smi_out"
