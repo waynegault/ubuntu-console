@@ -188,13 +188,24 @@ MOCK
 
 @test "sampler: real path — a matched profile with no lanes is a state, not a failure" {
     unset LLM_LANE_CACHE_SPECS
-    export LLM_HOST_PROFILE=asus-n1n-rtx-spark
+    # A FIXTURE profile, not a real host. This case named `asus-n1n-rtx-spark` as its
+    # no-lanes host, and on 2026-11-01 that profile was given the two lanes the ASUS box
+    # actually serves — so "a matched profile with no lanes" stopped being true of the
+    # host the case pinned, and the case went red on main for four consecutive commits
+    # (measured: `no skip record`, because the sampler found two lanes and sampled them).
+    # The criterion is the STATE (a matched profile with an empty table), not any host's
+    # inventory, and TAC_HOST_PROFILE_DIR is the loader's own seam for exactly this.
+    mkdir -p "$SANDBOX/hosts"
+    printf '# fixture: a matched profile that declares no resident lanes\n' \
+        > "$SANDBOX/hosts/fixture-no-lanes.conf"
+    export TAC_HOST_PROFILE_DIR="$SANDBOX/hosts"
+    export LLM_HOST_PROFILE=fixture-no-lanes
     run bash "$SCRIPT"
     [[ "$status" -eq 0 ]] || { echo "a host with no lanes failed the unit: $output"; return 1; }
     [[ -e "$STATE/llm-lane-cache-skip" ]] \
         || { echo "no skip record: absence of rows would be indistinguishable from never running"; return 1; }
     grep -q 'lanes=0' "$STATE/llm-lane-cache-skip" || { echo "skip record does not name the count"; return 1; }
-    grep -q 'asus-n1n-rtx-spark' "$STATE/llm-lane-cache-skip" || { echo "skip record does not name the profile"; return 1; }
+    grep -q 'fixture-no-lanes' "$STATE/llm-lane-cache-skip" || { echo "skip record does not name the profile"; return 1; }
     [[ ! -s "$LLM_LANE_CACHE_FILE" ]] || { echo "a no-lanes host wrote rows"; return 1; }
 }
 
