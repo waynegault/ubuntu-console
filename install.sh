@@ -3,6 +3,11 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.17 (2026-10-31, physical-path links): REPO is now resolved with `pwd -P` so every
+#   link the installer writes points at the repo's PHYSICAL path, not at a convenience
+#   symlink the user may later delete.  Measured before this: run through the
+#   ~/ubuntu-console symlink, `pwd` (logical) made REPO=/home/wayne/ubuntu-console, and
+#   45 links (4 hooks + 41 ~/.local/bin) were born pointing at that symlink path.
 # v1.16 (2026-10-30, repo relocation): `systemctl --user enable` records an ABSOLUTE
 #   path in *.wants/ when the unit file is itself a symlink into this repo, so moving the
 #   repo left six lanes and eight timers ENABLED IN NAME ONLY - dangling links, units
@@ -46,7 +51,7 @@
 #   systemd/* linking loop (it ran before it, so on a FIRST install the target
 #   units did not exist yet and every alias was skipped), and a skipped alias now
 #   names its missing target on stderr instead of passing silently.
-VERSION="1.16"
+VERSION="1.17"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -56,7 +61,7 @@ then
     exit 0
 fi
 
-REPO="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$(dirname "$0")" && pwd -P)"
 PROFILE_PATH="$REPO/tactical-console.bashrc"
 # The ~/.bashrc loader is a TRACKED template (dotfiles/bashrc), rendered here with
 # this clone's profile path. It used to be a heredoc in this script; v1.15 moved
