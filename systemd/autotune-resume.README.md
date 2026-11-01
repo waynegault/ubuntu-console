@@ -33,7 +33,7 @@ job; the boot no longer waits for a six-hour campaign.
    With no plan the unit exits 0 and says so — a boot that does nothing says that,
    rather than looking like a resume that failed.
 
-**The plan is claimed once.** Before the run it is copied to `~/.llm/autotune-logs/`
+**The plan is claimed once.** Before the run it is copied to `$LLM_STATE_DIR/autotune-logs/`
 and moved aside as `<plan>.claimed-<stamp>`, so a boot loop cannot re-tune rows it
 already has and the operator can read exactly what ran. A row whose model file is
 missing is dropped with a line (an unloadable row still burns CUDA cycles walking

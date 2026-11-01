@@ -2,7 +2,8 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-11-01): init creates $LLM_STATE_DIR at profile load.
 #   v19 (2026-10-24): the loopback0 check no longer reports an UNREADABLE boot
 #   state as "loopback0 missing".  Measured 2026-10-24: boot 19:02:56, the unit
 #   ran 19:03:43, "Startup finished in 53.181s" at 19:03:49, and the shell started
@@ -42,8 +43,10 @@
 if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
     mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS"
 fi
-# Always create LLM directory (independent of OpenClaw)
-mkdir -p "$HOME/.llm"
+# Always create the LLM tool-state directory (independent of OpenClaw).
+# LLM_STATE_DIR is the profile-aware tool-state home (01-constants), not a literal
+# ~/.llm — a box whose store moved to ~/models keeps its state in ~/models/.llm.
+mkdir -p "$LLM_STATE_DIR"
 
 # Check for required dependencies
 if ! command -v jq >/dev/null 2>&1

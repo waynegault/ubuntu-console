@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-11-01): oc-backup stages the model registry under a fixed .llm/models.conf
+#   path so the restore path stays valid wherever $LLM_REGISTRY lives.
 #   v15 (2026-10-31): drop the OpenStinger line from the graph-roles help (retired).
 #   v13 (2026-10-02): oc-kgraph's viewer launch and its stale-viewer guard use the kgraph
 #   SUBCOMMAND form (`kgraph serve`), not the removed flat `--serve` flag, so `oc g` keeps
@@ -396,10 +398,17 @@ function oc-backup() {
         fi
     )
 
-    # Model registry (backed up from canonical location)
+    # Model registry (backed up from canonical location).  Staged under the
+    # archive's fixed internal path (.llm/models.conf) so the restore path stays
+    # valid regardless of where $LLM_REGISTRY lives on this box.
     if [[ -f "$LLM_REGISTRY" ]]
     then
-        (cd "$HOME" && zip -q "$zipPath" ".llm/models.conf")
+        local _reg_stage
+        _reg_stage="$(mktemp -d)" || return 1
+        mkdir -p "$_reg_stage/.llm"
+        cp "$LLM_REGISTRY" "$_reg_stage/.llm/models.conf"
+        (cd "$_reg_stage" && zip -q "$zipPath" ".llm/models.conf")
+        rm -rf "$_reg_stage"
     fi
 
     if [[ -f "$zipPath" ]]

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-11-01): resolve the host profile (source 01-constants.sh) so the
+#   registry, store and CUDA lane are THIS box's, not the generic ~/.llm / old-box
+#   lane.  REGISTRY and LOGDIR now derive from the profile's LLM_REGISTRY / LLM_STATE_DIR.
 #   v9 (2026-11-01): the --all-but-done / --all scope skips embedding models (arch field 6
 #   contains "embedding", e.g. gemma-embedding) — they have no generation to measure.
 #   v8 (2026-11-01): the post-stop free-VRAM wait bound is ${LLAMA_GPU_FREE_THRESHOLD_MIB:-800}
@@ -62,10 +65,16 @@ if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
 fi
 
 REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
-REGISTRY="$HOME/.llm/models.conf"
+# Resolve the host profile so the registry, store and lane are THIS box's (a box
+# whose store moved off ~/.llm, or whose CUDA lane is not the old box's, names its
+# own).  01-constants exports LLM_REGISTRY / LLM_STATE_DIR / LLAMA_MODEL_DIR /
+# LLAMA_CUDA_LANE_UNIT from the profile, so the children inherit the same paths.
+# shellcheck source=01-constants.sh
+source "$REPO/scripts/01-constants.sh"
+REGISTRY="${LLM_REGISTRY:-$HOME/.llm/models.conf}"
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
-LOGDIR="$HOME/.llm/autotune-logs"
+LOGDIR="${LLM_STATE_DIR:-$HOME/.llm}/autotune-logs"
 mkdir -p "$LOGDIR"
 
 case "${1:-}" in

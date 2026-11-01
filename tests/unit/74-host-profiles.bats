@@ -278,17 +278,42 @@ install_stub_env() {
     [[ "$output" != *"removed llama-xe-minicpm5-1b-chat.service"* ]]
 }
 
-@test "the arm64 profile names a flat store on a plain directory, sized to RAM" {
-    # The two decisions of 2026-10-30, asserted together: the box's store is named
-    # directly (~/models, flat) instead of reshaping its files to <root>/active, and
-    # its GPU memory is the system pool, so sizing is RAM-clamped.
+@test "the arm64 profile names the active/archived store on a plain directory, sized to RAM" {
+    # The store is a plain directory with the repo's active/ + archived/ shape
+    # (reversed 2026-11-01: the files sit in active/ and archived/, not a flat
+    # ~/models), and its GPU memory is the system pool, so sizing is RAM-clamped.
     run env -i HOME=/home/wayne PATH=/usr/bin:/bin LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
         TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
         bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s|%s|%s\n" \
             "$LLAMA_MODEL_DIR" "$TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT" \
             "$TAC_HOST_PROFILE_SHARED_MEMORY" "$LLAMA_ARCHIVE_DIR"' _ "$LIB"
     [ "$status" -eq 0 ]
-    [ "$output" = "/home/wayne/models|0|1|/home/wayne/models/archive" ]
+    [ "$output" = "/home/wayne/models/active|0|1|/home/wayne/models/archived" ]
+}
+
+@test "the arm64 profile points the registry at the active models and the state dir beside them" {
+    # 2026-11-01: the registry lists the ACTIVE models, so it lives in active/ with
+    # them; the rest of the tool state lives in the store's .llm/ dir.  Catches: the
+    # registry or state dir defaulting to ~/.llm on a box whose store moved to ~/models.
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
+        TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s\n" \
+            "$LLM_REGISTRY" "$LLM_STATE_DIR"' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "/home/wayne/models/active/models.conf|/home/wayne/models/.llm" ]
+}
+
+@test "with no profile the registry and default pointer derive from a ~/.llm state dir" {
+    # The generic default: LLM_STATE_DIR=~/.llm, and LLM_REGISTRY / LLM_DEFAULT_FILE
+    # derive from it when no profile names its own.  Catches: a hardcoded ~/.llm that
+    # ignores the moved state dir, or the derived paths not following LLM_STATE_DIR.
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" \
+        TAC_HOST_PROFILE_FILE="$BATS_TEST_TMPDIR/none" \
+        bash -c 'source "$1" >/dev/null 2>&1; printf "%s|%s|%s\n" \
+            "$LLM_REGISTRY" "$LLM_DEFAULT_FILE" "$LLM_STATE_DIR"' \
+        _ "$REPO_ROOT/scripts/01-constants.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "/home/wayne/.llm/models.conf|/home/wayne/.llm/default_model.conf|/home/wayne/.llm" ]
 }
 
 @test "the intel profile keeps the derived dirs, the mount test and private VRAM" {
@@ -374,9 +399,10 @@ PROFILE
     printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry.conf"
     run env LLM_HOST_PROFILE="bare" TAC_HOST_PROFILE_DIR="$prof" \
         TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" PATH="$stub:$PATH" \
-        LLM_REGISTRY="$BATS_TEST_TMPDIR/registry.conf" TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" \
-        bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; model-recommend general' \
-        _ "$REPO_ROOT/env.sh" "$stub"
+        TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" \
+        bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; \
+                 export LLM_REGISTRY="$3"; model-recommend general' \
+        _ "$REPO_ROOT/env.sh" "$stub" "$BATS_TEST_TMPDIR/registry.conf"
     [ "$status" -eq 1 ]
     [[ "$output" == *"UNKNOWN"* ]]
 }
@@ -392,9 +418,10 @@ PROFILE
     printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry2.conf"
     run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
         TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) PATH="$stub:$PATH" \
-        LLM_REGISTRY="$BATS_TEST_TMPDIR/registry2.conf" TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache2" \
-        bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; model-recommend general' \
-        _ "$REPO_ROOT/env.sh" "$stub"
+        TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache2" \
+        bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; \
+                 export LLM_REGISTRY="$3"; model-recommend general' \
+        _ "$REPO_ROOT/env.sh" "$stub" "$BATS_TEST_TMPDIR/registry2.conf"
     [ "$status" -eq 0 ]
     [[ "$output" == *"4GB"* ]]
 }

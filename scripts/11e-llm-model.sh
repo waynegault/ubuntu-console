@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 74
+# Module Version: 75
+#   v75 (2026-11-01): the scan backup and bench TSV paths live under $LLM_STATE_DIR.
 #   v73 (2026-10-30): a store that is a plain directory is told to be CREATED, not
 #   mounted — the refusal keeps its teeth but names the remedy the host actually has.
 #   v72 (2026-10-28): `llm-build` no longer pins -DCMAKE_CUDA_ARCHITECTURES=86.  The
@@ -231,10 +232,10 @@ function __model_scan() {
             rm -f "$old_registry_snapshot"
             return 1
         }
-        # Persistent backup in ~/.llm/backups/ so pre-scan state can be
+        # Persistent backup in the tool-state home so pre-scan state can be
         # recovered if autotune data is accidentally lost (issue 2026-07-07).
         local _scan_backup_dir
-        _scan_backup_dir="$(dirname "$LLM_REGISTRY")/backups"
+        _scan_backup_dir="$LLM_STATE_DIR/backups"
         mkdir -p "$_scan_backup_dir"
         cp "$LLM_REGISTRY" "$_scan_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S).pre-scan"
     fi
@@ -2623,7 +2624,7 @@ function __model_bench() {
     done
 
     local bench_file
-    bench_file="$HOME/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
+    bench_file="$LLM_STATE_DIR/bench_$(date +%Y%m%d_%H%M%S).tsv"
     {
         printf "#\tmodel\tsize\ttps\tnotes\n"
         for i in "${!b_num[@]}"
@@ -2687,7 +2688,7 @@ function __model_bench_diff() {
     local diff_files old_bench new_bench
     diff_files=$(__bench_resolve_files "$@") || {
         __tac_info "Usage" "[model bench-diff [old.tsv new.tsv]]" "$C_Error"
-        __tac_info "Hint" "Need two bench TSVs in $HOME/.llm" "$C_Dim"
+        __tac_info "Hint" "Need two bench TSVs in $LLM_STATE_DIR" "$C_Dim"
         return 1
     }
     IFS='|' read -r old_bench new_bench <<< "$diff_files"
@@ -2769,7 +2770,7 @@ function __model_bench_history() {
     while IFS= read -r bench_file
     do
         bench_files+=("$bench_file")
-    done < <(find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+    done < <(find "$LLM_STATE_DIR" -maxdepth 1 -name 'bench_*.tsv' -type f \
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -n "$limit" | cut -d' ' -f2-)
 
     if (( ${#bench_files[@]} == 0 ))
@@ -2843,7 +2844,7 @@ function __model_bench_trend() {
     while IFS= read -r bench_file
     do
         bench_files+=("$bench_file")
-    done < <(find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+    done < <(find "$LLM_STATE_DIR" -maxdepth 1 -name 'bench_*.tsv' -type f \
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -2 | cut -d' ' -f2-)
 
     if (( ${#bench_files[@]} < 2 ))

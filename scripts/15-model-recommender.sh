@@ -2,7 +2,8 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-11-01): the outcomes artefact default is $LLM_STATE_DIR/outcomes/latest.json.
 #   v12 (2026-10-30): the VRAM figure comes from the shared helper, so the
 #   recommender and the scanner size against the SAME ceiling — including the
 #   unified-memory clamp to physical RAM.
@@ -326,7 +327,7 @@ function model-recommend() {
     # correctness TOGETHER, including whether the model recommended here was the one
     # with the best measured outcome.  No correctness figure is invented here.
     __tac_divider
-    local _outcomes="${LLM_OUTCOME_ARTEFACT:-$HOME/.llm/outcomes/latest.json}"
+    local _outcomes="${LLM_OUTCOME_ARTEFACT:-$LLM_STATE_DIR/outcomes/latest.json}"
     if [[ -f "$_outcomes" ]]
     then
         __tac_info "Quality" \

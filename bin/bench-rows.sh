@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-11-01): resolve the host profile (source 01-constants.sh) so the store
+#   and CUDA lane are THIS box's, not the generic ~/.llm / old-box lane.  LOGDIR now
+#   derives from the profile's LLM_STATE_DIR.
 #   v9 (2026-11-01): the post-stop free-VRAM wait bound is ${LLAMA_GPU_FREE_THRESHOLD_MIB:-800}
 #   instead of a hardcoded 800, so a box whose driver reserves more than 800 MiB names its own bound.
 #   v6 (2026-10-20): the planned rows are written to a resume plan before measuring and
@@ -58,9 +61,14 @@ if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
 fi
 
 REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
+# Resolve the host profile so the store and lane are THIS box's, not the old box's
+# hardcoded lane/model-dir (01-constants exports LLM_STATE_DIR / LLAMA_MODEL_DIR /
+# LLAMA_CUDA_LANE_UNIT from the profile).
+# shellcheck source=01-constants.sh
+source "$REPO/scripts/01-constants.sh"
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
-LOGDIR="$HOME/.llm/autotune-logs"
+LOGDIR="${LLM_STATE_DIR:-$HOME/.llm}/autotune-logs"
 mkdir -p "$LOGDIR"
 
 if (( $# == 0 )); then

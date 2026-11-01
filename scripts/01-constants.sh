@@ -2,7 +2,14 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 47
+# Module Version: 48
+#   v48 (2026-11-01): the registry and tool state are decoupled.  LLM_STATE_DIR
+#   (default ~/.llm) is the tool-state home — default-model pointer, bench TSVs,
+#   autotune logs, backups — and LLM_REGISTRY / LLM_DEFAULT_FILE now derive from it.
+#   A host profile may move the tool state beside the model store (asus:
+#   ~/models/.llm) and point the registry at the active models themselves (asus:
+#   ~/models/active/models.conf).  Both stay overridable knobs, so a fixture still
+#   pins its own registry.
 #   v46 (2026-10-30): the model store's SHAPE is a host-profile fact.  The dirs may be
 #   declared by the profile (a flat store, not <root>/active), and readiness is tested
 #   the way the store exists: `mountpoint` for a bind mount, existence for a plain
@@ -318,8 +325,14 @@ export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|
 # Measured 2026-10-30: the assignment ignored a pre-set LLM_REGISTRY, so a fixture
 # registry became "$HOME/.llm/models.conf" and every caller reported NOT FOUND — the
 # unified-memory recommendation case had been failing on both boxes for that reason.
-export LLM_REGISTRY="${LLM_REGISTRY:-$HOME/.llm/models.conf}"
-export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
+# LLM_STATE_DIR is the tool-state home (registry sidecars, default pointer, bench
+# TSVs, autotune logs, backups).  Defaults to ~/.llm; a HOST PROFILE may move it
+# beside the model store.  LLM_REGISTRY and LLM_DEFAULT_FILE derive from it, except
+# where a profile names the registry explicitly — a registry that lists the ACTIVE
+# models may sit beside them rather than in the state dir (asus does exactly that).
+export LLM_STATE_DIR="${LLM_STATE_DIR:-$HOME/.llm}"
+export LLM_REGISTRY="${LLM_REGISTRY:-$LLM_STATE_DIR/models.conf}"
+export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLM_STATE_DIR/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
 export LLM_TPS_CACHE="/dev/shm/last_tps"
@@ -554,7 +567,7 @@ fi
 export LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-$_tac_cpu_threads}"
 unset _tac_cpu_threads _tac_total_cpus
 # AUTOTUNE-002: ctx is registry-driven — the per-model ctx comes from
-# ~/.llm/models.conf (autotuned rows); there is deliberately NO
+# $LLM_REGISTRY (autotuned rows); there is deliberately NO
 # LLAMA_CTX_SIZE / LLM_CONTEXT_SIZE default here.  The launch resolves
 # registry-ctx > --ctx-size override > loud error (no hardwired value).
 export LLAMA_FLASH_ATTN="${LLAMA_FLASH_ATTN:-true}"

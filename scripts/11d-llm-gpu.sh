@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-11-01): bench_*.tsv discovery reads $LLM_STATE_DIR (the tool-state home).
 #   v29 (2026-10-30): on a UNIFIED-MEMORY host the sizing ceiling is physical RAM, not
 #   the card's reported figure (81920 MiB reported against 39 GiB of RAM, measured on
 #   the arm64 box) — the profile declares TAC_HOST_PROFILE_SHARED_MEMORY and the
@@ -1093,7 +1094,7 @@ function __bench_resolve_files() {
     while IFS= read -r bench_file
     do
         latest_files+=("$bench_file")
-    done < <(find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+    done < <(find "$LLM_STATE_DIR" -maxdepth 1 -name 'bench_*.tsv' -type f \
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -2 | cut -d' ' -f2-)
 
     if (( ${#latest_files[@]} < 2 ))
@@ -1110,7 +1111,7 @@ function __bench_resolve_files() {
 # Returns 1 if no bench TSV exists.
 # ---------------------------------------------------------------------------
 function __bench_latest_file() {
-    find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+    find "$LLM_STATE_DIR" -maxdepth 1 -name 'bench_*.tsv' -type f \
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -1 | cut -d' ' -f2-
 }
 

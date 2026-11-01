@@ -28,7 +28,12 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-11-01): LLM_REGISTRY / LLM_DEFAULT_FILE / LLM_STATE_DIR join the
+#   cleared profile-owned facts.  The registry and tool-state home are per-box, so a
+#   console-started window that exported the OLD box's ~/.llm values must not leak
+#   them into a shell whose profile now points beside the store (measured 2026-11-01:
+#   the agent's shell carried LLM_REGISTRY=~/.llm/models.conf after the move).
 #   v4 (2026-11-01): four more profile-owned facts join the clear/export set —
 #   LLAMA_CUDA_LANE_UNIT, LLAMA_GPU_FREE_THRESHOLD_MIB, LLM_AUTOTUNE_BASELINE_GAP_MAX and
 #   LLAMA_CUDA_SERVER_BIN — so the heavy-job re-exec no longer drops them.
@@ -262,6 +267,7 @@ tac_host_profile_apply() {
           TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
           TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT \
           LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
+          LLM_REGISTRY LLM_DEFAULT_FILE LLM_STATE_DIR \
           LLAMA_QUANT_GUIDE_REL QUANT_GUIDE
     _facts="$(tac_host_facts)" || _facts=""
     if [[ -n "$_facts" ]]
@@ -297,6 +303,7 @@ tac_host_profile_apply() {
            LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
            LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
+           LLM_REGISTRY LLM_STATE_DIR \
            TAC_HOST_PRIMARY_LANE VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL \
            TAC_HOST_IGPU_LABEL TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
            TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT

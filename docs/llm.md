@@ -1014,11 +1014,11 @@ one (`model autotune N --workload agentic`).
 | `/mnt/m/active/` | Active GGUF model files (`$LLAMA_MODEL_DIR`) — `/mnt/m` is the `intel-xe-cuda` profile's `$LLAMA_DRIVE_ROOT`; each box has its own |
 | `/mnt/m/archive/` | Archived/discouraged models (`$LLAMA_ARCHIVE_DIR`) |
 | `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) — custom-tuned CUDA build (see [Building llama.cpp](#building-llamacpp) below) |
-| `~/.llm/models.conf` | Model registry — 45-column format (schema v7: v6 + the 2b measurement columns 40-44 + `ctx_policy` 45) (`$LLM_REGISTRY`) — per box |
+| `$LLM_REGISTRY` | Model registry — 45-column format (schema v7: v6 + the 2b measurement columns 40-44 + `ctx_policy` 45) — per box (default `~/.llm/models.conf`; a profile may point it beside the store) |
 | `~/.llm/host-profile` | This box's host-profile id (optional, machine-local; `LLM_HOST_PROFILE` overrides it) |
 | `config/hosts.d/<id>.conf` | Host profile — the machine's cards, lanes, tuning, model store and quant policy |
-| `~/.llm/models.conf` | Also stores autotune winners (`autotuned`, row-level knobs, `mmap_mode`) |
-| `~/.llm/bench_*.tsv` | Benchmark history from `model bench` |
+| `$LLM_REGISTRY` | Also stores autotune winners (`autotuned`, row-level knobs, `mmap_mode`) |
+| `$LLM_STATE_DIR/bench_*.tsv` | Benchmark history from `model bench` |
 | `~/github-wsl/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
 | `/dev/shm/active_llm` | Active model FILE name (the row's identity; not a row number) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr log |

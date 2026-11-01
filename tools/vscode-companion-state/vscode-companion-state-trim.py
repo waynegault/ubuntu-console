@@ -31,7 +31,7 @@ CONTRACT
                     (default 90).  Conversations with no messages are always dropped —
                     measured 2026-10-15: 641 of 1006 held nothing at all.
     --state-dir D   override the auto-detected VS Code user-data dir.
-    --backup-dir D  override the backup home (default ~/.llm/backups).
+    --backup-dir D  override the backup home (default $LLM_STATE_DIR/backups, else ~/.llm/backups).
     -h / --help     this text.
 
 PRECONDITION — READ IT
@@ -94,9 +94,7 @@ def read_blob(db: Path) -> bytes | None:
     """The raw value, or None when this DB cannot hold the key at all."""
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
     try:
-        have = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ItemTable'"
-        ).fetchone()
+        have = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ItemTable'").fetchone()
         if have is None:
             # e.g. the remote server's state.vscdb can exist at 0 bytes with no tables;
             # a DB without ItemTable holds no extension state, which is not an error.
@@ -245,13 +243,26 @@ def main(argv: list[str] | None = None) -> int:
         description="Bound the companion's conversation blob in VS Code extension state.",
     )
     ap.add_argument("--apply", action="store_true", help="write the trim (backup taken first)")
-    ap.add_argument("--vacuum", action="store_true",
-                    help="compact each state DB instead of trimming: returns freed pages to the "
-                         "filesystem.  Reports only unless --apply")
-    ap.add_argument("--keep-days", type=int, default=DEFAULT_KEEP_DAYS,
-                    help=f"keep conversations with messages updated within N days (default {DEFAULT_KEEP_DAYS})")
+    ap.add_argument(
+        "--vacuum",
+        action="store_true",
+        help="compact each state DB instead of trimming: returns freed pages to the "
+        "filesystem.  Reports only unless --apply",
+    )
+    ap.add_argument(
+        "--keep-days",
+        type=int,
+        default=DEFAULT_KEEP_DAYS,
+        help=f"keep conversations with messages updated within N days (default {DEFAULT_KEEP_DAYS})",
+    )
     ap.add_argument("--state-dir", default=None, help="VS Code user-data dir")
-    ap.add_argument("--backup-dir", default=os.path.expanduser("~/.llm/backups"))
+    ap.add_argument(
+        "--backup-dir",
+        default=os.path.join(
+            os.environ.get("LLM_STATE_DIR", os.path.expanduser("~/.llm")),
+            "backups",
+        ),
+    )
     args = ap.parse_args(argv)
 
     user_dirs = candidate_user_dirs(args.state_dir)
@@ -287,10 +298,8 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if args.apply:
             res = apply_trim(db, state, keep, Path(args.backup_dir))
-            print(f"  backup:        {res['backup']} "
-                  f"({res['backup'].stat().st_size:,} bytes gz)")
-            print(f"  after re-read: {res['after_bytes']:,} bytes, "
-                  f"{res['after_conversations']} conversations")
+            print(f"  backup:        {res['backup']} ({res['backup'].stat().st_size:,} bytes gz)")
+            print(f"  after re-read: {res['after_bytes']:,} bytes, {res['after_conversations']} conversations")
             if res["after_conversations"] != len(keep):
                 print("  MISMATCH: the re-read disagrees with the write — investigate", file=sys.stderr)
                 rc = 1

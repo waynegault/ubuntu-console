@@ -60,7 +60,11 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-11-01): resolve the host profile (source 01-constants.sh) so the
+#   registry, model dir and autotune-log dir are THIS box's, not the generic ~/.llm /
+#   /mnt/m defaults.  REGISTRY / MODEL_DIR / LOGDIR now fall back to the profile's
+#   LLM_REGISTRY / LLAMA_MODEL_DIR / LLM_STATE_DIR.
 #   v25 (2026-11-01): derive_rows skips embedding models (arch field 6 contains
 #   "embedding") — they have no generation to measure, so the plan never owes them a run.
 #   v23 (2026-10-20): v22 polish, from a self-review.  The empty-plan message said "every row is
@@ -227,10 +231,14 @@ EXIT_ADAPTER=3 # the chunk stalled with the cycle budget UNSPENT: a person looks
 EXIT_PAUSED=4  # the campaign PAUSED: the cap, a CI job that will not drain, or an unwritable plan
 
 REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
-REGISTRY="${TAC_RESUME_REGISTRY:-$HOME/.llm/models.conf}"
+# Resolve the host profile so the registry, store and lane are THIS box's (01-constants
+# exports LLM_REGISTRY / LLM_STATE_DIR / LLAMA_MODEL_DIR from the profile).
+# shellcheck source=01-constants.sh
+source "$REPO/scripts/01-constants.sh"
+REGISTRY="${TAC_RESUME_REGISTRY:-${LLM_REGISTRY:-$HOME/.llm/models.conf}}"
 MODEL_DIR="${TAC_RESUME_MODEL_DIR:-${LLAMA_MODEL_DIR:-/mnt/m/active}}"
 STATE_DIR="${TAC_RESUME_STATE_DIR:-${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tactical-console}}"
-LOGDIR="${TAC_RESUME_LOGDIR:-$HOME/.llm/autotune-logs}"
+LOGDIR="${TAC_RESUME_LOGDIR:-${LLM_STATE_DIR:-$HOME/.llm}/autotune-logs}"
 ENTRY="${TAC_RESUME_ENTRY:-$REPO/bin/autotune-rows.sh}"
 PLAN="${TAC_RESUME_PLAN:-$STATE_DIR/autotune-resume.rows}"
 # The owner-written SCOPE, if present (v6): rows that must be measured every boot REGARDLESS of what
