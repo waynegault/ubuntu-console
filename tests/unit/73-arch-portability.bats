@@ -135,9 +135,10 @@ stub_uname() {
         ! grep -q '^ConditionArchitecture=' "$unit" \
             || { echo "FAIL: $(basename "$unit") is still architecture-gated"; return 1; }
         grep -qx '# install-profile: intel-xe-cuda' "$unit" \
+            || grep -qx '# install-profile: asus-n1n-rtx-spark' "$unit" \
             || { echo "FAIL: $(basename "$unit") is not marked for a host profile"; return 1; }
     done
-    [ "$count" -eq 2 ] || { echo "FAIL: expected 2 CUDA units, matched $count"; return 1; }
+    [ "$count" -eq 4 ] || { echo "FAIL: expected 4 CUDA units, matched $count"; return 1; }
 }
 
 @test "the CPU lane unit stays architecture-neutral" {

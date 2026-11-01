@@ -217,6 +217,9 @@ install_stub_env() {
     [ ! -e "$unit_dir/llama-xe-minicpm5-1b-chat.service" ]
     [ ! -e "$unit_dir/llama-cuda-llama32-3b-chat.service" ]
     [ ! -e "$unit_dir/llama-cpu-qwen25-3b-chat.service" ]
+    # This box's OWN CUDA lanes ARE linked — they name GGUFs in ~/models/active.
+    [ -e "$unit_dir/llama-cuda-qwen3coder-30b-chat.service" ]
+    [ -e "$unit_dir/llama-cuda-embeddinggemma-embed.service" ]
     # ...while a shared unit that must exist on every box is still installed.  The
     # watchdog is now profile-agnostic — it reads LLAMA_LANE_SPECS at run time — so it
     # installs on every box rather than travelling with one box's hardcoded lanes.

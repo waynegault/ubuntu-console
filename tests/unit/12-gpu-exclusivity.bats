@@ -335,6 +335,8 @@ EOS
         llama-xe-llama32-3b-chat.service
         llama-cuda-llama32-3b-chat.service
         llama-cuda-qwen35-4b-pipeline.service
+        llama-cuda-qwen3coder-30b-chat.service
+        llama-cuda-embeddinggemma-embed.service
         llama-cpu-qwen25-3b-chat.service
     )
     local u launcher

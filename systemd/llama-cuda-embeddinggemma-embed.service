@@ -1,0 +1,67 @@
+[Unit]
+# install-profile: asus-n1n-rtx-spark
+# CARD: CUDA0 (RTX Spark N1X, Blackwell sm_121a)   MODEL: EmbeddingGemma-300M (Q8_0)   FUNCTION: embeddings
+# Port 18080 is the port `memory.search.remote.baseUrl` in ~/.openclaw/openclaw.json has
+# always pointed at. It was served on the old box by `llama-xe-embeddinggemma-embed.service`
+# (Intel Xe tier), a unit that no longer exists here — see
+# workspace-hal/docs/arm64-migration-runbook.md: "The -xe-* tier does not exist on the target
+# at all — no Intel iGPU… Expect one new tier design, not a port." This is that design.
+#
+# Why the port and the alias matter (measured 2026-11-01): the gateway embeds against
+# provider=openai-compatible, model=embeddinggemma, baseUrl=http://127.0.0.1:18080/v1, and the
+# memory index identity is a hash of (provider, model, providerKey). Serving the same model
+# under the same name on the same port keeps every stored vector valid: no reindex, no
+# rebuild, no config edit.
+#
+# Failure it ends: 4,220 `connect ECONNREFUSED 127.0.0.1:18080` lines between 2026-10-29
+# 12:29:07Z and 2026-11-01 00:28:58Z. Per docs/reference/memory-config.md an explicit non-local
+# provider does NOT fall back to FTS-only recall, so memory_search was returning unavailable —
+# no semantic *and* no keyword recall — for the whole window.
+Description=llama.cpp server — CUDA tier, EmbeddingGemma-300M, embeddings (port 18080)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+# --embedding restricts the server to the embedding use case. --pooling mean matches how
+# EmbeddingGemma is trained/exported; the model default is read from the GGUF but naming it
+# keeps the vector space identical if the file is ever swapped for a re-quant of the same model.
+#
+# --batch-size 8192 --ubatch-size 8192 --ctx-size 2048 --parallel 1 (REVISED 2026-11-01 10:47Z).
+# Settled state after three measurements, and the third one is the limit that actually binds:
+#   ubatch 512  -> HTTP 500 "input (559 tokens) is too large... (current batch size: 512)"
+#   ubatch 2048 -> HTTP 500 the same shape at 2169 and 2470 tokens (42 failures, 00:38-10:43).
+#   ubatch 8192 -> the batch objection disappears and the real ceiling shows: n_ctx_slot is
+#                  pinned at 2048 because EmbeddingGemma's n_ctx_train is 2048, and llama-server
+#                  clamps the slot to the trained context. Inputs over 2048 tokens now fail
+#                  "input (2402 tokens) is larger than the max context size (2048 tokens)".
+# So raising --ctx-size buys nothing for input size: 2048 is the honest value, and it is also
+# what the watchdog's window check expects — the earlier --ctx-size 16384 advertised a window
+# the model cannot serve, and the watchdog flagged the mismatch (16384 vs 2048) every tick.
+# --parallel 1 keeps the single slot at the full 2048 (with --parallel 2 a 2048 ctx would halve
+# each slot to 1024); a 300M embedding model is fast enough that serialised requests are not a
+# bottleneck.  8192/8192 stops llama-server downgrading n_batch to n_ubatch.
+#
+# Consequence, stated plainly: an embedding input longer than 2048 tokens CANNOT be served by
+# this model, however the flags are set. The two ways to change that are both worse than the
+# symptom -- lowering memory chunkTokens changes the index identity and forces a fleet-wide
+# reindex of ~18.7k chunks; --rope-scaling shifts the whole vector space away from the vectors
+# already stored, silently degrading every existing hit. Index chunks measure <=1600 chars
+# (~500 tokens), so this only bites the handful of oversized inputs (2 per cycle, retried and
+# logged as "sync failed (watch)"), not normal indexing.
+#
+# No --jinja, no --flash-attn, no KV cache quantisation: none apply to a pure embedding pass.
+# The launcher shim defaults to build/bin (the retired Intel build); this box's
+# CUDA 13.4.3 build lives at build-cuda, so Environment names it for the shim.
+Environment=LLAMA_CUDA_SERVER_BIN=%h/llama.cpp/build-cuda/bin/llama-server
+ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/embeddinggemma-300M-Q8_0.gguf --alias embeddinggemma --port 18080 --host 127.0.0.1 --ctx-size 2048 --batch-size 8192 --ubatch-size 8192 --threads 8 --parallel 1 --cache-ram 0 --embeddings --pooling mean --metrics -ngl 99
+# 320 MB of weights; the memory ceiling here is about bounding a bug, not about capacity.
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+MemoryHigh=3G
+MemoryMax=4G
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,52 @@
+[Unit]
+# install-profile: asus-n1n-rtx-spark
+# CARD: CUDA0 (RTX Spark N1X, Blackwell sm_121a)   MODEL: Qwen3-Coder-30B-A3B (Q4_K_M)   FUNCTION: serving
+# Port 18087: 18086 is the CPU-only tier (build-cpu), 18083/18085 are the retired
+# CUDA/Xe cards, 18084 the retired Qwen2.5-3B CPU tier.
+#
+# Why this unit exists (measured 2026-10-31): the box had no GPU build at all — only
+# build-cpu, no nvcc, and apt's CUDA candidate (12.4) cannot target this GPU. A CUDA
+# 13.4.3 build from NVIDIA's ubuntu2604/sbsa repo (the host is Ubuntu 26.04 with
+# glibc 2.43, not 24.04 — the 2404 packages install but every compile dies on glibc's
+# rsqrt noexcept declaration) now lives at build-cuda, -DCMAKE_CUDA_ARCHITECTURES=121
+# auto-promoted to 121a. Measured: 78.2 and 69.5 tok/s generation, 125-151 tok/s
+# prefill, 49/49 layers offloaded, ~20 GiB VRAM — against a CPU tier that was the
+# reason a 17k-token prompt needed a 24576 window.
+Description=llama.cpp server — CUDA tier, Qwen3-Coder-30B-A3B, chat (port 18087)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+# No ExecStartPre GPU clear here. bin/llama-gpu-clear.sh reaps by /proc/PID/exe over
+# build-cuda*/ — which this is — so a stale sibling would be cleared before start only
+# if the unit asked for it; it does not, because two CUDA servers on one GPU is a
+# decision, not an accident to be silently repaired.
+#
+# --ctx-size 131072 (raised from 32768 on 2026-11-01): 32768 measured 0 output tokens for
+# real fleet prompts. Journal at 00:36:32 and 00:36:39 — "estimated input 40884 leaves only 0
+# output tokens within the 32768-token context" and the same at 34970 — killed one session and
+# the daily-digest cron run, and auto-compaction could not recover either ("Nothing to compact
+# (session too small)"). Prompts in this fleet routinely measure 30k-104k tokens, so 32k was
+# structurally too small for the default model, not occasionally tight. Measured VRAM before
+# the change: 22,524 MiB used of 81,920 (weights 17.3 GiB, ~5.2 GiB was the 32k q8_0 KV), so
+# 128k costs roughly 21 GiB KV and still leaves ~30 GiB free. --cache-ram 0 keeps the host-side
+# prompt cache off, because WSL2 shares this box's 39 GiB of RAM with Windows and the CPU tier
+# (17.3 GiB of page cache) may still be holding the same weights.
+# The launcher shim defaults to build/bin (the retired Intel build); this box's
+# CUDA 13.4.3 build lives at build-cuda, so Environment names it for the shim.
+Environment=LLAMA_CUDA_SERVER_BIN=%h/llama.cpp/build-cuda/bin/llama-server
+ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf --alias qwen3-coder-30b-gpu --port 18087 --host 127.0.0.1 --ctx-size 131072 --batch-size 2048 --ubatch-size 512 --threads 12 --parallel 1 --cache-ram 0 -ctk q8_0 -ctv q8_0 --flash-attn on --jinja --metrics -ngl 99
+# Model load is 18.6 GiB from disk through the Windows driver into VRAM; the CPU tier
+# needed 600 s cold, so this gets the same.
+Restart=always
+RestartSec=5
+TimeoutStartSec=900
+# Weights 17.3 GiB are copied host->VRAM at load; MemoryHigh above the transient so a
+# normal start is not punished, MemoryMax as the kill line.
+MemoryHigh=26G
+MemoryMax=32G
+
+[Install]
+WantedBy=default.target
