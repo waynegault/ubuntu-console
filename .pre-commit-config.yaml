@@ -7,9 +7,11 @@
 # before `pip install pre-commit`) the step is skipped, and CI still runs the same
 # Python gates (see .github/workflows/ci.yml `python` job).
 #
-# Versions are pinned to match the venv and CI (ruff 0.15.20 — .github/ci-requirements.txt
-# and pyproject [tool.ruff]).  A bump is a deliberate change: move the pin HERE, in
-# ci-requirements.txt AND the venv together, then fix any new findings.
+# Versions are pinned to match the venv and CI.  The ruff version has ONE source —
+# .github/ci-requirements.txt (`ruff==X.Y.Z`) — and is RESTATED here as a git tag only
+# because the ruff-pre-commit hook downloads its own ruff.  tools/check-ruff-pin.sh
+# refuses a commit where this `rev:` and that `ruff==` (or the venv's ruff) disagree, so
+# a bump is a single edit plus whatever the guard names, never a three-place chore.
 
 repos:
   # Lint + format, matching CI's `ruff check .` step.  `ruff-format` formats the STAGED

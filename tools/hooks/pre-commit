@@ -74,6 +74,16 @@ if ! "$REPO_ROOT/tools/check-module-versions.sh" --staged; then
     rc=1
 fi
 
+# ── Ruff pin discipline ────────────────────────────────────────────────────
+# ruff's version lives in .github/ci-requirements.txt (single source) but is
+# restated as a git tag in .pre-commit-config.yaml because the ruff-pre-commit
+# hook downloads its own ruff.  A bump in one without the other makes local
+# pre-commit and CI lint different bytes; tools/check-ruff-pin.sh refuses that
+# drift at commit time (and names the venv if it also disagrees).
+if ! "$REPO_ROOT/tools/check-ruff-pin.sh"; then
+    rc=1
+fi
+
 # ── Staged .py quality (pre-commit framework) ──────────────────────────────
 # The Python gates live in .pre-commit-config.yaml, run here over the STAGED set so a
 # co-worker's in-flight file cannot refuse a commit that does not touch it (the same

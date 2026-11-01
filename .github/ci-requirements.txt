@@ -10,6 +10,9 @@
 # tools/install-shellcheck.sh for shellcheck: an unpinned linter drifts from the developer's
 # venv and fails CI on code the local run passed (measured 2026-09-18 with ruff). A bump is a
 # deliberate change: move the pin HERE, run the suite, and fix any new findings — never float it.
+# This file is the SINGLE SOURCE for ruff's version: .pre-commit-config.yaml restates it as a
+# git tag (the ruff-pre-commit hook ships its own ruff) and tools/check-ruff-pin.sh refuses a
+# commit where that tag, this pin, or the venv's installed ruff disagree.
 #
 # mypy is pinned like the rest because QWEN.md requires it after any Python change; requests
 # and aiohttp are installed (both ship py.typed) so mypy can RESOLVE them — the heavy optional
