@@ -151,4 +151,41 @@ lint() {
     [[ "$output" == *"MD032"* ]]
 }
 
+# ── the WRITE GUARD (v6) ───────────────────────────────────────────────────────────────────
+# A fixer that prints FIXED after an unchecked `mv` is a success message with no write behind it.
+# `mv` is resolved through PATH, so a failing stub on PATH is the honest seam for that branch: the
+# hook's own calls (awk, find, markdownlint) still run, and only the replacement step fails.
+
+fail_mv() {
+    STUB="$BATS_TEST_TMPDIR/stub"
+    mkdir -p "$STUB"
+    printf '#!/bin/sh\nexit 1\n' > "$STUB/mv"
+    chmod +x "$STUB/mv"
+}
+
+@test "memory lint hook: an H1 it cannot write is REFUSED, never reported as FIXED" {
+    printf -- '---\nname: Fixture note title\n---\n\nProse with no heading.\n' \
+        > "$FIX/.qwen/memories/note.md"
+    before="$(sha256sum "$FIX/.qwen/memories/note.md")"
+    fail_mv
+    [ -n "$(lint)" ]
+    run env PATH="$STUB:$PATH" HOME="$FIX" bash "$HOOK"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"REFUSED to fix MD041"* ]]
+    [[ "$output" != *"FIXED the missing H1"* ]]
+    [ "$(sha256sum "$FIX/.qwen/memories/note.md")" = "$before" ]
+}
+
+@test "memory lint hook: an emphasis fix it cannot write is REFUSED, never reported as FIXED" {
+    write_note 'A first run in _underscore_ style, then a span in *asterisk* style.'
+    before="$(sha256sum "$FIX/.qwen/memories/note.md")"
+    fail_mv
+    [ -n "$(lint)" ]
+    run env PATH="$STUB:$PATH" HOME="$FIX" bash "$HOOK"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"REFUSED to fix emphasis"* ]]
+    [[ "$output" != *"FIXED emphasis"* ]]
+    [ "$(sha256sum "$FIX/.qwen/memories/note.md")" = "$before" ]
+}
+
 # end of file

@@ -10,7 +10,12 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-11-01): every fixer CHECKS its own write.  All three printed "FIXED …" after an
+#   unchecked `mv`, which is a success message with no write behind it whenever the repaired
+#   copy cannot be moved into place (a read-only note directory, an immutable file).  The
+#   repair is now conditional and the failure is REFUSED by name, so the verdict matches disk.
+#   A BATS case shadows `mv` with a failing stub to hold that line.
 #   v5 (2026-11-01): FIXES two more shapes the extractor keeps re-creating — MD041 (no H1) and MD032
 #   (a list not surrounded by blank lines) — narrowly, and refuses everything else.  The writer patch
 #   ALREADY states both rules (clauses (2) and (3), see bin/qwen-memory-style-patch.sh), and a note
@@ -188,10 +193,12 @@ fix_emphasis() {
             ' "$note" > "$tmp" 2>"$tmp.refused"; then
                 if cmp -s "$note" "$tmp"; then
                     echo "memory-markdownlint: $note was cited for MD049 but nothing changed — the report was stale."
-                else
-                    mv "$tmp" "$note"
+                elif mv "$tmp" "$note"; then
                     echo "memory-markdownlint: FIXED emphasis in $note ($cited_char -> $want_char, its own style)."
                     printf '%s\n' "$note" >> "$FIXED_LIST"
+                else
+                    # A FIXED line here would be a success message with no write behind it.
+                    echo "memory-markdownlint: REFUSED to fix emphasis in $note — the repaired copy could not be moved into place."
                 fi
                 rm -f "$tmp" "$tmp.refused"
             else
@@ -252,10 +259,15 @@ fix_md032() {  # fix_md032 <note> <cited line>
             for (i = cited; i <= NR; i++) print line[i]
         }
     ' "$note" > "$tmp" 2>"$tmp.why"; then
-        mv "$tmp" "$note"
-        rm -f "$tmp.why"
-        echo "memory-markdownlint: FIXED the blank line MD032 asks for above line $cited of $note."
-        printf '%s\n' "$note" >> "$FIXED_LIST"
+        if mv "$tmp" "$note"; then
+            rm -f "$tmp.why"
+            echo "memory-markdownlint: FIXED the blank line MD032 asks for above line $cited of $note."
+            printf '%s\n' "$note" >> "$FIXED_LIST"
+        else
+            # A FIXED line here would be a success message with no write behind it.
+            shape_refuse "$note" MD032 "the repaired copy could not be moved into place"
+            rm -f "$tmp" "$tmp.why"
+        fi
     else
         shape_refuse "$note" MD032 "$(sed -n '1p' "$tmp.why")"
         rm -f "$tmp" "$tmp.why"
@@ -303,10 +315,15 @@ fix_md041() {  # fix_md041 <note>
             for (i = first; i <= NR; i++) print line[i]
         }
     ' "$note" > "$tmp" 2>"$tmp.why"; then
-        mv "$tmp" "$note"
-        rm -f "$tmp.why"
-        echo "memory-markdownlint: FIXED the missing H1 in $note (MD041, from its frontmatter name)."
-        printf '%s\n' "$note" >> "$FIXED_LIST"
+        if mv "$tmp" "$note"; then
+            rm -f "$tmp.why"
+            echo "memory-markdownlint: FIXED the missing H1 in $note (MD041, from its frontmatter name)."
+            printf '%s\n' "$note" >> "$FIXED_LIST"
+        else
+            # A FIXED line here would be a success message with no write behind it.
+            shape_refuse "$note" MD041 "the repaired copy could not be moved into place"
+            rm -f "$tmp" "$tmp.why"
+        fi
     else
         shape_refuse "$note" MD041 "$(sed -n '1p' "$tmp.why")"
         rm -f "$tmp" "$tmp.why"
