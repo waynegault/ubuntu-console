@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 75
+# Module Version: 76
+#   v76 (2026-11-02): the previous-row identity fields are re-initialised on every scan
+#   iteration.  They were assigned without a `local`, so after any file matched a previous
+#   row, every later file with no previous row inherited its NAME — seven rows measured as
+#   'Embeddinggemma 300m' on the live store, on their way to becoming permanent.
 #   v75 (2026-11-01): the scan backup and bench TSV paths live under $LLM_STATE_DIR.
 #   v73 (2026-10-30): a store that is a plain directory is told to be CREATED, not
 #   mounted — the refusal keeps its teeth but names the remedy the host actually has.
@@ -306,6 +310,15 @@ function __model_scan() {
         # profile (26624/512/128/27.56/944.55) — measurements it had never earned, and
         # which the next scan would then re-read from its own row and make permanent.
         local prev_prefill="" prev_p2_ctx="" prev_p2_batch="" prev_p2_ubatch="" prev_p2_tps="" prev_p2_prefill=""
+        # The previous-row identity fields are PER ROW and must be re-initialised on every
+        # iteration.  They were assigned by the `read` below without a `local`, so they
+        # persisted across rows: a file with no previous row inherited whatever the last
+        # matched file had read.  Measured 2026-11-02: with the row for embeddinggemma matched
+        # first, the next seven scanned files — gpt-oss-120b, Llama-3.3-70B, Llama-3-70B,
+        # Nemotron-120B, qwen2.5-3b, Qwen3.8 — were each registered under the name
+        # "Embeddinggemma 300m", and because `_row_name` prefers the previous name the wrong
+        # name would be re-read from the registry and made permanent on every later scan.
+        local _pn="" _pname="" _pfile="" _psize="" _pqc="" _parch="" _pgpu="" _pctx="" _pthr=""
         if [[ -f "$LLM_REGISTRY" ]]
         then
             local prev_row

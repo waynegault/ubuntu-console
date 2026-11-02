@@ -45,7 +45,7 @@ setup() {
 @test "integration: model has list subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
-    
+
     [[ "$fn_src" == *"list"* ]] || [[ "$fn_src" == *"List"* ]]
 }
 
@@ -73,21 +73,21 @@ setup() {
 @test "integration: model has scan subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
-    
+
     [[ "$fn_src" == *"scan"* ]] || [[ "$fn_src" == *"Scan"* ]] || [[ "$fn_src" == *"registry"* ]]
 }
 
 @test "integration: model has status subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
-    
+
     [[ "$fn_src" == *"status"* ]] || [[ "$fn_src" == *"Status"* ]] || [[ "$fn_src" == *"OFFLINE"* ]]
 }
 
 @test "integration: model has doctor subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
-    
+
     [[ "$fn_src" == *"doctor"* ]] || [[ "$fn_src" == *"Doctor"* ]] || [[ "$fn_src" == *"validate"* ]]
 }
 
@@ -112,7 +112,7 @@ setup() {
 @test "integration: model has info subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
-    
+
     [[ "$fn_src" == *"info"* ]] || [[ "$fn_src" == *"Info"* ]]
 }
 
@@ -342,14 +342,14 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
 @test "integration: model has use subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
-    
+
     [[ "$fn_src" == *"use"* ]] || [[ "$fn_src" == *"Use"* ]] || [[ "$fn_src" == *"start"* ]]
 }
 
 @test "integration: model has stop subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
-    
+
     [[ "$fn_src" == *"stop"* ]] || [[ "$fn_src" == *"Stop"* ]] || [[ "$fn_src" == *"kill"* ]]
 }
 
@@ -472,6 +472,50 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     [ "$(awk -F'|' -v f='Newly-Added.Q4_K_M.gguf' '$3==f {print $38"|"$39}' "$LLM_REGISTRY")" = "1.3|64" ]
     # ... and the rescan did not duplicate the row.
     [ "$(awk -F'|' -v f='Newly-Added.Q4_K_M.gguf' '$3==f' "$LLM_REGISTRY" | wc -l)" -eq 1 ]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A row with NO previous row must not inherit the PREVIOUS ROW's name
+# ─────────────────────────────────────────────────────────────────────────────
+# `model scan` composes each row from that file's GGUF, then overlays the previous
+# row's name when the FILE has one (the carry-forward above).  The previous-row
+# identity fields were read into names that were not declared `local`, so they
+# survived from one loop iteration to the next: once ANY file matched a previous
+# row, every later file with no previous row inherited that file's name.  Measured
+# 2026-11-02 on the real store: seven rows — gpt-oss-120b, Llama-3.3-70B,
+# Llama-3-70B, Nemotron-120B, qwen2.5-3b, Qwen3.8 — were all registered as
+# "Embeddinggemma 300m", and because a rescan prefers the previous name the wrong
+# name was on its way to becoming permanent.
+@test "integration: a newly scanned model takes its own name, not the previous row's" {
+    local sb="$TAC_TEST_TMPDIR/scan-name-leak"
+    mkdir -p "$sb/models"
+    # Sorted first, so it is scanned first and is the row that has a previous row.
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Curated-Test.Q4_K_M.gguf" >/dev/null
+    # Sorted second, and NOT present in the registry: this is the row that must be born
+    # with its own GGUF name.
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/ZZ-Newly-Added.Q4_K_M.gguf" >/dev/null
+    truncate -s 400M "$sb/models/Curated-Test.Q4_K_M.gguf"
+    truncate -s 400M "$sb/models/ZZ-Newly-Added.Q4_K_M.gguf"
+
+    export LLAMA_MODEL_DIR="$sb/models"
+    export LLM_REGISTRY="$sb/models.conf"
+    {
+        printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram'
+        printf '%s\n' '1|Curated Name|Curated-Test.Q4_K_M.gguf|0.4G|Q4_K_M/q4_0/q4_0|qwen2|999|32768|6|1024|256|1|256|native|auto|on|22.5|yes|no|no'
+    } > "$LLM_REGISTRY"
+    __LLAMA_DRIVE_MOUNTED=1
+
+    run __model_scan
+    [[ "$status" -eq 0 ]]
+    # The new row owns its own name ...
+    [ "$(awk -F'|' -v f='ZZ-Newly-Added.Q4_K_M.gguf' '$3==f {print $2}' "$LLM_REGISTRY")" \
+        = "Unsloth_Gguf_JunkFixture" ]
+    # ... it did not clone the curated row's name (pre-fix: "Curated Name") ...
+    ! awk -F'|' -v f='ZZ-Newly-Added.Q4_K_M.gguf' '$3==f {exit ($2=="Curated Name")}' "$LLM_REGISTRY"
+    # ... and the curated row still keeps the name the operator set.
+    [ "$(awk -F'|' -v f='Curated-Test.Q4_K_M.gguf' '$3==f {print $2}' "$LLM_REGISTRY")" = "Curated Name" ]
 }
 
 # end of file
