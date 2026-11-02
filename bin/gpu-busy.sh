@@ -83,7 +83,13 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 15
+# Module Version: 16
+# Version: 1.7.1 (2026-11-02: comment-only. The `# swallow-ok:` reason for the ldconfig
+#          probe moved from the END of the code line to the line directly above it: the
+#          marker is 180 characters of rationale riding on a non-comment line, so §18.3
+#          counter 8.1.8 charged it as a line over 120 chars and rose 285 -> 286. The
+#          classifier accepts the marker only on its own line or the line DIRECTLY above
+#          (a three-line block above does not classify - measured), so it is last.
 # Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
 #          SCRIPT the interpreter was GIVEN — the argv element immediately after an
 #          interpreter — not any element that merely names it.  A CI lint job's file list
@@ -185,7 +191,10 @@ fi
 # it answers "is the driver actually broken, or is the resolver pointing elsewhere?".
 libcuda_shadowed() {
     local line
-    line=$(ldconfig -p 2>/dev/null | awk '/libcuda\.so\.1 /{print $NF; exit}')  # swallow-ok: an ldconfig that cannot read its cache returns empty, which reads "nothing shadows WSL" -- the conservative direction, since the probe itself already prefers the WSL dir
+    # An unreadable ldconfig cache returns empty, which reads "nothing shadows WSL"
+    # -- the conservative direction, since the probe itself already prefers the WSL dir.
+    # swallow-ok: an unreadable cache reads "nothing shadows WSL", the conservative direction
+    line=$(ldconfig -p 2>/dev/null | awk '/libcuda\.so\.1 /{print $NF; exit}')
     [[ -z "$line" ]] && return 0
     [[ "$line" == "$WSL_CUDA_LIB_DIR"/* ]] && return 0
     printf '%s' "$line"
