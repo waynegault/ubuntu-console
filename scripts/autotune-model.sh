@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 88
+# Module Version: 90
+#   v90 (2026-11-02): a pre-flight refusal now carries a ONE-LINE detail into the result file
+#   ("VRAM baseline not cleared — 27626 MiB still held by another process"), so a caller's
+#   summary can state the fact the operator would otherwise have to scroll up for.  The
+#   message this script prints is unchanged; only the machine-readable record gains it.
+#   v89 (2026-11-02): DEF-024 — a run that certifies nothing now SAYS WHY, and never calls an
+#   environmental refusal "no working config".  Every failed launch kept its stderr in
+#   $_BENCH_LOG and then deleted it on unwind, so `model autotune N` ended in one bare
+#   "failed: unsupported model" whatever the launch had actually said.  Each attempt now
+#   records a bounded tail plus a classification read FROM THE LOG — unsupported_arch /
+#   resource_exhausted / launch_error / unclassified — and the final failure prints both,
+#   marks the registry row meas_state=unacceptable ONLY when the verdict is durable
+#   (unsupported_arch; a contended-card or dxgkrnl halt is not a property of the model and
+#   must not poison the plan), and writes a key=value result file when the caller asks for
+#   one (LLM_AUTOTUNE_RESULT_FILE).  Pre-flight refusals — the measured DEF-024 case was
+#   one: "VRAM baseline not cleared — 27626 MiB still held" — are recorded through the same
+#   channel with stage=preflight, so a caller can stop reporting "no working config" for a
+#   run that never launched a server.
 #   v88 (2026-11-02): the VRAM baseline gate can now be satisfied on a box whose declared
 #   CUDA lane holds the card.  __llm_kill_cuda_llama_servers SPARES every lane in
 #   LLAMA_LANE_SPECS by design (a managed unit must never be reaped by a sweep), so on this
@@ -359,7 +376,103 @@ _fail() {
     else
         echo "ERROR: $*"
     fi
+    # DEF-024: every _fail site is a pre-measurement refusal, so the result file must
+    # say "refused before any launch" rather than "all configurations failed".
+    _PREFLIGHT_CLASS="${_FAIL_CLASS:-unclassified}"
     exit 1
+}
+
+# ---------------------------------------------------------------------------
+# DEF-024 — the run's verdict, and the refusal that never launched a server.
+# These sit HERE, above the VRAM baseline gate, because that gate (and the CUDA
+# ledger guard) can end the run before any of the probe helpers exist.
+# ---------------------------------------------------------------------------
+
+# __autotune_failure_label <token> — the operator-facing name of a classification.
+__autotune_failure_label() {
+    case "${1:-}" in
+        resource_exhausted) printf 'resource exhaustion (OOM / failed allocation)' ;;
+        unsupported_arch)   printf 'unsupported architecture / no matching backend' ;;
+        launch_error)       printf 'launch or flag error (the server rejected its invocation)' ;;
+        certified)          printf 'certified' ;;
+        *)                  printf 'unclassified (the launch output matched no known signature)' ;;
+    esac
+}
+
+# _preflight_refuse <classification> <exit-rc> [detail] — end a run that never launched a
+# server, recording WHY for the result file.  The caller has already printed its own
+# message; this carries the verdict (and an optional one-line detail the caller composes
+# for a CALLER-side summary, e.g. the byte count a consumer would not otherwise see) to
+# the EXIT trap, so the operator message here stays exactly as it was.
+_preflight_refuse() {
+    _PREFLIGHT_CLASS="${1:-unclassified}"
+    _PREFLIGHT_RC="${2:-1}"
+    _PREFLIGHT_DETAIL="${3:-}"
+    exit "$_PREFLIGHT_RC"
+}
+
+# __autotune_write_result <rc> — the run's machine-readable verdict, written on EVERY
+# exit path when LLM_AUTOTUNE_RESULT_FILE names a path.  Callers that do not set it see
+# no change at all.  Deliberately key=value rather than JSON: no escaping layer, no
+# python dependency on a path that runs while the box may be unhealthy, and every value
+# is a single line except `tail=`, which may repeat.
+__autotune_write_result() {
+    local _rc="${1:-0}" _out="${LLM_AUTOTUNE_RESULT_FILE:-}"
+    local _stage="unknown" _cls="unclassified" _outcome="not_certified"
+    local _line=""
+    [[ -n "$_out" ]] || return 0
+    if (( _rc == 0 )); then
+        _outcome="certified"; _stage="certified"; _cls="certified"
+    elif [[ -n "${_PREFLIGHT_CLASS:-}" ]]; then
+        _stage="preflight"; _cls="$_PREFLIGHT_CLASS"
+    elif [[ -r "/tmp/at-fail-$$" ]]; then
+        _stage="launch"
+        _cls=$(sed -n 's/^classification=//p' "/tmp/at-fail-$$" | head -1)
+        [[ -n "$_cls" ]] || _cls="unclassified"
+    fi
+    {
+        printf 'outcome=%s\n' "$_outcome"
+        printf 'stage=%s\n' "$_stage"
+        printf 'classification=%s\n' "$_cls"
+        printf 'reason=%s\n' "$(__autotune_failure_label "$_cls")"
+        if [[ -n "${_PREFLIGHT_DETAIL:-}" ]]; then
+            printf 'detail=%s\n' "$_PREFLIGHT_DETAIL"
+        fi
+        printf 'exit_rc=%s\n' "$_rc"
+        printf 'model=%s\n' "${MODEL_FILE:-}"
+        printf 'row=%s\n' "${MODEL:-}"
+        if [[ "$_stage" == "certified" ]]; then
+            printf 'config=ctx=%s batch=%s ubatch=%s tps=%s\n' \
+                "${BEST_CTX:-0}" "${BEST_B:-}" "${BEST_U:-}" "${BEST_TPS:-}"
+            printf 'state=%s\n' "${_meas_state:-}"
+        elif [[ "$_stage" == "launch" ]]; then
+            sed -n 's/^config=//p' "/tmp/at-fail-$$" | head -1 | sed 's/^/config=/'
+            sed -n 's/^log=//p' "/tmp/at-fail-$$" | head -1 | sed 's/^/log=/'
+            while IFS= read -r _line; do
+                [[ -n "$_line" ]] || continue
+                printf 'tail=%s\n' "$_line"
+            done < <(sed -n 's/^tail=//p' "/tmp/at-fail-$$")
+        fi
+        if [[ -n "${_FINAL_REGISTRY_STATE:-}" ]]; then
+            printf 'registry_state=%s\n' "$_FINAL_REGISTRY_STATE"
+        fi
+    } > "$_out"
+    return 0
+}
+
+# __autotune_exit_trap — one EXIT path for the lane hold AND the result file.  It
+# replaces the release-only trap so the two cannot fight over the handler (a second
+# `trap ... EXIT` replaces the first), and it preserves the script's exit status,
+# including exit 3 (adapter halt), which a driver branches on.
+__autotune_exit_trap() {
+    local _rc=$?
+    if [[ -n "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_release &>/dev/null; then
+        # swallow-ok: release is owner-checked and idempotent; a failed release leaves a marker the reader treats as NOT HELD
+        _tac_suspend_release "${_LANE_SUSPEND:-}" 2>/dev/null || true
+    fi
+    # swallow-ok: the result file is a report; a run that cannot write it has already reported on stderr
+    __autotune_write_result "$_rc" 2>/dev/null || true
+    exit "$_rc"
 }
 
 _cuda_cycles() {
@@ -395,14 +508,17 @@ _cuda_guard_or_exit() {
     if (( c >= CUDA_CYCLE_BUDGET )); then
         echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
         echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
-        exit 3
+        # DEF-024: a refused pre-flight is not a failed configuration list.  The class is
+        # left unclassified on purpose: the adapter state is the cause, and calling it
+        # "resource exhaustion" would send the operator to free VRAM instead of restarting WSL.
+        _preflight_refuse unclassified 3
     fi
     if (( CUDA_DEGRADE_CONSECUTIVE_STALLS > 0 )); then
         s=$(_cuda_stalls)
         if (( s >= CUDA_DEGRADE_CONSECUTIVE_STALLS )); then
             echo "ERROR: ${s} consecutive launches stalled (health never ready while the process stayed alive) — the dxgkrnl degradation signature, at ${c}/${CUDA_CYCLE_BUDGET} cycles." >&2
             echo "       Restart WSL from Windows ('wsl --shutdown'); nothing was certified this run." >&2
-            exit 3
+            _preflight_refuse unclassified 3
         fi
     fi
     return 0
@@ -448,12 +564,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/_tac-bin-lib.sh" 2>
 if [[ -z "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_acquire &>/dev/null; then
     if _tac_suspend_acquire "$_LANE_SUSPEND"; then
         _TAC_SUSPEND_HELD=1
-        # swallow-ok: release is owner-checked and idempotent; a failed release leaves a marker the reader treats as NOT HELD
-        trap '_tac_suspend_release "$_LANE_SUSPEND" 2>/dev/null || true' EXIT
     else
         echo "WARN: $_LANE_SUSPEND is held by another run (pid $(_tac_suspend_pid "$_LANE_SUSPEND")) — the watchdog may restart the CUDA lane mid-run" >&2
     fi
 fi
+# ONE exit handler, installed on every path: it releases the lane hold when this run
+# took one AND writes the result file (DEF-024).  A second `trap ... EXIT` would
+# REPLACE the first, which is why the release no longer has a trap of its own.
+trap '__autotune_exit_trap' EXIT
 # The OpenClaw gateway's local embedding workers each hold ~430 MiB VRAM
 # (embeddinggemma-300m on CUDA); the gateway respawns them on demand, so
 # killing them here is safe and self-healing. Bracket the pattern so
@@ -523,7 +641,9 @@ if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
         __llm_vram_holder_report >&2 || true
     fi
     echo "Remedy: stop the holding lane (model stop, or systemctl --user stop <unit>) and re-run; a foreign run's GPU lock is never evicted by this check." >&2
-    exit 1
+    # DEF-024: the card is held by someone else.  That is resource exhaustion from THIS
+    # run's point of view, and it is NOT a verdict on the model — the row is left alone.
+    _preflight_refuse resource_exhausted 1 "VRAM baseline not cleared — ${BASELINE_GAP} MiB still held by another process"
 fi
 # Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
 _cuda_guard_or_exit
@@ -599,7 +719,7 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 #     2026-09-16).
 if ! declare -f __autotune_ctx_bounds &>/dev/null || ! declare -f __autotune_descent_candidates &>/dev/null; then
     echo "ERROR: __autotune_ctx_bounds / __autotune_descent_candidates are not loaded (scripts/11b-llm-autotune.sh missing?) — refusing to autotune without tested ctx bounds." >&2
-    exit 1
+    _preflight_refuse unclassified 1
 fi
 read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
     "$START_CTX" "${_native_ctx:-}" "${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}" "$MIN_CTX")
@@ -903,8 +1023,80 @@ _sampler_args() {
     return 0
 }
 
-# _bench_spawn — the ctx/batch/ubatch search's launcher.  Its rationale and its argument
-# list are in the block comment above _sampler_args, which was inserted here so the
+# ---------------------------------------------------------------------------
+# DEF-024 — the witness a failed run used to throw away.
+#
+# Every launch writes stdout+stderr to $_BENCH_LOG and every failure path then deletes
+# it on unwind, so the ONE line naming the cause was gone before the operator saw the
+# verdict.  Measured 2026-11-02: `model bench` reported "no working config" for a row
+# whose autotune had printed a VRAM-baseline refusal, and could not say what any launch
+# said.  The three functions below keep a BOUNDED tail, classify it from its own text,
+# and lend the same vocabulary to a refusal that never launched anything.
+# ---------------------------------------------------------------------------
+
+# _bench_log_tail <log> [lines] — the last N non-blank lines of a server log.
+# llama.cpp pads its progress output with blank lines; the witness is never blank.
+# @stdout the tail, one line per line. @returns 1 when the log is unreadable or empty.
+_bench_log_tail() {
+    local _log="${1:-}" _n="${2:-20}" _tail=""
+    [[ -n "$_log" && -r "$_log" ]] || return 1
+    # swallow-ok: an unreadable/blank log yields an empty tail, which the caller reports as "no witness captured"
+    _tail=$(grep -v '^[[:space:]]*$' "$_log" 2>/dev/null | tail -n "$_n") || _tail=""
+    [[ -n "$_tail" ]] || return 1
+    printf '%s\n' "$_tail"
+}
+
+# __autotune_classify_failure <log> — classify a failed launch FROM ITS OWN OUTPUT.
+# @stdout one token:
+#   resource_exhausted  an allocation failed: OOM, CUDA OOM, failed to allocate
+#   unsupported_arch    the build/backend does not support this model at all
+#   launch_error        the server rejected its own invocation (bad flag/argument)
+#   unclassified        nothing above matched — say so rather than guess
+# The order is deliberate.  Memory text is specific; the arch patterns are the ones
+# llama.cpp prints for a model it cannot map to a loader.  "failed to load model"
+# alone is NOT an unsupported-architecture signature — v80 paid for that lesson when
+# every load failure read as flash-attn, and it stays out of the patterns below.
+__autotune_classify_failure() {
+    local _log="${1:-}" _text=""
+    [[ -n "$_log" && -r "$_log" ]] || { printf 'unclassified'; return 0; }
+    _text=$(<"$_log")
+    local _re_resource='out of memory|out-of-memory|cuda error: out of memory|cudamalloc|cudaerror(memoryallocation)?|failed to allocate|unable to allocate|not enough (vram|memory|gpu memory)|insufficient (vram|memory|gpu memory)|alloc_buffer: allocating|ggml_backend_(cuda|vulkan|metal)_buffer_type_alloc_buffer'
+    local _re_unsupported='unknown model architecture|unsupported model|unsupported architecture|architectures? (is|are) not supported|is not supported by this|not supported by this (build|backend)|no (matching|suitable|supported) backend|failed to find (a |the )?(matching |suitable )?backend|requires ctx_other to be set|support for .* was not (built|compiled)|model architecture .* (not supported|unknown)'
+    local _re_launch='invalid argument|unknown argument|unrecognized (option|argument)|unexpected argument|error while handling argument|invalid value for|failed to parse|usage: |address already in use|cannot open model'
+    if grep -qiE "$_re_resource" <<< "$_text"; then
+        printf 'resource_exhausted'
+    elif grep -qiE "$_re_unsupported" <<< "$_text"; then
+        printf 'unsupported_arch'
+    elif grep -qiE "$_re_launch" <<< "$_text"; then
+        printf 'launch_error'
+    else
+        printf 'unclassified'
+    fi
+    return 0
+}
+
+# _bench_record_failure <ctx> <batch> <ubatch> <ngl> <cache> — keep the LAST failed
+# launch's witness for the operator.  bench_* run inside command substitutions, where
+# a global assignment never reaches the caller, so the side file is the channel (the
+# same contract /tmp/at-metrics-$$ already has).
+_bench_record_failure() {
+    local _c="${1:-0}" _b="${2:-}" _u="${3:-}" _ngl="${4:-}" _kv="${5:-}"
+    local _log="${_BENCH_LOG:-}" _cls="unclassified" _tail="" _line=""
+    _cls=$(__autotune_classify_failure "$_log")
+    [[ -n "$_cls" ]] || _cls="unclassified"
+    _tail=$(_bench_log_tail "$_log" 20) || _tail=""
+    {
+        printf 'classification=%s\n' "$_cls"
+        printf 'config=ctx=%s batch=%s ubatch=%s ngl=%s cache=%s\n' "$_c" "$_b" "$_u" "$_ngl" "$_kv"
+        printf 'log=%s\n' "$_log"
+        while IFS= read -r _line; do
+            [[ -n "$_line" ]] || continue
+            printf 'tail=%s\n' "$_line"
+        done <<< "$_tail"
+    } > "/tmp/at-fail-$$"
+}
+
+
 # sampler flags sit next to the launch sites that use them.
 _bench_spawn() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}" kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
@@ -1034,6 +1226,7 @@ _bench_spawn() {
             _cuda_stall_reset
         fi
         _bench_stop "$_BENCH_PID"
+        _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
         echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"; return 1
     fi
 
@@ -1049,11 +1242,12 @@ _bench_spawn() {
             2>/dev/null | "$TAC_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
             pf_ok=1; break
         fi
-        kill -0 "$_BENCH_PID" 2>/dev/null || { local _sft; _sft=$(_startup_fail_type); echo "0|0|$_sft" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="$_sft"; return 1; }
+        kill -0 "$_BENCH_PID" 2>/dev/null || { local _sft; _sft=$(_startup_fail_type); _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"; echo "0|0|$_sft" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="$_sft"; return 1; }
         sleep 1; pf_w=$((pf_w + 1))
     done
     if [[ $pf_ok -ne 1 ]]; then
         _bench_stop "$_BENCH_PID"
+        _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
         echo "0|0|oom" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="oom"; return 1
     fi
 
@@ -1536,6 +1730,47 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
         # empty return would be classified OOM.
         if [[ -n "${_SELFTEST_LOAD_FAIL:-}" ]]; then
             echo "0|0|load_fail" > "/tmp/at-metrics-$$"
+            echo ""; return 1
+        fi
+        # Optional LAUNCH-failure mode (DEF-024): _SELFTEST_LAUNCH_FAIL=<oom|unsupported|
+        # launch|unknown> writes a REPRESENTATIVE server log at the same path the real
+        # _bench_spawn uses, records it through the SAME recorder, and fails — so the
+        # capture -> classify -> report -> registry-mark path runs without a GPU and
+        # without a 60 GB model.  The metrics field stays faithful too: an unsupported
+        # launch is a load_fail (the walk STOPS), anything else is an oom (the walk
+        # halves), which is what the real classifier's callers do.
+        if [[ -n "${_SELFTEST_LAUNCH_FAIL:-}" ]]; then
+            _BENCH_LOG="/tmp/at-${MODEL}-c${c}-b${b}.log"
+            case "$_SELFTEST_LAUNCH_FAIL" in
+                oom)
+                    cat > "$_BENCH_LOG" <<'EOF'
+llama_model_load: loading model from '/models/stub.gguf'
+ggml_backend_cuda_buffer_type_alloc_buffer: allocating 61440.00 MiB on device 0: cudaMalloc failed: out of memory
+llama_model_load: error loading model: unable to allocate CUDA0 buffer
+CUDA error: out of memory
+EOF
+                    printf '0|0|oom\n' > "/tmp/at-metrics-$$" ;;
+                unsupported)
+                    cat > "$_BENCH_LOG" <<'EOF'
+llama_model_load: loading model from '/models/stub.gguf'
+llama_model_load: error loading model: unknown model architecture: 'gpt-oss'
+llama_load_model_from_file: failed to load model
+EOF
+                    printf '0|0|load_fail\n' > "/tmp/at-metrics-$$" ;;
+                launch)
+                    cat > "$_BENCH_LOG" <<'EOF'
+error while handling argument "--spec-ngram-mod-n-max": invalid argument: 16
+usage: llama-server [options]
+EOF
+                    printf '0|0|oom\n' > "/tmp/at-metrics-$$" ;;
+                *)
+                    cat > "$_BENCH_LOG" <<'EOF'
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  unexpected internal state
+EOF
+                    printf '0|0|oom\n' > "/tmp/at-metrics-$$" ;;
+            esac
+            _bench_record_failure "$c" "$b" "$u" "${override_ngl:-0}" "q8_0/q8_0"
             echo ""; return 1
         fi
         # Optional TPS-floor threshold: _SELFTEST_FLOOR_ABOVE makes ctx above
@@ -2756,6 +2991,69 @@ fi
 WIN_PARALLEL=1
 
 # REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT (18082), not the production port 18081
+# ---------------------------------------------------------------------------
+# _autotune_failure_report — the operator-facing failure verdict (DEF-024).
+# Defined HERE, before the final branch calls it: a function is only callable once the
+# definition has been executed, and the branch below ends the script.
+# Prints the classification, the last attempted configuration and that launch's
+# stderr tail; marks the registry row ONLY for a durable verdict.
+# ---------------------------------------------------------------------------
+_autotune_failure_report() {
+    local _src="/tmp/at-fail-$$" _cls="unclassified" _config="" _log="" _line=""
+    local -a _tail=()
+    if [[ -r "$_src" ]]; then
+        _cls=$(sed -n 's/^classification=//p' "$_src" | head -1)
+        _config=$(sed -n 's/^config=//p' "$_src" | head -1)
+        _log=$(sed -n 's/^log=//p' "$_src" | head -1)
+        mapfile -t _tail < <(sed -n 's/^tail=//p' "$_src")
+    fi
+    [[ -n "$_cls" ]] || _cls="unclassified"
+    _FINAL_FAIL_CLASS="$_cls"
+
+    echo "  failed: the model cannot be loaded at any ctx — NOT CERTIFIED"
+    echo "  reason:  $(__autotune_failure_label "$_cls")"
+    if [[ -n "$_config" ]]; then
+        echo "  last launch attempted: ${_config}"
+    fi
+    if (( ${#_tail[@]} > 0 )); then
+        echo "  server stderr (last ${#_tail[@]} lines${_log:+ of $_log}):"
+        for _line in "${_tail[@]}"; do
+            printf '    | %s\n' "$_line"
+        done
+    elif [[ -n "$_log" ]]; then
+        echo "  server stderr: the launch wrote nothing to $_log before it exited"
+    else
+        echo "  server stderr: no launch output was captured for this run"
+    fi
+
+    # A DURABLE verdict is one about the model or the build: an architecture the binary
+    # cannot map to a loader stays unloadable on every re-run, so the row is marked in the
+    # registry's own state vocabulary (meas_state=unacceptable — the terminal value the
+    # resume loop already defines) and leaves the plan.  A contended card, a dxgkrnl halt,
+    # an OOM at large ctx and an unclassified failure are properties of THIS RUN, not of
+    # the model: marking them would poison the row against a re-run, so the row is left
+    # exactly as it was and the message says so.
+    if [[ "$_cls" == "unsupported_arch" ]]; then
+        if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
+            echo "  registry: would mark meas_state=unacceptable (selftest — registry untouched)"
+            _FINAL_REGISTRY_STATE="unacceptable (selftest, not written)"
+        elif declare -f __llm_autotune_mark_state &>/dev/null \
+            && __llm_autotune_mark_state "$MODEL_FILE" "unacceptable"; then
+            _FINAL_REGISTRY_STATE="unacceptable"
+            echo "  registry: row marked meas_state=unacceptable — NOT CERTIFIED; consumers must not select it"
+        else
+            _FINAL_REGISTRY_STATE="unmarked (write failed)"
+            echo "  registry: WARNING — could not mark $MODEL_FILE not-certified; the row still reads as usable" >&2
+        fi
+    else
+        _FINAL_REGISTRY_STATE="unchanged"
+        echo "  registry: row left unchanged — this failure is not a verdict on the model; fix it and re-run"
+    fi
+    if [[ -n "${LLM_AUTOTUNE_RESULT_FILE:-}" ]]; then
+        echo "  result:  ${LLM_AUTOTUNE_RESULT_FILE}"
+    fi
+}
+
 cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18082} still bound" >&2; exit 1; }
 echo ""
 
@@ -2993,7 +3291,15 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     echo "  done"
     exit 0
 else
-    echo "  failed: unsupported model — model could not be loaded at any ctx"
+    # ── DEF-024: say WHY, and never call an unqualified failure "unsupported" ────
+    # The pre-v89 line was `failed: unsupported model — model could not be loaded at any
+    # ctx`, printed from _ALL_LOAD_FAIL's walk policy (which treats every load_fail as
+    # unsupported) and with the failing server's own output already deleted.  An operator
+    # could not tell an unsupported architecture from an OOM from a bad-flag launch, and
+    # `model bench` collapsed all three into "no working config".  This block reads the
+    # witness the spawn kept, classifies it, prints it, and only then decides whether the
+    # registry row carries a durable verdict.
+    _autotune_failure_report
     exit 1
 fi
 
