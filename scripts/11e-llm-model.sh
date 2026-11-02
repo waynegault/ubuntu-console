@@ -1,7 +1,23 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 77
+# Module Version: 79
+#   v79 (2026-11-02): the bench summary appends the autotuner's `detail=` when the result
+#   carries one (bounded to 160 chars), so the measured case reads "refused BEFORE any
+#   launch: resource exhaustion (...) — VRAM baseline not cleared — 27626 MiB still held".
+#   v78 (2026-11-02): DEF-024 — `model bench` no longer says "(no working config)" for every
+#   non-zero autotune return.  It sets LLM_AUTOTUNE_RESULT_FILE per model and reports the
+#   autotuner's own verdict through __bench_autotune_failure_why: "refused BEFORE any launch:
+#   resource exhaustion (OOM / failed allocation)" is a different sentence from "no working
+#   configuration", and the measured case was the former (VRAM baseline held, 2026-11-02).
+#   A missing result file is NAMED as missing rather than replaced by a guess.
+#   Also: `model info` now prints meas_state and an explicit NOT CERTIFIED line for an
+#   `unacceptable` row, and `model scan`'s STATE column widened to 12 so that word is not
+#   truncated to "unacceptab".
+#   Also: the three autotune entry points resolved $HOME/github-wsl/ubuntu-console/... — an
+#   absolute path to ONE checkout, so a workflow tree or installed copy ran a different,
+#   older autotuner than the one under test.  __autotune_script_path resolves beside this
+#   module instead.
 #   v77 (2026-11-02): a split GGUF missing any shard is SKIPPED, not registered from the
 #   bytes of the shards that happen to be present.  Measured 2026-11-02: Llama-3.3-70B
 #   NVFP4 was registered as 8.3G from 00001-of-00005 alongside a genuine 73.3G model —
@@ -630,11 +646,11 @@ function __model_list() {
     fi
 
     # Human-readable output — compute column widths dynamically
-    local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s %-10s %6s"
+    local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s %-12s %6s"
     printf '\n%s  '"${_col_spec}"'%s\n' "$C_Dim" \
         "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "FA" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING" "STATE" "DRIFT" "$C_Reset"
     local _list_rule
-    printf -v _list_rule '%*s' 167 ''
+    printf -v _list_rule '%*s' 169 ''
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
@@ -660,7 +676,7 @@ function __model_list() {
         local _drift_disp="-"
         [[ -n "$meas_drift" ]] && _drift_disp="${meas_drift}%"
         printf '%s%s'"${_col_spec}"'%s\n' "$color" "$marker" \
-            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}" "${_state_disp:0:10}" "${_drift_disp:0:6}" "$C_Reset"
+            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}" "${_state_disp:0:12}" "${_drift_disp:0:6}" "$C_Reset"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
@@ -2059,9 +2075,13 @@ function __model_info() {
         return 1
     fi
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+    local _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
     # The trailing fields are bound for position only, and marked unread (SC2034)
-    # so the positional binding needs no suppression.
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill <<< "$entry"
+    # so the positional binding needs no suppression.  The list runs to column 45
+    # because meas_state (44) is the registry's own not-certified flag and DEF-024
+    # requires `model info` to SURFACE it: before this, the row of an unloadable model
+    # printed its FIT and TPS values and said nothing about usability.
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy <<< "$entry"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -2087,6 +2107,17 @@ function __model_info() {
     __tac_info "autotuned" "${autotuned:-no}" "$C_Text"
     __tac_info "is_default" "${is_default:-no}" "$C_Text"
     __tac_info "in_vram" "${in_vram:-no}" "$C_Text"
+    # DEF-024: the certification state is part of what this row IS.  An `unacceptable`
+    # row (the autotune could not load the model at all, or the resume loop capped it)
+    # must read as unusable here, not only in a log the operator no longer has.
+    __tac_info "meas_state" "${meas_state:--}" "$([ "${meas_state:-}" = "unacceptable" ] && printf '%s' "$C_Error" || printf '%s' "$C_Text")"
+    if [[ "${meas_state:-}" == "unacceptable" ]]
+    then
+        __tac_info "certification" "[NOT CERTIFIED — no working configuration was found for this model; do not select it]" "$C_Error"
+    elif [[ -n "${meas_state:-}" && "${meas_state:-}" != "certified" ]]
+    then
+        __tac_info "certification" "[${meas_state} — the recorded numbers are not a certification]" "$C_Warning"
+    fi
     if [[ -f "$LLAMA_MODEL_DIR/$file" ]]
     then
         __tac_info "On Disk" "[FOUND]" "$C_Success"
@@ -2245,6 +2276,60 @@ function __bench_run_with_timeout() {
 # @description Benchmark on-disk models, save TPS results, and restore prior state.
 # @returns 0 on success, 1 if the registry or benchmark candidates are unavailable.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# __autotune_script_path — the autotune entry point FOR THIS CHECKOUT.
+#
+# The call sites below used to spell "$HOME/github-wsl/ubuntu-console/scripts/autotune-model.sh",
+# an absolute path to ONE checkout.  A workflow tree, an installed copy or a second clone
+# therefore ran a DIFFERENT autotuner than the one under test — measured 2026-11-02, when a
+# fix to autotune-model.sh could not take effect in a bench run because bench invoked the
+# other checkout's copy.  This module knows its own directory, so it resolves beside itself.
+# ---------------------------------------------------------------------------
+function __autotune_script_path() {
+    local _dir _name="${1:-autotune-model.sh}"
+    _dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    printf '%s\n' "$_dir/$_name"
+}
+
+# ---------------------------------------------------------------------------
+# __bench_autotune_failure_why <result-file> <rc> — WHY an autotune failed, in the
+# autotuner's own words.  DEF-024: the bench used to print "(no working config)" for
+# EVERY non-zero return, including the measured case where the autotuner had refused
+# before launching anything ("VRAM baseline not cleared — 27626 MiB still held").
+# Reads the key=value result file the autotuner writes when LLM_AUTOTUNE_RESULT_FILE
+# is set; when it is absent it says so instead of inventing a cause.
+# @stdout a single-line reason. @returns 0 when a result file was read, 1 otherwise.
+# ---------------------------------------------------------------------------
+function __bench_autotune_failure_why() {
+    local _f="${1:-}" _rc="${2:-1}" _stage="" _reason="" _detail="" _line=""
+    if [[ -z "$_f" || ! -r "$_f" ]]; then
+        printf 'rc=%s, no result recorded — see the autotune output above' "$_rc"
+        return 1
+    fi
+    while IFS= read -r _line
+    do
+        case "$_line" in
+            stage=*) _stage="${_line#stage=}" ;;
+            reason=*) _reason="${_line#reason=}" ;;
+            detail=*) _detail="${_line#detail=}" ;;
+        esac
+    done < "$_f"
+    [[ -n "$_reason" ]] || _reason="unclassified failure (the autotuner recorded no reason)"
+    # The detail is the fact the caller would otherwise have to scroll up for — e.g. the
+    # 27626 MiB a foreign lane still held when the measured refusal fired.  Bounded so one
+    # failure cannot grow the summary line without limit.
+    _detail="${_detail:0:160}"
+    local _suffix=""
+    [[ -n "$_detail" ]] && _suffix=" — ${_detail}"
+    case "$_stage" in
+        preflight) printf 'refused BEFORE any launch: %s%s' "$_reason" "$_suffix" ;;
+        launch)    printf '%s — no working configuration%s' "$_reason" "$_suffix" ;;
+        *)         printf '%s%s' "$_reason" "$_suffix" ;;
+    esac
+    return 0
+}
+
 function __model_bench() {
     local -a bench_selectors=("$@")
     if [[ ! -f "$LLM_REGISTRY" ]]
@@ -2564,9 +2649,13 @@ function __model_bench() {
 
 
                 local _autotune_rc=0
+                local _autotune_result="${bench_log_dir}/autotune-${b_num[$i]}.result"
                 # Single autotuner policy: bench and interactive flows both
                 # use the standalone autotune script (no --fit bug, verified).
-                bash "$HOME/github-wsl/ubuntu-console/scripts/autotune-model.sh" "${b_file[$i]}" 2>&1 || _autotune_rc=$?
+                # DEF-024: the result file is how the failure gets a REASON — the
+                # autotuner writes it on every exit path, including a pre-flight refusal.
+                LLM_AUTOTUNE_RESULT_FILE="$_autotune_result" \
+                    bash "$(__autotune_script_path)" "${b_file[$i]}" 2>&1 || _autotune_rc=$?
                 if (( _autotune_rc != 0 ))
                 then
                     # Clear any lifted/safe overrides before skipping this model so
@@ -2574,7 +2663,10 @@ function __model_bench() {
                     unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
                     unset LLM_AUTOTUNE_RESTORE_PREV
                     unset LLM_AUTOTUNE_SKIP_LOCK
-                    __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} (no working config) - skipping benchmark]" "$C_Error"
+                    local _autotune_why=""
+                    # swallow-ok: the helper's non-zero return means "no result file", which its own stdout already states; the bench line below must still print
+                    _autotune_why=$(__bench_autotune_failure_why "$_autotune_result" "$_autotune_rc") || true
+                    __tac_info "Bench" "[Autotune failed for model #${b_num[$i]}: ${_autotune_why} - skipping benchmark]" "$C_Error"
                     b_tps+=("FAIL_AUTOTUNE")
                     sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     # swallow-ok: a stop before the next measurement; a model already stopped is the state sought
@@ -3965,7 +4057,7 @@ function model() {
                 # 1 = rows failed, 0 = clean (2026-09-15 — it used to return 0 even on
                 # a 2-of-2 failure, and this line then announced "[Complete]" over it).
                 _at_rc=0
-                bash "$HOME/github-wsl/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1 || _at_rc=$?
+                bash "$(__autotune_script_path run-autotune-batch.sh)" 2>&1 || _at_rc=$?
                 if (( _at_rc == 0 ))
                 then
                     __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
@@ -3986,7 +4078,7 @@ function model() {
             fi
             # Route to the standalone autotune script (proven, no --fit bug).
             # Forward all remaining args so flags like --workload reach it.
-            bash "$HOME/github-wsl/ubuntu-console/scripts/autotune-model.sh" "$@" 2>&1
+            bash "$(__autotune_script_path)" "$@" 2>&1
             ;;
 
         bench-diff)

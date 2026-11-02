@@ -279,9 +279,60 @@ EOF
 #     into the sandbox and quietly be the registry under test.
 #   * the documented LLM_AUTOTUNE_BASELINE_GAP_MAX knob tolerates the CUDA lane
 #     holding the card, which would otherwise refuse the run before any logic.
+# _selftest_run() — the shared harness.  Two facts about it were measured on THIS box
+# (ProArt, asus-n1n-rtx-spark profile) on 2026-11-02, and both made cases 14-20/22-25 red
+# BEFORE this file's DEF-024 work:
+#   * tools/host-profile.sh CLEARS LLM_REGISTRY before sourcing the profile (it treats it
+#     as a profile-owned fact), so `LLM_REGISTRY=<sandbox>` in the env does not survive on
+#     a box whose profile names the registry itself (asus: $HOME/models/active/models.conf).
+#     The fixture is therefore written where the console RESOLVES the registry, which is
+#     the same path through the same profile the script under test uses — so the harness is
+#     box-independent rather than pinned to the intel layout.
+#   * the MODEL STORE's shape is a profile fact too (asus names $HOME/models/active; the
+#     intel profile derives $LLAMA_DRIVE_ROOT/active).  The fixture is planted at every
+#     candidate the console itself reports, so the case measures the code and not the
+#     profile.
+_selftest_paths() {
+    local sandbox="$1" out=""
+    # swallow-ok: the probe's stderr is the profile's one-line announce; its STDOUT is the answer
+    out=$(env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
+        bash -c 'source "$1/scripts/01-constants.sh" >/dev/null 2>&1; printf "%s|%s" "${LLM_REGISTRY:-}" "${LLAMA_MODEL_DIR:-}"' _ "$REPO_ROOT" 2>/dev/null)
+    [[ -n "$out" ]] || out="$sandbox/home/.llm/models.conf|"
+    printf '%s\n' "$out"
+}
+
+_selftest_registry_path() {
+    _selftest_paths "$1" | cut -d'|' -f1
+}
+
+# The CARD is an input to this decision logic, so the harness STATES it instead of reading
+# whatever the box happens to be running.  Measured 2026-11-02: a serving lane holding its
+# VRAM made the baseline gate refuse, so these cases passed or failed depending on whether
+# that lane was up at that instant — and every run also killed real processes and could
+# stand a REAL systemd lane down.  The stubs below answer for the sandbox: a fully free
+# card and no units, so a case measures the autotune's decisions and nothing else.
+_selftest_isolate() {
+    # shellcheck disable=SC2317  # invoked by the child bash through the exported environment
+    nvidia-smi() {
+        case "$*" in
+            *memory.free*|*memory.total*) printf '81920\n' ;;
+            *memory.used*) printf '0\n' ;;
+            *pstate*) printf 'P0\n' ;;
+            *clocks_throttle_reasons.active*) printf '0x0\n' ;;
+            *temperature.gpu*) printf '45, 1500\n' ;;
+            *) printf '0\n' ;;
+        esac
+    }
+    pkill() { return 0; }
+    pgrep() { return 1; }
+    systemctl() { return 1; }
+    export -f nvidia-smi pkill pgrep systemctl
+}
+
 _selftest_run() {
     local sandbox="$1"; shift
     mkdir -p "$sandbox/home/.llm" "$sandbox/drive/active" "$sandbox/home/models"
+    _selftest_isolate
     # _SELFTEST_FIXTURE=<case> plants a REAL metadata fixture (make-gguf-fixture.py) instead
     # of the unparseable stub.  The capacity ctx comes from the GGUF's <arch>.context_length,
     # so a test that needs a ceiling ABOVE MIN_CTX must use one: 'plain-ctx' declares
@@ -302,10 +353,19 @@ _selftest_run() {
     # $HOME/models path too, so the relative name resolves on a box whose profile names a
     # flat store rather than deriving $LLAMA_DRIVE_ROOT/active.
     cp "$sandbox/drive/active/stub.gguf" "$sandbox/home/models/stub.gguf"
+    local _reg _mdir _paths
+    _paths=$(_selftest_paths "$sandbox")
+    _reg="${_paths%%|*}"
+    _mdir="${_paths#*|}"
+    if [[ -n "$_mdir" ]]; then
+        mkdir -p "$_mdir"
+        cp "$sandbox/drive/active/stub.gguf" "$_mdir/stub.gguf"
+    fi
+    mkdir -p "$(dirname "$_reg")"
     {
-        printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram'
+        printf '%s\n' "$LLM_REGISTRY_HEADER"
         printf '%s\n' '1|Stub Model|stub.gguf|0.1G|Q4_K_M/q8_0|llama|0|4096|4|1024|256|1|256|native|auto|on|0|no|no|no'
-    } > "$sandbox/home/.llm/models.conf"
+    } > "$_reg"
     # LLM_AUTOTUNE_VRAM_CAP_MULT is pinned so the probe ceiling is the fixture's
     # DECLARED ctx and not host-dependent.  The real ceiling is min(native, start x mult),
     # and `start` comes from live free-VRAM heuristics; on a box with less free VRAM the
@@ -321,11 +381,12 @@ _selftest_run() {
     # test-private lock makes the suite independent of the shared box-wide lock while still
     # exercising the real heavy-job serialisation path (card 34c28be3).
     env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
-        LLM_REGISTRY="$sandbox/home/.llm/models.conf" \
+        LLM_REGISTRY="$_reg" \
         HEAVY_JOB_LOCK="$sandbox/heavy-job.lock" \
         CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
         LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 \
-        LLM_AUTOTUNE_VRAM_CAP_MULT=4194304 "$@" \
+        LLM_AUTOTUNE_VRAM_CAP_MULT=4194304 \
+        LLM_AUTOTUNE_RESULT_FILE="$sandbox/autotune.result" "$@" \
         bash "$REPO_ROOT/scripts/autotune-model.sh" 1 --workload chat 2>&1
 }
 
@@ -927,4 +988,210 @@ STUB
     grep -qF '$_SELF_DIR/autotune-model.sh' "$REPO_ROOT/scripts/run-autotune-batch.sh"
     # v85 runner: a missing profile/command is a usage error, not an executed path.
     grep -qF 'missing <profile_path> <command...>' "$REPO_ROOT/bin/bench-timeout-runner.sh"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEF-024 — a failed autotune must SAY WHY, and must not call every failure
+# "unsupported" or every non-zero return "no working config".
+#
+# Measured 2026-11-02 (UAT run 2026-11-02_v6): `model bench` reported
+#
+#   Autotune failed for model #2 (no working config) — skipping benchmark
+#
+# for a run that had actually REFUSED before launching anything ("VRAM baseline
+# not cleared — 27626 MiB still held"), and the autotuner's own final line said
+# "failed: unsupported model" whatever the launch had said, with the server log
+# already deleted.  Four things are pinned below:
+#   1. the classifier reads the LOG and distinguishes OOM / unsupported / launch;
+#   2. the failing launch's stderr tail reaches the operator;
+#   3. only a DURABLE (unsupported-architecture) verdict marks the registry row;
+#   4. the CONTROL arm: a succeeding configuration still certifies, prints no
+#      failure block, and marks nothing — a guard that classifies everything as
+#      failed would pass 1-3 and fail here.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@test "def-024: the classifier reads the launch's own words (pure, no GPU)" {
+    eval "$(sed -n '/^__autotune_classify_failure()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^__autotune_failure_label()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^_bench_log_tail()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    local log="$BATS_TEST_TMPDIR/log"
+
+    printf 'ggml_backend_cuda_buffer_type_alloc_buffer: allocating 61440.00 MiB: cudaMalloc failed: out of memory\n' > "$log"
+    [[ "$(__autotune_classify_failure "$log")" == "resource_exhausted" ]]
+
+    printf "llama_model_load: error loading model: unknown model architecture: 'gpt-oss'\n" > "$log"
+    [[ "$(__autotune_classify_failure "$log")" == "unsupported_arch" ]]
+
+    printf 'error while handling argument "--nonsense": invalid argument\n' > "$log"
+    [[ "$(__autotune_classify_failure "$log")" == "launch_error" ]]
+
+    # Nothing recognisable says SO — it does not fall back to a cause.
+    printf 'terminate called after throwing an instance of std::runtime_error\n' > "$log"
+    [[ "$(__autotune_classify_failure "$log")" == "unclassified" ]]
+    # An unreadable/absent log is not evidence of a cause either.
+    [[ "$(__autotune_classify_failure "$BATS_TEST_TMPDIR/nope")" == "unclassified" ]]
+
+    # The tail is BOUNDED, and it keeps the LAST lines (the witness is at the end).
+    local i
+    for i in $(seq 1 40); do printf 'line %s\n' "$i"; done > "$log"
+    printf '\n\n' >> "$log"
+    [[ "$(_bench_log_tail "$log" 20 | wc -l)" -eq 20 ]]
+    [[ "$(_bench_log_tail "$log" 20 | tail -1)" == "line 40" ]]
+
+    # Labels never claim a cause the classifier did not establish.
+    [[ "$(__autotune_failure_label unclassified)" == unclassified* ]]
+    [[ "$(__autotune_failure_label resource_exhausted)" == *"resource exhaustion"* ]]
+}
+
+@test "def-024: a CUDA OOM is resource exhaustion, WITH the stderr tail, and the row is NOT poisoned" {
+    local sb="$BATS_TEST_TMPDIR/oom"
+    run _selftest_run "$sb" _SELFTEST_LAUNCH_FAIL=oom
+    [[ "$status" -eq 1 ]]
+    # 1. the classification, in the operator's message...
+    [[ "$output" == *"reason:  resource exhaustion"* ]]
+    # 2. ...and the launch's own witness, not a paraphrase of it
+    [[ "$output" == *"server stderr (last"* ]]
+    [[ "$output" == *"cudaMalloc failed: out of memory"* ]]
+    [[ "$output" == *"last launch attempted: ctx="* ]]
+    # 3. the result file carries the same verdict machine-readably
+    grep -qx 'stage=launch' "$sb/autotune.result"
+    grep -qx 'classification=resource_exhausted' "$sb/autotune.result"
+    grep -qx 'outcome=not_certified' "$sb/autotune.result"
+    grep -q '^tail=.*out of memory' "$sb/autotune.result"
+    # 4. an OOM is a property of THIS RUN (a smaller ctx may load): the row is left alone,
+    #    and the message says so rather than implying a verdict on the model.
+    [[ "$output" == *"row left unchanged"* ]]
+    local reg; reg=$(_selftest_registry_path "$sb")
+    [[ -z "$(awk -F'|' '$1=="1"{print $44}' "$reg")" ]]
+}
+
+@test "def-024: an unsupported architecture is classified as such and the row is marked not-certified" {
+    local sb="$BATS_TEST_TMPDIR/unsup"
+    run _selftest_run "$sb" _SELFTEST_LAUNCH_FAIL=unsupported
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"reason:  unsupported architecture / no matching backend"* ]]
+    [[ "$output" == *"unknown model architecture: 'gpt-oss'"* ]]
+    grep -qx 'classification=unsupported_arch' "$sb/autotune.result"
+    # A durable verdict: the row would be marked in the registry's OWN terminal vocabulary.
+    # (Under AUTOTUNE_SELFTEST nothing is persisted — the canned failure is not a measurement
+    # of this row — so the DECISION is printed and the registry is proven untouched.)
+    [[ "$output" == *"would mark meas_state=unacceptable"* ]]
+    local reg; reg=$(_selftest_registry_path "$sb")
+    [[ -z "$(awk -F'|' '$1=="1"{print $44}' "$reg")" ]]
+    # ...and the REAL (non-selftest) path calls that writer — the wiring, not just the pieces.
+    grep -qF '__llm_autotune_mark_state "$MODEL_FILE" "unacceptable"' "$REPO_ROOT/scripts/autotune-model.sh"
+}
+
+@test "def-024: a PRE-FLIGHT refusal (the measured case) is reported as a refusal, not a failed sweep" {
+    # The UAT run never launched a server: the autotuner refused at the VRAM baseline gate
+    # ("VRAM baseline not cleared — 27626 MiB still held"), and bench still printed
+    # "(no working config)".  This pins BOTH ends without touching the card or a GPU:
+    # the result writer's preflight branch, and the consumer that turns it into a sentence.
+    eval "$(sed -n '/^__autotune_failure_label()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^__autotune_write_result()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^function __bench_autotune_failure_why()/,/^}/p' "$REPO_ROOT/scripts/11e-llm-model.sh")"
+    local out="$BATS_TEST_TMPDIR/preflight.result"
+    (
+        _PREFLIGHT_CLASS=resource_exhausted
+        MODEL_FILE=stub.gguf
+        MODEL=1
+        LLM_AUTOTUNE_RESULT_FILE="$out"
+        __autotune_write_result 3
+    )
+    grep -qx 'stage=preflight' "$out"
+    grep -qx 'classification=resource_exhausted' "$out"
+    grep -qx 'exit_rc=3' "$out"
+    # There is no tail because there was no launch — and the result does not invent one.
+    ! grep -q '^tail=' "$out"
+    local why
+    why=$(__bench_autotune_failure_why "$out" 3)
+    [[ "$why" == "refused BEFORE any launch: resource exhaustion (OOM / failed allocation)" ]]
+    # A detail rides along — the byte count a caller would otherwise have to scroll up for.
+    printf 'detail=VRAM baseline not cleared — 27626 MiB still held by another process\n' >> "$out"
+    why=$(__bench_autotune_failure_why "$out" 3)
+    [[ "$why" == *"27626 MiB still held"* ]]
+    # A missing result file is NAMED as missing, never replaced by a cause.
+    why=$(__bench_autotune_failure_why "$BATS_TEST_TMPDIR/absent.result" 3) || true
+    [[ "$why" == *"no result recorded"* ]]
+    # The baseline gate is what actually routes to that class on the measured path.
+    local gate
+    gate=$(sed -n '/VRAM baseline not cleared/,/^fi$/p' "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$gate" == *'_preflight_refuse resource_exhausted 1 "VRAM baseline not cleared'* ]]
+}
+
+@test "def-024: an unrecognised failure is 'unclassified' and does not pretend to know why" {
+    local sb="$BATS_TEST_TMPDIR/odd"
+    run _selftest_run "$sb" _SELFTEST_LAUNCH_FAIL=unknown
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"reason:  unclassified"* ]]
+    [[ "$output" == *"unexpected internal state"* ]]
+    # The whole point: no invented cause, and no durable mark either.
+    [[ "$output" != *"out of memory"* ]]
+    [[ "$output" != *"unsupported architecture"* ]]
+    [[ "$output" != *"would mark"* ]]
+    grep -qx 'classification=unclassified' "$sb/autotune.result"
+    [[ "$(awk -F'|' '$1=="1"{print $44}' "$(_selftest_registry_path "$sb")")" == "" ]]
+}
+
+@test "def-024 CONTROL: a configuration that succeeds certifies and prints NO failure block" {
+    # A guard that classified everything as failed would pass the three cases above.
+    # This is the arm that proves it does not.
+    local sb="$BATS_TEST_TMPDIR/control"
+    run _selftest_run "$sb"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"winner:"* ]]
+    [[ "$output" != *"reason:"* ]]
+    [[ "$output" != *"server stderr"* ]]
+    [[ "$output" != *"NOT CERTIFIED"* ]]
+    [[ "$output" != *"would mark"* ]]
+    grep -qx 'outcome=certified' "$sb/autotune.result"
+    grep -qx 'stage=certified' "$sb/autotune.result"
+    [[ "$(awk -F'|' '$1=="1"{print $44}' "$(_selftest_registry_path "$sb")")" == "" ]]
+}
+
+@test "def-024: __llm_autotune_mark_state writes meas_state=unacceptable and verifies the read-back" {
+    mkdir -p "$(dirname "$LLM_REGISTRY")"
+    {
+        printf '%s\n' "$LLM_REGISTRY_HEADER"
+        printf '%s\n' '1|Alpha|alpha.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|256|llama_server|auto|on|11.0|yes|no|no'
+        printf '%s\n' '2|Beta|beta.gguf|1.5G|Q4_K_M/q8_0|gpt-oss|0|8192|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no'
+    } > "$LLM_REGISTRY"
+    __llm_autotune_mark_state "beta.gguf" "unacceptable"
+    [[ "$(awk -F'|' '$3=="beta.gguf"{print $44}' "$LLM_REGISTRY")" == "unacceptable" ]]
+    # ...and it lands on THAT row only, matched by FILE (a rescan may renumber).
+    [[ "$(awk -F'|' '$3=="alpha.gguf"{print $44}' "$LLM_REGISTRY")" == "" ]]
+    [[ "$(awk -F'|' 'NR>1{print NF}' "$LLM_REGISTRY" | sort -u)" == "$(awk -F'|' 'NR==1{print NF}' "$LLM_REGISTRY")" ]]
+    # The file name is accepted even when the row NUMBER is what the caller holds.
+    __llm_autotune_mark_state "2" "unacceptable"
+    [[ "$(awk -F'|' '$3=="beta.gguf"{print $44}' "$LLM_REGISTRY")" == "unacceptable" ]]
+    # Refusals: a state outside the terminal vocabulary, an unknown model, a missing registry.
+    ! __llm_autotune_mark_state "beta.gguf" "certified"
+    ! __llm_autotune_mark_state "nosuch.gguf" "unacceptable"
+    ! LLM_REGISTRY="$BATS_TEST_TMPDIR/absent.conf" __llm_autotune_mark_state "beta.gguf" "unacceptable"
+}
+
+@test "def-024: model info and the model scan listing SHOW the unsupported state" {
+    source "$REPO_ROOT/scripts/03-design-tokens.sh"
+    source "$REPO_ROOT/scripts/05-ui-engine.sh"
+    source "$REPO_ROOT/scripts/_startup-env.sh"
+    source "$REPO_ROOT/scripts/11e-llm-model.sh"
+    mkdir -p "$LLAMA_MODEL_DIR"
+    : > "$LLAMA_MODEL_DIR/beta.gguf"
+    {
+        printf '%s\n' "$LLM_REGISTRY_HEADER"
+        printf '%s\n' '1|Beta|beta.gguf|60.9G|F16/q8_0|gpt-oss|0|8192|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no'
+    } > "$LLM_REGISTRY"
+    __llm_autotune_mark_state "beta.gguf" "unacceptable"
+
+    run __model_info 1
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"meas_state"* ]]
+    [[ "$output" == *"unacceptable"* ]]
+    [[ "$output" == *"NOT CERTIFIED"* ]]
+
+    run __model_list
+    [[ "$status" -eq 0 ]]
+    # The word must SURVIVE the column: at 10 chars the table printed "unacceptab".
+    [[ "$output" == *"unacceptable"* ]]
+    [[ "$output" != *"unacceptab "* ]]
 }

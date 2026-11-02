@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-11-02): __llm_autotune_mark_state — DEF-024's registry half.  A model the
+#   backend cannot load stays in the registry indistinguishable from a certified one (its
+#   FIT and TPS columns still carry values), so every consumer believes it is usable.  This
+#   writes the registry's OWN terminal vocabulary (meas_state, col 44 = unacceptable) rather
+#   than adding a column, verifies the read-back exactly as __llm_autotune_profile_save does,
+#   and refuses every other state because recording a measurement belongs to the save.
 #   v28 (2026-10-18): __autotune_window_policy — a pure verdict comparing a certified MAX-ctx
 #   window against the investigator-observed input profile (bench_avg_prompt_tokens, col 37).
 #   __llm_autotune_profile_save takes an optional 31st arg and writes ctx_policy (col 45),
@@ -26,7 +32,7 @@
 # @depends: constants
 # @uses: llm-model, llm-runtime
 # @exports: __llm_autotune_done_for_model,
-#   __llm_autotune_profile_save,
+#   __llm_autotune_profile_save, __llm_autotune_mark_state,
 #   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry,
 #   __autotune_ctx_bounds, __autotune_window_policy
 # Idempotent include guard: sub-modules are sourced both by their thin
@@ -566,6 +572,77 @@ function __llm_autotune_profile_save() {
 
 # (Removed 2026-09-20: __llm_autotune_verify_winner — its only caller was deleted in
 # b48e8dbe ("remove dead autotune code"), leaving the definition unreferenced.)
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_mark_state <model> <state> — record a TERMINAL verdict on a row.
+#
+# DEF-024: a model the backend cannot load was indistinguishable from a certified one —
+# its FIT column still carried a value and nothing in STATE said otherwise, so every
+# consumer believed it was usable.  This writes the registry's OWN vocabulary into the
+# column that already expresses that judgement (meas_state, col 44: certified |
+# indicative | unacceptable — see 01-constants' header note) rather than inventing a
+# column or a second state machine.
+#
+# ONLY `unacceptable` is accepted, and deliberately so: it is the one terminal value
+# that takes a row out of the plan.  A caller wanting to say "certified" or "indicative"
+# has a measurement to record and must use __llm_autotune_profile_save, which carries it
+# together with the numbers it describes.
+#
+# @args <row-number|model-file> <unacceptable>
+# @returns 0 when the row holds the requested state afterwards, 1 otherwise (fail closed:
+# a caller must treat 1 as "the row still reads usable", not as a warning).
+# ---------------------------------------------------------------------------
+function __llm_autotune_mark_state() {
+    local model_ref="${1:-}" state="${2:-}"
+    [[ "$state" == "unacceptable" ]] || return 1
+    [[ -n "$model_ref" ]] || return 1
+
+    # Same identity rule as the save: a FILE name is the row's identity; a number is
+    # resolved through the registry helpers and matched by file, so a rescan cannot make
+    # this mark land on another model.
+    local model_file=""
+    if [[ "$model_ref" =~ ^[0-9]+$ ]]; then
+        model_file="$(__llm_registry_file_for_row "$model_ref")"
+    else
+        model_file="$model_ref"
+    fi
+    [[ -n "$model_file" ]] || return 1
+    [[ -f "$LLM_REGISTRY" ]] || return 1
+    awk -F'|' -v f="$model_file" '$3 == f {found=1} END {exit !found}' "$LLM_REGISTRY" || return 1
+
+    # Auto-backup, as the profile save does: a state stamp must not be the one write that
+    # has no way back.
+    local _backup_dir
+    _backup_dir="$(dirname "$LLM_REGISTRY")/backups"
+    mkdir -p "$_backup_dir"
+    # swallow-ok: a missing backup is not a reason to refuse the write; the row's own verification below is what decides
+    cp "$LLM_REGISTRY" "$_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+
+    awk -F'|' -v f="$model_file" -v st="$state" -v header="$LLM_REGISTRY_HEADER" '
+        BEGIN { OFS="|"; print header; ncols = split(header, _hdr, "|") }
+        $1 == "#" { next }
+        {
+            if (NF >= 20 && NF < ncols) { for (i = NF + 1; i <= ncols; i++) $i = "" }
+            if ($3 == f) { $44 = st }
+            print
+        }' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
+
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]; then
+        # swallow-ok: a failed mv leaves the original registry in place and the read-back below refuses
+        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY" 2>/dev/null || { rm -f "${LLM_REGISTRY}.tmp"; return 1; }
+    else
+        rm -f "${LLM_REGISTRY}.tmp"
+        return 1
+    fi
+
+    # Read the row BACK: an awk whose $3 matched nothing changed nothing and still exits 0
+    # (the same trap the profile save closed on 2026-10-12).
+    local _v_state
+    _v_state=$(awk -F'|' -v f="$model_file" '$3 == f {print $44; exit}' "$LLM_REGISTRY")
+    [[ "$_v_state" == "$state" ]] || return 1
+    return 0
+}
+
 
 # ---------------------------------------------------------------------------
 # __kv_mb_per_1k M-bM-^@M-^T Estimate KV cache cost per 1K tokens (G-5 audit).
