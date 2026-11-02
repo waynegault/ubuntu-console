@@ -68,6 +68,17 @@ EOS
 exit 1
 EOS
     chmod +x "$TAC_TEST_TMPDIR/bin/pgrep"
+    # The lane-metrics probe is a live HTTP read of :18087 (sanctioned_lane_serving).
+    # Pin it: a real lane serving on the box while the suite runs would otherwise flip
+    # these cases, and the default answers "no metric" so fail-closed is what is tested.
+    cat > "$TAC_TEST_TMPDIR/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+[ -n "${STUB_METRICS:-}" ] || exit 7
+printf '%s\n' "$STUB_METRICS"
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/curl"
+    export LLAMA_CUDA_LANE_PORT=18087
+    unset STUB_METRICS
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
     # Extract the real definitions, stopping before the script's own main block.
@@ -137,12 +148,48 @@ run_probe() {
 }
 
 @test "high utilisation with no compute-app listing still fails closed" {
+    # No metric either: the lane is not serving, so an unattributable util is BUSY.
     export STUB_PIDS=""
     export STUB_UTIL=95
 
     run run_probe
     [ "$status" -eq 0 ]
     [[ "$output" == *"util=95%"* ]]
+}
+
+@test "no compute-app listing while the lane serves its own request is NOT busy (00:13:53)" {
+    # The measured fault, pinned end to end: empty residency read + high utilisation.
+    # `requests_processing 1` is the server saying the utilisation is its own prefill,
+    # and stopping on that is stopping the lane for being busy with itself.
+    export STUB_PIDS=""
+    export STUB_UTIL=90
+    export STUB_METRICS='# TYPE llamacpp:requests_processing gauge
+llamacpp:requests_processing 1'
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [ "$output" = "free" ]
+}
+
+@test "an idle lane plus an empty residency listing is still busy on utilisation" {
+    # The other side of the same arm: requests_processing 0 is not an excuse.
+    export STUB_PIDS=""
+    export STUB_UTIL=90
+    export STUB_METRICS='llamacpp:requests_processing 0'
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"util=90%"* ]]
+}
+
+@test "an unparseable metric body does not excuse utilisation" {
+    export STUB_PIDS=""
+    export STUB_UTIL=90
+    export STUB_METRICS='<html>not metrics</html>'
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"util=90%"* ]]
 }
 
 @test "the bench lock beats a sanctioned-only card" {

@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.9.0 (2026-11-02: an empty residency read plus a SERVING lane is us, not a
+#          foreign workload. Measured 00:13:53 — `util=90%>=15%` was the recorded reason,
+#          and because busy() is a short-circuiting OR that is proof all five prior signals
+#          were false, including both residency probes. The lane was mid-prefill on a 45k
+#          prompt, so the utilisation WAS the lane's own work; the watchdog stopped it and
+#          the client turns died behind it. sanctioned_residents_only() cannot separate
+#          "residents listed, all sanctioned" from "the list is empty / unreadable" — the
+#          bare non-empty test returns 1 for both — so the empty arm handed the decision to
+#          utilisation. Reversal of the fail-closed direction: stopping is the destructive
+#          act and needs positive evidence of a foreign owner, so the last arm now asks the
+#          LANE ITSELF. `llamacpp:requests_processing` is a gauge the server publishes
+#          (verified live on :18088), so "we are serving" is a statement from the process
+#          rather than an inference from device state. Any read failure answers "not
+#          serving", which leaves the old fail-closed behaviour intact.
 # Version: 1.8.0 (2026-11-01: a resident that cannot be a GPU workload is not a tenant.
 #          Measured 19:22:01 — a VS Code pytest run in another workspace
 #          (…/investigator/.venv/bin/python … run_pytest_script.py) imported torch, which
@@ -47,7 +61,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 11
+# Module Version: 12
 # Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
 #          SCRIPT the interpreter was GIVEN — the argv element immediately after an
 #          interpreter — not any element that merely names it.  A CI lint job's file list
@@ -68,7 +82,10 @@
 #
 #   1. Utilization samples — max over N samples exceeds threshold (actually computing).
 #      Asked LAST, and only when the card's compute apps are not exclusively the two
-#      sanctioned servers: see sanctioned_residents_only().
+#      sanctioned servers (see sanctioned_residents_only()) AND the CUDA lane itself is
+#      not processing a request (see sanctioned_lane_serving()): a serving server pins
+#      utilisation far past the threshold, and an empty residency read plus a serving
+#      lane is our own work, not a foreign workload.
 #   2. Foreign compute-app PIDs — a resident whose /proc/PID/exe is not one of the
 #      two sanctioned llama-server binaries holds a CUDA context (someone else is
 #      loaded on the GPU).  Both are allowed: the Xe binary is ours, and the Xe
@@ -119,6 +136,32 @@ export TAC_LOG_FILE
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 REASONS=()
+
+# sanctioned_lane_serving -- 0 when the sanctioned CUDA lane is processing a request
+# right now.  Asked only from the utilisation arm, where the residency read already
+# failed to name a resident: without this, a serving lane's own prefill is the
+# evidence used to stop it (2026-11-02 00:13:53).
+#
+# The signal is read from the SERVER, not from the device: llama-server publishes
+# `llamacpp:requests_processing` when started with --metrics (verified live on the
+# CPU lane :18088 on 2026-11-02, gauge present at 0 while idle).  A server that is
+# mid-prefill reports >=1 for the whole request, which is exactly the window the
+# 00:13:53 stop landed in.
+#
+# Fail-closed is preserved in the direction that matters: an unreachable or
+# unparseable metric answers "not serving", so utilisation still decides BUSY the
+# way it always did.  This function can only ever REMOVE a stop, never add one.
+SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
+
+sanctioned_lane_serving() {
+    local out n
+    [[ "$SANCTIONED_LANE_PORT" =~ ^[0-9]+$ ]] || return 1
+    out=$(curl -s --max-time 2 "http://127.0.0.1:${SANCTIONED_LANE_PORT}/metrics" 2>/dev/null) || return 1
+    [[ -n "$out" ]] || return 1
+    n=$(awk '$1 == "llamacpp:requests_processing" {print $2; exit}' <<<"$out")
+    [[ "$n" =~ ^[0-9]+$ ]] || return 1
+    (( n > 0 ))
+}
 
 util_busy() {
     local max_util=0 s out rc
@@ -465,7 +508,7 @@ busy() {
     training_tenant_busy \
         || lock_busy || cuda_owner_busy \
         || foreign_apps_busy || declared_workload_busy \
-        || { ! sanctioned_residents_only && util_busy; }
+        || { ! sanctioned_residents_only && ! sanctioned_lane_serving && util_busy; }
 }
 
 emit() {

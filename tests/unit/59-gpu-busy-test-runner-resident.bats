@@ -60,6 +60,17 @@ EOS
 exit 1
 EOS
     chmod +x "$TAC_TEST_TMPDIR/bin/pgrep"
+    # The lane-metrics probe is a live HTTP read of :18087 (sanctioned_lane_serving).
+    # Pin it: a real lane serving on the box while the suite runs would otherwise flip
+    # these cases, and the default answers "no metric" so fail-closed is what is tested.
+    cat > "$TAC_TEST_TMPDIR/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+[ -n "${STUB_METRICS:-}" ] || exit 7
+printf '%s\n' "$STUB_METRICS"
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/curl"
+    export LLAMA_CUDA_LANE_PORT=18087
+    unset STUB_METRICS
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
     cp "$REPO_ROOT/bin/_tac-bin-lib.sh" "$TAC_TEST_TMPDIR/_tac-bin-lib.sh"
