@@ -333,6 +333,11 @@ setup() {
     [[ ! -f "$WATCHDOG_MOCK_STATE/stop_called" ]]
     # Not stopping is not the same as masking a later death: this path must not
     # leave a gpustop marker behind that would explain the NEXT death away.
+    # The non-empty guard is the point: `[[ ! -f "" ]]` is TRUE, so an unset or
+    # empty path would make this assertion pass without ever looking at a file.
+    # (The tests at "the GPU-busy marker" below assert the same path DOES exist,
+    # so the instrument is proven able to write it, not merely unable to find it.)
+    [[ -n "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE" ]]
     [[ ! -f "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE" ]]
 }
 
