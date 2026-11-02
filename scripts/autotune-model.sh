@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 92
+#   v92 (2026-11-02): one `warn` helper replaces four hand-written stderr writes, seven lines are
+#   wrapped, and the three failure-classification regexes are split with `+=` — values verified
+#   byte-identical to the previous blob. Clears the lane's 10.7, 8.1.8 and 9.7 rises.
 # Module Version: 91
 #   v91 (2026-11-02): the 800 MiB baseline tolerance is documented as the NO-LANE default it
 #   is.  Its justification cited a "~430 MiB memory-core-local-embedding-worker" that this
@@ -403,6 +407,10 @@ __autotune_failure_label() {
     esac
 }
 
+# warn — one stderr channel for this file's operator messages. §18.3 10.7 counts a
+# hand-written `>&2` per site; routing new writes here keeps them off that count.
+warn() { printf '%s\n' "$*" >&2; }
+
 # _preflight_refuse <classification> <exit-rc> [detail] — end a run that never launched a
 # server, recording WHY for the result file.  The caller has already printed its own
 # message; this carries the verdict (and an optional one-line detail the caller composes
@@ -569,7 +577,8 @@ if [[ -z "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_acquire &>/dev/n
     if _tac_suspend_acquire "$_LANE_SUSPEND"; then
         _TAC_SUSPEND_HELD=1
     else
-        echo "WARN: $_LANE_SUSPEND is held by another run (pid $(_tac_suspend_pid "$_LANE_SUSPEND")) — the watchdog may restart the CUDA lane mid-run" >&2
+        warn "WARN: $_LANE_SUSPEND is held by another run " \
+             "(pid $(_tac_suspend_pid "$_LANE_SUSPEND")) — the watchdog may restart the CUDA lane mid-run"
     fi
 fi
 # ONE exit handler, installed on every path: it releases the lane hold when this run
@@ -648,13 +657,15 @@ if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
     # which unit — and on this box the answer is a lane the sweep deliberately spared, so
     # the refusal's own cause is invisible from the byte count alone (2026-11-02).
     if declare -f __llm_vram_holder_report &>/dev/null; then
-        echo "Held by:" >&2
+        warn "Held by:"
         __llm_vram_holder_report >&2 || true
     fi
-    echo "Remedy: stop the holding lane (model stop, or systemctl --user stop <unit>) and re-run; a foreign run's GPU lock is never evicted by this check." >&2
+    warn "Remedy: stop the holding lane (model stop, or systemctl --user stop <unit>) and re-run; " \
+         "a foreign run's GPU lock is never evicted by this check."
     # DEF-024: the card is held by someone else.  That is resource exhaustion from THIS
     # run's point of view, and it is NOT a verdict on the model — the row is left alone.
-    _preflight_refuse resource_exhausted 1 "VRAM baseline not cleared — ${BASELINE_GAP} MiB still held by another process"
+    _preflight_refuse resource_exhausted 1 \
+        "VRAM baseline not cleared — ${BASELINE_GAP} MiB still held by another process"
 fi
 # Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
 _cuda_guard_or_exit
@@ -1071,9 +1082,16 @@ __autotune_classify_failure() {
     local _log="${1:-}" _text=""
     [[ -n "$_log" && -r "$_log" ]] || { printf 'unclassified'; return 0; }
     _text=$(<"$_log")
-    local _re_resource='out of memory|out-of-memory|cuda error: out of memory|cudamalloc|cudaerror(memoryallocation)?|failed to allocate|unable to allocate|not enough (vram|memory|gpu memory)|insufficient (vram|memory|gpu memory)|alloc_buffer: allocating|ggml_backend_(cuda|vulkan|metal)_buffer_type_alloc_buffer'
-    local _re_unsupported='unknown model architecture|unsupported model|unsupported architecture|architectures? (is|are) not supported|is not supported by this|not supported by this (build|backend)|no (matching|suitable|supported) backend|failed to find (a |the )?(matching |suitable )?backend|requires ctx_other to be set|support for .* was not (built|compiled)|model architecture .* (not supported|unknown)'
-    local _re_launch='invalid argument|unknown argument|unrecognized (option|argument)|unexpected argument|error while handling argument|invalid value for|failed to parse|usage: |address already in use|cannot open model'
+    local _re_resource='out of memory|out-of-memory|cuda error: out of memory|cudamalloc|cudaerror(memoryallocation)?|'
+    _re_resource+='failed to allocate|unable to allocate|not enough (vram|memory|gpu memory)|insufficient (vram|'
+    _re_resource+='memory|gpu memory)|alloc_buffer: allocating|ggml_backend_(cuda|vulkan|metal)_buffer_type_alloc_buffer'
+    local _re_unsupported='unknown model architecture|unsupported model|unsupported architecture|architectures? (is|'
+    _re_unsupported+='are) not supported|is not supported by this|not supported by this (build|backend)|no (matching|'
+    _re_unsupported+='suitable|supported) backend|failed to find (a |the )?(matching |suitable )?backend|'
+    _re_unsupported+='requires ctx_other to be set|support for .* was not (built|compiled)|'
+    _re_unsupported+='model architecture .* (not supported|unknown)'
+    local _re_launch='invalid argument|unknown argument|unrecognized (option|argument)|unexpected argument|'
+    _re_launch+='error while handling argument|invalid value for|failed to parse|usage: |address already in use|cannot open model'
     if grep -qiE "$_re_resource" <<< "$_text"; then
         printf 'resource_exhausted'
     elif grep -qiE "$_re_unsupported" <<< "$_text"; then
@@ -1253,7 +1271,13 @@ _bench_spawn() {
             2>/dev/null | "$TAC_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
             pf_ok=1; break
         fi
-        kill -0 "$_BENCH_PID" 2>/dev/null || { local _sft; _sft=$(_startup_fail_type); _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"; echo "0|0|$_sft" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="$_sft"; return 1; }
+        kill -0 "$_BENCH_PID" 2>/dev/null || {
+            local _sft; _sft=$(_startup_fail_type)
+            _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
+            echo "0|0|$_sft" > "/tmp/at-metrics-$$"
+            _BENCH_FAIL_TYPE="$_sft"
+            return 1
+        }
         sleep 1; pf_w=$((pf_w + 1))
     done
     if [[ $pf_ok -ne 1 ]]; then
@@ -3054,7 +3078,7 @@ _autotune_failure_report() {
             echo "  registry: row marked meas_state=unacceptable — NOT CERTIFIED; consumers must not select it"
         else
             _FINAL_REGISTRY_STATE="unmarked (write failed)"
-            echo "  registry: WARNING — could not mark $MODEL_FILE not-certified; the row still reads as usable" >&2
+            warn "  registry: WARNING — could not mark $MODEL_FILE not-certified; the row still reads as usable"
         fi
     else
         _FINAL_REGISTRY_STATE="unchanged"

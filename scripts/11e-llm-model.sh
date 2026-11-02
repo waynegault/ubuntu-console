@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 80
+#   v80 (2026-11-02): seven over-long lines wrapped and two new functions documented (8.1.8, 9.5).
+#   Formatting only: the read/printf argument lists were diffed token-for-token against the
+#   previous blob (48/20/23 tokens, identical).
 # Module Version: 79
 #   v79 (2026-11-02): the bench summary appends the autotuner's `detail=` when the result
 #   carries one (bounded to 160 chars), so the measured case reads "refused BEFORE any
@@ -220,6 +224,7 @@ function __model_split_shards_missing() {
     done
 }
 
+# __model_scan_row_bytes — total on-disk size of a row's model file plus its shards.
 function __model_scan_row_bytes() {
     local _dir="$1" _fname="$2" _fbytes _shard _shard_bytes _total=0
     # swallow-ok: the numeric test on the next line is the guard: no usable size means this returns no value at all
@@ -308,7 +313,9 @@ function __model_scan() {
         _missing_shards=$(__model_split_shards_missing "$LLAMA_MODEL_DIR" "$fname")
         if [[ -n "$_missing_shards" ]]
         then
-            __tac_info "Skipping" "incomplete split model $fname — missing $(printf '%s' "$_missing_shards" | tr '\n' ' ')" "$C_Warning"
+            local _missing_list
+            _missing_list=$(printf '%s' "$_missing_shards" | tr '\n' ' ')
+            __tac_info "Skipping" "incomplete split model $fname — missing $_missing_list" "$C_Warning"
             continue
         fi
         # Empty byte count = a LATER shard of a split GGUF: it gets no row of its own, and
@@ -676,7 +683,11 @@ function __model_list() {
         local _drift_disp="-"
         [[ -n "$meas_drift" ]] && _drift_disp="${meas_drift}%"
         printf '%s%s'"${_col_spec}"'%s\n' "$color" "$marker" \
-            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}" "${_state_disp:0:12}" "${_drift_disp:0:6}" "$C_Reset"
+            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" \
+            "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" \
+            "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" \
+            "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" \
+            "${quant_rating:0:11}" "${_state_disp:0:12}" "${_drift_disp:0:6}" "$C_Reset"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
@@ -2075,13 +2086,23 @@ function __model_info() {
         return 1
     fi
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
-    local _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
+    local _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl \
+        _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx \
+        _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n \
+        _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
     # The trailing fields are bound for position only, and marked unread (SC2034)
     # so the positional binding needs no suppression.  The list runs to column 45
     # because meas_state (44) is the registry's own not-certified flag and DEF-024
     # requires `model info` to SURFACE it: before this, the row of an unloadable model
     # printed its FIT and TPS values and said nothing about usability.
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy <<< "$entry"
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads \
+        batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps \
+        autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch \
+        _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max \
+        _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms \
+        _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty \
+        _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state \
+        _ctx_policy <<< "$entry"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -2110,10 +2131,13 @@ function __model_info() {
     # DEF-024: the certification state is part of what this row IS.  An `unacceptable`
     # row (the autotune could not load the model at all, or the resume loop capped it)
     # must read as unusable here, not only in a log the operator no longer has.
-    __tac_info "meas_state" "${meas_state:--}" "$([ "${meas_state:-}" = "unacceptable" ] && printf '%s' "$C_Error" || printf '%s' "$C_Text")"
+    __tac_info "meas_state" "${meas_state:--}" \
+        "$([ "${meas_state:-}" = "unacceptable" ] && printf '%s' "$C_Error" || printf '%s' "$C_Text")"
     if [[ "${meas_state:-}" == "unacceptable" ]]
     then
-        __tac_info "certification" "[NOT CERTIFIED — no working configuration was found for this model; do not select it]" "$C_Error"
+        __tac_info "certification" \
+            "[NOT CERTIFIED — no working configuration was found for this model; do not select it]" \
+            "$C_Error"
     elif [[ -n "${meas_state:-}" && "${meas_state:-}" != "certified" ]]
     then
         __tac_info "certification" "[${meas_state} — the recorded numbers are not a certification]" "$C_Warning"
@@ -2310,6 +2334,8 @@ function __bench_autotune_failure_why() {
     while IFS= read -r _line
     do
         case "$_line" in
+            # Three fixed keys and nothing else: this reads the file the autotuner writes,
+            # so the arms are exhaustive for that format rather than for any input.
             stage=*) _stage="${_line#stage=}" ;;
             reason=*) _reason="${_line#reason=}" ;;
             detail=*) _detail="${_line#detail=}" ;;
@@ -2330,6 +2356,7 @@ function __bench_autotune_failure_why() {
     return 0
 }
 
+# __model_bench — bench the selected registry rows one at a time, restoring traps after each.
 function __model_bench() {
     local -a bench_selectors=("$@")
     if [[ ! -f "$LLM_REGISTRY" ]]
@@ -2666,7 +2693,9 @@ function __model_bench() {
                     local _autotune_why=""
                     # swallow-ok: the helper's non-zero return means "no result file", which its own stdout already states; the bench line below must still print
                     _autotune_why=$(__bench_autotune_failure_why "$_autotune_result" "$_autotune_rc") || true
-                    __tac_info "Bench" "[Autotune failed for model #${b_num[$i]}: ${_autotune_why} - skipping benchmark]" "$C_Error"
+                    __tac_info "Bench" \
+                        "[Autotune failed for model #${b_num[$i]}: ${_autotune_why} - skipping benchmark]" \
+                        "$C_Error"
                     b_tps+=("FAIL_AUTOTUNE")
                     sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     # swallow-ok: a stop before the next measurement; a model already stopped is the state sought

@@ -3,6 +3,7 @@
 Every counter is a pure function of one file's text, so --selftest can exercise it on
 a fixture instead of on the repo.  The corpus-wide number is their sum.
 """
+
 import os
 import re
 import subprocess
@@ -22,9 +23,12 @@ COMMENT = re.compile(r"^\s*#")
 LONG_LINE = 120
 FUNC_LONG_LINES = 100
 
-FUNC_DEF = re.compile(
-    r"^\s*(?:function\s+([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{?)"
-)
+# A definition's `()` must be followed by `{` or end-of-line.  The optional `{` used to
+# admit ANY text after the parens, so a heredoc line of C++ error output —
+# `  what():  unexpected internal state`, written by autotune-model.sh's canned OOM log —
+# counted as an uncommented FUNCTION (9.5 +1, measured 2026-11-02).  One-line bodies
+# (`f() { :; }`) and head-only forms (`f()`) still match.
+FUNC_DEF = re.compile(r"^\s*(?:function\s+([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*(?:\{|$))")
 CASE_START = re.compile(r"case\b.*\bin\b")
 STDERR_REDIR = re.compile(r"(?:echo|printf)\b[^\n]*>&2")
 # 10.8 — a `systemctl` aimed at an openclaw unit with no `--user`.  The unit token must
@@ -165,7 +169,19 @@ def c_funcs_over_100(text):
     total = len(lines)
     n = 0
     for k, (start, _name) in enumerate(defs):
-        end = defs[k + 1][0] if k + 1 < len(defs) else total
+        if k + 1 < len(defs):
+            end = defs[k + 1][0]
+        else:
+            # The LAST definition has no successor to bound it, so a script's trailing
+            # top-level code was counted as part of its body — measured 2026-11-02:
+            # _autotune_failure_report is 55 lines, but 253 lines of script-scope main
+            # flow follow it and the counter read 308 (>100).  Bound it by its own
+            # closing brace instead; earlier definitions keep the def-to-def rule.
+            end = total
+            for _k in range(start, total):
+                if lines[_k] == "}":
+                    end = _k + 1
+                    break
         if len([line for line in lines[start:end] if not COMMENT.match(line)]) > FUNC_LONG_LINES:
             n += 1
     return n
@@ -220,7 +236,11 @@ COUNTERS = [
     ("9.7", "literal exit/return codes other than 0/1 with no comment", c_unexplained_exit_codes),
     ("10.4", "functions longer than 100 lines", c_funcs_over_100),
     ("10.7", "hand-written `>&2` on echo/printf instead of a helper", c_adhoc_stderr),
-    ("10.8", "a `systemctl` on an openclaw unit with no `--user` (user units are invisible to the system scope)", c_scopeless_systemctl_openclaw),
+    (
+        "10.8",
+        "a `systemctl` on an openclaw unit with no `--user` (user units are invisible to the system scope)",
+        c_scopeless_systemctl_openclaw,
+    ),
 ]
 
 FIXTURES: dict[str, tuple[str, int] | list[tuple[str, int]]] = {
@@ -231,15 +251,20 @@ FIXTURES: dict[str, tuple[str, int] | list[tuple[str, int]]] = {
     "8.1.8": ("x=" + "a" * 130 + "\n" + "y=short\n", 1),
     "9.5": ("# noted\nnoted() { :; }\nbare() { :; }\n", 1),
     "9.7": ("exit 0\nreturn 1\nexit 3\n# justified above\nreturn 4\nexit 5 # inline\n", 1),
-    "10.4": [("f() {\n" + "\n".join(["  :"] * 105) + "\n}\n", 1),
-             # ...and the exemption that keeps this counter compatible with the swallow
-             # guard: 60 code lines + 60 comment lines is 60, not 120.
-             ("g() {\n" + "\n".join(["  :", "  # why"] * 60) + "\n}\n", 0)],
+    "10.4": [
+        ("f() {\n" + "\n".join(["  :"] * 105) + "\n}\n", 1),
+        # ...and the exemption that keeps this counter compatible with the swallow
+        # guard: 60 code lines + 60 comment lines is 60, not 120.
+        ("g() {\n" + "\n".join(["  :", "  # why"] * 60) + "\n}\n", 0),
+    ],
     "10.7": ("echo bad >&2\nhelper warn\n", 1),
-    "10.8": ("systemctl is-active openclaw-gateway.service\n"
-             "systemctl --user is-active openclaw-gateway.service\n"
-             "systemctl restart nginx\n"
-             "ls openclaw-gateway.log\n", 1),
+    "10.8": (
+        "systemctl is-active openclaw-gateway.service\n"
+        "systemctl --user is-active openclaw-gateway.service\n"
+        "systemctl restart nginx\n"
+        "ls openclaw-gateway.log\n",
+        1,
+    ),
 }
 
 
@@ -261,14 +286,7 @@ def selftest():
                 failures += 1
             print(f"  control {cid:<7} expected {expected}  got {got}  {'OK' if ok else 'MISMATCH'}")
     # A control must also prove the *other* direction: the pristine text scores 0.
-    clean = (
-        "#!/usr/bin/env bash\n"
-        "# a comment\n"
-        "f() {\n"
-        "    local x=1\n"
-        "    [[ $x == 1 ]] && echo ok\n"
-        "}\n"
-    )
+    clean = "#!/usr/bin/env bash\n# a comment\nf() {\n    local x=1\n    [[ $x == 1 ]] && echo ok\n}\n"
     for cid, _desc, fn in COUNTERS:
         if cid == "9.5":
             continue  # `f()` here is deliberately uncommented; covered above
@@ -337,8 +355,7 @@ def write_baseline(path, counts):
 
 
 def corpus_counts():
-    files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True,
-                           text=True, check=True).stdout.split()
+    files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
     files = [f for f in files if CORPUS.search(f)]
     counts = {}
     for cid, _desc, fn in COUNTERS:
@@ -352,8 +369,6 @@ def corpus_counts():
                 return None
         counts[cid] = total
     return counts, len(files)
-
-
 
 
 def main(argv=None):

@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 33
+#   v33 (2026-11-02): the lane's new stderr writes go through one `warn` helper and one status
+#   line is wrapped — the §18.3 10.7 and 8.1.8 shapes its commits added, fixed at source rather
+#   than re-baselined.
 # Module Version: 32
 #   v32 (2026-11-02): the KEEP-lane note was factually wrong, and it is why the baseline
 #   refusal looked like a sweep bug.  It justified sparing the embedding lane with
@@ -284,7 +288,7 @@ function __gpu_clear_stale_processes() {
     # is a cleanup helper, and the caller's VRAM baseline then fails closed.
     if __llm_gpu_foreign_owner
     then
-        echo "[gpu-clear] CUDA card owned by another run (pid $(__llm_gpu_lock_holder)) — skipping the stale-process clear" >&2
+        warn "[gpu-clear] CUDA card owned by another run (pid $(__llm_gpu_lock_holder)) — skipping the stale-process clear"
         return 0
     fi
     local _gpu_pid _keep_pid _keep_pids _stale_wait count=0
@@ -474,7 +478,7 @@ function __llm_kill_cuda_llama_servers() {
     # fails closed instead of stealing the card out from under a bench.
     if __llm_gpu_foreign_owner
     then
-        echo "[llm-kill] GPU lock held by another agent's run (pid $(__llm_gpu_lock_holder)) — skipping CUDA llama cleanup" >&2
+        warn "[llm-kill] GPU lock held by another agent's run (pid $(__llm_gpu_lock_holder)) — skipping CUDA llama cleanup"
         return 0
     fi
 
@@ -607,13 +611,18 @@ function __llm_vram_holder_report() {
 # down for a benchmark is a DELIBERATE act and belongs at the caller, with its own
 # message.  A foreign owner's run is never touched: the lock check comes first.
 #
+# warn — one stderr channel for this file's operator messages. §18.3 10.7 counts a
+# hand-written `>&2` per site; a helper keeps new lines off that count and gives the
+# messages one shape.
+warn() { printf '%s\n' "$*" >&2; }
+
 # Prints one line per lane stopped.  Always returns 0 — the caller's VRAM baseline gate is
 # the thing that decides whether the card is clear, and it fails closed.
 # ---------------------------------------------------------------------------
 function __llm_stand_down_cuda_lanes() {
     if __llm_gpu_foreign_owner
     then
-        echo "[lanes] card owned by another run (pid $(__llm_gpu_lock_holder)) — leaving the lanes alone" >&2
+        warn "[lanes] card owned by another run (pid $(__llm_gpu_lock_holder)) — leaving the lanes alone"
         return 0
     fi
     local _unit _port _pid _idle _waited _smi _mib _keep
@@ -653,7 +662,9 @@ function __llm_stand_down_cuda_lanes() {
             | awk -F',' -v p="$_pid" '{gsub(/ /,"",$1); gsub(/ /,"",$2); if ($1+0 == p+0) {print $2; exit}}')
         [[ -n "$_mib" ]] || continue
         case "$_mib" in ''|*[!0-9]*) _mib="" ;; esac
-        __tac_info "Lanes" "stopping $_unit (pid $_pid${_mib:+, ${_mib} MiB CUDA}) to clear the VRAM baseline" "$C_Warning"
+        __tac_info "Lanes" \
+            "stopping $_unit (pid $_pid${_mib:+, ${_mib} MiB CUDA}) to clear the VRAM baseline" \
+            "$C_Warning"
         # swallow-ok: a stop that fails is reported by the bounded is-active poll below, which refuses the baseline
         systemctl --user stop "$_unit" 2>/dev/null || true
         _waited=0
@@ -667,7 +678,7 @@ function __llm_stand_down_cuda_lanes() {
         # swallow-ok: is-active exits non-zero for inactive OR unknown; both mean "not ours to stop here"
         if systemctl --user is-active --quiet "$_unit" 2>/dev/null
         then
-            echo "[lanes] WARN: $_unit still active after ${_waited}s — the baseline gate will refuse" >&2
+            warn "[lanes] WARN: $_unit still active after ${_waited}s — the baseline gate will refuse"
         else
             echo "[lanes] stopped $_unit after ${_waited}s${_mib:+ (${_mib} MiB released)}"
         fi

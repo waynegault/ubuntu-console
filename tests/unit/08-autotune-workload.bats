@@ -1116,7 +1116,10 @@ STUB
     # The baseline gate is what actually routes to that class on the measured path.
     local gate
     gate=$(sed -n '/VRAM baseline not cleared/,/^fi$/p' "$REPO_ROOT/scripts/autotune-model.sh")
-    [[ "$gate" == *'_preflight_refuse resource_exhausted 1 "VRAM baseline not cleared'* ]]
+    # The two facts, not their layout: the call names the class and the cause. The literal
+    # used to span one line, and a §18.3 wrap split it across a continuation (2026-11-02).
+    [[ "$gate" == *'_preflight_refuse resource_exhausted 1'* ]]
+    [[ "$gate" == *'"VRAM baseline not cleared'* ]]
 }
 
 @test "def-024: an unrecognised failure is 'unclassified' and does not pretend to know why" {

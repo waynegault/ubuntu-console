@@ -11,6 +11,12 @@
 #   Verified the same day: 43c8c55c is the ONLY commit in HEAD~5..HEAD whose added-minus-
 #   removed long-line count differs (+1/-0), and this change-set adds none.
 #
+# 2026-11-02: three rows TIGHTENED after the lane's §18.3 rise was fixed at source (not
+# re-baselined): 8.1.8 287 -> 285 (11e/11d/autotune long lines wrapped), 9.7 80 -> 78,
+# 10.4 51 -> 41 (the counter no longer counts a script's trailing top-level code as part
+# of its last function, nor `what():` in a heredoc as a definition — tools/ratchet_check.py).
+# Earlier rows are deliberately ABOVE the tree where a fix lowered a counter; a baseline
+# above the tree is a raised floor, so each was tightened rather than left stale.
 # 2026-11-01 (later): 8.1.8 288 -> 286 — the three bridge-fallback `__tac_info` lines in 09d
 # v66 were each over 120 characters and are now wrapped across two lines. No rise.
 # 2026-11-01: 8.1.8 289 -> 288 — 09d v64 replaced the three long `_patch=`/`_applied=`/
@@ -208,9 +214,9 @@
 4.2.6	9
 4.3.6	31
 6.7	107
-8.1.8	287
+8.1.8	285
 9.5	118
-9.7	80
-10.4	51
+9.7	78
+10.4	41
 10.7	228
 10.8	0
