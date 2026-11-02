@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.9.2 (2026-11-02: docs/inspection.md §18.3 9.5 — SANCTIONED_LANE_PORT sat
+#          between the doc comment and sanctioned_lane_serving(), so the function counted
+#          as "no comment directly above" and raised the ratchet by one. Moved the
+#          assignment above the comment block. No behaviour change; measured 9.5 122->121.
 # Version: 1.9.1 (2026-11-02: a FREE answer now says WHY it is free. Recorded by Rook
 #          from the committed source: every append to REASONS sat on a busy path and
 #          emit() prints only REASONS, so the state the 00:13:53 stop was made in —
@@ -79,7 +83,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 13
+# Module Version: 14
 # Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
 #          SCRIPT the interpreter was GIVEN — the argv element immediately after an
 #          interpreter — not any element that merely names it.  A CI lint job's file list
@@ -160,6 +164,7 @@ REASONS=()
 # ever contribute to a stop.
 RESIDENCY_EMPTY=0   # nvidia-smi listed no compute app at all
 LANE_SERVING=0      # the sanctioned lane answered >=1 processing request
+SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
 
 # sanctioned_lane_serving -- 0 when the sanctioned CUDA lane is processing a request
 # right now.  Asked only from the utilisation arm, where the residency read already
@@ -175,8 +180,6 @@ LANE_SERVING=0      # the sanctioned lane answered >=1 processing request
 # Fail-closed is preserved in the direction that matters: an unreachable or
 # unparseable metric answers "not serving", so utilisation still decides BUSY the
 # way it always did.  This function can only ever REMOVE a stop, never add one.
-SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
-
 sanctioned_lane_serving() {
     local out n
     LANE_SERVING=0
