@@ -724,7 +724,7 @@ a coin-flip.  Use the card-explicit launchers.
 | `LLM_AUTOTUNE_KV_QUANTS` | `q8_0/q8_0 q4_0/q4_0` | KV-quant candidates for the sweep |
 | `LLM_AUTOTUNE_BENCH_TIMEOUT` | `300` | Per-bench server timeout (seconds) |
 | `LLM_AUTOTUNE_SPEC_N_MAX_LIST` | `4 8 16 32` | Speculative-decoding draft lengths to try |
-| `LLM_AUTOTUNE_BASELINE_GAP_MAX` | `800` | Max MiB of held VRAM tolerated before refusing to run |
+| `LLM_AUTOTUNE_BASELINE_GAP_MAX` | `800` | Max MiB of held VRAM tolerated before refusing to run. `800` is the no-lane default. It does **not** cover a lane the host keeps: on asus-n1n-rtx-spark the profile tolerates `3500` for the driver's reservation alone, while the spared embedding lane holds 4094 MiB, so the guard refuses — see card `AUTOTUNE-BASELINE-002` for the unresolved trade-off |
 | `LLM_AUTOTUNE_VRAM_CAP_MULT` | `2` | Second cap on the ctx-probe ceiling: `min(<arch>.context_length, START_CTX × N)`. The KV-fit estimate under-probes **by design** — Phi-3.5-mini (native 131072) serves 32768 FULL in 9 s while a 2× cap stops the probe near 15360 — and it is ~4× too pessimistic for hybrid-attention models (Spark). Raising it is NOT a licence to certify a slow window: Phase 4's TPS-first descent still refuses anything that cannot hold `LLM_MIN_TPS` |
 | `CUDA_CYCLE_BUDGET` | `60` | CUDA context create/destroy cycles allowed in one WSL boot before the run halts (the batch exits **4**, the designed end of one boot's measuring). See the WSL2 cycle-budget note below |
 | `CUDA_DEGRADE_CONSECUTIVE_STALLS` | `2` | Consecutive launches that stay alive but never report healthy before halting as the dxgkrnl degradation signature (`0` disables) |

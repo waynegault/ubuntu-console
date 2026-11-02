@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
+#   v32 (2026-11-02): the KEEP-lane note was factually wrong, and it is why the baseline
+#   refusal looked like a sweep bug.  It justified sparing the embedding lane with
+#   "evicting it to free ~0.5 GB" while that lane holds 4094 MiB, and claimed the baseline
+#   tolerance "already absorbs" it while the host profile tolerates 3500.  The arithmetic
+#   is now recorded next to the code that depends on it, and the unresolved trade-off
+#   (tolerate a contended baseline, or stand the lane down and risk leaving memory search
+#   dark) is named on card AUTOTUNE-BASELINE-002.  No behaviour change.
 #   v31 (2026-11-02): __llm_stand_down_cuda_lanes — the PROTECTED declared lanes made the
 #   autotune VRAM baseline unreachable on a box whose lane holds the CUDA card.  Measured
 #   `model autotune 2`: "28099 MiB still held", because llama-cuda-qwen3coder-30b-chat.service
@@ -617,8 +624,16 @@ function __llm_stand_down_cuda_lanes() {
     do
         [[ -n "$_unit" ]] || continue
         # A lane the host profile marks as always-on is never stood down: the embedding
-        # lane backs memory search, and evicting it to free ~0.5 GB would break a
-        # different subsystem to save memory the baseline tolerance already absorbs.
+        # lane backs memory search, and evicting it would break a different subsystem.
+        # The baseline tolerance therefore has to ABSORB it, and did not: measured
+        # 2026-11-02, that lane alone holds 4094 MiB on this box (the driver's ~2.9 GiB
+        # reservation included), while the profile tolerated 3500 — so every autotune
+        # refused by 594 MiB, and the refusal's remedy could not help, because the
+        # holder was the lane the same run is told to keep.  Tolerating it by raising the
+        # bound is not free either: the same guard exists to refuse a baseline whose TPS
+        # would be untrustworthy.  That trade-off is recorded, unresolved, on card
+        # AUTOTUNE-BASELINE-002; this comment exists so the next reader does not
+        # re-derive it as a bug in the sweep.
         for _keep in ${LLAMA_LANE_KEEP_UNITS:-}
         do
             [[ "$_unit" == "$_keep" ]] && continue 2
