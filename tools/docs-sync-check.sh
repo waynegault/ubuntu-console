@@ -14,9 +14,21 @@
 #   - CI (fails the build on drift)
 #   - `up` step 18 / `docs-sync` command (via 08-maintenance.sh)
 #
-# Usage: tools/docs-sync-check.sh
+# Usage: tools/docs-sync-check.sh          (report; exit 1 on drift)
+#        tools/docs-sync-check.sh --fix    (rewrite the phrases it derives, then re-check)
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
+# Module Version: 10
+#   v10 (2026-11-02): `--fix`. The gate already printed the exact expected literal for
+#   every drifting phrase, and the repair was being done by hand — three times on
+#   2026-11-01/02, once with a hand-written mapper that mis-matched the Total row. --fix
+#   rewrites each drifting phrase in its own file (README.md or pytest.ini) from the
+#   value the checks just computed, then re-execs itself so the verdict and the exit
+#   status come from a clean pass, not from the repairing one. It REFUSES to invent: a
+#   phrase that cannot be located is reported UNFIXED and still exits 1, because a
+#   fabricated count is worse than a red gate. Locators are the expected string with
+#   its digit runs generalised, except the per-directory breakdowns, whose element
+#   COUNT changes with a new suite file and so cannot be matched by that rule.
 # Module Version: 9
 #   v9 (2026-10-31): force LC_ALL=C so the per-file breakdown globs in ONE order on
 #   every box.  The bash glob's sort order follows LC_COLLATE, and the two boxes
@@ -45,14 +57,61 @@ README="$REPO_ROOT/README.md"
 LOADER="$REPO_ROOT/tactical-console.bashrc"
 
 drift=0
+FIX=0
+fixed_count=0
+case "${1:-}" in
+    "")    ;;
+    --fix) FIX=1 ;;
+    *)     printf 'usage: %s [--fix]\n' "${0##*/}"; exit 2 ;;
+esac
 
-check_phrase() { # <description> <grep -F pattern>
-    local desc="$1" pattern="$2"
+# fix_phrase <file> <desc> <expected> [locator]
+# Rewrite the ONE phrase this check derives. The locator defaults to the expected text
+# with every digit run widened to `\d+`, so a changed COUNT is found while the wording
+# around it still has to match exactly; a caller whose shape changes (the breakdowns,
+# where a new suite file adds a term) passes its own. Prints 1 on a rewrite, 0 when
+# nothing matched — and writes NOTHING in that case, because inventing a figure is the
+# failure mode this gate exists to catch.
+fix_phrase() {
+    local file="$1" desc="$2" expected="$3" locator="${4:-}" n=""
+    n=$("${TAC_PYTHON:-python3}" - "$file" "$locator" "$expected" <<'PY'
+import re, sys
+path, locator, expected = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(path, encoding="utf-8").read()
+if not locator:
+    locator = "".join(r"\d+" if part.isdigit() else re.escape(part)
+                      for part in re.split(r"(\d+)", expected) if part)
+new, n = re.subn(locator, lambda _m: expected, src, count=1, flags=re.M)
+if n:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(new)
+print(n)
+PY
+)
+    if [[ "$n" == "1" ]]
+    then
+        echo "  FIXED: $desc — wrote '$expected' to ${file#"$REPO_ROOT"/}"
+        fixed_count=$((fixed_count + 1))
+    else
+        # Say WHICH pattern failed: an empty locator means the default was derived inside
+        # the python above, and `matched ''` read as though nothing had been tried.
+        local _tried="${locator:-the expected text with its numbers widened}"
+        echo "  UNFIXED: $desc — nothing in ${file#"$REPO_ROOT"/} matched $_tried"
+        drift=1
+    fi
+}
+
+check_phrase() { # <description> <grep -F pattern> [locator]
+    local desc="$1" pattern="$2" locator="${3:-}"
     if grep -qF "$pattern" "$README"; then
         echo "  OK: $desc"
     else
         echo "  DRIFT: $desc — expected '$pattern' in README.md"
         drift=1
+        if (( FIX == 1 ))
+        then
+            fix_phrase "$README" "$desc" "$pattern" "$locator"
+        fi
     fi
 }
 
@@ -122,8 +181,11 @@ do
         unit)        unit_sum=$_sum ;;
         integration) integration_sum=$_sum ;;
     esac
+    # This one needs its OWN locator: a new suite file adds a term, so the expected
+    # string's digit-run generalisation would demand the old term count and never match.
     check_phrase "tests/$_dir breakdown ($_sum tests: $_counts)" \
-        "${_dir} tests (${_sum} tests: ${_counts})"
+        "${_dir} tests (${_sum} tests: ${_counts})" \
+        "${_dir} tests \\([0-9]+ tests: [0-9+]+\\)"
 done
 
 # ── 3c. The same facts, stated anywhere else ───────────────────────────────
@@ -137,13 +199,17 @@ done
 # docs/architecture.md was CONSOLIDATED INTO README on 2026-09-15 (12 docs -> 6):
 # its counts now live in the README tree, so the checks below point there.  Keep
 # this list in step with wherever the same fact is next asserted.
-check_in_file() { # <file> <description> <grep -F pattern>
-    local file="$1" desc="$2" pattern="$3"
+check_in_file() { # <file> <description> <grep -F pattern> [locator]
+    local file="$1" desc="$2" pattern="$3" locator="${4:-}"
     if grep -qF "$pattern" "$file"; then
         echo "  OK: $desc"
     else
         echo "  DRIFT: $desc — expected '$pattern' in ${file#"$REPO_ROOT"/}"
         drift=1
+        if (( FIX == 1 ))
+        then
+            fix_phrase "$file" "$desc" "$pattern" "$locator"
+        fi
     fi
 }
 
@@ -226,6 +292,16 @@ check_phrase "CI Status: unit suites (in CI)" \
     "**Unit suites (${ci_unit_total} tests in CI):**"
 check_phrase "CI Status: integration suites" \
     "**Integration suites (${integration_sum} tests overall):**"
+
+# --fix re-runs ITSELF so the verdict and the exit status come from a clean pass; the
+# repairing pass would otherwise report the drift it just removed. When nothing could be
+# rewritten the fall-through below reports it and exits 1, as a bare run would.
+if (( FIX == 1 && fixed_count > 0 ))
+then
+    echo ""
+    echo "docs-sync-check --fix: $fixed_count phrase(s) rewritten — re-checking"
+    exec bash "$REPO_ROOT/tools/docs-sync-check.sh"
+fi
 
 echo ""
 if (( drift == 0 )); then
