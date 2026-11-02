@@ -1,5 +1,23 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.9.1 (2026-11-02: a FREE answer now says WHY it is free. Recorded by Rook
+#          from the committed source: every append to REASONS sat on a busy path and
+#          emit() prints only REASONS, so the state the 00:13:53 stop was made in —
+#          empty residency read, high utilisation, our own lane serving — answered
+#          `reasons=none`, byte-identical to an idle card. The safety half of 1.9.0
+#          worked; the RECORD could not, and the anomaly that was worth an alarm had no
+#          trace at all.
+#          Additive, free-path only, and it can never add a stop: utilisation is read
+#          (util_peak) but its REASONS entry is appended only after the arm has already
+#          answered FREE. Two labels, because they answer different questions:
+#            cannot-attribute:residency-empty  — nvidia-smi listed no compute app, so a
+#                                                high utilisation cannot be attributed to
+#                                                a named resident (the tri-state that
+#                                                sanctioned_residents_only still cannot
+#                                                express: a bare non-empty test returns 1
+#                                                for "empty" and "foreign" alike)
+#            lane-serving                      — the lane's own gauge said >=1 request
+#          plus util-suppressed=<n>%>=<thr>% naming the reading we chose not to act on.
 # Version: 1.9.0 (2026-11-02: an empty residency read plus a SERVING lane is us, not a
 #          foreign workload. Measured 00:13:53 — `util=90%>=15%` was the recorded reason,
 #          and because busy() is a short-circuiting OR that is proof all five prior signals
@@ -61,7 +79,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 12
+# Module Version: 13
 # Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
 #          SCRIPT the interpreter was GIVEN — the argv element immediately after an
 #          interpreter — not any element that merely names it.  A CI lint job's file list
@@ -137,6 +155,12 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 REASONS=()
 
+# Free-path record (v1.9.1). Set by the probes that can answer "not attributable" and
+# read only by utilisation_arm() AFTER it has decided the card is free, so neither can
+# ever contribute to a stop.
+RESIDENCY_EMPTY=0   # nvidia-smi listed no compute app at all
+LANE_SERVING=0      # the sanctioned lane answered >=1 processing request
+
 # sanctioned_lane_serving -- 0 when the sanctioned CUDA lane is processing a request
 # right now.  Asked only from the utilisation arm, where the residency read already
 # failed to name a resident: without this, a serving lane's own prefill is the
@@ -155,15 +179,24 @@ SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
 
 sanctioned_lane_serving() {
     local out n
+    LANE_SERVING=0
     [[ "$SANCTIONED_LANE_PORT" =~ ^[0-9]+$ ]] || return 1
     out=$(curl -s --max-time 2 "http://127.0.0.1:${SANCTIONED_LANE_PORT}/metrics" 2>/dev/null) || return 1
     [[ -n "$out" ]] || return 1
     n=$(awk '$1 == "llamacpp:requests_processing" {print $2; exit}' <<<"$out")
     [[ "$n" =~ ^[0-9]+$ ]] || return 1
-    (( n > 0 ))
+    (( n > 0 )) || return 1
+    # Recorded for the free-path audit line only; the return value alone decides.
+    LANE_SERVING=1
+    return 0
 }
 
-util_busy() {
+# util_peak — echo the highest utilisation reading, 1 when the probe failed.
+# Deliberately records NOTHING: the caller decides whether a reading becomes a reason.
+# Splitting it out is what lets the suppression path PRINT a reading it declined to
+# act on, without a second sampling loop and without the risk of a read that appends
+# to REASONS by itself.
+util_peak() {
     local max_util=0 s out rc
     for _ in $(seq 1 "$SAMPLES"); do
         out=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null); rc=$?
@@ -175,9 +208,49 @@ util_busy() {
         s=$(tr -dc '0-9' <<<"$out")
         [[ -z "$s" ]] && s=0
         (( s > max_util )) && max_util=$s
-        (( s >= UTIL_THRESHOLD )) && { REASONS+=("util=${s}%>=${UTIL_THRESHOLD}%"); return 0; }
+        # Above the threshold the exact peak no longer matters: every caller compares
+        # against the threshold, so returning here keeps the probe as fast as before.
+        (( s >= UTIL_THRESHOLD )) && { printf '%s\n' "$s"; return 0; }
         sleep "$SAMPLE_INTERVAL"
     done
+    printf '%s\n' "$max_util"
+    return 0
+}
+
+util_busy() {
+    local m
+    m=$(util_peak) || return 1
+    [[ "$m" =~ ^[0-9]+$ ]] || return 1
+    (( m >= UTIL_THRESHOLD )) || return 1
+    REASONS+=("util=${m}%>=${UTIL_THRESHOLD}%")
+    return 0
+}
+
+# The last arm of busy(), and the only one that can answer FREE while the card is
+# busy. Two suppressions, both of which MUST be recorded on the free path (v1.9.1):
+#   * every compute-app resident is a sanctioned server, so the utilisation is our own
+#     lane's work; or
+#   * the sanctioned lane reports a request in flight, so the utilisation is its prefill.
+# A quiet card records nothing: with utilisation below the threshold there is nothing
+# to attribute and an annotation would be noise on every idle poll.
+utilisation_arm() {
+    local m
+    if sanctioned_residents_only; then
+        :
+    elif sanctioned_lane_serving; then
+        :
+    else
+        util_busy
+        return
+    fi
+    # Suppressed: read the utilisation we are declining to act on. A failed probe here
+    # is not a reason to stop either — this arm can only ever answer FREE.
+    m=$(util_peak) || return 1
+    [[ "$m" =~ ^[0-9]+$ ]] || return 1
+    (( m >= UTIL_THRESHOLD )) || return 1
+    (( RESIDENCY_EMPTY )) && REASONS+=("cannot-attribute:residency-empty")
+    (( LANE_SERVING )) && REASONS+=("lane-serving")
+    REASONS+=("util-suppressed:${m}%>=${UTIL_THRESHOLD}%")
     return 1
 }
 
@@ -241,10 +314,17 @@ _is_non_gpu_resident() {
 # false, so utilisation still counts: the fail-closed direction is preserved.
 sanctioned_residents_only() {
     local smi_out pid exe seen=0
+    RESIDENCY_EMPTY=0
     # stderr is dropped because a driver fault is answered by the explicit
     # "|| return 1" (not-busy-only), never by reading the error text as a pid.
     smi_out=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null)  # swallow-ok: see above
-    [[ -n "$smi_out" ]] || return 1
+    if [[ -z "$smi_out" ]]; then
+        # No listing at all. This is the state that cannot be told apart from "a
+        # foreign resident is listed" by the return value (both answer 1), so it is
+        # recorded here and read only by utilisation_arm()'s free-path audit line.
+        RESIDENCY_EMPTY=1
+        return 1
+    fi
     while IFS= read -r pid; do
         pid="${pid%$'\r'}"
         [[ "$pid" =~ ^[0-9]+$ ]] || continue
@@ -504,11 +584,13 @@ busy() {
     #   3. cuda owner        — the investigator's flock is held elsewhere
     #   4. foreign app       — an unsanctioned resident holds a CUDA context
     #   5. declared workload — a bench/autotune artefact is EXECUTING
-    #   6. utilisation       — heuristic, and only when the residents are not ours
+    #   6. utilisation       — heuristic, and only when the residents are not ours.
+    #      This arm can also answer FREE while the card is busy (a serving lane's own
+    #      prefill), so it records WHY on the free path — see utilisation_arm().
     training_tenant_busy \
         || lock_busy || cuda_owner_busy \
         || foreign_apps_busy || declared_workload_busy \
-        || { ! sanctioned_residents_only && ! sanctioned_lane_serving && util_busy; }
+        || utilisation_arm
 }
 
 emit() {

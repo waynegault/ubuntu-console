@@ -96,7 +96,10 @@ REASONS=()
 if busy; then
     printf 'busy reasons=%s\n' "${REASONS[*]}"
 else
-    printf 'free\n'
+    # v1.9.1: a FREE answer carries its own audit line, so the assertions below can
+    # tell "quiet card" (reasons=none) from "free because the lane was serving its own
+    # prefill" — the state that used to be indistinguishable from idle.
+    printf 'free reasons=%s\n' "${REASONS[*]:-none}"
 fi
 EOS
 }
@@ -131,7 +134,10 @@ run_probe() {
 
     run run_probe
     [ "$status" -eq 0 ]
-    [ "$output" = "free" ]
+    # Sanctioned residents at 95% util: suppressed, and the audit line says why.
+    [[ "$output" == free\ reasons=*"util-suppressed:95%"* ]]
+    [[ "$output" != *"cannot-attribute"* ]]
+    [[ "$output" != *"busy"* ]]
 }
 
 @test "unsanctioned resident at high utilisation is busy, and named" {
@@ -168,7 +174,12 @@ llamacpp:requests_processing 1'
 
     run run_probe
     [ "$status" -eq 0 ]
-    [ "$output" = "free" ]
+    # The 00:13:53 shape, now with its record: free BECAUSE the lane was serving, and
+    # the residency read could not attribute the utilisation to a named resident.
+    [[ "$output" == *"cannot-attribute:residency-empty"* ]]
+    [[ "$output" == *"lane-serving"* ]]
+    [[ "$output" == *"util-suppressed:90%"* ]]
+    [[ "$output" != *"busy"* ]]
 }
 
 @test "an idle lane plus an empty residency listing is still busy on utilisation" {
@@ -212,5 +223,43 @@ llamacpp:requests_processing 1'
 
     run run_probe
     [ "$status" -eq 0 ]
-    [ "$output" = "free" ]
+    # Quiet card: nothing to attribute, so no annotation. An annotation here would be
+    # noise on every idle poll and would make the 00:13:53 shape ordinary.
+    [ "$output" = "free reasons=none" ]
+}
+
+@test "a sanctioned-only card at high utilisation records the suppressed reading" {
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /bin/sleep)"
+    export STUB_PIDS="$RESIDENT_PID"
+    export STUB_UTIL=95
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"util-suppressed:95%"* ]]
+    # A listed, sanctioned resident is attributable: the card was NOT unreadable.
+    [[ "$output" != *"cannot-attribute"* ]]
+}
+
+@test "a serving lane with no residency listing is free and says both reasons" {
+    export STUB_PIDS=""
+    export STUB_UTIL=90
+    export STUB_METRICS='llamacpp:requests_processing 1'
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cannot-attribute:residency-empty"* ]]
+    [[ "$output" == *"lane-serving"* ]]
+}
+
+@test "a serving lane on a quiet card records nothing" {
+    # Suppression without a threshold breach is not an event: no annotation, because
+    # a reading below UTIL_THRESHOLD was never a candidate for a stop.
+    export STUB_PIDS=""
+    export STUB_UTIL=3
+    export STUB_METRICS='llamacpp:requests_processing 1'
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [ "$output" = "free reasons=none" ]
 }

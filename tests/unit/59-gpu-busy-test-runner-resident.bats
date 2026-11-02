@@ -83,7 +83,7 @@ REASONS=()
 if busy; then
     printf 'busy reasons=%s\n' "${REASONS[*]}"
 else
-    printf 'free\n'
+    printf 'free reasons=%s\n' "${REASONS[*]:-none}"
 fi
 EOS
 }
@@ -129,7 +129,9 @@ $PYTEST_PID"
 
     run run_probe
     [ "$status" -eq 0 ]
-    [ "$output" = "free" ]
+    # Free, and the audit line names the suppression rather than staying silent.
+    [[ "$output" == free\ reasons=*"util-suppressed:95%"* ]]
+    [[ "$output" != *"busy"* ]]
 }
 
 @test "the test-runner exemption is scoped: a plain unsanctioned resident still reads foreign" {
