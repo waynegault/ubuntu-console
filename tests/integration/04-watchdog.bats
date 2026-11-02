@@ -1000,4 +1000,89 @@ setup() {
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.15 — the flap hold must not feed itself, and a live GPU claim is not a death
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "integration: a tick during a live flap hold stamps NO new death and does not extend it" {
+    # Measured 2026-11-02 on the live box: the hold was entered at 02:57:27, and the
+    # 03:30:12 and 03:35:12 ticks each recorded a fresh death ("died 4x", "died 5x")
+    # for a lane nobody had tried to start, then 03:30:12 re-armed the hold for another
+    # 30 min.  A held lane could therefore never come back: every expiry found a stamp
+    # its own ticks had just written.  This is the regression test for that ratchet.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+
+    run "$WATCHDOG_SCRIPT"   # 1
+    run "$WATCHDOG_SCRIPT"   # 2
+    run "$WATCHDOG_SCRIPT"   # 3 -> hold entered
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 3 ]]
+    hold_before="$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold")"
+    rm -f "$WATCHDOG_MOCK_STATE/start_called"
+
+    run "$WATCHDOG_SCRIPT"   # 4 -> held: no count, no start, no re-arm
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"held down after repeated flaps"* ]]
+    [[ "$output" != *"WARNING flap"* ]]
+    [[ "$output" != *"starting CUDA lane"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 3 ]]
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold")" == "$hold_before" ]]
+}
+
+@test "integration: an expired hold clears itself and starts the lane WITHOUT a death stamp" {
+    # The other half of the ratchet: at expiry the lane is down BECAUSE the hold kept
+    # it down, so that is not an unexpected death.  It must be cleared and started, and
+    # the stamp count must not grow — otherwise the next tick re-enters the hold from
+    # stamps that describe the outage the hold itself caused.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    now=$(date +%s)
+    printf '%s\n%s\n%s\n' "$now" "$now" "$now" > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps"
+    printf '%s\n' "$(( now - 5 ))" > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"cooling-off ended"* ]]
+    [[ "$output" == *"starting CUDA lane"* ]]
+    [[ "$output" != *"WARNING flap"* ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold" ]]
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 3 ]]
+}
+
+@test "integration: a LIVE GPU ownership flock parks the CUDA lane without counting a death" {
+    # The instrument that disagreed with the guard on 2026-11-02: bench_lock() reads the
+    # marker FILE, the investigator bench takes a FLOCK, so the watchdog called the card
+    # unclaimed 14 s after the guard called it claimed and started lanes into the bench's
+    # queued stop jobs.  This is the flock arm, and the NEGATIVE ARM beside it is the
+    # release: no lock, same state, lane starts.
+    export INVESTIGATOR_GPU_LOCK="$TAC_TEST_TMPDIR/gpu.lock"
+    : > "$INVESTIGATOR_GPU_LOCK"
+    ( flock -n 9 && sleep 20 ) 9>"$INVESTIGATOR_GPU_LOCK" &
+    holder=$!
+    sleep 0.3
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"a bench holds the card"* ]]
+    [[ "$output" != *"WARNING flap"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" ]]
+
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    rm -f "$INVESTIGATOR_GPU_LOCK"
+
+    # NEGATIVE ARM: with the claim gone the same down lane is started.
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"starting CUDA lane"* ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+}
+
 # end of file

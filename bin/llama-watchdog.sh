@@ -119,6 +119,27 @@
 #   a re-probe (GPU_REPROBE_ATTEMPTS x GPU_REPROBE_SLEEP_S) finds the card FREE, the stop
 #   is skipped and the gpustop marker cleared; if the re-probe stays busy or unreadable,
 #   the stop happens exactly as before.  The START path is untouched.
+# v3.15 (2026-11-02): the flap counter could hold the CUDA tier down forever without
+#   ever trying to start it, and it counted a stop a live GPU claim had asked for.
+#   Three measured faults, all in the same hour:
+#   (1) THE RATCHET.  The down+card-free branch stamped a death BEFORE it looked at the
+#       cooling-off, so a held lane earned a fresh stamp on every tick, and the hold was
+#       re-armed at every expiry by stamps it had written itself.  Measured: stamps
+#       02:44:50 / 02:47:12 / 02:57:27, hold entered 02:57:27, then 03:30:12 logged
+#       "died 4x" and re-armed to 04:00:12 while nothing had attempted a restart, and
+#       03:35:12 logged "died 5x".  Now: a live hold counts nothing, an expired hold is
+#       cleared and the lane gets the restart the hold owed it, and a hold can only be
+#       ENTERED by a death recorded on that same pass.
+#   (2) THE INSTRUMENT DISAGREED WITH THE GUARD.  bench_lock() reads the marker FILE
+#       /tmp/llm-bench.lock; the investigator bench takes a FLOCK on
+#       bin/_inv_gpu_lock_path.  At 02:46:58 the guard read the flock as held and stood
+#       down; 14 s later bench_lock read the same card as unclaimed and the tick started
+#       both CUDA lanes into the bench's queued stop jobs (stop-sigterm timeout ->
+#       SIGKILL, Result=timeout), which the flap counter then charged to the lane.
+#       gpu_claim_held() is the flock probe, scoped to the gated lane so a GPU bench
+#       still cannot park the CPU fallback.
+#   (3) The hold's log line is now emitted only when the hold is what stopped the start,
+#       so "deliberately OFFLINE" and "restarting it" can no longer describe one tick.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -127,7 +148,11 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-11-02): the flap ratchet and the GPU-claim probe — see the v3.15 history
+#   entry.  The ratchet was recorded as a code-path reading at 03:20Z and fired five
+#   minutes later (03:30:12 "died 4x", 03:35:12 "died 5x"), which is the only reason it
+#   is still described here as measured rather than as suspected.
 #   v21 (2026-11-01): a driver-level fail-closed no longer parks a RUNNING lane on one
 #   probe.  See the v3.14 history entry above for the measurement and the boundary
 #   (the start gate stays fail-closed; only the STOP is deferred, and only while a
@@ -636,6 +661,34 @@ gpu_classify_driver_failclosed() {
 
 bench_lock() { [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" ]]; }
 
+# gpu_claim_held — a live GPU OWNERSHIP CLAIM is held, whatever lock-file convention
+# the bench used.  bench_lock above reads the bench/autotune marker FILE
+# (/tmp/llm-bench.lock); the investigator pipeline takes a FLOCK instead, on the path
+# the supervision guard already probes (bin/_inv_gpu_lock_path).  A file test cannot see
+# a flock, and the kernel drops it when the holder dies, so the probe is: can we take it
+# right now?  Not being able to means a live owner.
+#
+# Measured 2026-11-02, and it is why this exists: the guard logged "a bench holds
+# gpu.lock — deliberate stop, standing down" at 02:46:58, and 14 s later the tick's
+# bench_lock answered "no bench" to the same card, so the watchdog started both CUDA
+# lanes into the bench's queued stop jobs.  stop-sigterm timed out twice and systemd
+# SIGKILLed the lane (Result=timeout, ExecMainStatus=9); the flap counter then charged
+# that wreckage to the lane.  A held claim is the only reliable "someone else owns this
+# card" signal on this host: the bench's server and our own lane are the same binary.
+#
+# Deliberately NOT folded into bench_lock(): that one also gates the always-on lanes
+# (the CPU tail among them), and a benchmark on the GPU must not stop the CPU fallback.
+gpu_claim_held() {
+    local _lock
+    _lock="$(_inv_gpu_lock_path)"
+    [[ -e "$_lock" ]] || return 1
+    # swallow-ok: the probe's exit status IS the question — a held flock means busy.
+    if flock -n "$_lock" -c true 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
 # cuda_suspended — the CUDA lane is held down on purpose (a bench/autotune run is
 # measuring TPS and wants the card to itself).  Scoped to the CUDA lane only:
 # unlike bench_lock it must NOT suppress Xe recovery.
@@ -846,28 +899,51 @@ supervise_cuda_lane() {
         strike_reset "$STRIKE_CUDA"
     else
         # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
-        if bench_lock; then
-            log "GPU free but bench lock present — not starting $CUDA_UNIT yet"
+        if bench_lock || gpu_claim_held; then
+            log "GPU free but a bench holds the card — not starting $CUDA_UNIT yet"
         else
             # Down with a free card is USUALLY an unexpected death (v3.8) — but not if
             # WE stopped it for a foreign GPU owner and the card has since freed.  The
             # marker is SINGLE-USE: consuming it here means it can explain exactly one
             # restart and can never mask a genuine death afterwards.
+            _held=0
+            _counted=0
             if gpustop_active; then
                 log "GPU free; the stop was ours for a foreign owner — restarting $CUDA_UNIT without recording a flap"
                 gpustop_clear
+            elif [[ -e "$FLAP_HOLD_FILE" ]] && flap_hold_active; then
+                # A live cooling-off is a deliberate, bounded stop and THIS tick makes no
+                # restart attempt, so there is no death to count.  v3.8 stamped one here
+                # anyway (flap_record ran before the hold check), so a held lane earned a
+                # fresh stamp every timer tick and the hold was re-armed at every expiry
+                # by stamps it had written itself: a one-way ratchet that holds the CUDA
+                # tier down with zero restart attempts.  Measured 2026-11-02 — stamps at
+                # 02:44:50 / 02:47:12 / 02:57:27, hold entered 02:57:27, then 03:30:12
+                # and 03:35:12 each logged "died 4x"/"5x" for a lane nothing had tried
+                # to start, and 03:30:12 re-armed the hold for another 30 minutes.
+                _held=1
+            elif [[ -e "$FLAP_HOLD_FILE" ]]; then
+                # Expired with the lane still down — but the hold is WHY it is down, so
+                # that is not a death either.  Clear it and give the lane the restart
+                # the hold owed it, without charging a stamp for the waiting.
+                rm -f "$FLAP_HOLD_FILE"
+                log "flap cooling-off ended — attempting one restart without counting a death"
             else
                 # An unexpected death: down, card free, nothing suspending us.  Count it
                 # BEFORE any recovery below so the alert and the action appear together.
                 flap_record "$FLAP_CUDA"
+                _counted=1
                 flap_alert "$CUDA_UNIT" "$FLAP_CUDA" "bin/gpu-busy.sh --json for a foreign GPU owner"
             fi
-            if flap_hold_active; then
+            if (( _held )); then
                 log "CUDA lane held down after repeated flaps — not starting $CUDA_UNIT (cooling-off; delete $FLAP_HOLD_FILE to lift it early)"
-            elif (( $(flap_count "$FLAP_CUDA") >= FLAP_THRESHOLD )); then
+            elif (( _counted )) && (( $(flap_count "$FLAP_CUDA") >= FLAP_THRESHOLD )); then
                 # At the threshold the restart STOPS.  A lane dying every few minutes is
                 # either being evicted by something outside our control or is broken; in
                 # both cases another context cycle makes it worse, not better.
+                # ONLY a death recorded on THIS pass may enter a hold: a count made of
+                # stale stamps describes the past, and re-arming from it was the other
+                # half of the ratchet above.
                 flap_hold_enter
             else
                 if [[ "$cuda_state" == "failed" ]]; then

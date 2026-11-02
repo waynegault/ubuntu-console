@@ -34,7 +34,23 @@
 #   deliberate, non-bench stop.  `rm` the file to resume.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-11-02): standing down for a bench claim now LEAVES EVIDENCE for the
+#   watchdog.  The bench stops these lanes itself, and the first tick after the claim
+#   ends sees "down, card free, nobody suspending us" — v3.8's shape for an unexpected
+#   death — so it charged the bench's own stop to the flap counter.  Measured
+#   2026-11-02: this script read the claim as held at 02:46:58; the watchdog's own
+#   bench test reads a different lock, so its 02:47:12 tick started both CUDA lanes
+#   into that bench's queued stop jobs (two stop-sigterm timeouts, both SIGKILLed,
+#   Result=timeout) and stamped 02:47:12 as an unexpected death.  The resulting hold
+#   then cost the CUDA tier 30+ minutes on an idle card, during an outage.  (The
+#   02:44:50 stamp in the same window is NOT attributed to the claim: no claim
+#   measurement covers it — it came from a suspend marker whose recorded owner had
+#   already died.)  This script already knows the claim is live (that is what
+#   standing down MEANS), so it writes the same single-use, TTL-bounded stop marker the
+#   watchdog's GPU-busy branch writes; the first free tick consumes it instead of
+#   counting a death.  Refreshed on every stand-down tick, so it is never older than
+#   this cadence while the claim lasts.
 #   v5 (2026-10-15): the alert writer uses the shared repository-venv-first resolver.
 
 set -euo pipefail
@@ -60,6 +76,12 @@ LOCK="$(_inv_gpu_lock_path)"
 PAUSE="/dev/shm/llama-watchdog-guard.pause"
 STRIKES="/dev/shm/llama-watchdog-guard.strikes"
 ALERT="/home/wayne/.openclaw/life/alerts/supervision-stall.json"
+# The CUDA-lane "this stop was sanctioned" marker (same file and env override the
+# watchdog writes and consumes).  TTL matches the watchdog's own default, and it is
+# refreshed on each stand-down tick, so while a bench holds the claim the marker is
+# never older than this script's cadence.
+GPUSTOP="${LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE:-/dev/shm/llama-watchdog-cuda.gpustop}"
+GPUSTOP_TTL_S="${LLAMA_WATCHDOG_CUDA_GPUSTOP_TTL_S:-1800}"
 NEED=2
 
 if [ -e "$PAUSE" ]; then
@@ -90,6 +112,14 @@ if [ -e "$LOCK" ]; then
 fi
 if [ "$held" = true ]; then
   log "$TIMER inactive but a bench holds $(basename "$LOCK") — deliberate stop, standing down"
+  # Leave the watchdog a marker it can consume: the bench stopped these lanes, and a
+  # down lane on a free card is otherwise indistinguishable from an unexpected death.
+  # Single-use and TTL-bounded (the watchdog deletes it when it explains one restart),
+  # so it cannot excuse a genuine death later in the window.
+  # swallow-ok: the redirect's own message is noise — the branch below names the failure
+  if ! printf '%s\n' "$(( $(date +%s) + GPUSTOP_TTL_S ))" > "$GPUSTOP" 2>/dev/null; then
+    log "WARNING: cannot write the sanctioned-stop marker $GPUSTOP — the bench's stop may be counted as a death"
+  fi
   exit 0
 fi
 
