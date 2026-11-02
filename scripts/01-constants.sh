@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 49
+# Module Version: 50
+#   v50 (2026-11-02): LLAMA_LANE_KEEP_UNITS is declared and exported beside
+#   LLAMA_LANE_SPECS.  The always-on embedding lane must survive a VRAM drain; without a
+#   named keep-list every declared lane is a candidate, and the alternative was a unit-name
+#   substring test — the name heuristic this module exists to remove.
 #   v49 (2026-11-01): LLAMA_SERVER_BIN names the CUDA tree that EXISTS.  It was pinned
 #   to $LLAMA_ROOT/build, which this box no longer has (measured 2026-11-01: build/
 #   absent, build-cuda/ serving), so every consumer without LLAMA_CUDA_SERVER_BIN set
@@ -543,6 +547,9 @@ export LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
 # (none, until its own are named) cannot be inferred from `uname -m`.  install.sh
 # links only the units marked `# install-profile: <this profile>`, so the table
 # and what systemd can actually start stay in step.
+# Lanes a VRAM drain must never stand down (always-on services).  Declared by the host
+# profile, exported here so a child script and a sourced shell agree.
+export LLAMA_LANE_KEEP_UNITS="${LLAMA_LANE_KEEP_UNITS:-}"
 export LLAMA_LANE_SPECS="${LLAMA_LANE_SPECS:-}"
 export OC_PORT=18789
 export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"

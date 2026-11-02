@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-11-02): __llm_stand_down_cuda_lanes — the PROTECTED declared lanes made the
+#   autotune VRAM baseline unreachable on a box whose lane holds the CUDA card.  Measured
+#   `model autotune 2`: "28099 MiB still held", because llama-cuda-qwen3coder-30b-chat.service
+#   was serving at :18087 with -ngl 99 and __llm_kill_cuda_llama_servers spares every declared
+#   lane by design.  The retune wrapper has stood its lane down since 2026-09-15; the direct
+#   entry point never did, so it could only ever refuse.  The sweep keeps sparing lanes —
+#   this helper stops them deliberately, and only when they actually hold CUDA memory.
 #   v30 (2026-11-01): bench_*.tsv discovery reads $LLM_STATE_DIR (the tool-state home).
 #   v29 (2026-10-30): on a UNIFIED-MEMORY host the sizing ceiling is physical RAM, not
 #   the card's reported figure (81920 MiB reported against 39 GiB of RAM, measured on
@@ -35,6 +42,7 @@
 # @exports: wake, gpu-status, gpu-check, __gguf_metadata, __calc_gpu_layers,
 #   __calc_ctx_size, __calc_threads, __quant_label, __tac_cleanup_stale_locks,
 #   __gpu_clear_stale_processes, __llm_kill_cuda_llama_servers,
+#   __llm_stand_down_cuda_lanes, __llm_vram_holder_report,
 #   __llm_gpu_lock_path, __llm_gpu_lock_holder, __llm_gpu_foreign_owner,
 #   __llm_train_lane_holder, __llm_train_lane_busy
 
@@ -546,6 +554,110 @@ function __llm_kill_cuda_llama_servers() {
             fi
         done
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __llm_vram_holder_report — name what is holding the card, one line per CUDA process.
+#
+# The autotune's refusal said only "28099 MiB still held".  An operator reading that has
+# to go and run nvidia-smi to learn which unit — and the answer, on this box, is a unit
+# the sweep deliberately spared, so the refusal's own cause is invisible from the message.
+# Prints to stdout for the caller to embed; empty when nvidia-smi cannot attribute.
+# ---------------------------------------------------------------------------
+function __llm_vram_holder_report() {
+    local _smi _pid _mib _unit _exe
+    # swallow-ok: a missing nvidia-smi is the documented no-attribution answer; the caller fails closed
+    _smi=$(command -v nvidia-smi 2>/dev/null || true)
+    [[ -n "$_smi" ]] || return 0
+    while IFS=',' read -r _pid _mib
+    do
+        _pid=$(printf '%s' "${_pid:-}" | tr -d ' ')
+        _mib=$(printf '%s' "${_mib:-}" | tr -d ' ')
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        # This host reports [N/A] for per-process memory (WSL2 dxgkrnl); print the figure
+        # only when it is a number, so the line reads as fact rather than as a placeholder.
+        case "$_mib" in ''|*[!0-9]*) _mib="" ;; esac
+        # swallow-ok: a process that exited since the nvidia-smi read has no cgroup to name
+        _unit=$(ps -o cgroup= -p "$_pid" 2>/dev/null | grep -o '[^/]*\.service' | head -1 || true)
+        # swallow-ok: a process that exited since the nvidia-smi read has no exe to name
+        _exe=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || true)
+        printf '  pid %s  %s%s  %s\n' \
+            "$_pid" "${_mib:+${_mib} MiB  }" "${_unit:-no-unit}" "${_exe:-unknown-exe}"
+    # swallow-ok: an unreadable compute-apps list yields no candidate; the baseline gate fails closed
+    done < <("$_smi" --query-compute-apps=pid,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null || true)
+}
+
+# ---------------------------------------------------------------------------
+# __llm_stand_down_cuda_lanes — stop the host profile's OWN declared lanes when they
+# hold CUDA memory, so an autotune/bench can take the whole card.
+#
+# Why this is not part of __llm_kill_cuda_llama_servers: that sweep must never reap a
+# systemd-managed unit (a restart storm, and a lane may be serving a user), so it SPARES
+# every lane in LLAMA_LANE_SPECS.  The sparing is right and it also makes the VRAM
+# baseline unreachable whenever a declared lane is a CUDA lane — measured 2026-11-02,
+# `model autotune 2` refused with 28099 MiB still held while
+# llama-cuda-qwen3coder-30b-chat.service served :18087 with -ngl 99.  Standing a lane
+# down for a benchmark is a DELIBERATE act and belongs at the caller, with its own
+# message.  A foreign owner's run is never touched: the lock check comes first.
+#
+# Prints one line per lane stopped.  Always returns 0 — the caller's VRAM baseline gate is
+# the thing that decides whether the card is clear, and it fails closed.
+# ---------------------------------------------------------------------------
+function __llm_stand_down_cuda_lanes() {
+    if __llm_gpu_foreign_owner
+    then
+        echo "[lanes] card owned by another run (pid $(__llm_gpu_lock_holder)) — leaving the lanes alone" >&2
+        return 0
+    fi
+    local _unit _port _pid _idle _waited _smi _mib _keep
+    # swallow-ok: a missing nvidia-smi is the documented no-attribution answer; the caller fails closed
+    _smi=$(command -v nvidia-smi 2>/dev/null || true)
+    [[ -n "$_smi" ]] || return 0
+    while IFS='|' read -r _unit _port
+    do
+        [[ -n "$_unit" ]] || continue
+        # A lane the host profile marks as always-on is never stood down: the embedding
+        # lane backs memory search, and evicting it to free ~0.5 GB would break a
+        # different subsystem to save memory the baseline tolerance already absorbs.
+        for _keep in ${LLAMA_LANE_KEEP_UNITS:-}
+        do
+            [[ "$_unit" == "$_keep" ]] && continue 2
+        done
+        # swallow-ok: is-active exits non-zero for inactive OR unknown; both mean "not ours to stop here"
+        systemctl --user is-active --quiet "$_unit" 2>/dev/null || continue
+        # swallow-ok: a unit with no MainPID has nothing to stand down
+        _pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
+        [[ "$_pid" =~ ^[0-9]+$ ]] && (( _pid > 0 )) || continue
+        # Attribution is PRESENCE in the compute-apps list, not a memory figure: on this
+        # box (WSL2 dxgkrnl) nvidia-smi reports used_gpu_memory as [N/A] for every PID, so
+        # keying the decision on a number meant no lane was ever stood down — the exact
+        # silent no-op that made `model autotune 2` keep refusing.  An Xe/OpenCL lane in
+        # the declared list never appears here and is therefore left serving.
+        # swallow-ok: an unreadable compute-apps list yields no candidate; the baseline gate fails closed
+        _mib=$("$_smi" --query-compute-apps=pid,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null \
+            | awk -F',' -v p="$_pid" '{gsub(/ /,"",$1); gsub(/ /,"",$2); if ($1+0 == p+0) {print $2; exit}}')
+        [[ -n "$_mib" ]] || continue
+        case "$_mib" in ''|*[!0-9]*) _mib="" ;; esac
+        __tac_info "Lanes" "stopping $_unit (pid $_pid${_mib:+, ${_mib} MiB CUDA}) to clear the VRAM baseline" "$C_Warning"
+        # swallow-ok: a stop that fails is reported by the bounded is-active poll below, which refuses the baseline
+        systemctl --user stop "$_unit" 2>/dev/null || true
+        _waited=0
+        while (( _waited < 60 ))
+        do
+            # swallow-ok: is-active exits non-zero for inactive OR unknown; both mean "not ours to stop here"
+            systemctl --user is-active --quiet "$_unit" 2>/dev/null || break
+            sleep 5
+            _waited=$((_waited + 5))
+        done
+        # swallow-ok: is-active exits non-zero for inactive OR unknown; both mean "not ours to stop here"
+        if systemctl --user is-active --quiet "$_unit" 2>/dev/null
+        then
+            echo "[lanes] WARN: $_unit still active after ${_waited}s — the baseline gate will refuse" >&2
+        else
+            echo "[lanes] stopped $_unit after ${_waited}s${_mib:+ (${_mib} MiB released)}"
+        fi
+    done <<< "${LLAMA_LANE_SPECS:-}"
+    return 0
 }
 
 # ---------------------------------------------------------------------------

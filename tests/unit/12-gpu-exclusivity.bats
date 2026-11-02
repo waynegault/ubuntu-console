@@ -1117,3 +1117,150 @@ EOS
         bash "$TAC_TEST_TMPDIR/lane-probe.sh" "$TAC_TEST_TMPDIR/lane.sh"
     [[ "$output" == *"Training lane [IDLE]"* ]] || { echo "got: $output"; return 1; }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A declared lane that HOLDS the CUDA card must be stood down for a baseline
+# ─────────────────────────────────────────────────────────────────────────────
+# __llm_kill_cuda_llama_servers SPARES every unit in LLAMA_LANE_SPECS — correct for a
+# sweep (a managed unit must never be reaped by a name sweep), and fatal for the
+# autotune's VRAM baseline on a box whose declared lane IS a CUDA lane.  Measured
+# 2026-11-02: `model autotune 2` refused with "28099 MiB still held" while
+# llama-cuda-qwen3coder-30b-chat.service served :18087 at -ngl 99, and the message
+# named no holder.  The deliberate stand-down is __llm_stand_down_cuda_lanes.
+@test "lane stand-down: a lane holding CUDA memory is stopped; a non-CUDA lane is left alone" {
+    local sb="$TAC_TEST_TMPDIR/lane-standdown"
+    mkdir -p "$sb/bin"
+    awk '/^function __llm_stand_down_cuda_lanes\(\)/,/^}/' "$MODULE" > "$sb/lane.sh"
+    grep -q '__llm_stand_down_cuda_lanes' "$sb/lane.sh" || { echo "helper not found"; return 1; }
+
+    # Stub nvidia-smi: only the CUDA lane's MainPID (4242) holds the card, and the
+    # per-process figure is [N/A] — the reading this box actually returns for every PID
+    # (WSL2 dxgkrnl).  A helper that keyed attribution on a NUMBER would stand nothing
+    # down here and silently no-op, which is the defect these tests exist for.
+    cat > "$sb/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *query-compute-apps*) printf '4242, [N/A]\n' ;;
+    *) exit 1 ;;
+esac
+EOS
+    # Stub systemctl: --user is-active/show/stop, with stop recorded and honoured.
+    cat > "$sb/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+unit="${@: -1}"
+case "$*" in
+    *"is-active"*)
+        grep -qx "$unit" "$STOP_LOG" 2>/dev/null && exit 3
+        [[ "$unit" == "llama-cuda-qwen3coder-30b-chat.service" || "$unit" == "llama-xe-embeddinggemma-embed.service" ]] || exit 3
+        exit 0 ;;
+    *"show -p MainPID"*)
+        case "$unit" in
+            *qwen3coder*) printf '4242\n' ;;
+            *) printf '7777\n' ;;
+        esac ;;
+    *"stop"*) printf '%s\n' "$unit" >> "$STOP_LOG" ;;
+esac
+exit 0
+EOS
+    chmod +x "$sb/bin/nvidia-smi" "$sb/bin/systemctl"
+    : > "$sb/stopped"
+
+    cat > "$sb/probe.sh" <<'EOS'
+set -uo pipefail
+C_Warning=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+__llm_gpu_foreign_owner() { return 1; }
+source "$1"
+__llm_stand_down_cuda_lanes
+EOS
+
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" \
+        LLAMA_LANE_SPECS=$'llama-cuda-qwen3coder-30b-chat.service|18087\nllama-xe-embeddinggemma-embed.service|18080' \
+        bash "$sb/probe.sh" "$sb/lane.sh"
+    [[ "$status" -eq 0 ]] || { echo "status=$status out=$output"; return 1; }
+    # The CUDA lane was stopped ...
+    grep -qx 'llama-cuda-qwen3coder-30b-chat.service' "$sb/stopped" || { echo "cuda lane not stopped: $output"; return 1; }
+    # ... the Xe lane, which holds no CUDA memory, was NOT ...
+    ! grep -qx 'llama-xe-embeddinggemma-embed.service' "$sb/stopped"
+    # ... and the operator is told which unit and how much it released.
+    [[ "$output" == *"stopped llama-cuda-qwen3coder-30b-chat.service"* ]] || { echo "out: $output"; return 1; }
+}
+
+# The embedding lane is always-on: it backs memory search, and its ~0.5 GB is inside the
+# baseline tolerance.  Standing it down to chase the last few hundred MiB would break a
+# different subsystem for no measurement gain.
+@test "lane stand-down: an always-on lane in LLAMA_LANE_KEEP_UNITS is left serving" {
+    local sb="$TAC_TEST_TMPDIR/lane-keep"
+    mkdir -p "$sb/bin"
+    awk '/^function __llm_stand_down_cuda_lanes\(\)/,/^}/' "$MODULE" > "$sb/lane.sh"
+    cat > "$sb/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+printf '4242, [N/A]\n'
+EOS
+    cat > "$sb/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+unit="${@: -1}"
+case "$*" in
+    *"is-active"*) exit 0 ;;
+    *"show -p MainPID"*) printf '4242\n' ;;
+    *"stop"*) printf '%s\n' "$unit" >> "$STOP_LOG" ;;
+esac
+exit 0
+EOS
+    chmod +x "$sb/bin/nvidia-smi" "$sb/bin/systemctl"
+    : > "$sb/stopped"
+    cat > "$sb/probe.sh" <<'EOS'
+set -uo pipefail
+C_Warning=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+__llm_gpu_foreign_owner() { return 1; }
+source "$1"
+__llm_stand_down_cuda_lanes
+EOS
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" \
+        LLAMA_LANE_SPECS='llama-cuda-embeddinggemma-embed.service|18080' \
+        LLAMA_LANE_KEEP_UNITS='llama-cuda-embeddinggemma-embed.service' \
+        bash "$sb/probe.sh" "$sb/lane.sh"
+    [[ "$status" -eq 0 ]]
+    [ ! -s "$sb/stopped" ] || { echo "evicted an always-on lane: $(cat "$sb/stopped")"; return 1; }
+}
+
+# The whole point of the sweep's sparing is that a FOREIGN run's card is not ours.
+# The stand-down must keep that rule, or it becomes the evictor the exclusivity
+# bridge exists to prevent.
+@test "lane stand-down: a foreign owner's card is never evicted" {
+    local sb="$TAC_TEST_TMPDIR/lane-standdown-foreign"
+    mkdir -p "$sb/bin"
+    awk '/^function __llm_stand_down_cuda_lanes\(\)/,/^}/' "$MODULE" > "$sb/lane.sh"
+    cat > "$sb/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+printf '4242, 28099\n'
+EOS
+    cat > "$sb/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+unit="${@: -1}"
+case "$*" in
+    *"is-active"*) exit 0 ;;
+    *"show -p MainPID"*) printf '4242\n' ;;
+    *"stop"*) printf '%s\n' "$unit" >> "$STOP_LOG" ;;
+esac
+exit 0
+EOS
+    chmod +x "$sb/bin/nvidia-smi" "$sb/bin/systemctl"
+    : > "$sb/stopped"
+    cat > "$sb/probe.sh" <<'EOS'
+set -uo pipefail
+C_Warning=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+__llm_gpu_foreign_owner() { return 0; }
+__llm_gpu_lock_holder() { printf '999\n'; }
+source "$1"
+__llm_stand_down_cuda_lanes
+EOS
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" \
+        LLAMA_LANE_SPECS='llama-cuda-qwen3coder-30b-chat.service|18087' \
+        bash "$sb/probe.sh" "$sb/lane.sh"
+    [[ "$status" -eq 0 ]]
+    [ ! -s "$sb/stopped" ] || { echo "STOPPED a foreign run's lane: $(cat "$sb/stopped")"; return 1; }
+    [[ "$output" == *"card owned by another run"* ]] || { echo "out: $output"; return 1; }
+}

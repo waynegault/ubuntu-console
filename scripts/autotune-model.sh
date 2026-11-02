@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 87
+# Module Version: 88
+#   v88 (2026-11-02): the VRAM baseline gate can now be satisfied on a box whose declared
+#   CUDA lane holds the card.  __llm_kill_cuda_llama_servers SPARES every lane in
+#   LLAMA_LANE_SPECS by design (a managed unit must never be reaped by a sweep), so on this
+#   box — where the lane IS a CUDA lane — `model autotune N` could only ever refuse:
+#   measured 2026-11-02, "28099 MiB still held" with llama-cuda-qwen3coder-30b-chat.service
+#   serving :18087 at -ngl 99.  The run now stands its OWN declared lanes down first
+#   (bounded, attributed by CUDA compute app, foreign-owner lock honoured), and the refusal
+#   names the holder instead of only the byte count.
 #   v87 (2026-11-01): the LLAMA_CUDA_SERVER_BIN fallback was still build/bin, which does
 #   not exist on this box — an unset environment therefore pointed the run at nothing and
 #   the same defect reached bin/llama-cuda-server, 01-constants, the spec-dec crossover and
@@ -416,6 +424,36 @@ if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
 else
     echo "WARN: __llm_kill_cuda_llama_servers not loaded — skipping llama cleanup (a name-based pkill would evict the Xe fleet)" >&2
 fi
+
+# The sweep above SPARES every declared lane — right for a sweep, fatal for a baseline on
+# a box whose lane holds the card.  Standing OUR OWN lane down is the deliberate act the
+# retune wrapper has done since 2026-09-15 and the direct entry point never did, so
+# `model autotune N` could not succeed while the lane was serving.  Measured 2026-11-02.
+if declare -f __llm_stand_down_cuda_lanes &>/dev/null; then
+    __llm_stand_down_cuda_lanes || true
+fi
+
+# Keep the lane down for the WHOLE run.  The stop above only wins until the watchdog's
+# next tick, and the watchdog restarts a declared lane unless a live suspend hold says
+# otherwise (bin/llama-watchdog.sh: cuda_suspended()).  The retune wrapper has taken
+# this hold since 2026-09-15; the direct entry point had no hold, so a 40-minute autotune
+# would have had the lane restored underneath it and every later measurement taken on a
+# contended card.  The release is owner-checked and idempotent, so the EXIT trap is safe.
+_LANE_SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
+# The suspend helpers live in bin/_tac-bin-lib.sh — the ONE reviewed implementation of
+# "held by a live pid".  Sourced by realpath so a repo path and an installed copy agree.
+# shellcheck source=../bin/_tac-bin-lib.sh
+# swallow-ok: the library is optional for a standalone copy; absence is reported by the declare -f guard below
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/_tac-bin-lib.sh" 2>/dev/null || true
+if [[ -z "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_acquire &>/dev/null; then
+    if _tac_suspend_acquire "$_LANE_SUSPEND"; then
+        _TAC_SUSPEND_HELD=1
+        # swallow-ok: release is owner-checked and idempotent; a failed release leaves a marker the reader treats as NOT HELD
+        trap '_tac_suspend_release "$_LANE_SUSPEND" 2>/dev/null || true' EXIT
+    else
+        echo "WARN: $_LANE_SUSPEND is held by another run (pid $(_tac_suspend_pid "$_LANE_SUSPEND")) — the watchdog may restart the CUDA lane mid-run" >&2
+    fi
+fi
 # The OpenClaw gateway's local embedding workers each hold ~430 MiB VRAM
 # (embeddinggemma-300m on CUDA); the gateway respawns them on demand, so
 # killing them here is safe and self-healing. Bracket the pattern so
@@ -477,6 +515,14 @@ BASELINE_GAP_MAX=${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}
 BASELINE_GAP=$(( VRAM_TOTAL - FREE_VRAM ))
 if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
     echo "ERROR: VRAM baseline not cleared — ${FREE_VRAM} MiB free of ${VRAM_TOTAL} MiB (${BASELINE_GAP} MiB still held). Refusing to autotune against an untrustworthy baseline." >&2
+    # Name the holder.  Without this the operator has to go and run nvidia-smi to learn
+    # which unit — and on this box the answer is a lane the sweep deliberately spared, so
+    # the refusal's own cause is invisible from the byte count alone (2026-11-02).
+    if declare -f __llm_vram_holder_report &>/dev/null; then
+        echo "Held by:" >&2
+        __llm_vram_holder_report >&2 || true
+    fi
+    echo "Remedy: stop the holding lane (model stop, or systemctl --user stop <unit>) and re-run; a foreign run's GPU lock is never evicted by this check." >&2
     exit 1
 fi
 # Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
