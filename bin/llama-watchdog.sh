@@ -148,7 +148,21 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 23
+# Module Version: 24
+#   v24 (2026-11-02): a DRIVER-level probe failure no longer stops a lane that is
+#   demonstrably SERVING.  Measured live: at 11:40:41 nvidia-smi answered rc=9 and
+#   gpu-busy reported nvidia-smi-unavailable while the same card was prefilling a
+#   69,632-token request at 1,056 tok/s on :18087; this script stopped the lane at
+#   11:40:51 and SIGKILLed it at :52, which left the WSL2 guest unable to mint ANY
+#   new CUDA context (llama-cuda-server then logs "no CUDA-capable device is
+#   detected") and took the fleet primary down for the rest of the morning.  The
+#   fail-closed gate is right to refuse a START on a card it cannot prove free; it is
+#   wrong to kill one that answers /health 200, because that answer is positive
+#   evidence the card exists and that OUR lane holds it.  gpu_reprobe_free stays: it
+#   answers a different question (is the card free?) and still defers the stop when a
+#   re-probe says so.  Deliberate trade, stated: on a wedged driver we can no longer
+#   see a foreign owner, so a benchmark may wait rather than be handed a card that
+#   cannot be handed over anyway.
 #   v23 (2026-11-02): the requested-stop arm.  v22 wired gpu_claim_held, which answers
 #   only about the PRESENT — the flock is gone the moment its holder releases, so the
 #   stop a claim asked for in its last seconds is unattributable to every console probe,
@@ -200,7 +214,7 @@
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.17"
+VERSION="3.18"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -574,6 +588,20 @@ gpu_driver_failclosed() {
     [[ "$GPU_BUSY_REASONS" == *nvidia-smi-unavailable* ]]
 }
 
+# gpu_serving_now — 0 when the gated lane answers /health 200 right now.
+#
+# WHY (measured 2026-11-02, and it cost a morning): nvidia-smi failing says nothing
+# about whether the card WORKS.  At 11:40:41 nvidia-smi answered rc=9 and gpu-busy
+# reported nvidia-smi-unavailable while the same card served a 69,632-token prefill on
+# :18087 at 1,056 tok/s.  The stop that followed was charged to "GPU busy" and left the
+# guest unable to create a new CUDA context at all.  A lane answering /health 200 is
+# positive evidence: the card exists, and OUR process is the one holding it.  A lane
+# answering 503 ("loading") is NOT that evidence — that is exactly what a restarted
+# lane looks like on a wedged driver — so only rc==0 counts here.
+gpu_serving_now() {
+    health "$CUDA_PORT"
+}
+
 # Re-probe dials (v3.14): how many attempts, and how far apart.
 GPU_REPROBE_ATTEMPTS=${GPU_REPROBE_ATTEMPTS:-2}
 GPU_REPROBE_SLEEP_S=${GPU_REPROBE_SLEEP_S:-5}
@@ -860,7 +888,16 @@ supervise_cuda_lane() {
         # sample (v3.14 — see gpu_reprobe_free's header for the 2026-11-01
         # measurement).  Only the STOP is deferred here; the start gate below is
         # untouched and still fails closed.
-        if gpu_driver_failclosed && [[ "$cuda_state" == "active" ]] && gpu_reprobe_free; then
+        if gpu_driver_failclosed && [[ "$cuda_state" == "active" ]] && gpu_serving_now; then
+            # v24: the probe cannot see the card, but the lane is answering 200 on its
+            # own port.  That is evidence the STOP would destroy and cannot replace —
+            # refused here regardless of what the (unreadable) probe says, and checked
+            # BEFORE the re-probe so a wedged driver does not also pay 2x5s of sleeps.
+            _msg="GPU reported busy driver-level [probe: $GPU_BUSY_REASONS]"
+            log "$_msg but $CUDA_UNIT answers /health 200 on :${CUDA_PORT} — it is SERVING," \
+                "so the stop is refused (an unreadable driver probe is not evidence the card is unusable)"
+            strike_reset "$STRIKE_CUDA"
+        elif gpu_driver_failclosed && [[ "$cuda_state" == "active" ]] && gpu_reprobe_free; then
             _msg="GPU reported busy driver-level [probe: $GPU_BUSY_REASONS]"
             log "$_msg but a re-probe found the card FREE — not stopping $CUDA_UNIT"
             gpustop_clear

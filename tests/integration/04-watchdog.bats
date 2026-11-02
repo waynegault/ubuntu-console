@@ -153,6 +153,10 @@ if [[ -f "$SYSTEMCTL_MOCK_STATE/gpu-probe-error" ]]; then
     echo "mock probe exploded" >&2
     exit 2
 fi
+if [[ -f "$SYSTEMCTL_MOCK_STATE/busy-smi-unavailable" ]]; then
+    echo '{"busy":true,"reasons":["nvidia-smi-unavailable"]}'
+    exit 1
+fi
 if [[ -f "$SYSTEMCTL_MOCK_STATE/busy" ]]; then
     echo '{"busy":true,"reasons":["mock"]}'
     exit 1
@@ -307,6 +311,58 @@ setup() {
 
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"probe failed"* ]]
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+    grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+}
+
+@test "integration: a driver-level probe failure does NOT stop a lane that is serving" {
+    # v24, measured 2026-11-02: nvidia-smi rc=9 reported while the card served a
+    # 69,632-token prefill at 1,056 tok/s. The stop that followed left the guest
+    # unable to create any new CUDA context, so this arm must refuse it.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$WATCHDOG_MOCK_STATE/busy-smi-unavailable"
+    touch "$WATCHDOG_MOCK_STATE/healthy"      # /health answers 200 -> the lane IS serving
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"answers /health 200"* ]]
+    [[ "$output" == *"the stop is refused"* ]]
+    ! grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ ! -f "$WATCHDOG_MOCK_STATE/stop_called" ]]
+    # Not stopping is not the same as masking a later death: this path must not
+    # leave a gpustop marker behind that would explain the NEXT death away.
+    [[ ! -f "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE" ]]
+}
+
+@test "integration: a driver-level probe failure DOES stop a lane that is only loading" {
+    # The control arm for the case above, and the reason it is keyed on rc==0 rather
+    # than on "the lane answers": a 503 is exactly what a restarted lane looks like on
+    # a wedged driver. If this arm did not stop, a wedged CUDA tier would sit holding
+    # VRAM while answering 503 forever.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$WATCHDOG_MOCK_STATE/busy-smi-unavailable"
+    touch "$WATCHDOG_MOCK_STATE/loading"      # /health answers 503 -> NOT serving
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+    grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+}
+
+@test "integration: a driver-level probe failure stops a lane whose port is dead" {
+    # Third arm: neither 200 nor 503 — the port refuses. Nothing is being served, so
+    # the fail-closed stop stands (this is the pre-v24 behaviour and it is correct).
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$WATCHDOG_MOCK_STATE/busy-smi-unavailable"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
     [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
     grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
 }
