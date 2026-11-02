@@ -28,6 +28,11 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 7
+#   v7 (2026-11-02): HF_HUB_CACHE joins HF_HOME in the cleared and exported profile-owned
+#   facts. Pinning only HF_HOME would leave a second cache path in play, because the hub
+#   cache follows HF_HUB_CACHE whenever it is set; both now name the box's model store, so
+#   a download and the GGUF it becomes share one directory.
 # Module Version: 6
 #   v6 (2026-11-02): HF_HOME joins the cleared profile-owned facts and the exported set.
 #   The arm64 box's profile now puts HuggingFace's cache inside its model store
@@ -277,7 +282,7 @@ tac_host_profile_apply() {
           TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT \
           LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
           LLM_REGISTRY LLM_DEFAULT_FILE LLM_STATE_DIR \
-          HF_HOME \
+          HF_HOME HF_HUB_CACHE \
           LLAMA_QUANT_GUIDE_REL QUANT_GUIDE
     _facts="$(tac_host_facts)" || _facts=""
     if [[ -n "$_facts" ]]
@@ -314,7 +319,7 @@ tac_host_profile_apply() {
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
            LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
            LLM_REGISTRY LLM_STATE_DIR \
-           HF_HOME \
+           HF_HOME HF_HUB_CACHE \
            TAC_HOST_PRIMARY_LANE VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL \
            TAC_HOST_IGPU_LABEL TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
            TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT
