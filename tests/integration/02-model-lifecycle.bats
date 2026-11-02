@@ -616,3 +616,43 @@ EOF
     [[ "$output" == *"Summary: 1 row(s): 1 fits"* ]]
     [[ "$output" == *"profile-fits:5120"* ]]
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A split GGUF missing a shard must not be registered as a model
+# ─────────────────────────────────────────────────────────────────────────────
+# __model_scan_row_bytes sums the shards it FINDS, so a half-downloaded model
+# registered with shard 1's bytes and looked loadable.  Measured 2026-11-02:
+# Llama-3.3-70B-Instruct-NVFP4 was registered as 8.3G from 00001-of-00005 beside a
+# genuine 73.3G model — selectable, unloadable, and indistinguishable in every listing
+# from a complete one.  A model that cannot load must not enter the registry.
+@test "integration: a split model with a missing shard is skipped, a complete one is summed" {
+    local sb="$TAC_TEST_TMPDIR/split-scan"
+    mkdir -p "$sb/models"
+    # 1-of-2: part 2 is absent -> no row.
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Half-Downloaded-Q4_K_M-00001-of-00002.gguf" >/dev/null
+    truncate -s 400M "$sb/models/Half-Downloaded-Q4_K_M-00001-of-00002.gguf"
+    # 2-of-2: both present -> ONE row, sized as the sum.
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Whole-Model-Q4_K_M-00001-of-00002.gguf" >/dev/null
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Whole-Model-Q4_K_M-00002-of-00002.gguf" >/dev/null
+    truncate -s 400M "$sb/models/Whole-Model-Q4_K_M-00001-of-00002.gguf"
+    truncate -s 300M "$sb/models/Whole-Model-Q4_K_M-00002-of-00002.gguf"
+
+    export LLAMA_MODEL_DIR="$sb/models"
+    export LLM_REGISTRY="$sb/models.conf"
+    printf '%s\n' "$LLM_REGISTRY_HEADER" > "$LLM_REGISTRY"
+    __LLAMA_DRIVE_MOUNTED=1
+
+    run __model_scan
+    [[ "$status" -eq 0 ]] || { echo "status=$status out=$output"; return 1; }
+    # The incomplete set left no row at all ...
+    ! grep -q 'Half-Downloaded' "$LLM_REGISTRY"
+    # ... the operator was told, by name ...
+    [[ "$output" == *"incomplete split model"* ]] || { echo "out: $output"; return 1; }
+    [[ "$output" == *"Half-Downloaded-Q4_K_M-00002-of-00002.gguf"* ]] || { echo "out: $output"; return 1; }
+    # ... the complete set produced exactly one row, with the sum of both shards (0.7G).
+    [ "$(grep -c 'Whole-Model-Q4_K_M' "$LLM_REGISTRY")" -eq 1 ] || { cat "$LLM_REGISTRY"; return 1; }
+    [ "$(awk -F'|' -v f='Whole-Model-Q4_K_M-00001-of-00002.gguf' '$3==f {print $4}' "$LLM_REGISTRY")" = "0.7G" ]
+}

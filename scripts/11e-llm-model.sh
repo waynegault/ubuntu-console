@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 76
+# Module Version: 77
+#   v77 (2026-11-02): a split GGUF missing any shard is SKIPPED, not registered from the
+#   bytes of the shards that happen to be present.  Measured 2026-11-02: Llama-3.3-70B
+#   NVFP4 was registered as 8.3G from 00001-of-00005 alongside a genuine 73.3G model —
+#   selectable, unloadable, and indistinguishable from a complete one in every listing.
 #   v76 (2026-11-02): the previous-row identity fields are re-initialised on every scan
 #   iteration.  They were assigned without a `local`, so after any file matched a previous
 #   row, every later file with no previous row inherited its NAME — seven rows measured as
@@ -125,7 +129,7 @@
 # @uses: llm-runtime
 # @exports: model, __model_scan, __model_list, __model_default, __model_use,
 #   __model_bench, __model_stop, __model_doctor, __model_recommend,
-#   __model_download, __model_register_trained
+#   __model_download, __model_register_trained, __model_split_shards_missing
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
@@ -175,6 +179,31 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/_tac-bin-lib.sh"
 #
 # Pure on purpose — no logging, no profile dependencies — so a test can extract this body
 # and exercise it against fixture shards without sourcing the console.
+# __model_split_shards_missing <model-dir> <basename> — the shard file names this split
+# GGUF declares but the directory does not hold, one per line; EMPTY when the set is
+# complete or the file is not a split at all.
+#
+# DEF-023 (UAT 2026-11-02): __model_scan_row_bytes sums the shards it FINDS, so a
+# half-downloaded model registered happily with shard 1's bytes and looked loadable.
+# Measured on this box: Llama-3.3-70B-Instruct-NVFP4 registered as 8.3G from
+# 00001-of-00005, next to a 120B at 73.3G — a model that can never launch, presented as
+# if it were complete, and selectable by every consumer of the registry.
+#
+# Pure on purpose (no logging, no profile dependencies), like its neighbour, so a test can
+# extract the body and exercise it against fixture shards without sourcing the console.
+function __model_split_shards_missing() {
+    local _dir="$1" _fname="$2" _i _expected _prefix _want
+    [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]] || return 0
+    _expected=$(( 10#${BASH_REMATCH[2]} ))
+    (( _expected > 1 )) || return 0
+    _prefix="${_fname%-[0-9][0-9][0-9][0-9][0-9]-of-*.gguf}"
+    for (( _i = 1; _i <= _expected; _i++ ))
+    do
+        printf -v _want '%s-%05d-of-%05d.gguf' "$_prefix" "$_i" "$_expected"
+        [[ -f "$_dir/$_want" ]] || printf '%s\n' "$_want"
+    done
+}
+
 function __model_scan_row_bytes() {
     local _dir="$1" _fname="$2" _fbytes _shard _shard_bytes _total=0
     # swallow-ok: the numeric test on the next line is the guard: no usable size means this returns no value at all
@@ -256,6 +285,16 @@ function __model_scan() {
         fname="${gguf##*/}"
         local fbytes
         fbytes=$(__model_scan_row_bytes "$LLAMA_MODEL_DIR" "$fname")
+        # A split model missing any shard cannot load, so it must not become a row at all:
+        # the registry is what every consumer selects from, and a half-download presented
+        # as a model is worse than an absent one (DEF-023, measured 2026-11-02).
+        local _missing_shards
+        _missing_shards=$(__model_split_shards_missing "$LLAMA_MODEL_DIR" "$fname")
+        if [[ -n "$_missing_shards" ]]
+        then
+            __tac_info "Skipping" "incomplete split model $fname — missing $(printf '%s' "$_missing_shards" | tr '\n' ' ')" "$C_Warning"
+            continue
+        fi
         # Empty byte count = a LATER shard of a split GGUF: it gets no row of its own, and
         # the first shard's row carries the group's summed size (see the helper above).
         [[ -n "$fbytes" ]] || continue
