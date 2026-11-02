@@ -83,7 +83,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 14
+# Module Version: 15
 # Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
 #          SCRIPT the interpreter was GIVEN — the argv element immediately after an
 #          interpreter — not any element that merely names it.  A CI lint job's file list
@@ -158,6 +158,38 @@ export TAC_LOG_FILE
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 REASONS=()
+
+# libcuda resolution (v1.9.2).  nvidia-smi has NO link-time libcuda dependency -- it
+# dlopens it at runtime -- so it obeys ldconfig order.  A native libnvidia-compute-595
+# package (landed 2026-11-02 11:39 with nvidia-cuda-toolkit) put
+# /usr/lib/aarch64-linux-gnu/libcuda.so.1 FIRST and the WSL copy second, so EVERY
+# nvidia-smi answered rc=9 "couldn't communicate with the NVIDIA driver" while the
+# same card was prefilling a 76,235-token request on :18087.  Measured in the same
+# minute: bare -> rc=9; LD_LIBRARY_PATH=/usr/lib/wsl/lib -> "GPU 0: NVIDIA RTX Spark
+# N1X".  The card never stopped working; the probe resolved the wrong libcuda, and a
+# broken probe that reports "GPU unavailable" is indistinguishable from a dead GPU.
+#
+# Prepending the WSL driver dir restores the resolution the launcher already relies on
+# (llama-server is started with LD_LIBRARY_PATH=/usr/lib/wsl/lib for the same reason).
+# This is deliberately a PATH preference and not a package removal: the native
+# libnvidia-compute-* packages belong to whoever installed the toolkit, and removing
+# them is their decision.  Any existing LD_LIBRARY_PATH is kept, so a caller that has
+# already chosen a driver still wins over this default.
+WSL_CUDA_LIB_DIR="/usr/lib/wsl/lib"
+if [[ -e "$WSL_CUDA_LIB_DIR/libcuda.so.1" ]]; then
+    export LD_LIBRARY_PATH="${WSL_CUDA_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+# libcuda_shadowed -- echo the path of a native libcuda.so.1 that ldconfig resolves
+# BEFORE the WSL one, or nothing.  Read-only, and used only to explain a failed probe:
+# it answers "is the driver actually broken, or is the resolver pointing elsewhere?".
+libcuda_shadowed() {
+    local line
+    line=$(ldconfig -p 2>/dev/null | awk '/libcuda\.so\.1 /{print $NF; exit}')  # swallow-ok: an ldconfig that cannot read its cache returns empty, which reads "nothing shadows WSL" -- the conservative direction, since the probe itself already prefers the WSL dir
+    [[ -z "$line" ]] && return 0
+    [[ "$line" == "$WSL_CUDA_LIB_DIR"/* ]] && return 0
+    printf '%s' "$line"
+}
 
 # Free-path record (v1.9.1). Set by the probes that can answer "not attributable" and
 # read only by utilisation_arm() AFTER it has decided the card is free, so neither can
@@ -261,8 +293,25 @@ utilisation_arm() {
 # foreign-app probe and the utilisation gate, so the two can never disagree about
 # which residents are OURS.
 _sanctioned_exes() {
-    local _a
-    for _a in "${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}" \
+    local _a _cuda
+    # Name the CUDA tree that EXISTS, not the one this probe was written against.
+    # Measured 2026-11-02 12:55Z: the serving lane runs
+    # /home/wayne/llama.cpp/build-cuda/bin/llama-server while this default still said
+    # build/bin, so the lane's OWN resident failed _is_sanctioned_exe and the probe
+    # answered BUSY "foreign-app exe=…/build-cuda/bin/llama-server" about the server it
+    # was protecting.  A false BUSY is the dangerous direction here — it takes the lane
+    # down — and this file states that two hundred lines further up.
+    #
+    # scripts/01-constants.sh already resolved this on 2026-11-01 (build/ held nothing
+    # while build-cuda/ served the card).  This probe is standalone by design and
+    # therefore carries a copy; the copy had drifted from the decision.  Preferring the
+    # existing tree keeps the copy honest without importing the console.
+    _cuda="${LLAMA_CUDA_SERVER_BIN:-}"
+    if [[ -z "$_cuda" ]]; then
+        _cuda="$HOME/llama.cpp/build-cuda/bin/llama-server"
+        [[ -x "$_cuda" ]] || _cuda="$HOME/llama.cpp/build/bin/llama-server"
+    fi
+    for _a in "$_cuda" \
               "${LLAMA_XE_SERVER_BIN:-$HOME/llama.cpp/build-opencl/bin/llama-server}"
     do
         # An absent build (the Xe tree is not on every host) must yield an empty
