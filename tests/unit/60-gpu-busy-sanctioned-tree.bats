@@ -163,3 +163,50 @@ resolved_exes() {
         *) false ;;
     esac
 }
+
+# ==============================================================================
+# THE DRIFT GUARD (2026-11-02, Rook's proposed durable repair)
+# ==============================================================================
+# gpu-busy.sh is standalone by design — it CARRIES A COPY of the tree decision that
+# scripts/01-constants.sh owns, rather than importing it. Measured on 2026-11-02, that
+# copy kept the pre-correction answer for eleven hours and nothing could notice: no
+# owner, no shared source, no test comparing them. A lane was nearly stopped for the
+# crime of being itself, and the log line said `foreign-app`, which is a thing a reader
+# stops investigating.
+#
+# The tests above pin the COPY's behaviour. They are all equally green if the copy and
+# the original disagree, because they never look at the original. These two do: they
+# source the real scripts/01-constants.sh and require it to name the same binary. A future
+# change to the constants that gpu-busy does not follow now fails a suite instead of
+# killing a serving lane.
+constants_exe() {
+    env -u LLAMA_CUDA_SERVER_BIN -u LLAMA_XE_SERVER_BIN HOME="$FAKE_HOME" \
+        bash -c 'source "$1" >/dev/null 2>&1; printf %s "$LLAMA_SERVER_BIN"' \
+        _ "$REPO_ROOT/scripts/01-constants.sh"
+}
+
+@test "the standalone copy agrees with 01-constants.sh on the CUDA tree" {
+    make_tree cuda
+    run resolved_exes
+    [ "$status" -eq 0 ]
+    probe_exe="$output"
+    run constants_exe
+    [ "$status" -eq 0 ]
+    if [ "$output" != "$probe_exe" ]; then
+        echo "gpu-busy.sh resolves:      $probe_exe" >&2
+        echo "01-constants.sh names:     $output" >&2
+        echo "gpu-busy.sh carries a COPY of this decision and it has drifted." >&2
+        echo "Fix the copy, or make gpu-busy.sh import the constants." >&2
+        false
+    fi
+}
+
+@test "the standalone copy agrees with 01-constants.sh on the legacy tree" {
+    make_tree legacy
+    run resolved_exes
+    [ "$status" -eq 0 ]
+    probe_exe="$output"
+    run constants_exe
+    [ "$status" -eq 0 ]
+    [ "$output" = "$probe_exe" ]
+}
