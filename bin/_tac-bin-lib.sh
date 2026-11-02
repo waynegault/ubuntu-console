@@ -16,7 +16,23 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 8
+#   v8 (2026-11-02): a follow-up edit folded into the same unpushed commit, so the marker
+#   moves again — the guard compares against HEAD, and a folded edit is a new change.  The
+#   edit itself: the token parse stripped `ttl=` from `$_ttl` instead of `$_tok`, so every
+#   record read MALFORMED and a refusal looked like a decision.  Behaviourally that is the
+#   one line below; the test that would have caught it now asserts the REASON for a refusal,
+#   not the refusal (tests/integration/04-watchdog.bats).
+#   v7 (2026-11-02): the requested-stop READER.  The investigator writes
+#   "requested-stop pid= start= ttl= unit= ts=" before every lane stop it asks for
+#   (pipeline/gpu/_lock.py:186, called from _exclusive.py:645), and its own reader
+#   (read_requested_stops) has ZERO production callers — so the console's gated-lane
+#   decision consulted only gpustop_active() (ours) and gpu_claim_held() (a probe of the
+#   PRESENT: the kernel drops the flock on release, so a stop taken in the claim's last
+#   seconds reads as "free").  This adds _inv_requested_stop_path, _inv_proc_start_epoch,
+#   requested_stop_active and requested_stop_consume.  The start-time comparison converts
+#   /proc/<pid>/stat field 22 from CLOCK TICKS to the epoch the writer stored — see
+#   _inv_proc_start_epoch for why getting that backwards refuses every genuine request.
 #   v6 (2026-10-12): the GPU-availability mechanism moved HERE, reviewed and tested —
 #   `_tac_gpu_used_mib` (multi-GPU-safe most-used reading; empty = unreadable),
 #   `_tac_gpu_wait_foreign_clear` (bin/gpu-busy.sh --json, exit-code contract; excludes
@@ -74,6 +90,185 @@ _free_mib() {
 # it is existence-gated because `flock -n` also fails on a missing path.
 _inv_gpu_lock_path() {
     printf '%s\n' "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
+}
+
+# ── requested-stop attribution — WHO asked for a lane to go down ─────────────
+# The investigator records ONE line per lane stop it requests, BEFORE its own
+# `systemctl stop` (pipeline/gpu/_exclusive.py:645 records, then _stop_lane stops):
+#
+#   requested-stop pid=547448 start=1793592880 ttl=1793614480 \
+#                  unit=llama-cuda-qwen3coder-30b-chat.service ts=1793593809
+#
+# It is the only instrument that names a requester AFTER the claim is gone: the kernel
+# drops a flock on release, so gpu_claim_held() answers "free" from then on, and a stop
+# taken inside the claim's last seconds is invisible to every probe of the PRESENT.
+# Measured 2026-11-02: the guard read the flock as held at 02:46:58, it was gone by
+# 02:52:11, and the stop in between could not be attributed by any console-side probe.
+#
+# VALID means: unit matches, `now <= ttl`, the pid is ALIVE, and its start epoch equals
+# the recorded `start=` (so a recycled pid cannot inherit the line).  Anything else is
+# NOT "no request was made" — it is "no longer attributable" — so every rejecting reason
+# is LOGGED and the caller proceeds exactly as it did before.
+
+# _inv_requested_stop_path — the record's path.  SAME DIRECTORY as the lock, derived
+# from it rather than repeated, so one production root moves both.  The override name is
+# the WRITER's (pipeline/gpu/_lock.py:59), not a console invention: a sandbox that
+# relocates the lock must relocate the record with it, or the reader reads an empty
+# file and every stop looks unattributed.
+_inv_requested_stop_path() {
+    printf '%s\n' "${INVESTIGATOR_REQUESTED_STOP:-$(dirname "$(_inv_gpu_lock_path)")/requested-stop}"
+}
+
+# _inv_proc_start_epoch <pid> — the SAME epoch `record_requested_stop` stores in
+# `start=`, or EMPTY when it cannot be computed.
+#
+# THE UNITS ARE THE TRAP.  The writer stores process_start_epoch(), which is
+# btime + (/proc/<pid>/stat field 22 in CLOCK TICKS) — i.e. EPOCH SECONDS.  Field 22 on
+# its own is a tick count since boot, so comparing `start=` with field 22 directly
+# compares seconds with ticks and refuses EVERY genuine request, which then reads
+# exactly like "no request was made" — the failure this reader exists to end.  Convert
+# the way the writer converts, including its integer division.
+_inv_proc_start_epoch() {
+    local _pid="$1" _stat _btime _clk _rest _ticks _k _v _ignored
+    local -a _fields
+    [[ "$_pid" =~ ^[0-9]+$ ]] || return 0
+    read -r _stat < "/proc/$_pid/stat" || return 0   # a dead pid has no stat line; empty IS the answer
+    # comm (field 2) is parenthesised and may contain spaces or ')', so count from the
+    # LAST ')': the field after it is state (field 3), which makes field 22 index 19.
+    _rest="${_stat##*)}"
+    read -r -a _fields <<<"$_rest"
+    _ticks="${_fields[19]:-}"
+    _btime=""
+    while read -r _k _v _ignored; do
+        [[ "$_k" == "btime" ]] || continue
+        _btime="$_v"
+        break
+    done < /proc/stat
+    # swallow-ok: an unreadable CLK_TCK leaves this empty and the numeric guard below refuses; a fallback value would be a guess about the running kernel's HZ presented as a measurement
+    _clk="$(getconf CLK_TCK 2>/dev/null)"
+    [[ "$_ticks" =~ ^[0-9]+$ ]] || return 0
+    [[ "$_btime" =~ ^[0-9]+$ ]] || return 0
+    [[ "$_clk" =~ ^[0-9]+$ ]] && (( _clk > 0 )) || return 0
+    printf '%s\n' "$(( _btime + _ticks / _clk ))"
+}
+
+# _inv_requested_stop_seen_path — where spent records are remembered ("<ts> <unit>").
+# Beside the watchdog's other state, env-overridable so a suite can sandbox it.
+_inv_requested_stop_seen_path() {
+    local _dir="${LLAMA_WATCHDOG_STRIKE_DIR:-/dev/shm}"
+    printf '%s\n' "${LLAMA_WATCHDOG_REQSTOP_SEEN_FILE:-$_dir/llama-watchdog.requested-stop.seen}"
+}
+
+# _requested_stop_consumed <ts> <unit> — 0 when an earlier tick already used this record.
+_requested_stop_consumed() {
+    local _ts="$1" _unit="${2%.service}" _f
+    _f="$(_inv_requested_stop_seen_path)"
+    [[ -f "$_f" ]] || return 1
+    # swallow-ok: "no match" IS the not-consumed answer this predicate reports, and the file's existence is checked above, so grep's stderr carries nothing the caller can act on
+    grep -qxF -- "$_ts $_unit" "$_f" 2>/dev/null
+}
+
+# requested_stop_active <unit> — 0 when a LIVE requester asked for <unit> to stop.
+#
+# On success it sets REQSTOP_PID and REQSTOP_TS (only on success; the caller needs both
+# to log and to consume).  It writes NOTHING: a reader that mutates on read could not be
+# re-run, and the falsification this function exists for is "same record, live pid →
+# stamps nothing; same record, dead pid → stamps as before".
+requested_stop_active() {
+    local _unit="${1%.service}" _path _line _tok _newest=""
+    local _pid _start _ttl _u _ts _now _actual
+    local -a _toks
+    _path="$(_inv_requested_stop_path)"
+    [[ -f "$_path" ]] || return 1
+    # Append-only, newest LAST: the last matching line is the current request.  An older
+    # line for the unit cannot be newer than it, and its ttl is older too.
+    while IFS= read -r _line; do
+        [[ -n "${_line//[[:space:]]/}" ]] || continue
+        _pid=""; _start=""; _ttl=""; _u=""; _ts=""
+        read -r -a _toks <<<"$_line"
+        for _tok in "${_toks[@]}"; do
+            case "$_tok" in
+                pid=*)   _pid="${_tok#pid=}" ;;
+                start=*) _start="${_tok#start=}" ;;
+                ttl=*)   _ttl="${_tok#ttl=}" ;;
+                unit=*)  _u="${_tok#unit=}" ;;
+                ts=*)    _ts="${_tok#ts=}" ;;
+                # Anything else is prose or a field a newer writer added: the five above
+                # are the whole contract, and an unknown token must not be one of them.
+                *) ;;
+            esac
+        done
+        [[ "${_u%.service}" == "$_unit" ]] || continue
+        _newest="$_pid $_start $_ttl $_ts"
+    done < "$_path"
+    [[ -n "$_newest" ]] || return 1
+    read -r _pid _start _ttl _ts <<<"$_newest"
+    if [[ ! "$_pid" =~ ^[0-9]+$ || ! "$_ttl" =~ ^[0-9]+$ || ! "$_ts" =~ ^[0-9]+$ ]]
+    then
+        log "requested-stop: the record for ${_unit}.service is MALFORMED" \
+            "(pid=${_pid:-?} ttl=${_ttl:-?} ts=${_ts:-?}) — not attributable"
+        return 1
+    fi
+    _now="$(date +%s)"
+    if (( _now > _ttl ))
+    then
+        log "requested-stop: the record for ${_unit}.service EXPIRED" \
+            "(ttl=$_ttl, now=$_now, pid=$_pid) — not attributable"
+        return 1
+    fi
+    if [[ -z "$_start" || "$_start" == "unknown" ]]
+    then
+        log "requested-stop: the record for ${_unit}.service (pid $_pid) carries NO start time" \
+            "— a recycled pid could own it, so it is not attributable"
+        return 1
+    fi
+    if ! kill -0 "$_pid" 2>/dev/null   # swallow-ok: a failed kill -0 IS the "not alive" answer this predicate reports
+    then
+        log "requested-stop: requester pid $_pid for ${_unit}.service is GONE — not attributable"
+        return 1
+    fi
+    _actual="$(_inv_proc_start_epoch "$_pid")"
+    if [[ "$_actual" != "$_start" ]]
+    then
+        log "requested-stop: pid $_pid now starts at ${_actual:-unreadable}," \
+            "the record says $_start — a recycled pid, not attributable"
+        return 1
+    fi
+    if _requested_stop_consumed "$_ts" "$_unit"
+    then
+        log "requested-stop: the record for ${_unit}.service (pid $_pid, ts=$_ts)" \
+            "was ALREADY CONSUMED by an earlier tick — not attributed twice"
+        return 1
+    fi
+    # Set for the CALLER, not for this file: the watchdog logs the requester and then
+    # consumes the record, so the two values must survive the return.  Nothing in this
+    # library reads them, which is why SC2034 has to be silenced rather than obeyed.
+    # shellcheck disable=SC2034
+    REQSTOP_PID="$_pid"
+    # shellcheck disable=SC2034
+    REQSTOP_TS="$_ts"
+    return 0
+}
+
+# requested_stop_consume <ts> <unit> — mark one record spent, pruning entries older than
+# a day so the file cannot grow without bound.  Consumption is what keeps the record's
+# 6 h TTL from masking a GENUINE death: one request may explain exactly one restart.
+requested_stop_consume() {
+    local _ts="$1" _unit="${2%.service}" _f _now _kept="" _line _pts
+    [[ "$_ts" =~ ^[0-9]+$ ]] || return 1
+    _f="$(_inv_requested_stop_seen_path)"
+    _now="$(date +%s)"
+    if [[ -f "$_f" ]]; then
+        while IFS= read -r _line; do
+            _pts="${_line%% *}"
+            [[ "$_pts" =~ ^[0-9]+$ ]] || continue
+            if (( _now - _pts <= 86400 )); then _kept+="$_line"$'\n'; fi
+        done < "$_f"
+    fi
+    _kept+="$_ts $_unit"$'\n'
+    # swallow-ok: an unwritable consume file degrades to "this record may be attributed twice", which the message names; there is no action a caller could take
+    printf '%s' "$_kept" > "$_f" 2>/dev/null \
+        || log "WARNING: cannot write the requested-stop consume file $_f — a spent record may be attributed twice"
 }
 
 # ── CUDA-lane suspend ownership (card 7d3e7b95; owner-liveness 2026-10-11) ───

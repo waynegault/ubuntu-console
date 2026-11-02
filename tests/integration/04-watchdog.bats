@@ -192,6 +192,12 @@ setup() {
     # `inactive`/`failed` itself. Reset it BEFORE the state wipe above, not after.
     echo "activating" > "$WATCHDOG_MOCK_STATE/xe3b_state"
     rm -f "$LLM_BENCH_LOCK_FILE" "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE" 2>/dev/null || true
+    # v3.17: the requested-stop seam and its consume file are per-test, and an env var a
+    # case exported survives into the NEXT case (bats runs them in one shell) — a record
+    # left behind would be read by every later tick.
+    unset INVESTIGATOR_REQUESTED_STOP INVESTIGATOR_GPU_LOCK
+    rm -f "$TAC_TEST_TMPDIR/requested-stop" \
+          "$TAC_TEST_TMPDIR/llama-watchdog.requested-stop.seen" 2>/dev/null || true
     export PATH="$WATCHDOG_MOCK_BIN:$PATH"
 }
 
@@ -1083,6 +1089,146 @@ setup() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"starting CUDA lane"* ]]
     [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.17 — the requested-stop record: WHO asked for THIS stop
+# ─────────────────────────────────────────────────────────────────────────────
+# The investigator writes "requested-stop pid= start= ttl= unit= ts=" BEFORE its own
+# `systemctl stop` (pipeline/gpu/_exclusive.py:645) and nothing on the console side read
+# it, so a stop a gpu.lock holder had asked for was charged to the lane as an unexpected
+# death.  The record is the only instrument that outlives the flock's release:
+# gpu_claim_held probes the PRESENT and the kernel drops the flock on release.
+#
+# The falsification is the pair below, and it is deliberately the SAME record shape:
+# live requester -> attributed, nothing stamped; dead requester -> refused, stamped.
+
+# _reqstop_start <pid> — the epoch the WRITER stores in `start=`: btime plus
+# /proc/<pid>/stat field 22 in CLOCK TICKS (pipeline/gpu/_lock.py process_start_epoch).
+# Computed here from the PUBLISHED definition instead of calling the reader's helper, so
+# a units mistake in bin/_tac-bin-lib.sh cannot be mirrored by the test and pass.
+_reqstop_start() {
+    local _stat _rest _btime _clk
+    local -a _f
+    _stat="$(cat "/proc/$1/stat")"
+    _rest="${_stat##*)}"
+    read -r -a _f <<<"$_rest"
+    _btime="$(awk '/^btime /{print $2}' /proc/stat)"
+    _clk="$(getconf CLK_TCK)"
+    echo $(( _btime + _f[19] / _clk ))
+}
+
+# _reqstop_write <pid> <start> <ttl> — one record line, as the investigator writes it.
+_reqstop_write() {
+    printf 'requested-stop pid=%s start=%s ttl=%s unit=llama-cuda-llama32-3b-chat.service ts=%s\n' \
+        "$1" "$2" "$3" "$(date +%s)" > "$INVESTIGATOR_REQUESTED_STOP"
+}
+
+@test "integration: a LIVE requested-stop record is attributed, not counted, and consumed once" {
+    export INVESTIGATOR_REQUESTED_STOP="$TAC_TEST_TMPDIR/requested-stop"
+    export LLAMA_WATCHDOG_REQSTOP_SEEN_FILE="$TAC_TEST_TMPDIR/llama-watchdog.requested-stop.seen"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    _reqstop_write "$$" "$(_reqstop_start $$)" "$(( $(date +%s) + 21600 ))"
+
+    run "$WATCHDOG_SCRIPT"
+
+    # The units trap: a reader comparing `start=` with field 22 RAW would refuse this
+    # record (ticks vs epoch) and stamp a death — which is what this arm forbids.
+    [[ "$status" -eq 0 ]]
+    _expect="REQUESTED by a live claim (pid $$,"
+    [[ "$output" == *"$_expect"* ]]
+    [[ "$output" == *"starting CUDA lane"* ]]
+    [[ "$output" != *"WARNING flap"* ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    [[ -f "$LLAMA_WATCHDOG_REQSTOP_SEEN_FILE" ]]
+
+    # SINGLE USE: the same record, the lane down again, and the record must NOT explain a
+    # second restart — its 6 h TTL would otherwise mask a genuine death hours later.
+    rm -f "$WATCHDOG_MOCK_STATE/start_called"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"ALREADY CONSUMED"* ]]
+    # flap_alert speaks only AT the threshold, so a single stamp is silent by design and
+    # the STAMP FILE is the evidence — asserting the alert line here would have been an
+    # assertion about a different object (and failed for the right output, wrongly).
+    [[ "$(grep -c . "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+}
+
+@test "integration: a requested-stop record whose REQUESTER IS DEAD is refused, and the death is counted" {
+    export INVESTIGATOR_REQUESTED_STOP="$TAC_TEST_TMPDIR/requested-stop"
+    export LLAMA_WATCHDOG_REQSTOP_SEEN_FILE="$TAC_TEST_TMPDIR/llama-watchdog.requested-stop.seen"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    sleep 0.05 &
+    _dead=$!
+    wait "$_dead" 2>/dev/null || true
+    _reqstop_write "$_dead" 1 "$(( $(date +%s) + 21600 ))"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"not attributable"* ]]
+    # The REASON must be the dead requester, not an unparsable line: this arm passed for
+    # the wrong reason once, while the parse case was stripping `ttl=` from itself and
+    # every record read as MALFORMED — a refusal is not evidence of the reason for it.
+    [[ "$output" != *"MALFORMED"* ]]
+    [[ "$output" != *"REQUESTED by a live claim"* ]]
+    [[ "$(grep -c . "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+}
+
+@test "integration: a RECYCLED pid does not inherit a stop request" {
+    export INVESTIGATOR_REQUESTED_STOP="$TAC_TEST_TMPDIR/requested-stop"
+    export LLAMA_WATCHDOG_REQSTOP_SEEN_FILE="$TAC_TEST_TMPDIR/llama-watchdog.requested-stop.seen"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    # Alive pid, wrong start: exactly what a reused pid looks like to the reader.
+    _reqstop_write "$$" "$(( $(_reqstop_start $$) - 3600 ))" "$(( $(date +%s) + 21600 ))"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"a recycled pid"* ]]
+    [[ "$output" != *"REQUESTED by a live claim"* ]]
+    [[ "$(grep -c . "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+}
+
+@test "integration: an EXPIRED requested-stop record is refused, not honoured on age alone" {
+    export INVESTIGATOR_REQUESTED_STOP="$TAC_TEST_TMPDIR/requested-stop"
+    export LLAMA_WATCHDOG_REQSTOP_SEEN_FILE="$TAC_TEST_TMPDIR/llama-watchdog.requested-stop.seen"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    _reqstop_write "$$" "$(_reqstop_start $$)" "$(( $(date +%s) - 60 ))"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"EXPIRED"* ]]
+    [[ "$output" != *"REQUESTED by a live claim"* ]]
+    [[ "$(grep -c . "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+}
+
+
+@test "integration: a MALFORMED requested-stop record is refused, and says so" {
+    export INVESTIGATOR_REQUESTED_STOP="$TAC_TEST_TMPDIR/requested-stop"
+    export LLAMA_WATCHDOG_REQSTOP_SEEN_FILE="$TAC_TEST_TMPDIR/llama-watchdog.requested-stop.seen"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    # A line that names the unit but carries an unusable pid/ttl: the reader must report
+    # "cannot tell", not fall through to a silence that reads as "no request".
+    printf 'requested-stop pid=x ttl=x unit=llama-cuda-llama32-3b-chat.service ts=x\n' \
+        > "$INVESTIGATOR_REQUESTED_STOP"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"MALFORMED"* ]]
+    [[ "$output" != *"REQUESTED by a live claim"* ]]
+    [[ "$(grep -c . "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
 }
 
 # end of file

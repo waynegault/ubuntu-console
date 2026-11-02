@@ -148,7 +148,15 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 22
+# Module Version: 23
+#   v23 (2026-11-02): the requested-stop arm.  v22 wired gpu_claim_held, which answers
+#   only about the PRESENT — the flock is gone the moment its holder releases, so the
+#   stop a claim asked for in its last seconds is unattributable to every console probe,
+#   and the next free tick charged it to the lane as a death.  The arm reads the
+#   investigator's requested-stop record (bin/_tac-bin-lib.sh, Module Version 7), honours
+#   it only for a LIVE requester whose /proc start epoch matches, logs who asked, and
+#   consumes it so one request can explain one restart.  Not folded into gpustop_active:
+#   that marker is written by THIS script and carries no identity.
 #   v22 (2026-11-02): the flap ratchet and the GPU-claim probe — see the v3.15 history
 #   entry.  The ratchet was recorded as a code-path reading at 03:20Z and fired five
 #   minutes later (03:30:12 "died 4x", 03:35:12 "died 5x"), which is the only reason it
@@ -192,7 +200,7 @@
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.16"
+VERSION="3.17"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -928,6 +936,21 @@ supervise_cuda_lane() {
                 # the hold owed it, without charging a stamp for the waiting.
                 rm -f "$FLAP_HOLD_FILE"
                 log "flap cooling-off ended — attempting one restart without counting a death"
+            elif requested_stop_active "$CUDA_UNIT.service"; then
+                # A LIVE gpu.lock holder asked for this stop: the investigator records
+                # the request BEFORE its own `systemctl stop` (pipeline/gpu/_exclusive.py
+                # :645), and its reader has no production callers — so until now the
+                # console consulted only gpustop_active (OUR marker) and gpu_claim_held
+                # (a probe of the PRESENT: the kernel drops the flock on release, so a
+                # stop taken inside the claim's last seconds answers "free" to the very
+                # next tick — the 02:46:58 -> 02:52:11 shape).  Count nothing, consume
+                # the record so it can explain exactly ONE restart, and fall through to
+                # the shared restart below: the lane is wanted back, the stop was not
+                # a death.  Placed AFTER the hold arms on purpose — a live cooling-off
+                # must still win, and an expired one still clears itself first.
+                log "GPU free; the stop of $CUDA_UNIT was REQUESTED by a live claim" \
+                    "(pid $REQSTOP_PID, ts=$REQSTOP_TS) — restarting without recording a flap"
+                requested_stop_consume "$REQSTOP_TS" "$CUDA_UNIT"
             else
                 # An unexpected death: down, card free, nothing suspending us.  Count it
                 # BEFORE any recovery below so the alert and the action appear together.
