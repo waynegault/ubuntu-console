@@ -60,3 +60,20 @@ setup() {
 }
 
 # end of file
+
+@test "gpu-watch selfcheck: every systemd unit named in the alarm text ships in the repo" {
+    # Measured 2026-11-03: the alarm text promised an independent
+    # openclaw-gpu-passthrough-watch.timer that existed at no scope and was invoked by nothing,
+    # and no test read that sentence. This derives the population from the text itself, so a unit
+    # name added to the alarm in future is checked without anyone remembering to list it here.
+    run awk '/^alarm_text\(\)/,/^}/' "$REPO_ROOT/bin/gpu-watch-selfcheck.sh"
+    [ "$status" -eq 0 ]
+    named=$(printf '%s\n' "$output" | grep -oE '[a-z0-9][a-z0-9-]*\.(timer|service)' | sort -u)
+    [ -n "$named" ] || skip "alarm text names no systemd unit; nothing to check"
+    while IFS= read -r unit; do
+        [ -f "$REPO_ROOT/systemd/$unit" ] || {
+            echo "alarm text names $unit, which this repo does not ship" >&2
+            return 1
+        }
+    done <<< "$named"
+}
