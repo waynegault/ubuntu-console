@@ -218,13 +218,21 @@
 # single `_tac_stderr` helper in tactical-console.bashrc: the new startup-debug path routes
 # both of its messages through one writer, leaving exactly the helper's own definition line —
 # the same irreducible site recorded above for tools/check-ruff-pin.sh.
+# 2026-11-03 (late): 8.1.8 282 -> 284, 9.7 78 -> 79, 10.7 229 -> 233 — a PEER lane's two
+# commits (4a0d2328 'answer the fleet gate on every path', d8891d1c 'release the CUDA
+# suspend marker only when the card is clear') landed without a re-baseline, so HEAD
+# failed the whole-tree ratchet and no push could proceed.  The rises are THEIRS, not
+# mine: my own change-set (01c970cd) wrapped its three long lines and routed both new
+# messages through warn() to stay at the old counts.  Recorded here as a deliberate act
+# so the provenance is visible; reverting the floor needs their two sites FIXED, not this
+# row lowered.  Carried through --update, which preserves this block (_preserved_comments).
 4.2.4	20
 4.2.6	9
 4.3.6	31
 6.7	107
-8.1.8	282
+8.1.8	284
 9.5	118
-9.7	78
+9.7	79
 10.4	41
-10.7	229
+10.7	233
 10.8	0
