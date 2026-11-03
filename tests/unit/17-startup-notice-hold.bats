@@ -159,6 +159,59 @@ _line_of() {
     [[ "$output" == *"notice-on-stdout"* ]]
 }
 
+@test "startup notice: TAC_STARTUP_NO_CLEAR draws NOTHING — no clear and no header" {
+    # Debug mode for a startup failure.  Two separate erasers have to be gone:
+    #   * `command clear`, whose ESC[3J erases the scrollback as well as the
+    #     screen, so an error printed before the hold window opened is lost;
+    #   * the header, which is four lines drawn at the cursor and pushes the load
+    #     output off the top on a terminal that has already scrolled.
+    # Measured 2026-11-02: with the header still drawn, the error text the mode
+    # exists to show was gone.  So BOTH are skipped, and the notices are the last
+    # thing on screen.
+    # Fails if: the clear returns unconditionally, the knob is ignored, or the
+    # header comes back into this branch.
+    run _run_loader TAC_STARTUP_NO_CLEAR=1
+    [ "$status" -eq 0 ]
+
+    [[ "$output" != *"CLEAR"* ]]
+    [[ "$output" != *"HEADER"* ]]
+    [[ "$output" == *"notice-on-stdout"* ]]
+    [[ "$output" == *"notice-on-stderr"* ]]
+}
+
+@test "startup notice: TAC_STARTUP_LOG keeps a copy the terminal cannot lose" {
+    # A terminal is a lossy place to read a startup failure: a clear, a scroll or
+    # a short window all lose it.  The log is the durable copy.
+    # Fails if: the file is not written, or it is written AFTER the hold file is
+    # removed (then it is empty), or the path is not named for the reader.
+    local log="$BATS_TEST_TMPDIR/startup.log"
+
+    run _run_loader "TAC_STARTUP_LOG=$log"
+    [ "$status" -eq 0 ]
+
+    [ -f "$log" ]
+    grep -q 'notice-on-stdout' "$log"
+    grep -q 'notice-on-stderr' "$log"
+    [[ "$output" == *"startup log: $log"* ]]
+}
+
+@test "startup notice: TAC_STARTUP_LOG is written even when the load was silent" {
+    # An empty log is an ANSWER — it proves the load printed nothing — so the file
+    # must exist even with no notices to hold.  Fails if the write is inside the
+    # `[[ -s ... ]]` guard, where a silent load would produce no file at all.
+    local log="$BATS_TEST_TMPDIR/silent.log"
+
+    # Only the constants module: nothing prints, and no 13-init to ask for a banner.
+    _set_module_list 01-constants
+
+    run _run_loader "TAC_STARTUP_LOG=$log"
+    [ "$status" -eq 0 ]
+
+    [ -f "$log" ]
+    [ ! -s "$log" ]
+    [[ "$output" == *"startup log: $log (0 bytes)"* ]]
+}
+
 @test "preexec blank line: the guard starts armed, so startup sourcing stays silent" {
     # 06-hooks installs a DEBUG trap that prints a blank line before each real
     # command.  It is installed part-way through the module loop, so if its guard

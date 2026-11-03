@@ -71,7 +71,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="11"
+_TAC_LOADER_VERSION="13"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -306,8 +306,18 @@ fi
 
 # Display the initial banner now that TACTICAL_PROFILE_VERSION is set.
 # This ensures the correct version is shown on first terminal open.
+#
+# TAC_STARTUP_NO_CLEAR=1 is the DEBUG mode for a startup failure: nothing is drawn
+# at all — neither `command clear` (whose ESC[3J erases the scrollback too, so an
+# error printed before the hold window opened is unrecoverable) nor the header.
+# The header is skipped because it is four lines tall at the cursor: on a terminal
+# that has already scrolled it pushes the load output off the screen, so a reader
+# chasing an error loses the error and keeps the banner.  Opt-in, so the default
+# first-load appearance is unchanged.
 if [[ -n "${__TAC_DISPLAY_BANNER:-}" ]]; then
-    clear_tactical
+    if [[ -z "${TAC_STARTUP_NO_CLEAR:-}" ]]; then
+        clear_tactical
+    fi
     unset __TAC_DISPLAY_BANNER
 fi
 
@@ -315,11 +325,37 @@ fi
 # these lines are now BELOW the banner, so the clear above cannot reach them.
 # Replayed to stderr — the stream diagnostics belong on, and the one it is
 # visible on when a caller captures only stdout.
+#
+# TAC_STARTUP_LOG=<path> also WRITES the held output to that file and names it
+# last.  A terminal is a lossy place to read a startup failure — a clear, a
+# scroll, or a window that was too short all lose it — so the debug path keeps a
+# copy the reader can open with `less` in any tab.  Written even when the hold
+# window printed nothing: an empty log is the evidence that the load was silent,
+# which is itself an answer.
+# _tac_stderr — the single stderr writer for the debug path below.  A helper rather
+# than an inline redirect at each site: §18.3 item 10.7 charges a hand-written
+# `>&2` on every echo/printf call site, and the point of that item is that the
+# destination lives in one place.
+_tac_stderr() { printf '%s\n' "$*" >&2; }
+
 if (( _tac_hold_active ))
 then
     if [[ -s "$_tac_hold_file" ]]
     then
         cat "$_tac_hold_file" >&2
+    fi
+    if [[ -n "${TAC_STARTUP_LOG:-}" ]]
+    then
+        # cp's own stderr is left ON: "permission denied" or "No such file or
+        # directory" is the reason the log is missing, and discarding it would
+        # leave the summary line as the only clue.
+        if cp -- "$_tac_hold_file" "$TAC_STARTUP_LOG"
+        then
+            _tac_stderr "startup log: $TAC_STARTUP_LOG" \
+                "($(wc -c <"$_tac_hold_file" 2>/dev/null || echo '?') bytes)"
+        else
+            _tac_stderr "startup log: could not write $TAC_STARTUP_LOG — the notices above are the only copy"
+        fi
     fi
     rm -f "$_tac_hold_file"
 fi

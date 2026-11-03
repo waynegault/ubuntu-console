@@ -209,14 +209,22 @@
 # -1 is scripts/09e-oc-health.sh gaining a comment above a definition.  The ONE long line this
 # session added to tools/qwen-hooks/memory-markdownlint.sh was WRAPPED at source rather than
 # baselined (131 characters -> two lines), which is why 8.1.8 reads 289 and not 290.
-# Hand edit, never --update: the tool rewrites this file without its comments.
+# --update now PRESERVES this comment block (_preserved_comments in tools/ratchet_check.py,
+# card fc4d3e29), so the older "hand edit, never --update" rule is retired: a re-baseline
+# carried by --update no longer deletes provenance.  Hand-editing rows is still the only way
+# to TIGHTEN a row below the tree's own count, which --update cannot express.
+# 2026-11-02: 8.1.8 285 -> 282 and 10.7 228 -> 229 via --update.  8.1.8's -3 is drift the tree
+# had already shed (the row sat above the tree, which is a raised floor).  10.7's +1 is the
+# single `_tac_stderr` helper in tactical-console.bashrc: the new startup-debug path routes
+# both of its messages through one writer, leaving exactly the helper's own definition line —
+# the same irreducible site recorded above for tools/check-ruff-pin.sh.
 4.2.4	20
 4.2.6	9
 4.3.6	31
 6.7	107
-8.1.8	285
+8.1.8	282
 9.5	118
 9.7	78
 10.4	41
-10.7	228
+10.7	229
 10.8	0
