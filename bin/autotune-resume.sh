@@ -60,7 +60,10 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 27
+#   v27 (2026-11-03): the chunk is handed AUTOTUNE_QUIET_GATE_PASSED=1. The entry point now asks
+#   the quiet-fleet gate itself, and this loop is the path that already asked it - one question,
+#   one answer, instead of a second probe that could refuse a chunk the arm had just approved.
 #   v26 (2026-11-01): resolve the host profile (source 01-constants.sh) so the
 #   registry, model dir and autotune-log dir are THIS box's, not the generic ~/.llm /
 #   /mnt/m defaults.  REGISTRY / MODEL_DIR / LOGDIR now fall back to the profile's
@@ -1025,7 +1028,9 @@ run_plan() {
         "${#_kept[@]}" "$ENTRY" "$PLAN" "$_stamp"
     # A CHILD, not `exec`: the exit code is the loop's input, and `exec` threw it
     # away by replacing this process with the chunk.
-    "$ENTRY" "${_kept[@]}" || _rc=$?
+    # Already gated: autotune-resume.service execs the quiet-gate, which asks once. Tell the
+    # entry point so it does not ask a second time and refuse a chunk this arm approved.
+    AUTOTUNE_QUIET_GATE_PASSED=1 "$ENTRY" "${_kept[@]}" || _rc=$?
     printf 'entry point exited %s after %s row(s) were handed to it\n' "$_rc" "${#_kept[@]}"
     # RETIRE before deciding: the exit code HAS been read, so this run is no longer an
     # interrupted one however continue_after resolves it.  A stall that stops for a person

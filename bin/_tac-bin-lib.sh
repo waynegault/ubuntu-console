@@ -16,7 +16,9 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-03): _tac_suspend_owner_is_ancestor - the row runner no longer reports a hold
+#   its OWN batch takes for the whole sweep as "another run" threatening the measurement.
 #   v8 (2026-11-02): a follow-up edit folded into the same unpushed commit, so the marker
 #   moves again — the guard compares against HEAD, and a folded edit is a new change.  The
 #   edit itself: the token parse stripped `ttl=` from `$_ttl` instead of `$_tok`, so every
@@ -295,6 +297,30 @@ _tac_suspend_pid() {
     [[ -f "$1" ]] || return 0
     # swallow-ok: an unreadable/empty file yields empty, which every caller reads as "no owner recorded"
     tr -dc '0-9' < "$1" 2>/dev/null
+}
+
+# _tac_suspend_owner_is_ancestor <file> — 0 = the recorded holder is an ANCESTOR of this
+# process, 1 = no recorded holder, or a holder outside our own process tree.
+#
+# Why (2026-11-03): scripts/autotune-model.sh runs INSIDE bin/autotune-rows.sh, which takes
+# the hold for the WHOLE sweep. The row script then fails to acquire (correctly) and used to
+# report it as "held by another run ... the watchdog may restart the CUDA lane mid-run",
+# naming the parent that is deliberately keeping the lane down as a foreign run that
+# threatens the measurement. The hold is ours THROUGH the parent, so only a holder outside
+# our own tree earns a warning. PPid is read from /proc/<pid>/status (comm can contain
+# spaces, so /proc/stat field arithmetic is not safe) and the walk is bounded, so a recycled
+# pid cannot loop it.
+_tac_suspend_owner_is_ancestor() {
+    local _f="$1" _pid _cur=$$ _hops=0
+    _pid="$(_tac_suspend_pid "$_f")"
+    [[ "$_pid" =~ ^[0-9]+$ ]] || return 1
+    while [[ "$_cur" =~ ^[0-9]+$ ]] && (( _cur > 1 )) && (( _hops < 64 )); do
+        if [[ "$_cur" == "$_pid" ]]; then return 0; fi
+        # swallow-ok: an unreadable /proc entry ends the walk, which is the "not an ancestor" answer
+        _cur="$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$_cur/status" 2>/dev/null)" || return 1
+        _hops=$(( _hops + 1 ))
+    done
+    return 1
 }
 
 # _tac_suspend_held <file> — 0 = HELD, 1 = not held.  THE rule, for readers too.

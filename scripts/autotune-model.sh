@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 93
+# Module Version: 94
+#   v94 (2026-11-03): a hold taken by an ANCESTOR (the batch runner) is reported as what it is -
+#   this row runs under the sweep own hold - instead of "held by another run ... the watchdog may
+#   restart the CUDA lane mid-run", which named our own parent as a foreign threat on every row.
 #   v92 (2026-11-02): one `warn` helper replaces four hand-written stderr writes, seven lines are
 #   wrapped, and the three failure-classification regexes are split with `+=` — values verified
 #   byte-identical to the previous blob. Clears the lane's 10.7, 8.1.8 and 9.7 rises.
@@ -576,6 +579,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/_tac-bin-lib.sh" 2>
 if [[ -z "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_acquire &>/dev/null; then
     if _tac_suspend_acquire "$_LANE_SUSPEND"; then
         _TAC_SUSPEND_HELD=1
+    elif declare -f _tac_suspend_owner_is_ancestor &>/dev/null &&
+         _tac_suspend_owner_is_ancestor "$_LANE_SUSPEND"; then
+        # The holder is an ANCESTOR - bin/autotune-rows.sh, which took the hold for the whole
+        # sweep and keeps the lane down on our behalf. Its EXIT trap releases it. Warning here
+        # named our own parent as a foreign run (measured 2026-11-03, on every row).
+        echo "suspend: already held by ancestor pid $(_tac_suspend_pid "$_LANE_SUSPEND") - this row runs under that hold"
     else
         warn "WARN: $_LANE_SUSPEND is held by another run " \
              "(pid $(_tac_suspend_pid "$_LANE_SUSPEND")) — the watchdog may restart the CUDA lane mid-run"

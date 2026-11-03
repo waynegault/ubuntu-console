@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-11-03): a DIRECT run asks the quiet-fleet gate too. The gate only ever guarded
+#   the boot/resume path, so a hand-started sweep reached the card ungated (measured 22:07 that
+#   day, launched from a live shell). --force-live-fleet is the named override; the resume loop
+#   marks its own pass with AUTOTUNE_QUIET_GATE_PASSED=1 so the question is asked once.
 #   v10 (2026-11-01): resolve the host profile (source 01-constants.sh) so the
 #   registry, store and CUDA lane are THIS box's, not the generic ~/.llm / old-box
 #   lane.  REGISTRY and LOGDIR now derive from the profile's LLM_REGISTRY / LLM_STATE_DIR.
@@ -77,6 +81,19 @@ LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
 LOGDIR="${LLM_STATE_DIR:-$HOME/.llm}/autotune-logs"
 mkdir -p "$LOGDIR"
 
+# ── --force-live-fleet (2026-11-03) ──────────────────────────────────────────
+# Stripped BEFORE the row arguments are read, so the flag can never be mistaken for a
+# model file. It is the deliberate override of the quiet-fleet gate below, nothing else.
+FORCE_LIVE_FLEET=0
+_args=()
+for _arg in "$@"; do
+    case "$_arg" in
+        --force-live-fleet) FORCE_LIVE_FLEET=1 ;;
+        *)                  _args+=("$_arg") ;;
+    esac
+done
+set -- ${_args[@]+"${_args[@]}"}
+
 case "${1:-}" in
     # Embedding models (arch field 6, e.g. gemma-embedding) have no generation to
     # measure, so the sweep skips them instead of burning a row on a probe that can
@@ -99,6 +116,33 @@ esac
 if (( ${#ROWS[@]} == 0 )); then
     echo "autotune-rows: no rows selected — nothing to do" >&2
     exit 0
+fi
+
+# ── Quiet-fleet gate (2026-11-03) ────────────────────────────────────────────
+# A live agent turn and a measurement contend for the same CPU, so a row measured
+# alongside one describes the contention rather than the model. autotune-resume.service
+# asks this question before it claims a plan; every other caller - a hand-started sweep
+# above all - now asks it here. Fail closed: a gate that cannot answer (exit 2) refuses too.
+GATE="${AUTOTUNE_QUIET_GATE:-$REPO/bin/autotune-resume-quiet-gate.py}"
+if (( FORCE_LIVE_FLEET )); then
+    echo "quiet-fleet gate: BYPASSED by --force-live-fleet — the fleet may be live, so the reading may be contended" >&2
+elif [[ -n "${AUTOTUNE_QUIET_GATE_PASSED:-}" ]]; then
+    echo "quiet-fleet gate: already passed by the resume loop (AUTOTUNE_QUIET_GATE_PASSED=1)" >&2
+elif [[ -f "$GATE" ]]; then
+    if "$GATE" --check; then
+        echo "quiet-fleet gate: fleet is quiet" >&2
+    else
+        _gate_rc=$?
+        {
+            echo "autotune-rows: REFUSING — the quiet-fleet gate did not clear (rc=$_gate_rc)."
+            echo "  A live agent turn contends for the CPU, so a tps measured beside one"
+            echo "  describes the contention, not the model."
+            echo "  Re-run when the fleet is idle, or pass --force-live-fleet to override on purpose."
+        } >&2
+        exit 1
+    fi
+else
+    echo "WARN: quiet-fleet gate not found at $GATE — proceeding UNGATED" >&2
 fi
 
 LOG="$LOGDIR/autotune-$(date +%Y%m%d-%H%M%S)-rows-${ROWS[0]}${ROWS[*]:+_to_${ROWS[-1]}}.log"
