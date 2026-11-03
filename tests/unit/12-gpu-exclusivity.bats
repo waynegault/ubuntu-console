@@ -1252,6 +1252,11 @@ EOS
 set -uo pipefail
 C_Warning=""
 __tac_info() { printf '%s %s\n' "$1" "$2"; }
+# warn() is defined in the module at scripts/11d-llm-gpu.sh:617, but awk extracts ONLY
+# __llm_stand_down_cuda_lanes, so the harness had no warn and the function's first
+# statement died with "warn: command not found" - the refusal message never printed and
+# the assertion below failed for want of a definition, not for want of the behaviour.
+warn() { printf '%s\n' "$*" >&2; }
 __llm_gpu_foreign_owner() { return 0; }
 __llm_gpu_lock_holder() { printf '999\n'; }
 source "$1"

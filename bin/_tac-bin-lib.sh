@@ -16,7 +16,15 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-11-03): _tac_suspend_release waits (bounded) for gpu-busy.sh to report no
+#   foreign holder BEFORE unlinking the marker.  Measured at 22:34:13: the marker was
+#   released while gpu-busy still named the just-finished autotune, so the watchdog took
+#   its designed "GPU busy -> stop the serving lane" path and killed the CUDA tier seconds
+#   before the card freed; the lane then waited for the next 5-minute tick.  Releasing the
+#   claim is not the same event as the card going idle.  Fail-OPEN at the deadline
+#   (TAC_SUSPEND_RELEASE_WAIT_S, default 30s): a marker that outlives its owner is worse
+#   than one early release, and an EXIT trap must not hang a run.
 #   v9 (2026-11-03): _tac_suspend_owner_is_ancestor - the row runner no longer reports a hold
 #   its OWN batch takes for the whole sweep as "another run" threatening the measurement.
 #   v8 (2026-11-02): a follow-up edit folded into the same unpushed commit, so the marker
@@ -382,7 +390,41 @@ _tac_suspend_release() {
     if [[ "$(_tac_suspend_pid "$_f")" != "$$" ]]; then
         return 1
     fi
-    rm -f "$_f" 2>/dev/null   # swallow-ok: `rm -f` is best-effort by definition; the return below is the result
+    # HANDOVER (2026-11-03): releasing the CLAIM is not the same event as the card going
+    # idle.  Measured: at 22:34:13 the watchdog logged "suspend: NOT HELD" and, because
+    # gpu-busy.sh still reported the just-finished autotune as a foreign holder, it took
+    # the designed "GPU busy -> stop the serving lane" path and killed the CUDA lane
+    # seconds before the card freed; the lane then stayed down until the next 5-minute
+    # tick.  The marker was released while the reason for holding it was still true.
+    #
+    # Wait (bounded) for no foreign holder, THEN drop the marker: the next tick then sees
+    # NOT HELD + free and STARTS the lane instead of stopping it.  Same detector the
+    # watchdog uses (gpu-busy.sh exit contract: 0 = nothing foreign holds the card), and
+    # it excludes our own fleet servers, so our own residual VRAM reads free.
+    #
+    # Fail-OPEN on purpose: if the card is still held at the deadline we release anyway.
+    # A marker that outlives its owner is worse than one early release (the watchdog is
+    # the backstop for a held card), and an EXIT trap must not be able to hang a run.
+    local _sh _wait _poll _waited=0 _stuck=1
+    _sh="${TAC_GPU_BUSY_SH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gpu-busy.sh}"
+    _wait="${TAC_SUSPEND_RELEASE_WAIT_S:-30}"
+    _poll="${TAC_SUSPEND_RELEASE_POLL_S:-3}"
+    if [[ -x "$_sh" ]]; then
+        while (( _waited < _wait )); do
+            if "$_sh" --json >/dev/null 2>&1; then
+                _stuck=0
+                break
+            fi
+            sleep "$_poll"
+            _waited=$(( _waited + _poll ))
+        done
+        if (( _stuck == 1 )); then
+            log "suspend-release: card still held after ${_waited}s - releasing the marker anyway (watchdog is the backstop)"
+        elif (( _waited > 0 )); then
+            log "suspend-release: card clear after ${_waited}s - releasing now so the watchdog can restart the lane"
+        fi
+    fi
+    rm -f "$_f" 2>/dev/null   # swallow-ok: best-effort by definition; the return below is the result
     return 0
 }
 
