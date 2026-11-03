@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 96
+# Module Version: 97
 #   v94 (2026-11-03): a hold taken by an ANCESTOR (the batch runner) is reported as what it is -
 #   this row runs under the sweep own hold - instead of "held by another run ... the watchdog may
 #   restart the CUDA lane mid-run", which named our own parent as a foreign threat on every row.
@@ -2860,8 +2860,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
         echo "  block ${_sb_block}: ${_sb_t} tps (accept len ${_sb_al:-0}, rate ${_sb_ar:-0})"
         if [[ $(echo "$_sb_t > $_sb_best_tps" | bc 2>/dev/null || echo "0") == 1 ]]; then
-            _sb_best_tps="$_sb_t"
-            WIN_SPEC_TYPE="ngram"; WIN_SPEC_N_MAX="$_sb_block"; WIN_SPEC_ACCEPT_LEN="$_sb_al"
+            # Faster is not enough: the block must actually PLACE draft tokens, or every
+            # token pays a lookup for nothing (measured 2026-11-03 — a row certified with
+            # spec_accept_len=0 because tps alone chose the winner).  See
+            # __autotune_spec_worth_keeping.
+            if __autotune_spec_worth_keeping "${_sb_al:-0}" "${_sb_ar:-0}"
+            then
+                _sb_best_tps="$_sb_t"
+                WIN_SPEC_TYPE="ngram"; WIN_SPEC_N_MAX="$_sb_block"; WIN_SPEC_ACCEPT_LEN="$_sb_al"
+            else
+                echo "  block ${_sb_block}: faster but accepted ${_sb_al:-0} tokens —" \
+                     "NOT recorded (a draft that never hits is pure overhead)"
+            fi
         fi
     done
     BENCH_SPEC_TYPE="off"; BENCH_SPEC_N_MAX=""; BENCH_SPEC_DRAFT_MODEL=""

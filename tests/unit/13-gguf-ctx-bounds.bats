@@ -324,3 +324,35 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     ! __kv_geometry_known 0 128
     __kv_geometry_known 4 128
 }
+
+# --- __autotune_spec_worth_keeping (spec-decode, 2026-11-03) -------------------
+# Criterion: a spec-decode block is only RECORDED when its draft actually placed tokens.
+# Measured on gpt-oss-120b: the sweep's own line read `block 4: 31.28 tps (accept len 0,
+# rate 0)` and the row then certified `spec_type=ngram spec_n_max=8 spec_accept_len=0`,
+# so every token paid a draft lookup for zero gain and the recorded tps was measured with
+# that overhead in place.
+
+@test "spec-decode: a block that accepts nothing is NOT worth keeping" {
+    # Fails if: tps alone can record a draft that never hits.
+    ! __autotune_spec_worth_keeping 0 0
+    ! __autotune_spec_worth_keeping 0 0.0
+}
+
+@test "spec-decode: a block that places tokens IS worth keeping" {
+    # Fails if: the gate becomes blanket and a real spec win is discarded.
+    __autotune_spec_worth_keeping 3 0.75
+    __autotune_spec_worth_keeping 1
+}
+
+@test "spec-decode: a missing or unparsable metric is not evidence of a win" {
+    # Fails if: an empty counter reads as success. 0 is the honest reading of "no evidence".
+    ! __autotune_spec_worth_keeping "" ""
+    ! __autotune_spec_worth_keeping "n/a" ""
+}
+
+@test "spec-decode: the predicate EXISTS (a missing function must not read as 'not worth keeping')" {
+    # `! __missing` is TRUE — a nonexistent command also returns non-zero — so the two
+    # negative cases above would pass vacuously if this function were ever lost (measured
+    # 2026-11-03: a peer tree-restore removed it and two cases still went green).
+    declare -f __autotune_spec_worth_keeping >/dev/null
+}

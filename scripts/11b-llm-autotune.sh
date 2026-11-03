@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
 #   v29 (2026-11-02): __llm_autotune_mark_state — DEF-024's registry half.  A model the
 #   backend cannot load stays in the registry indistinguishable from a certified one (its
 #   FIT and TPS columns still carry values), so every consumer believes it is usable.  This
@@ -266,6 +266,29 @@ function __autotune_fa_retry() {
         return 0
     fi
     printf 'retry\n'
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_spec_worth_keeping — should a spec-decode block be RECORDED?
+#   args: accept_len [accept_rate]
+# Returns 0 (keep) only when the draft actually placed tokens: accept_len > 0.
+#
+# WHY THIS EXISTS (measured 2026-11-03): the block sweep picked the fastest block and
+# recorded it, and "fastest" alone can be noise. gpt-oss-120b certified as
+# `spec_type=ngram spec_n_max=8 spec_accept_len=0` while the sweep's own line read
+# `block 4: 31.28 tps (accept len 0, rate 0)` — a draft that accepted NOTHING, so every
+# token paid a draft lookup for zero gain, and the certified 32.31 tps was measured with
+# that overhead in place. An empty/unreadable metric is NOT evidence of a win.
+# ---------------------------------------------------------------------------
+function __autotune_spec_worth_keeping() {
+    local accept_len="${1:-0}" accept_rate="${2:-}"
+    [[ "$accept_len" =~ ^[0-9]+$ ]] || return 1
+    (( accept_len > 0 )) || return 1
+    if [[ -n "$accept_rate" ]] && [[ "$accept_rate" =~ ^[0-9]+([.][0-9]+)?$ ]]
+    then
+        [[ "$accept_rate" != "0" && "$accept_rate" != "0.0" ]] || return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
