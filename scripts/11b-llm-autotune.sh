@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
 #   v29 (2026-11-02): __llm_autotune_mark_state — DEF-024's registry half.  A model the
 #   backend cannot load stays in the registry indistinguishable from a certified one (its
 #   FIT and TPS columns still carry values), so every consumer believes it is usable.  This
@@ -237,6 +237,35 @@ function __autotune_descent_candidates() {
         return 0
     fi
     printf '%s\n' "${cands[@]}" | LC_ALL=C sort -nr | awk '!seen[$0]++'
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_fa_retry — should a failed launch be retried with --flash-attn off?
+#   args: fail_type (load_fail|oom|other)  fa_state (on|off)
+#   stdout: retry | descend | noop
+# A PURE decision, so the one case that must never retry is testable without a GPU.
+#
+# An OOM is a FIT verdict: the launch asked for more memory than the card/guest had.
+# Retrying with flash attention OFF allocates the full attention buffer, i.e. asks for
+# MORE of the resource that just ran out — it cannot succeed and it makes the failure
+# worse.  Measured 2026-11-03: two such retries (ctx 131072 then 65536, a 39.8 GB
+# NVFP4 row on the 96 GiB pool) took the 29.8 GiB guest into the kernel OOM killer,
+# which killed openclaw-gateway.service 7 times in 25 minutes and ended the sweep.
+# The descent is the correct response: a smaller ctx needs less.
+#
+# A LOAD failure is the opposite case and the one the retry exists for: an arch that
+# cannot run FA fails to load with an explicit error, and FA off is the only way to
+# serve it.  "other"/unknown keeps today's behaviour (retry) — an unclassified
+# failure must not silently lose the one recovery we have.
+# ---------------------------------------------------------------------------
+function __autotune_fa_retry() {
+    local fail="${1:-other}" fa="${2:-on}"
+    [[ "$fa" == "on" ]] || { printf 'noop\n'; return 0; }
+    if [[ "$fail" == "oom" ]]; then
+        printf 'descend\n'
+        return 0
+    fi
+    printf 'retry\n'
 }
 
 # ---------------------------------------------------------------------------

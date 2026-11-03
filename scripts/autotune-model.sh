@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 92
+# Module Version: 93
 #   v92 (2026-11-02): one `warn` helper replaces four hand-written stderr writes, seven lines are
 #   wrapped, and the three failure-classification regexes are split with `+=` — values verified
 #   byte-identical to the previous blob. Clears the lane's 10.7, 8.1.8 and 9.7 rises.
@@ -1220,21 +1220,44 @@ _bench_spawn() {
         fi
     }
     _launch_server || {
-        if [[ $flash_attn == "on" ]]; then
-            # The retry is right — an FA-on launch failure is the one case worth a
-            # re-try — but the REASON must be READ, never assumed: labelling every
-            # launch failure "flash-attn" is how an unloadable GGUF read as an FA
-            # fault for hours (2026-10-14 — code-100k-Q8_0 logged load_model
-            # "failed to load model" at every ctx while each attempt claimed
-            # flash-attn).  Name the failure the server log actually shows.
-            local _fa_cause _fa_label="launch failed (no load-failure signature)"
-            _fa_cause=$(_startup_fail_type quiet)
-            [[ "$_fa_cause" == "load_fail" ]] && _fa_label="model load failure"
-            echo "  ${_fa_label} — retrying once with --flash-attn off" >&2
-            _bench_stop "$_BENCH_PID"
-            flash_attn="off"
-            _launch_server || true
+        # The REASON must be READ, never assumed: labelling every launch failure
+        # "flash-attn" is how an unloadable GGUF read as an FA fault for hours
+        # (2026-10-14 — code-100k-Q8_0 logged load_model "failed to load model" at
+        # every ctx while each attempt claimed flash-attn).  And an OOM must not be
+        # retried with FA off at all — that asks for MORE memory than the attempt
+        # that just failed, which is what drove this guest into the kernel OOM killer
+        # and got openclaw-gateway killed 7 times on 2026-11-03.  The decision lives
+        # in __autotune_fa_retry (11b) so both directions are unit-tested.
+        local _fa_cause _fa_act
+        _fa_cause=$(_startup_fail_type quiet)
+        if declare -f __autotune_fa_retry >/dev/null 2>&1
+        then
+            _fa_act=$(__autotune_fa_retry "$_fa_cause" "$flash_attn")
+        else
+            # Standalone run with no 11b on disk — this script already refuses to run
+            # without it, so reaching here means a partial tree; keep the old retry.
+            _fa_act="retry"
         fi
+        case "$_fa_act" in
+            retry)
+                local _fa_label="launch failed (no load-failure signature)"
+                [[ "$_fa_cause" == "load_fail" ]] && _fa_label="model load failure"
+                echo "  ${_fa_label} — retrying once with --flash-attn off" >&2
+                _bench_stop "$_BENCH_PID"
+                flash_attn="off"
+                _launch_server || true
+                ;;
+            descend)
+                warn "  OOM at this ctx — NOT retrying with --flash-attn off (that needs more memory); descending"
+                _bench_stop "$_BENCH_PID"
+                ;;
+            *)
+                # Unreachable through __autotune_fa_retry, but a silent fall-through
+                # would leave flash_attn "on" with the failure unclassified.
+                warn "  unrecognised fa-retry decision '${_fa_act}' — leaving flash attention as it is"
+                _bench_stop "$_BENCH_PID"
+                ;;
+        esac
     }
     if [[ $hw -ge 90 ]]; then
         # Tell a *stall* apart from a real load failure: the process is still

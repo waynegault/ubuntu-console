@@ -263,3 +263,34 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
         done
     done
 }
+
+# --- __autotune_fa_retry -----------------------------------------------------
+# Criterion (2026-11-03): an OOM is a FIT verdict and must NOT be retried with
+# --flash-attn off, because FA off allocates the full attention buffer — it asks for
+# MORE of the resource that just ran out. Measured: two such retries at ctx 131072 and
+# 65536 with a 39.8 GB row on the 96 GiB pool drove the 29.8 GiB guest into the kernel
+# OOM killer, which killed openclaw-gateway.service 7 times in 25 minutes.
+# An arch that cannot run FA is the opposite case and still gets its one retry.
+
+@test "fa-retry: an OOM descends instead of retrying with flash attention off" {
+    # Fails if: the retry returns for an OOM (the defect), i.e. the probe asks for
+    # more memory than the attempt that just failed.
+    [ "$(__autotune_fa_retry oom on)" = "descend" ]
+}
+
+@test "fa-retry: a model load failure still gets one retry with flash attention off" {
+    # Fails if: the gate becomes blanket and an FA-incompatible arch loses the only
+    # recovery this script has for it.
+    [ "$(__autotune_fa_retry load_fail on)" = "retry" ]
+}
+
+@test "fa-retry: an unclassified failure keeps the retry (never lose the recovery)" {
+    # Fails if: an unknown/other failure is treated as OOM and the retry is dropped.
+    [ "$(__autotune_fa_retry other on)" = "retry" ]
+}
+
+@test "fa-retry: with flash attention already off there is nothing to retry" {
+    # Fails if: the decision ignores the current state and loops a retry forever.
+    [ "$(__autotune_fa_retry oom off)" = "noop" ]
+    [ "$(__autotune_fa_retry load_fail off)" = "noop" ]
+}
