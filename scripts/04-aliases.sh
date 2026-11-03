@@ -2,7 +2,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 34
+# Module Version: 35
 #   v34 (2026-11-01): the ocms ownership note no longer says it aliases oc-sync-models.
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
@@ -461,6 +461,17 @@ function cop-ask() {
 # wtf <topic>— ask the local LLM to explain a tool or concept (REPL mode)
 alias chat:='local_chat'
 alias wtf='wtf_repl'
+
+# ---- llama.cpp binaries (the box's single LLM stack — single-quoted on purpose) ----
+# SINGLE quotes so the path expands when the alias is USED, not when it is defined:
+# 01-constants.sh is the exporter (LLAMA_SERVER_BIN -> build-cuda/, overridden by the
+# host profile's LLAMA_CUDA_SERVER_BIN), so a double-quoted alias would freeze whatever
+# this shell happened to hold at load and reproduce the stale-build/ literal the repo
+# swept out on 2026-11-01.  llama-cli has no exported variable of its own, so it derives
+# from the same bin/ directory the server resolves to.
+# Measured 2026-11-03: both binaries exist in ~/llama.cpp/build-cuda/bin/.
+alias llama-server='${LLAMA_CUDA_SERVER_BIN:?llama-server binary not configured (source the console)}'
+alias llama-cli='${LLAMA_CUDA_CLI_BIN:-${LLAMA_CUDA_SERVER_BIN%/*}/llama-cli}'
 
 # ---- Project Shortcuts ----
 # inv — Enter investigator project and run its CLI.
