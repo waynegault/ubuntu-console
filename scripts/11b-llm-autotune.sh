@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
 #   v29 (2026-11-02): __llm_autotune_mark_state — DEF-024's registry half.  A model the
 #   backend cannot load stays in the registry indistinguishable from a certified one (its
 #   FIT and TPS columns still carry values), so every consumer believes it is usable.  This
@@ -534,7 +534,16 @@ function __llm_autotune_profile_save() {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
                 $13 = fit; $14 = backend
                 if ($16 == "") $16 = "on"
-                $17 = tps_val; $18 = "yes"
+                $17 = tps_val
+                # Field 18 is the SCOPE key, not merely a flag: the --all-but-done
+                # selector in bin/autotune-rows.sh takes rows whose field 18 is neither
+                # "yes" nor "slow".  A row below LLM_MIN_TPS at EVERY ctx is DONE — it was
+                # profiled and the answer is "too slow" — so leaving it "no" made every
+                # future sweep re-spend a full descent on it (measured 2026-11-03: the
+                # 39.8 GB 70B plateaued at 5.5-6.2 tps across 4096..131072, 13 probes).
+                # The caller sets AUTOTUNE_SAVE_STATE=slow for that verdict; anything else
+                # keeps "yes", so a certified save is unchanged.
+                $18 = (ENVIRON["AUTOTUNE_SAVE_STATE"] == "slow" ? "slow" : "yes")
                 if (kv_quant_val != "") $5 = kv_quant_val
                 if (ngl_val != "") $7 = ngl_val
                 if (prefill_val != "") $21 = prefill_val
@@ -591,7 +600,12 @@ function __llm_autotune_profile_save() {
     _v_rest="${_verified#*|}"
     _v_autotuned="${_v_rest%%|*}"
     _v_policy="${_v_rest#*|}"
-    if [[ "$_v_tps" != "$tps" || "$_v_autotuned" != "yes" ]]; then
+    # The expected state, not a hardcoded "yes": a below-floor save legitimately writes
+    # "slow" (2026-11-03) and this verifier is what refused it — the write was correct and
+    # the check insisted on the certified value.
+    local _want_state="yes"
+    [[ "${AUTOTUNE_SAVE_STATE:-}" == "slow" ]] && _want_state="slow"
+    if [[ "$_v_tps" != "$tps" || "$_v_autotuned" != "$_want_state" ]]; then
         return 1
     fi
     if [[ -n "$ctx_policy" && "$_v_policy" != "$ctx_policy" ]]; then

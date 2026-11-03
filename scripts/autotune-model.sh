@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 94
+# Module Version: 95
 #   v94 (2026-11-03): a hold taken by an ANCESTOR (the batch runner) is reported as what it is -
 #   this row runs under the sweep own hold - instead of "held by another run ... the watchdog may
 #   restart the CUDA lane mid-run", which named our own parent as a foreign threat on every row.
@@ -2574,6 +2574,16 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             # Candidates are pre-built (descending, and including this row's PREVIOUS
             # certification) so the walk cannot step over a value the row is known to hold —
             # see __autotune_descent_candidates.
+            #
+            # FLAT-CURVE STOP (2026-11-03).  On a compute-bound model the filled-cache tps
+            # barely moves with ctx, so walking to MIN_CTX proves nothing and spends a CUDA
+            # cycle per step.  Measured on the 39.8 GB 70B: 5.72 / 6.17 / 6.23 / 5.93 / 5.80
+            # / 5.82 / 5.80 / 5.62 across 131072 -> 16896 (13 probes in total to reach the
+            # same verdict).  Two consecutive descents without a >10% gain while still below
+            # the floor is enough to say "too slow", and the verdict is saved as
+            # autotuned=slow so no later sweep re-spends it.
+            # (not `local`: this block is script scope, not a function — SC2168)
+            _flat=0 _prev_tps=$_ft
             for _dc in $(__autotune_descent_candidates "$_dc" "$MIN_CTX" "$PREV_CERT_CTX"); do
                 _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
                 if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
@@ -2590,10 +2600,29 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                         echo "  ✓ floor met at ctx $(fmt "$_dc") — certifying this as the usable ctx"
                         break
                     fi
+                    if [[ $_dok == 0 ]]; then
+                        # swallow-ok: bc's own failure is the "no improvement" answer below, which fails safe (the walk continues)
+                        if [[ $(echo "$_ft > $_prev_tps * 1.10" | bc -l 2>/dev/null || echo "0") == 1 ]]
+                        then
+                            _flat=0
+                        else
+                            _flat=$((_flat + 1))
+                        fi
+                        _prev_tps=$_ft
+                        if (( _flat >= 2 )); then
+                            echo "  tps is flat across ctx (no >10% gain in 2 descents) — stopping the walk early"
+                            break
+                        fi
+                    fi
                 fi
             done
             if [[ $_dok == 0 || $_pok == 0 ]]; then
-                echo "  ⚠ below floor even at min ctx — too slow for our purposes; recording best-effort config"
+                if (( _flat >= 2 )); then
+                    echo "  ⚠ below floor and flat across ctx — too slow (walk stopped early)"
+                    echo "    recording best-effort config (max TPS) for capability profiling"
+                else
+                    echo "  ⚠ below floor even at min ctx — too slow for our purposes; recording best-effort config"
+                fi
             fi
         fi
     else
@@ -3321,6 +3350,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         [[ "$_meas_n" =~ ^[0-9]+$ ]] || _meas_n=5
         _meas_spread=""
         [[ -r "/tmp/at-spread-$$" ]] && _meas_spread=$(< "/tmp/at-spread-$$")
+        # A below-floor verdict is saved as autotuned=slow, not "yes" and not "no":
+        # the row HAS been profiled (so a sweep must not re-spend a descent on it) and it
+        # is NOT usable (so nothing may serve it as certified).  bin/autotune-rows.sh's
+        # --all-but-done treats both "yes" and "slow" as done.
+        # swallow-ok: an unusable bc is the below-floor branch, which records "slow" — the safe side
+        if [[ $(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]
+        then
+            AUTOTUNE_SAVE_STATE=yes
+        else
+            AUTOTUNE_SAVE_STATE=slow
+        fi
+        export AUTOTUNE_SAVE_STATE
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \

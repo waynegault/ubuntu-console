@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 #   v11 (2026-11-03): a DIRECT run asks the quiet-fleet gate too. The gate only ever guarded
 #   the boot/resume path, so a hand-started sweep reached the card ungated (measured 22:07 that
 #   day, launched from a live shell). --force-live-fleet is the named override; the resume loop
@@ -98,10 +98,16 @@ case "${1:-}" in
     # Embedding models (arch field 6, e.g. gemma-embedding) have no generation to
     # measure, so the sweep skips them instead of burning a row on a probe that can
     # only fail.
+    #
+    # "slow" is a TERMINAL state beside "yes" (2026-11-03).  A row that measured below
+    # LLM_MIN_TPS at every ctx has been profiled — the answer is "too slow" — so
+    # re-selecting it every sweep re-spends a full descent for a verdict that cannot
+    # change (measured: 5.5-6.2 tps across 4096..131072, 13 probes, then "too slow").
+    # --all still re-measures everything, which is the deliberate re-validation sweep.
     --all-but-done)
         shift
         mapfile -t ROWS < <(awk -F'|' '
-            $1 ~ /^[0-9]+$/ && $18 != "yes" && tolower($6) !~ /embedding/ {print $3}
+            $1 ~ /^[0-9]+$/ && $18 != "yes" && $18 != "slow" && tolower($6) !~ /embedding/ {print $3}
         ' "$REGISTRY" | sort)
         ;;
     --all)
@@ -165,6 +171,12 @@ fi
 # Release only when THIS run owns the hold (card 7d3e7b95): the old trap removed a
 # hold it may not have set, releasing another run's hold mid-sweep.
 trap '_tac_suspend_release "$SUSPEND"' EXIT
+# ...and when the WRAPPER is the thing signalled, the case block below never runs at all
+# (measured 2026-11-03: `pkill -TERM` on this script left the log ending on a probe result,
+# with no verdict).  Say it, then exit through the EXIT trap so the hold is still released.
+trap '{ echo "=== WRAPPER KILLED by a signal — the rows were NOT measured to a verdict" \
+            | tee -a "$LOG"
+        exit 130; }' TERM INT
 # swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
 systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 
@@ -190,6 +202,13 @@ rc=$?
     case "$rc" in
         4) echo "=== batch exited 4 (cycle budget spent — one boot's measuring is done)" ;;
         3) echo "=== batch exited 3 (adapter stalled with the budget UNSPENT — look, do not reboot)" ;;
+        129|130|137|143)
+            # A KILLED run says so.  Without this, a run stopped by an operator (or by the
+            # OOM killer) ended on a bare "batch exited N" or, when the WRAPPER itself was
+            # signalled, left no verdict line at all — measured 2026-11-03, when `pkill -TERM`
+            # ended a row and the log's last line was a probe result.  The distinction that
+            # matters: killed is neither "measured" (exit 0) nor "budget spent" (4).
+            echo "=== batch KILLED by signal $((rc - 128)) — not a verdict on the rows" ;;
         *) echo "=== batch exited $rc at $(date -Iseconds)" ;;
     esac
     # swallow-ok: the boot-scoped ledger again — an absent file reports zero cycles, which is its true value

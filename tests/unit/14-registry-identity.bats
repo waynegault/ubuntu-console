@@ -95,6 +95,24 @@ __prepend_model() {
     [[ "$output" == "32768 40" ]]
 }
 
+@test "registry-identity: a below-floor verdict saves autotuned=slow, not yes and not no" {
+    # Criterion (2026-11-03): field 18 is the SCOPE key. A row that was profiled and
+    # measured below LLM_MIN_TPS at every ctx must read "slow" — "yes" would let something
+    # serve it as certified, and "no" made every future --all-but-done sweep re-spend a
+    # full descent on a verdict that cannot change (the 39.8 GB 70B plateaued at ~6 tps
+    # across 4096..131072 and was re-selected by construction).
+    # Fails if: the caller's verdict is ignored (always "yes"), or the state lands on a
+    # different row.
+    AUTOTUNE_SAVE_STATE=slow __llm_autotune_profile_save "gamma.gguf" "native" "4608" "1024" "256" "1" "256" "5.7"
+    run awk -F'|' '$3 == "gamma.gguf" {print $17, $18}' "$LLM_REGISTRY"
+    [[ "$output" == "5.7 slow" ]]
+
+    # Control: the default path still certifies, so "slow" cannot become the only outcome.
+    __llm_autotune_profile_save "gamma.gguf" "native" "4608" "1024" "256" "1" "256" "30.1"
+    run awk -F'|' '$3 == "gamma.gguf" {print $18}' "$LLM_REGISTRY"
+    [[ "$output" == "yes" ]]
+}
+
 @test "registry-identity: a save survives a RENUMBER between capture and write" {
     # The failure the rule exists for: a scan runs while work is queued or in flight.
     local target="gamma.gguf"
