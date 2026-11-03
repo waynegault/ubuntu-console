@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
 #   v33 (2026-11-02): the lane's new stderr writes go through one `warn` helper and one status
 #   line is wrapped — the §18.3 10.7 and 8.1.8 shapes its commits added, fixed at source rather
 #   than re-baselined.
@@ -914,6 +914,11 @@ function __gguf_metadata() {
         blocks = 0
         ctx    = 4096
         ftype  = 0
+        # KV GEOMETRY (fields 6 and 7, added 2026-11-03).  0 = not present in the header,
+        # which is the signal for __kv_mb_per_1k to fall back to its old shape-agnostic
+        # constant rather than compute from a half-read geometry.
+        kvh    = 0
+        kdim   = 0
         found  = 0
 
         # --- Walk KV pairs ---
@@ -959,6 +964,8 @@ function __gguf_metadata() {
                 # 2026-09-16: those rows reported a 4096 window, so their ctx
                 # estimates and KV-math ceilings were capped at 4096 too).
                 if (key ~ /^[A-Za-z0-9_-]+\.context_length$/ || key == "general.context_length") { ctx = val; found++ }
+                # KV GEOMETRY — scalar form (many archs write these as one u32).
+                if (key ~ /head_count_kv$/) kvh = val; if (key ~ /key_length$/) kdim = val
             }
             # -- Types 10,11,12: UINT64, INT64, FLOAT64 (8 bytes) --
             else if (vt == 10 || vt == 11 || vt == 12) {
@@ -967,6 +974,7 @@ function __gguf_metadata() {
                 if (key == "general.file_type")  { ftype  = val; found++ }
                 if (key ~ /block_count/)         { blocks = val; found++ }
                 if (key ~ /^[A-Za-z0-9_-]+\.context_length$/ || key == "general.context_length") { ctx = val; found++ }
+                if (key ~ /head_count_kv$/) kvh = val; if (key ~ /key_length$/) kdim = val
             }
             # -- Type 6: FLOAT32 (4 bytes) --
             else if (vt == 6) { off += 4 }
@@ -979,6 +987,16 @@ function __gguf_metadata() {
                 if (off + 12 > n) break
                 at = u32(off); off += 4              # element type
                 al = u32(off); off += 8              # array length (lower 32)
+                # KV GEOMETRY — ARRAY form.  MoE archs commonly write head_count_kv as a
+                # per-layer array, which the skip below would step over without reading,
+                # so the geometry would read as "absent" on exactly the models whose KV
+                # cost is largest.  Read element 0 here; the values are uniform in every
+                # GGUF seen on this box, and a per-layer divergence only moves the
+                # estimate, never a correctness decision.
+                if (al > 0 && (at == 4 || at == 5 || at == 10 || at == 11)) {
+                    if (key ~ /\.attention\.head_count_kv$/) kvh  = u32(off)
+                    if (key ~ /\.attention\.key_length$/)    kdim = u32(off)
+                }
                 # Skip array contents based on element type
                 if      (at == 0 || at == 1 || at == 7)          off += al
                 else if (at == 2 || at == 3)                     off += al * 2
@@ -995,11 +1013,13 @@ function __gguf_metadata() {
             }
             else break  # unknown value type - bail
 
-            # Early exit once all 5 target keys are found.
-            if (found >= 5) break
+            # Early exit once all 5 target keys are found AND the KV geometry was seen —
+            # the geometry can appear after any of them, and a model whose header omits
+            # it simply walks the remaining keys (bounded by nkv).
+            if (found >= 5 && kvh > 0 && kdim > 0) break
         }
 
-        print name "|" arch "|" blocks "|" ctx "|" ftype
+        print name "|" arch "|" blocks "|" ctx "|" ftype "|" kvh "|" kdim
     }'
 }
 

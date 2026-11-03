@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
 #   v29 (2026-11-02): __llm_autotune_mark_state — DEF-024's registry half.  A model the
 #   backend cannot load stays in the registry indistinguishable from a certified one (its
 #   FIT and TPS columns still carry values), so every consumer believes it is usable.  This
@@ -701,13 +701,41 @@ function __llm_autotune_mark_state() {
 # huge-ctx CUDA context (WSL2 dxgkrnl degradation, 2026-09-05).
 # ---------------------------------------------------------------------------
 function __kv_mb_per_1k() {
-    local n_layers="${1:-0}"
+    local n_layers="${1:-0}" kv_heads="${2:-0}" head_dim="${3:-0}" bpe="${4:-1.06}"
     [[ "$n_layers" =~ ^[0-9]+$ ]] || n_layers=0
-    if (( n_layers > 0 )); then
+    [[ "$kv_heads" =~ ^[0-9]+$ ]] || kv_heads=0
+    [[ "$head_dim" =~ ^[0-9]+$ ]] || head_dim=0
+    # Mirror of the "one budget, two pools" defect this closes (card bf92711c): the old
+    # constant was n_layers * 2.0 MiB per 1k tokens REGARDLESS of KV width — no KV heads,
+    # no head dimension, no dtype.  For a GQA model with 8 KV heads the real cost is far
+    # below that; for a model without GQA it is far above, so the probe's start ctx was
+    # wrong in both directions and the wrongness was invisible.  Now the arithmetic comes
+    # from the GGUF's own geometry when the header carries it (fields 6 and 7 of
+    # __gguf_metadata), and falls back to the old constant — SAYING SO — when it does not.
+    #   bytes/token = n_layers * 2 (K and V) * kv_heads * head_dim * bytes_per_element
+    #   MiB per 1k    = bytes/token * 1024 / 1048576
+    # bpe defaults to 1.06 bytes/element, which is q8_0 (32 values per 34 bytes) — the KV
+    # dtype the probes and the resident lanes use.  f16 would be ~1.88x larger.
+    if (( n_layers > 0 && kv_heads > 0 && head_dim > 0 )); then
+        awk -v L="$n_layers" -v h="$kv_heads" -v d="$head_dim" -v b="$bpe" \
+            'BEGIN{printf "%.2f", (L * 2 * h * d * b * 1024) / 1048576}'
+    elif (( n_layers > 0 )); then
         awk -v L="$n_layers" 'BEGIN{printf "%.2f", L * 2.0}'
     else
         echo "48.0"
     fi
+}
+
+# __kv_geometry_known — did the GGUF header carry usable KV geometry?
+#   args: kv_heads head_dim   returns 0 when both are positive integers
+# A PURE predicate so the CALLER decides how to report a fallback: the warning belongs on
+# the run's own stderr through its warn() helper, not on a library function, and keeping it
+# out of __kv_mb_per_1k leaves that function a single output stream (its number).
+function __kv_geometry_known() {
+    local kv_heads="${1:-0}" head_dim="${2:-0}"
+    [[ "$kv_heads" =~ ^[0-9]+$ ]] && (( kv_heads > 0 )) || return 1
+    [[ "$head_dim" =~ ^[0-9]+$ ]] && (( head_dim > 0 )) || return 1
+    return 0
 }
 
 # ---------------------------------------------------------------------------

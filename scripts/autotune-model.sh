@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 95
+# Module Version: 96
 #   v94 (2026-11-03): a hold taken by an ANCESTOR (the batch runner) is reported as what it is -
 #   this row runs under the sweep own hold - instead of "held by another run ... the watchdog may
 #   restart the CUDA lane mid-run", which named our own parent as a foreign threat on every row.
@@ -692,13 +692,36 @@ fi
 
 BUDGET=$(( FREE_VRAM - MODEL_MB - 200 ))
 
+# NAME BOTH POOLS (2026-11-03).  This script sizes against FREE_VRAM, which is the GPU
+# pool — correct for offloaded weights and KV, but NOT the only pool a row draws on:
+# mmap, --cache-ram and the loader's own staging buffers come out of guest RAM, and on a
+# shared-memory host that is the SMALL side (measured: GPU pool 98304 MiB, host 29.8 GiB).
+# A run that prints only the card's figure reads as though host memory were unlimited,
+# which is how a 60.9 GB row reached the kernel OOM killer with 8 kills and no line
+# saying memory was finite.  Printing both costs one read and makes the next refusal
+# (or kill) attributable from the log alone.
+    # swallow-ok: an unreadable /proc/meminfo is reported by the UNREADABLE branch below
+_HOST_AVAIL_MB=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)
+if [[ "$_HOST_AVAIL_MB" =~ ^[0-9]+$ ]]
+then
+    echo "  pools: gpu ${VRAM_TOTAL} MiB (free ${FREE_VRAM}) | host avail ${_HOST_AVAIL_MB} MiB | model ${MODEL_MB} MiB"
+else
+    warn "  pools: gpu ${VRAM_TOTAL} MiB (free ${FREE_VRAM}) | host avail UNREADABLE | model ${MODEL_MB} MiB"
+fi
+
 if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/null; then
     # Shared function path — architecture-aware estimate
     _meta=$(__gguf_metadata "$MODEL_PATH" 2>/dev/null || true)
     if [[ -n "$_meta" ]]; then
         _n_layers=$(cut -d'|' -f3 <<< "$_meta")
         _native_ctx=$(cut -d'|' -f4 <<< "$_meta")
-        _kv_mb=$(__kv_mb_per_1k "${_n_layers:-0}")
+        # KV geometry (11d v35 fields 6 and 7) — see __kv_mb_per_1k.  Passing it means
+        # the start ctx is computed from this model's KV width rather than a constant;
+        # an empty/0 pair is the header-absent case and the estimate says so on stderr.
+        _kv_heads=$(cut -d'|' -f6 <<< "$_meta")
+        _kv_dim=$(cut -d'|' -f7 <<< "$_meta")
+        _kv_mb=$(__kv_mb_per_1k "${_n_layers:-0}" "${_kv_heads:-0}" "${_kv_dim:-0}")
+        echo "  kv geometry: layers=${_n_layers:-0} kv_heads=${_kv_heads:-0} head_dim=${_kv_dim:-0} -> ${_kv_mb} MiB/1k"
     else
         _native_ctx=""
         _kv_mb=$(__kv_mb_per_1k "0")
@@ -2471,7 +2494,20 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
     # registry's current value and against each other.
     NGL_CANDIDATES=()
     [[ "$BENCH_NGL" != "999" ]] && NGL_CANDIDATES+=("999")
-    if [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
+    # SHARED-MEMORY HOSTS GET NO LADDER (2026-11-03).  The ladder exists for a discrete
+    # card, where fewer layers on the GPU means less VRAM pressure.  On a unified host
+    # the trade runs the other way: the GPU pool is the LARGE side (98304 MiB here) and
+    # host RAM the small one (29.8 GiB), so every step down moves weights OUT of the big
+    # pool and INTO the small one.  Measured on gpt-oss-120b (60.9 GB F16): the ladder
+    # reached ngl=27, MemAvailable fell to 448 MiB and the kernel OOM killer fired 8
+    # times in three minutes.  The same shape at ngl=999 held 64 GiB of the pool and
+    # never touched host memory (and measured 39-40 tps).  So 999 is not merely the best
+    # point here, it is the safe one — the ladder cannot help and can only hurt.
+    if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
+    then
+        echo "  n_gpu_layers sweep: SKIPPED — shared memory: the pool is the large side,"
+        echo "    so a lower ngl moves weights into host RAM instead of relieving it"
+    elif [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
         for _frac in 3 1; do
             _ngl_cand=$(( _n_layers * _frac / 4 ))
             [[ $_ngl_cand -lt 1 ]] && _ngl_cand=1

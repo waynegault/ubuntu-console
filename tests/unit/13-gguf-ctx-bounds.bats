@@ -294,3 +294,33 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     [ "$(__autotune_fa_retry oom off)" = "noop" ]
     [ "$(__autotune_fa_retry load_fail off)" = "noop" ]
 }
+
+# --- __kv_mb_per_1k (KV geometry, card bf92711c) ------------------------------
+# Criterion (2026-11-03): the KV estimate comes from the model's GEOMETRY when the header
+# carries it, and falls back to the old shape-agnostic constant — saying so — when it does
+# not. Measured on Qwen3-Coder-30B (48 layers, kv_heads 4, head_dim 128):
+# 48*2*4*128*1.06*1024/1048576 = 50.88 MiB/1k against the old constant's 96.
+
+@test "kv-estimate: geometry gives the arithmetic cost, not the layer constant" {
+    [ "$(__kv_mb_per_1k 48 4 128 1.06)" = "50.88" ]
+}
+
+@test "kv-estimate: more KV heads cost more, and the constant ignores that" {
+    # Same layers, 32 KV heads instead of 4 -> 8x the KV. A shape-blind constant cannot
+    # tell these apart, which is the defect this closes.
+    [ "$(__kv_mb_per_1k 48 32 128 1.06)" = "407.04" ]
+}
+
+@test "kv-estimate: no geometry falls back to the old constant" {
+    # Fails if: a header without the KV keys returns a geometry-derived number.
+    [ "$(__kv_mb_per_1k 48)" = "96.00" ]
+}
+
+@test "kv-estimate: the fallback is a PREDICATE the caller reports, not a silent value" {
+    # Fails if: a missing geometry becomes indistinguishable from a measured one. The
+    # warning lives in the caller (autotune-model's warn) so the function keeps one stream.
+    ! __kv_geometry_known 0 0
+    ! __kv_geometry_known 4 0
+    ! __kv_geometry_known 0 128
+    __kv_geometry_known 4 128
+}
