@@ -28,6 +28,15 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 8
+#   v8 (2026-11-03): TAC_HOST_GPU_POOL_BYTES — the GPU-addressable pool, MEASURED once
+#   per boot and exported. 11d used to clamp the card's figure to MemTotal on a
+#   unified host; two boots hours apart showed why that is wrong (card 81920 MiB with
+#   Windows at 46.5 GB, then 98304 MiB with Windows at 30.5 GB — the split MOVES), and
+#   torch reported 110.5 GiB on the second, above the card, so the card is the
+#   conservative bound. The value is cached per boot_id so only the first shell of a
+#   boot pays for the probe; an unreadable card returns 1 and 11d keeps its own
+#   fallback rather than inventing a number.
 # Module Version: 7
 #   v7 (2026-11-02): HF_HUB_CACHE joins HF_HOME in the cleared and exported profile-owned
 #   facts. Pinning only HF_HOME would leave a second cache path in play, because the hub
@@ -273,8 +282,51 @@ tac_host_profile_selected() {
 # documented knobs (LLAMA_DRIVE_ROOT, LLAMA_GPU_LAYERS, LLAMA_CPU_THREADS,
 # LLAMA_FIT_TARGET_MB, LLAMA_CACHE_RAM_MB) are deliberately NOT cleared: those are
 # the values an operator is told to export.
+# tac_host_gpu_pool_bytes — the GPU-addressable pool for THIS boot, in bytes; 1 when
+# the card cannot be read.  Measured, never assumed: the OS/GPU split is made at boot
+# and it moves (81920 MiB with Windows at 46.5 GB on the 2026-11-02 boot; 98304 MiB
+# with Windows at 30.5 GB on 2026-11-03), so a constant would be stale after one
+# restart.  Cached per boot_id, so only the first shell of a boot pays for the
+# nvidia-smi call; an unwritable cache costs one re-probe per shell and nothing else,
+# which is why that write is not fatal — but an unreadable CARD is reported as a
+# failure so the caller keeps its own fallback instead of sizing against a guess.
+tac_host_gpu_pool_bytes() {
+    local _cache _boot _mb _cb _cv
+    _cache="${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tactical-console}/gpu-pool"
+    # No boot_id only costs the cache: the probe below still answers and the write is
+    # skipped, so the worst case is one nvidia-smi call per shell.
+    # swallow-ok: boot_id is optional — the probe is the answer, the file is only speed
+    _boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" || _boot=""
+    if [[ -n "$_boot" && -r "$_cache" ]]
+    then
+        # A short or unreadable cache line is a MISS, decided by the two checks below;
+        # this file is not under `set -e`, so a non-zero read needs no `|| true`.
+        read -r _cb _cv < "$_cache"
+        if [[ "$_cb" == "$_boot" && "${_cv:-}" =~ ^[0-9]+$ ]]
+        then
+            printf '%s\n' "$_cv"
+            return 0
+        fi
+    fi
+    # An unreadable card returns 1 on the next line, so the caller keeps its own fallback.
+    # swallow-ok: an nvidia-smi failure is reported by the `return 1` on the line below
+    _mb="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+    [[ "$_mb" =~ ^[0-9]+$ ]] || return 1
+    if [[ -n "$_boot" ]]
+    then
+        # Failures here are NOT suppressed: an unwritable state dir costs a re-probe per
+        # shell and nothing else, but it usually means something larger is broken (the
+        # same directory holds LLM_STATE_DIR), so bash's own message is worth seeing.
+        mkdir -p "${_cache%/*}"
+        printf '%s %s\n' "$_boot" "$(( _mb * 1048576 ))" > "$_cache"
+    fi
+    printf '%s\n' "$(( _mb * 1048576 ))"
+}
+
+# tac_host_profile_apply — clear the profile-owned facts, select a profile, source it and
+# export what the rest of the console reads.  Called once per shell.
 tac_host_profile_apply() {
-    local _id _file _facts _arch _cuda _render
+    local _id _file _facts _arch _cuda _render _pool
     unset LLAMA_LANE_SPECS LLAMA_CUDA_LANE_UNIT LLAMA_GPU_FREE_THRESHOLD_MIB \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
           VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
@@ -284,6 +336,16 @@ tac_host_profile_apply() {
           LLM_REGISTRY LLM_DEFAULT_FILE LLM_STATE_DIR \
           HF_HOME HF_HUB_CACHE \
           LLAMA_QUANT_GUIDE_REL QUANT_GUIDE
+    # Measured per boot.  DELIBERATELY NOT in the clear list above: those clear because a
+    # profile constant describes a machine identity, so a parent's value is a foreign
+    # box's fact.  This is a per-boot MEASUREMENT, and no shell can outlive the boot it
+    # was started in, so inheritance within a boot is the same number — while clearing it
+    # would discard a caller's explicit value (a fallback path, a test, an operator).
+    if _pool="$(tac_host_gpu_pool_bytes)"
+    then
+        : "${TAC_HOST_GPU_POOL_BYTES:=$_pool}"
+        export TAC_HOST_GPU_POOL_BYTES
+    fi
     _facts="$(tac_host_facts)" || _facts=""
     if [[ -n "$_facts" ]]
     then

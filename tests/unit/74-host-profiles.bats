@@ -358,31 +358,36 @@ install_stub_env() {
     [ "$output" = "011" ]   # a plain dir is NOT a mountpoint: the mount test must say so
 }
 
-@test "unified-memory sizing clamps the card's figure to physical RAM" {
-    # Catches: a model marked "fits GPU" against 81920 MiB on a box with 39 GiB of
-    # RAM — it can only OOM.  The two functions are extracted rather than the module
-    # sourced, so the case needs no card and no live shell.
+@test "GPU pool: the card's figure stands even on a unified host, and TAC_HOST_GPU_POOL_BYTES wins" {
+    # Criterion (2026-11-03): the pool is a MEASURED, per-boot fact, never RAM and never
+    # a constant. Two boots hours apart on this box measured 81920 MiB against 46.5 GB of
+    # Windows RAM, then 98304 MiB against 30.5 GB — the OS/GPU split MOVES — and torch
+    # reported 110.5 GiB, above the card, so the card is the conservative bound.
+    # This REPLACES the old "clamps the card's figure to physical RAM" case: that clamp
+    # capped sizing at guest MemTotal (29.8 GiB on the second boot) and hid ~66 GiB.
+    # Fails if: the RAM clamp returns, the card is ignored, or the exported pool loses to
+    # the nvidia-smi read (which would make the per-boot cache pointless).
     local fn="$BATS_TEST_TMPDIR/sizing.sh"
     awk '/^function __tac_ram_total_bytes\(\)/,/^}/' "$REPO_ROOT/scripts/11d-llm-gpu.sh" > "$fn"
     awk '/^function __tac_vram_total_bytes\(\)/,/^}/' "$REPO_ROOT/scripts/11d-llm-gpu.sh" >> "$fn"
-    grep -q 'TAC_HOST_PROFILE_SHARED_MEMORY' "$fn" || { echo "FAIL: functions not extracted"; return 1; }
+    grep -q 'TAC_HOST_GPU_POOL_BYTES' "$fn" || { echo "FAIL: function not extracted"; return 1; }
 
     local stub="$BATS_TEST_TMPDIR/cardbin"
     mkdir -p "$stub"
-    printf '#!/bin/sh\nprintf "81920\\n"\n' > "$stub/nvidia-smi"
+    printf '#!/bin/sh\nprintf "98304\\n"\n' > "$stub/nvidia-smi"
     chmod +x "$stub/nvidia-smi"
 
-    # 4 GiB of RAM, a card reporting 80 GiB.
+    # A unified host with 4 GiB of RAM must still size against the card's 98304 MiB.
     run env PATH="$stub:$PATH" TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) \
         TAC_HOST_PROFILE_SHARED_MEMORY=1 bash -c 'source "$1"; __tac_vram_total_bytes' _ "$fn"
     [ "$status" -eq 0 ]
-    [ "$output" = "$((4 * 1024 * 1024 * 1024))" ]
+    [ "$output" = "$((98304 * 1048576))" ]
 
-    # Control: without the shared-memory fact, the card's own figure stands.
-    run env PATH="$stub:$PATH" TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) \
-        TAC_HOST_PROFILE_SHARED_MEMORY=0 bash -c 'source "$1"; __tac_vram_total_bytes' _ "$fn"
+    # The profile's per-boot measurement wins over the card, with the card nowhere near.
+    run env PATH="$stub:$PATH" TAC_HOST_GPU_POOL_BYTES="$((96 * 1024 * 1024 * 1024))" \
+        bash -c 'source "$1"; __tac_vram_total_bytes' _ "$fn"
     [ "$status" -eq 0 ]
-    [ "$output" = "$((81920 * 1048576))" ]
+    [ "$output" = "$((96 * 1024 * 1024 * 1024))" ]
 }
 
 # NOTE ON THE UNREADABLE-CARD STUB (2026-10-30).  The stub is re-prepended AFTER
@@ -414,7 +419,7 @@ PROFILE
     printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry.conf"
     run env LLM_HOST_PROFILE="bare" TAC_HOST_PROFILE_DIR="$prof" \
         TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" PATH="$stub:$PATH" \
-        TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" \
+        TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" TAC_STATE_DIR="$BATS_TEST_TMPDIR/state-bare" \
         bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; \
                  export LLM_REGISTRY="$3"; model-recommend general' \
         _ "$REPO_ROOT/env.sh" "$stub" "$BATS_TEST_TMPDIR/registry.conf"
@@ -422,23 +427,30 @@ PROFILE
     [[ "$output" == *"UNKNOWN"* ]]
 }
 
-@test "a unified-memory host with an unreadable card sizes to RAM, not to UNKNOWN" {
-    # The other half of the decision: on the arm64 box the GPU memory IS the system
-    # pool, so an unreadable card still has an honest ceiling.  Catches: that box
-    # refusing to rank because nvidia-smi did not answer.
+@test "a unified host with an unreadable card sizes to its per-boot pool, never to RAM" {
+    # Criterion (2026-11-03, replaces "sizes to RAM"): RAM is NOT the pool. The pool is
+    # the card's figure, measured once per boot and exported as TAC_HOST_GPU_POOL_BYTES
+    # — so an unreadable card in a LATER shell still has an honest ceiling, and a box
+    # with neither reading reports UNKNOWN rather than inventing one from MemTotal
+    # (which is only a .wslconfig value: 29.8 GiB on the 2026-11-03 boot).
+    # Fails if: the RAM clamp returns, or a missing pool silently becomes a number.
     local stub="$BATS_TEST_TMPDIR/nosmi2"
     mkdir -p "$stub"
     printf '#!/bin/sh\nexit 1\n' > "$stub/nvidia-smi"
     chmod +x "$stub/nvidia-smi"
     printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry2.conf"
+
     run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
-        TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) PATH="$stub:$PATH" \
-        TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache2" \
+        TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) \
+        TAC_HOST_GPU_POOL_BYTES=$((76800 * 1048576)) PATH="$stub:$PATH" \
+        TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache2" TAC_STATE_DIR="$BATS_TEST_TMPDIR/state-uni" \
         bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; \
                  export LLM_REGISTRY="$3"; model-recommend general' \
         _ "$REPO_ROOT/env.sh" "$stub" "$BATS_TEST_TMPDIR/registry2.conf"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"4GB"* ]]
+    # 75 GiB of pool, NOT the 4 GiB of RAM the old clamp would have used.
+    [[ "$output" == *"75GB"* ]]
+    [[ "$output" != *"4GB"* ]]
 }
 
 @test "the installer links all five lanes on this box's own profile" {

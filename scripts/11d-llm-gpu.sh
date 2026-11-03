@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
 #   v33 (2026-11-02): the lane's new stderr writes go through one `warn` helper and one status
 #   line is wrapped — the §18.3 10.7 and 8.1.8 shapes its commits added, fixed at source rather
 #   than re-baselined.
@@ -1049,6 +1049,26 @@ function __tac_vram_total_bytes() {
         printf '%d\n' "$__TAC_VRAM_TOTAL_BYTES_CACHE"
         return
     fi
+    # THE POOL IS MEASURED PER BOOT AND NEVER CLAMPED TO RAM (2026-11-03).
+    # This used to clamp the card's figure to MemTotal on a unified host, on the reading
+    # that the card reports memory the machine cannot back.  Two boots measured hours
+    # apart refute that: 2026-11-02 23:43 gave card 81920 MiB against Windows 46.5 GB, and
+    # 2026-11-03 01:50 gave card 98304 MiB against Windows 30.5 GB — the OS/GPU split is
+    # made at boot and it MOVES by ~16 GiB between boots.  On the second of those,
+    # torch.cuda.get_device_properties(0).total_memory read 110.5 GiB, i.e. ABOVE the
+    # card's own figure, so the card's number is the conservative bound of the two and
+    # min(card, torch) reduces to the card — one cheap read rather than a torch import
+    # in this path.  What the clamp actually did was hide ~66 GiB behind a guest MemTotal
+    # that was itself only a .wslconfig value (29.8 GiB).
+    #
+    # Precedence: the profile's measured pool, then the card, then the declared fallback.
+    # TAC_HOST_GPU_POOL_BYTES is what tools/host-profile.sh exports, once per boot.
+    if [[ "${TAC_HOST_GPU_POOL_BYTES:-}" =~ ^[0-9]+$ ]] && (( TAC_HOST_GPU_POOL_BYTES > 0 ))
+    then
+        __TAC_VRAM_TOTAL_BYTES_CACHE="$TAC_HOST_GPU_POOL_BYTES"
+        printf '%d\n' "$__TAC_VRAM_TOTAL_BYTES_CACHE"
+        return
+    fi
     local _total_mb=""
     if command -v nvidia-smi >/dev/null 2>&1
     then
@@ -1062,26 +1082,6 @@ function __tac_vram_total_bytes() {
         __TAC_VRAM_TOTAL_BYTES_CACHE=$(( _total_mb * 1048576 ))
     else
         __TAC_VRAM_TOTAL_BYTES_CACHE="${VRAM_TOTAL_BYTES:-0}"
-    fi
-    # UNIFIED MEMORY (a HOST PROFILE fact, TAC_HOST_PROFILE_SHARED_MEMORY=1): the card
-    # reports a figure the machine cannot back with separate memory — measured
-    # 2026-10-30, 81920 MiB reported against 39 GiB of RAM — so the ceiling is physical
-    # RAM, not the card's number.  Sizing above RAM would mark models "fits GPU" that
-    # can only OOM, and the figure is measured here rather than invented.
-    if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
-    then
-        local _ram
-        _ram="$(__tac_ram_total_bytes)"
-        if (( _ram > 0 ))
-        then
-            # No reading on a unified host still has an honest ceiling — the pool —
-            # so an unreadable card does not become "unknown" there.  When the card
-            # DOES answer, its figure may exceed the pool and is clamped to it.
-            if (( __TAC_VRAM_TOTAL_BYTES_CACHE == 0 || __TAC_VRAM_TOTAL_BYTES_CACHE > _ram ))
-            then
-                __TAC_VRAM_TOTAL_BYTES_CACHE="$_ram"
-            fi
-        fi
     fi
     printf '%d\n' "$__TAC_VRAM_TOTAL_BYTES_CACHE"
 }
