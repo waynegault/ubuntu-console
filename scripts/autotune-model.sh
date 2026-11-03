@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 97
+# Module Version: 98
 #   v94 (2026-11-03): a hold taken by an ANCESTOR (the batch runner) is reported as what it is -
 #   this row runs under the sweep own hold - instead of "held by another run ... the watchdog may
 #   restart the CUDA lane mid-run", which named our own parent as a foreign threat on every row.
@@ -2844,6 +2844,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         _sb_list=""
         echo "  (AUTOTUNE_SPEC_SWEEP=0 — skipping the sweep to conserve CUDA cycles)"
     fi
+    _sb_zero=0
     for _sb_block in $_sb_list
     do
         if [[ ! "$_sb_block" =~ ^[0-9]+$ ]] || (( _sb_block <= 0 )); then
@@ -2859,6 +2860,21 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         _sb_al="0"; _sb_ar="0"
         IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
         echo "  block ${_sb_block}: ${_sb_t} tps (accept len ${_sb_al:-0}, rate ${_sb_ar:-0})"
+        # ECONOMY (2026-11-03): two consecutive blocks that accepted nothing is enough
+        # evidence that ngram has no purchase here, and each remaining block costs a CUDA
+        # cycle plus a full model load. Checked BEFORE the win test so a zero-accept block
+        # can never be fast enough to matter.
+        if [[ "${_sb_al:-0}" =~ ^[0-9]+$ ]] && (( _sb_al == 0 ))
+        then
+            _sb_zero=$((_sb_zero + 1))
+        else
+            _sb_zero=0
+        fi
+        if __autotune_spec_sweep_stop "$_sb_zero"
+        then
+            echo "  spec-decode: ${_sb_zero} consecutive blocks accepted nothing — stopping the sweep"
+            break
+        fi
         if [[ $(echo "$_sb_t > $_sb_best_tps" | bc 2>/dev/null || echo "0") == 1 ]]; then
             # Faster is not enough: the block must actually PLACE draft tokens, or every
             # token pays a lookup for nothing (measured 2026-11-03 — a row certified with

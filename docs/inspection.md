@@ -12,15 +12,19 @@ Scope
 The following file classes are in-scope for every audit pass:
 
 - `tactical-console.bashrc` — thin loader
-- `scripts/[0-9][0-9]-*.sh` — the 15 numbered profile modules (01-constants
-  through 15-model-recommender) plus the `18-lint.sh` utility
-- `scripts/09b-gog.sh` — the 16th profile module (non-numeric name)
-- `tools/*.sh` — 21 utility scripts (capture-golden-fixtures, check-agent-use,
-  check-contracts, check-module-versions, check-repo-boundaries,
-  check-swallows-staged, clean-orphans, count-ratchet, docs-sync-check,
-  import-windows-env, install-bats, install-gitleaks, install-shellcheck, lint,
-  llama-cpp-inventory, mirror-vault, normalize-fixture, python-runtime, run-tests,
-  secret-scan, sync-openclaw-completion)
+- `scripts/[0-9][0-9]-*.sh` — the numbered profile modules. The CANONICAL list is
+  `scripts/_module-list.sh`; measured 2026-11-03 it names **16** modules while **28**
+  numbered scripts exist on disk, because several are sub-modules sourced by a parent
+  (`11a`-`11f` under `11e`, `09a`-`09e` under `09-openclaw`), not loader entries.
+  `18-lint.sh` is a numbered UTILITY, not a module.
+- `scripts/09b-gog.sh` — a profile module with a non-numeric name, listed in the same
+  canonical list
+- `tools/*.sh` — utility scripts. Enumerated by the DIRECTORY, not by a hand-list: the
+  hand-list that used to sit here had drifted (21 named against **24** on disk, measured
+  2026-11-03). Read `ls tools/*.sh` for the current set; the ones an audit pass is most
+  likely to need are `lint.sh`, `run-tests.sh`, `check-contracts.py`,
+  `check-module-versions.sh`, `count-ratchet.sh`, `docs-sync-check.sh`,
+  `check-swallows-staged.sh` and `check-repo-boundaries.sh`.
 - `tools/hooks/*` — the repo's git hooks (`pre-commit`, `pre-push`, `post-commit`,
   `post-merge`, `_kgraph-auto-rebuild`). Tracked here, NOT in `.git/hooks/`
   (which holds only git's own samples); activated via `core.hooksPath`
@@ -2396,7 +2400,19 @@ measurement shows expert offload behaves differently.
 
 grep -n '\-ngl' <file>
 
-GPU layers set to 999 (all) for small models; documented if partial offload is intentional for VRAM-constrained setups
+GPU layers set to 999 (all) for small models; documented if partial offload is intentional
+for VRAM-constrained setups.
+
+**UNIFIED-MEMORY HOSTS INVERT THIS (measured 2026-11-03).** On a discrete card, fewer
+layers on the GPU means less VRAM pressure — which is why the autotune's ladder walked
+`999 -> 3/4 -> 1/4`. On a host where the GPU pool and system RAM are one physical pool
+that has been SPLIT (here 98304 MiB to the card, 29.8 GiB to Linux), a lower `-ngl` moves
+weights OUT of the large pool and INTO the small one: the ladder is a host-RAM amplifier,
+not a relief. Measured on a 60.9 GB model: the ladder reached `ngl=27`, MemAvailable fell
+to 448 MiB and the kernel OOM killer fired 8 times in three minutes; the same model at
+`ngl=999` held 64 GiB of the pool and measured 39-40 tps. So the audit question on a
+shared-memory profile is the opposite: `-ngl 999` is the SAFE value, and any partial
+offload needs a stated reason.
 
 12.2.5
 
@@ -2428,7 +2444,7 @@ build** — `llama-server --help` lists exactly the three above and nothing cont
 And something IS passed: every lane unit pins `--reasoning off` in its ExecStart
 (`systemd/llama-cuda-llama32-3b-chat.service`, `llama-cuda-qwen35-4b-pipeline.service`,
 `llama-xe-minicpm5-1b-chat.service`, and — added since this item was written —
-`llama-xe-llama32-3b-chat.service` and `llama-cpu-qwen25-3b-chat.service`; five at
+`llama-xe-llama32-3b-chat.service` (installed) and `llama-cpu-qwen25-3b-chat.service` (not installed); five at
 2026-10-25), confirmed against the live processes. That is the
 deliberate choice — thinking traces off for the served lanes.
 

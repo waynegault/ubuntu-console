@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
 #   v29 (2026-11-02): __llm_autotune_mark_state — DEF-024's registry half.  A model the
 #   backend cannot load stays in the registry indistinguishable from a certified one (its
 #   FIT and TPS columns still carry values), so every consumer believes it is usable.  This
@@ -289,6 +289,24 @@ function __autotune_spec_worth_keeping() {
         [[ "$accept_rate" != "0" && "$accept_rate" != "0.0" ]] || return 1
     fi
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_spec_sweep_stop — stop the spec-decode block sweep early?
+#   args: consecutive_zero
+# Returns 0 (stop) after TWO consecutive blocks whose draft accepted nothing.
+#
+# WHY: each block in that sweep is a fresh CUDA context — a cycle off the boot's 60-cycle
+# budget, and on a 60 GB model a full load as well. Measured 2026-11-03: gpt-oss-120b
+# walked four blocks and every one read `accept len 0, rate 0`; the sweep learned nothing
+# and spent four cycles doing it. Two consecutive zeros is enough evidence that ngram has
+# no purchase on this model's token stream, and the winner gate
+# (__autotune_spec_worth_keeping) already refuses to record such a block.
+# ---------------------------------------------------------------------------
+function __autotune_spec_sweep_stop() {
+    local consecutive_zero="${1:-0}"
+    [[ "$consecutive_zero" =~ ^[0-9]+$ ]] || return 1
+    (( consecutive_zero >= 2 ))
 }
 
 # ---------------------------------------------------------------------------

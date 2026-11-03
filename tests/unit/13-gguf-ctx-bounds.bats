@@ -356,3 +356,15 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     # 2026-11-03: a peer tree-restore removed it and two cases still went green).
     declare -f __autotune_spec_worth_keeping >/dev/null
 }
+
+@test "spec-decode: the block sweep stops after two zero-accept blocks" {
+    # Each block costs a CUDA cycle plus a full model load; measured 2026-11-03 four
+    # blocks were walked and every one accepted nothing. Two consecutive zeros is the stop.
+    # Fails if: the sweep keeps spending cycles after the evidence is in, or stops early
+    # on a single zero (a later, larger block can legitimately start hitting).
+    declare -f __autotune_spec_sweep_stop >/dev/null
+    ! __autotune_spec_sweep_stop 0
+    ! __autotune_spec_sweep_stop 1
+    __autotune_spec_sweep_stop 2
+    __autotune_spec_sweep_stop 3
+}
