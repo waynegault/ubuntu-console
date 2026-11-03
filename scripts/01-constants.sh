@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 50
+# Module Version: 51
 #   v50 (2026-11-02): LLAMA_LANE_KEEP_UNITS is declared and exported beside
 #   LLAMA_LANE_SPECS.  The always-on embedding lane must survive a VRAM drain; without a
 #   named keep-list every declared lane is a candidate, and the alternative was a unit-name
@@ -520,6 +520,33 @@ then
     if [[ ":${LD_LIBRARY_PATH:-}:" != *":/usr/lib/wsl/lib:"* ]]
     then
         export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+fi
+
+# ---- CUDA toolkit (build side) ----
+# The RUNTIME does not need this on WSL: libcuda resolves through the driver mount above,
+# and the toolkit's own libraries are already in ldconfig's cache
+# (/etc/ld.so.conf.d/000_cuda.conf).  What it is for is BUILDING a CUDA backend and for
+# CMake/tools that read $CUDA_HOME.  Measured 2026-11-02: /usr/local/cuda ->
+# /etc/alternatives/cuda -> /usr/local/cuda-13.4, with lib64 -> targets/sbsa-linux/lib.
+#
+# ORDER IS LOAD-BEARING: the toolkit path is APPENDED to LD_LIBRARY_PATH, never
+# prepended, so /usr/lib/wsl/lib keeps priority.  Measured the same day — an
+# `apt install nvidia-cuda-toolkit` placed a 12.4 libcuda.so.1 in
+# /usr/lib/aarch64-linux-gnu, ldconfig began resolving libcuda.so.1 to it ahead of the
+# WSL driver, and `nvidia-smi` hung until LD_LIBRARY_PATH=/usr/lib/wsl/lib was forced.
+# A prepended toolkit directory is the same class of mistake.
+if [[ -d /usr/local/cuda ]]
+then
+    : "${CUDA_HOME:=/usr/local/cuda}"
+    export CUDA_HOME
+    if [[ ":$PATH:" != *":$CUDA_HOME/bin:"* ]]
+    then
+        export PATH="$CUDA_HOME/bin:$PATH"
+    fi
+    if [[ -d "$CUDA_HOME/lib64" && ":${LD_LIBRARY_PATH:-}:" != *":$CUDA_HOME/lib64:"* ]]
+    then
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$CUDA_HOME/lib64"
     fi
 fi
 
