@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 98
+# Module Version: 99
+#   v99 (2026-11-04): a DETECTED cause reaches the writer.  The row that OOM'd at ctx 8192
+#   was SIGKILLed, so the classifier was handed an empty log and recorded "unclassified"
+#   while /tmp/at-metrics-$$ already said oom - the detected-and-discarded reason.  Only
+#   oom is carried, and only into the hole the log cannot fill; load_fail is overloaded
+#   (the stall check reads != load_fail) so mapping it would manufacture an arch verdict.
 #   v94 (2026-11-03): a hold taken by an ANCESTOR (the batch runner) is reported as what it is -
 #   this row runs under the sweep own hold - instead of "held by another run ... the watchdog may
 #   restart the CUDA lane mid-run", which named our own parent as a foreign threat on every row.
@@ -1136,14 +1141,38 @@ __autotune_classify_failure() {
     return 0
 }
 
-# _bench_record_failure <ctx> <batch> <ubatch> <ngl> <cache> — keep the LAST failed
+# _bench_class_from_startup <startup-type> — carry a DETECTED cause to the writer, or nothing.
+# _startup_fail_type answers a different question from __autotune_classify_failure:
+# load_fail|oom, read off the live server log.  Only oom is carried here.  load_fail
+# is OVERLOADED - the never-became-healthy check uses != load_fail to tell a STALL from
+# a real load failure - so the function has already declined to name an architecture, and
+# mapping it would manufacture a verdict the log never gave.  Pass nothing for it and let
+# re-derivation stand: the log text that produced load_fail survives the kill.
+# @stdout one token, or empty when nothing is carried.
+_bench_class_from_startup() {
+    case "${1:-}" in
+        oom) printf 'resource_exhausted' ;;
+        *)   printf '' ;;
+    esac
+}
+
+# _bench_record_failure <ctx> <batch> <ubatch> <ngl> <cache> [class] — keep the LAST failed
 # launch's witness for the operator.  bench_* run inside command substitutions, where
 # a global assignment never reaches the caller, so the side file is the channel (the
 # same contract /tmp/at-metrics-$$ already has).
 _bench_record_failure() {
     local _c="${1:-0}" _b="${2:-}" _u="${3:-}" _ngl="${4:-}" _kv="${5:-}"
-    local _log="${_BENCH_LOG:-}" _cls="unclassified" _tail="" _line=""
+    local _carried="${6:-}"
+    local _log="${_BENCH_LOG:-}" _cls="" _tail="" _line=""
     _cls=$(__autotune_classify_failure "$_log")
+    # The LOG is the arbiter and keeps winning whenever it names something - it can see a
+    # rejected invocation.  The carried token fills only the hole the log cannot fill: a
+    # SIGKILLed child leaves no signature at all, and "matched no known signature" is true
+    # of the file and false about the run.  Fill, never override - an override would let a
+    # defaulted oom clobber a log that actually said launch_error.
+    if [[ -z "$_cls" || "$_cls" == "unclassified" ]] && [[ -n "$_carried" ]]; then
+        _cls="$_carried"
+    fi
     [[ -n "$_cls" ]] || _cls="unclassified"
     _tail=$(_bench_log_tail "$_log" 20) || _tail=""
     {
@@ -1328,7 +1357,11 @@ _bench_spawn() {
         fi
         kill -0 "$_BENCH_PID" 2>/dev/null || {
             local _sft; _sft=$(_startup_fail_type)
-            _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
+            # _sft is derived HERE from the log, so it is always set (no -u risk) and it is
+            # the token this arm already trusts for the metrics line below; carry the same
+            # observation rather than re-deriving it from a log the kill emptied.
+            _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" \
+                "$(_bench_class_from_startup "$_sft")"
             echo "0|0|$_sft" > "/tmp/at-metrics-$$"
             _BENCH_FAIL_TYPE="$_sft"
             return 1
