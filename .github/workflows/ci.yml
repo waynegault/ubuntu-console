@@ -223,8 +223,10 @@ jobs:
                tests/unit/20-up-npm-safety.bats \
                tests/unit/21-token-plan-quota-errors.bats \
                tests/unit/22-contracts-state.bats \
+               tests/unit/23-autotune-baseline-tolerance.bats \
                tests/unit/23-prompt-cache-and-gpu-classify.bats \
                tests/unit/24-contracts-guards.bats \
+               tests/unit/24-gpu-passthrough-diagnosis.bats \
                tests/unit/25-claimed-success-witness.bats \
                tests/unit/26-docker-prune.bats \
                tests/unit/27-gh-token-wrapper.bats \
@@ -260,6 +262,8 @@ jobs:
                tests/unit/58-gpu-busy-sanctioned-util.bats \
                tests/unit/58b-gpu-watch-selfcheck-timer.bats \
                tests/unit/59-check-swallows-staged.bats \
+               tests/unit/59-gpu-busy-test-runner-resident.bats \
+               tests/unit/60-gpu-busy-sanctioned-tree.bats \
                tests/unit/60-wsl-restart.bats \
                tests/unit/61-autotune-resume.bats \
                tests/unit/62-vscode-companion-state-trim.bats \
@@ -267,7 +271,10 @@ jobs:
                tests/unit/64-fleet-quiesce.bats \
                tests/unit/65-autotune-keeper.bats \
                tests/unit/66-autotune-quiet-gate.bats \
+               tests/unit/67-autotune-suspend-ancestor.bats \
                tests/unit/67-bench-resume.bats \
+               tests/unit/68-autotune-fail-class-token.bats \
+               tests/unit/68-autotune-rows-quiet-gate.bats \
                tests/unit/68-llm-lane-cache-sample.bats \
                tests/unit/69-wsl-conf-guard.bats \
                tests/unit/70-agents-root-override.bats \
