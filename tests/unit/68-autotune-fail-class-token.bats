@@ -83,7 +83,7 @@ classify_with() {
     [ "$output" = "unclassified" ]
 }
 
-@test "load_fail maps to nothing, so re-derivation stands" {
+@test "load_fail carries no token at all (mapping would manufacture a verdict)" {
     run bash -c 'source "$1"; _bench_class_from_startup load_fail' _ "$HARNESS"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
@@ -119,4 +119,61 @@ classify_with() {
     [ "$output" -eq 0 ]
     run bash -c 'awk "/^bench_ctx\(\) \{/,/^\}/" "$1" | grep -c _fa_cause || true' _ "$SCRIPT"
     [ "$output" -eq 0 ]
+}
+
+# ── the hole that "let re-derivation stand" assumed was closed ────────────────
+# Passing nothing for load_fail is only sound if re-derivation can actually read
+# the log.  It could not.  _startup_fail_type (:1267) matches
+# "failed to load model|error loading model|failed to open|no such file", and NONE
+# of those strings appeared in the classifier's three sets - so every
+# load-failure row was recorded "unclassified (the launch output matched no known
+# signature)" while the log named its cause.  That is the code-100k-Q8_0 case the
+# comment at :1286 quotes, and the same discard this file already fixed for OOM,
+# one arm over.
+#
+# Measured 2026-11-04 before the widening: 4 of the 7 _startup_fail_type
+# alternatives classified as unclassified.  The widening maps them to
+# launch_error, NOT to unsupported_arch, because unsupported_arch marks the
+# registry meas_state=unacceptable at :3227 and an unloadable file is not an
+# architecture verdict.  Whether it should retire the row is a separate judgement.
+
+@test "every load-failure shape _startup_fail_type matches is re-derivable" {
+    local shapes=(
+        "llama_model_load: failed to load model from /m/x.gguf"
+        "llama_model_load: error loading model: invalid magic"
+        "failed to open /home/wayne/models/x.gguf"
+        "no such file or directory"
+        "check_tensor_dims: tensor blk.0.attn_q.weight has wrong shape; expected 8192, got 4096"
+    )
+    local s
+    for s in "${shapes[@]}"; do
+        printf '%s\n' "$s" > "$LOG"
+        # Through the WRITER with no carried token: this is the load_fail arm's
+        # claim tested as the claim it is, not as a mapping.
+        run classify_with ""
+        [ "$status" -eq 0 ] || return 1
+        [ "$output" = "launch_error" ] || { echo "not re-derivable: $s -> $output"; return 1; }
+    done
+}
+
+@test "an unloadable file never reaches the registry-marking token by accident" {
+    echo "llama_model_load: failed to load model from /m/x.gguf" > "$LOG"
+    run classify_with ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "launch_error" ]
+    [ "$output" != "unsupported_arch" ]
+}
+
+@test "an architecture verdict still outranks the load shape printed beside it" {
+    echo "llama_model_load: error loading model: unknown model architecture: 'gpt-oss'" > "$LOG"
+    run classify_with ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "unsupported_arch" ]
+}
+
+@test "the widening did not eat the null arm" {
+    printf '0.00.426.120 I srv  llama_server: initializing ...\n' > "$LOG"
+    run classify_with ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "unclassified" ]
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 99
+# Module Version: 100
 #   v99 (2026-11-04): a DETECTED cause reaches the writer.  The row that OOM'd at ctx 8192
 #   was SIGKILLed, so the classifier was handed an empty log and recorded "unclassified"
 #   while /tmp/at-metrics-$$ already said oom - the detected-and-discarded reason.  Only
@@ -409,7 +409,7 @@ __autotune_failure_label() {
     case "${1:-}" in
         resource_exhausted) printf 'resource exhaustion (OOM / failed allocation)' ;;
         unsupported_arch)   printf 'unsupported architecture / no matching backend' ;;
-        launch_error)       printf 'launch or flag error (the server rejected its invocation)' ;;
+        launch_error)       printf 'launch or flag error, or a model the server could not load (the server rejected its invocation)' ;;
         certified)          printf 'certified' ;;
         *)                  printf 'unclassified (the launch output matched no known signature)' ;;
     esac
@@ -1109,7 +1109,8 @@ _bench_log_tail() {
 # @stdout one token:
 #   resource_exhausted  an allocation failed: OOM, CUDA OOM, failed to allocate
 #   unsupported_arch    the build/backend does not support this model at all
-#   launch_error        the server rejected its own invocation (bad flag/argument)
+#   launch_error        the server rejected its own invocation (bad flag/argument), or could not
+#                       load the model file at all (corrupt/truncated/absent GGUF, shape mismatch)
 #   unclassified        nothing above matched — say so rather than guess
 # The order is deliberate.  Memory text is specific; the arch patterns are the ones
 # llama.cpp prints for a model it cannot map to a loader.  "failed to load model"
@@ -1127,12 +1128,27 @@ __autotune_classify_failure() {
     _re_unsupported+='suitable|supported) backend|failed to find (a |the )?(matching |suitable )?backend|'
     _re_unsupported+='requires ctx_other to be set|support for .* was not (built|compiled)|'
     _re_unsupported+='model architecture .* (not supported|unknown)'
+    # A model the server could NOT LOAD was a shape this classifier was blind to.  _startup_fail_type
+    # (:1267) matches "failed to load model|error loading model|failed to open|no such file", but none of
+    # those strings appear in the three sets below - so every such row reached the ledger as
+    # "unclassified (the launch output matched no known signature)" while the log named its cause.
+    # That is the code-100k-Q8_0 case quoted at :1286, and it is the same discard this file already
+    # fixed for OOM, one arm over.
+    #
+    # Mapped to launch_error, NOT unsupported_arch: unsupported_arch marks the registry
+    # meas_state=unacceptable at :3227, and a corrupt, truncated or absent file is not an architecture
+    # verdict.  Whether an unloadable file should retire the row is a separate judgement, and this
+    # change deliberately does not make it - it only stops the ledger from claiming it did not know.
+    local _re_load='failed to load model|error loading model|failed to open|cannot open model file|'
+    _re_load+='no such file|check_tensor_dims|wrong shape'
     local _re_launch='invalid argument|unknown argument|unrecognized (option|argument)|unexpected argument|'
     _re_launch+='error while handling argument|invalid value for|failed to parse|usage: |address already in use|cannot open model'
     if grep -qiE "$_re_resource" <<< "$_text"; then
         printf 'resource_exhausted'
     elif grep -qiE "$_re_unsupported" <<< "$_text"; then
         printf 'unsupported_arch'
+    elif grep -qiE "$_re_load" <<< "$_text"; then
+        printf 'launch_error'
     elif grep -qiE "$_re_launch" <<< "$_text"; then
         printf 'launch_error'
     else
