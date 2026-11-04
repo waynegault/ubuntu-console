@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 103
+# Module Version: 104
+#   v104 (2026-11-04): clear the two §18.3 rises the lane's own commits left behind, at source
+#   rather than by re-baselining — the launch_error label and the readiness-window message are
+#   wrapped (same output, no single line over 120 columns), and `_fail` gains the comment above
+#   it that item 9.5 asks for.
 #   v103 (2026-11-04): a SELFTEST run may not take the real watchdog hold.  The harness stubs
 #   nvidia-smi/pkill/pgrep/systemctl, but the hold is a FILE WRITE, so a selftest acquired
 #   /dev/shm/llama-watchdog-cuda.suspend, the watchdog honoured it, and the production CUDA lane
@@ -396,6 +400,7 @@ CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
 # two >= tests must read the same value, or a lowered window turns a timeout into a pass.
 AT_WINDOW_S="${AT_WINDOW_S:-300}"
 
+# _fail — refuse before any launch: print the reason, then exit 1 with the class recorded.
 _fail() {
     if declare -f __tac_info >/dev/null; then
         __tac_info "Autotune" "[ERROR: $*]" "${C_Error:-}"
@@ -419,7 +424,8 @@ __autotune_failure_label() {
     case "${1:-}" in
         resource_exhausted) printf 'resource exhaustion (OOM / failed allocation)' ;;
         unsupported_arch)   printf 'unsupported architecture / no matching backend' ;;
-        launch_error)       printf 'launch or flag error, or a model the server could not load (the server rejected its invocation)' ;;
+        launch_error)       printf "launch or flag error, or a model the server could not load \
+(the server rejected its invocation)" ;;
         certified)          printf 'certified' ;;
         *)                  printf 'unclassified (the launch output matched no known signature)' ;;
     esac
@@ -1375,7 +1381,10 @@ _bench_spawn() {
             # combos instead of descending — the right response for a stall too —
             # but a stall is not an unsupported model, and the operator reading
             # "unsupported model" is sent to the wrong place entirely.
-            echo "  the readiness window (${AT_WINDOW_S}s) expired with no error signature in the server log and the process stayed alive — dxgkrnl degradation or a model that simply needs longer, NOT an OOM and NOT an unsupported model" >&2
+            local _stall_msg="  the readiness window (${AT_WINDOW_S}s) expired with no error signature"
+            _stall_msg+=" in the server log and the process stayed alive — dxgkrnl degradation"
+            _stall_msg+=" or a model that simply needs longer, NOT an OOM and NOT an unsupported model"
+            echo "$_stall_msg" >&2
         else
             _cuda_stall_reset
         fi
