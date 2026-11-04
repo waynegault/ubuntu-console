@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 107
+# Module Version: 108
+#   v108 (2026-11-04): _startup_fail_type calls __autotune_oom_evidence (11b v38) instead of a nested
+#   copy, so the witness is testable; with 11b absent the token falls to loader_crash_unknown rather
+#   than claiming an OOM.
 #   v107 (2026-11-04): OOM requires POSITIVE EVIDENCE.  _startup_fail_type's else arm used to print
 #   `oom` for "nothing matched", so a silent death was filed as a memory verdict and descended; the
 #   70B spent a day that way.  _oom_evidence now supplies the witness (the server's own allocation
@@ -1374,7 +1377,8 @@ _bench_spawn() {
                 echo "  server log said: $_wit" >&2
             fi
             printf 'load_fail'
-        elif _oom_evidence "${_BENCH_PID:-}"; then
+        elif declare -f __autotune_oom_evidence &>/dev/null \
+             && __autotune_oom_evidence "$_BENCH_LOG" "${_BENCH_PID:-}"; then
             printf 'oom'
         else
             # Neither a load signature nor an OOM witness.  The old `else` printed `oom` here, and
@@ -1384,32 +1388,6 @@ _bench_spawn() {
             # evidence gets a name that claims nothing.
             printf 'loader_crash_unknown'
         fi
-    }
-    # _oom_evidence <pid> — positive evidence that THIS launch died for memory.  OOM is a CLAIM, so
-    # it needs a witness; the absence of a signature is not one (see _startup_fail_type's else arm).
-    # Two sources, both attributable to this launch:
-    #   1. the server's own log carries the allocation text it printed while dying, and
-    #   2. the kernel names THIS pid in an OOM line.
-    # A cgroup counter was rejected on measurement: the autotune runs under the user manager, where
-    # the counter is a systemd slice path, and this shell's own /sys/fs/cgroup/non-systemd/memory.events
-    # read oom_kill 0 immediately after a real kill (2026-11-04).  dmesg is read through a variable so
-    # an unreadable buffer cannot be mistaken for "no OOM line" — it simply matches nothing.
-    _oom_evidence() {
-        local _pid="${1:-}" _re _dm
-        _re='out of memory|out-of-memory|oom-kill|cuda error: out of memory|cudamalloc|'
-        _re+='failed to allocate|unable to allocate|insufficient memory|cuda_host|'
-        _re+='not enough (vram|memory|gpu memory)|alloc_buffer: allocating|'
-        _re+='ggml_backend_(cuda|cpu|vulkan)_buffer_type_alloc_buffer'
-        if [[ -r "${_BENCH_LOG:-}" ]] && grep -qiE "$_re" "$_BENCH_LOG"; then
-            return 0
-        fi
-        if [[ "$_pid" =~ ^[0-9]+$ ]]; then
-            _dm=$(dmesg 2>&1) || _dm=""
-            if grep -qE "Out of memory: Killed process ${_pid} " <<< "$_dm"; then
-                return 0
-            fi
-        fi
-        return 1
     }
     _launch_server || {
         # The REASON must be READ, never assumed: labelling every launch failure

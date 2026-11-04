@@ -1,10 +1,17 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 37
-#   v37 (2026-11-04): __autotune_fa_retry gains `loader_crash_unknown -> stop`.  A launch that dies
-#   with no OOM witness and no load signature must not descend (nothing was measured) and must not
-#   retry with flash attention off (that asks for MORE host memory — the 2026-11-03 path).
+# Module Version: 38
+#   v38 (2026-11-04): __autotune_oom_evidence moves here from a nested scope inside _bench_spawn,
+#   where no test could reach it — so the rule the change exists for ("OOM needs evidence") had no
+#   case that could disagree.  It now takes (log, pid) and is pinned in tests/unit/13 in three
+#   shapes: an allocation line is a witness, the 70B's silent four-line log is not, and an
+#   unreadable log is not either.
+#   v37 (2026-11-04): __autotune_oom_evidence — the witness an OOM claim needs (the server's own
+#   allocation line, or a kernel OOM line naming THIS pid); and __autotune_fa_retry gains
+#   `loader_crash_unknown -> stop`.  A launch that dies with no witness and no load signature must
+#   not descend (nothing was measured) and must not retry with flash attention off (that asks for
+#   MORE host memory — the 2026-11-03 path).
 #   v36 (2026-11-04): __autotune_staged_shard_bytes + __autotune_staging_fits — the host-RAM
 #   leg a split GGUF needs and a single file does not.  A single file is mmapped (120b: 62,340
 #   MiB certified on 16,052 MiB available); a split set stages one whole shard as a CUDA_Host
@@ -287,6 +294,38 @@ function __autotune_fa_retry() {
         return 0
     fi
     printf 'retry\n'
+}
+
+# __autotune_oom_evidence <log> [pid] — positive evidence that a launch died for MEMORY.
+# @exit 0 when the evidence exists, 1 when it does not.
+#
+# OOM is a CLAIM, so it needs a witness.  The absence of a signature is not one: the old classifier
+# printed `oom` from its else arm, and that is how the 70B spent 2026-11-04 reading as a memory
+# failure — 16 "OOM at this ctx" lines while the card reported 95,516 MiB free and the kernel held
+# no OOM line at all.  Two attributable sources, and nothing else:
+#   1. the server's own log: it prints the allocation text while dying, and
+#   2. the kernel names THIS pid in an OOM line.
+# A cgroup counter was rejected on measurement: the autotune runs under the user manager, where the
+# counter is a systemd slice path, and this shell's own /sys/fs/cgroup/non-systemd/memory.events read
+# oom_kill 0 immediately after a real kill (2026-11-04).
+# The kernel buffer is read through a variable so an unreadable one matches nothing rather than
+# being mistaken for evidence.
+function __autotune_oom_evidence() {
+    local _log="${1:-}" _pid="${2:-}" _re _dm
+    _re='out of memory|out-of-memory|oom-kill|cuda error: out of memory|cudamalloc|'
+    _re+='failed to allocate|unable to allocate|insufficient memory|cuda_host|'
+    _re+='not enough (vram|memory|gpu memory)|alloc_buffer: allocating|'
+    _re+='ggml_backend_(cuda|cpu|vulkan)_buffer_type_alloc_buffer'
+    if [[ -n "$_log" && -r "$_log" ]] && grep -qiE "$_re" "$_log"; then
+        return 0
+    fi
+    if [[ "$_pid" =~ ^[0-9]+$ ]]; then
+        _dm=$(dmesg 2>&1) || _dm=""
+        if grep -qE "Out of memory: Killed process ${_pid} " <<< "$_dm"; then
+            return 0
+        fi
+    fi
+    return 1
 }
 
 # ---------------------------------------------------------------------------

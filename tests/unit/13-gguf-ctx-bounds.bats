@@ -289,6 +289,46 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     [ "$(__autotune_fa_retry loader_crash_unknown off)" = "noop" ]
 }
 
+@test "oom-evidence: the server's own allocation line IS a witness" {
+    # Criterion (2026-11-04): OOM is a claim, so the predicate must answer from evidence, and the
+    # strongest evidence is the server naming the allocation it could not make. Measured shape:
+    # "ggml_backend_buft_alloc_buffer_n_default: failed to allocate CUDA_Host buffer of size
+    # 38400184320" followed by the kernel's kill.
+    # Fails if: the patterns stop matching the real text, and a genuine OOM reads as unexplained.
+    mkdir -p "$TMPDIR_BATS"
+    local log="$TMPDIR_BATS/oom.log"
+    printf '%s\n' \
+        '0.02.811.638 E llama_model_load: error loading model: unable to allocate CUDA_Host buffer' \
+        > "$log"
+    run __autotune_oom_evidence "$log" 999999
+    [ "$status" -eq 0 ]
+}
+
+@test "oom-evidence: an innocuous log with an unmatched pid is NOT a witness" {
+    # The other direction, and the one that matters: this is the 70B's four-line log — a server that
+    # printed "loading model" and then vanished. No allocation text, no kernel line naming it.
+    # Fails if: the predicate answers 'oom' from silence, which is the defect being fixed.
+    mkdir -p "$TMPDIR_BATS"
+    local log="$TMPDIR_BATS/quiet.log"
+    printf '%s\n' \
+        '0.00.698.826 I srv  llama_server: initializing ...' \
+        '0.00.708.400 I srv    load_model: loading model /models/thing.gguf' \
+        > "$log"
+    # 999999 is not a live pid, so no kernel OOM line can name it.
+    run __autotune_oom_evidence "$log" 999999
+    [ "$status" -eq 1 ]
+}
+
+@test "oom-evidence: an unreadable log is not evidence" {
+    # A missing log must read as "no witness", never as a match — the empty-result trap.
+    run __autotune_oom_evidence "$TMPDIR_BATS/does-not-exist.log" 999999
+    [ "$status" -eq 1 ]
+}
+
+@test "oom-evidence: the symbol exists (a missing one passes the cases above vacuously)" {
+    declare -f __autotune_oom_evidence >/dev/null
+}
+
 @test "fa-retry: a model load failure still gets one retry with flash attention off" {
     # Fails if: the gate becomes blanket and an FA-incompatible arch loses the only
     # recovery this script has for it.
