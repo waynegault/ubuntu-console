@@ -378,7 +378,12 @@ install_stub_env() {
     chmod +x "$stub/nvidia-smi"
 
     # A unified host with 4 GiB of RAM must still size against the card's 98304 MiB.
-    run env PATH="$stub:$PATH" TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) \
+    # The profile's pool is UNSET here: this assertion is the card arm of the precedence,
+    # and tools/host-profile.sh exports the measured pool into any shell it is sourced in
+    # (72 GiB on the 2026-11-04 boot), which would otherwise answer instead of the stub
+    # and make this pass or fail on the box's current carve rather than on the rule.
+    run env -u TAC_HOST_GPU_POOL_BYTES PATH="$stub:$PATH" \
+        TAC_HOST_RAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024)) \
         TAC_HOST_PROFILE_SHARED_MEMORY=1 bash -c 'source "$1"; __tac_vram_total_bytes' _ "$fn"
     [ "$status" -eq 0 ]
     [ "$output" = "$((98304 * 1048576))" ]
