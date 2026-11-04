@@ -204,8 +204,12 @@ __fast_member_shellcheck() {
         echo "FAIL: $shell_count shell suppressions (baseline 16) — fix the cause, or lower this number deliberately; do not raise it"
         return 1
     }
-    (( bats_count <= 4 )) || {
-        echo "FAIL: $bats_count bats suppressions (baseline 4)"
+    # 5, not 4: 08-autotune-workload.bats defines a stub `nvidia-smi` for the child bash
+    # it exports the environment to (cc56a3cf), which SC2317 reads as an unreachable
+    # command.  It is irreducible in that shape — the function IS called, just not in the
+    # file shellcheck can see — and it carries its own reason on the line.
+    (( bats_count <= 5 )) || {
+        echo "FAIL: $bats_count bats suppressions (baseline 5)"
         return 1
     }
     # `|| true`: grep -c exits 1 on a ZERO count, which would fail this test for the
