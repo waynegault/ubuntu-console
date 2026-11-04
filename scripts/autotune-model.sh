@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 100
+# Module Version: 101
 #   v99 (2026-11-04): a DETECTED cause reaches the writer.  The row that OOM'd at ctx 8192
 #   was SIGKILLed, so the classifier was handed an empty log and recorded "unclassified"
 #   while /tmp/at-metrics-$$ already said oom - the detected-and-discarded reason.  Only
@@ -3217,7 +3217,23 @@ _autotune_failure_report() {
     [[ -n "$_cls" ]] || _cls="unclassified"
     _FINAL_FAIL_CLASS="$_cls"
 
-    echo "  failed: the model cannot be loaded at any ctx — NOT CERTIFIED"
+    # The headline must not outrun the class.  It used to say "the model cannot be loaded at any
+    # ctx" unconditionally, which the very next paragraph contradicts for every class but
+    # unsupported_arch - :3257 prints "not a verdict on the model" two lines below.  It also
+    # stopped being merely vague once the ledger learned to say resource_exhausted: a row that
+    # ran out of memory at its largest ctx was being introduced as a model that cannot be
+    # loaded at all.  The run's outcome is still not certified either way; what changes is
+    # whether the sentence blames the MODEL, which only unsupported_arch has evidence for.
+    case "$_cls" in
+        unsupported_arch)
+            echo "  failed: the model cannot be loaded at any ctx — NOT CERTIFIED" ;;
+        resource_exhausted)
+            echo "  failed: every configuration ran out of memory on this card — not certified on this run" ;;
+        launch_error)
+            echo "  failed: the server rejected its launch before it could be measured — not certified on this run" ;;
+        *)
+            echo "  failed: no configuration could be measured — not certified on this run" ;;
+    esac
     echo "  reason:  $(__autotune_failure_label "$_cls")"
     if [[ -n "$_config" ]]; then
         echo "  last launch attempted: ${_config}"

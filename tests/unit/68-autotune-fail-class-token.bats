@@ -45,7 +45,7 @@ extract_fns() {
 
 setup() {
     HARNESS="$BATS_TEST_TMPDIR/fns.sh"
-    extract_fns "_bench_log_tail __autotune_classify_failure _bench_class_from_startup _bench_record_failure" > "$HARNESS"
+    extract_fns "_bench_log_tail __autotune_classify_failure _bench_class_from_startup _bench_record_failure _autotune_failure_report __autotune_failure_label" > "$HARNESS"
     # A harness that failed to extract would make every arm below vacuous.
     grep -q '^_bench_record_failure() {' "$HARNESS"
     grep -q '^_bench_class_from_startup() {' "$HARNESS"
@@ -176,4 +176,45 @@ classify_with() {
     run classify_with ""
     [ "$status" -eq 0 ]
     [ "$output" = "unclassified" ]
+}
+
+# ── the headline must not outrun the class ───────────────────────────────────
+# :3220 printed "the model cannot be loaded at any ctx" UNCONDITIONALLY while
+# :3257, eighteen lines below, printed "not a verdict on the model" for every
+# class except unsupported_arch.  So the report contradicted itself for a rejected
+# launch, and it stopped being merely vague once the ledger learned to say
+# resource_exhausted: a row that ran out of memory at its largest ctx was being
+# introduced to the operator as a model that cannot be loaded at all.
+# The run is still not certified either way; what changes is whether the sentence
+# blames the MODEL, which only unsupported_arch has evidence for.
+
+report_with() {
+    bash -c '
+        source "$1" || exit 90
+        printf "classification=%s\nconfig=ctx=8192 batch=512\nlog=/tmp/x.log\n" "$2" > "/tmp/at-fail-$$"
+        AUTOTUNE_SELFTEST=1 _autotune_failure_report
+        rm -f "/tmp/at-fail-$$"
+    ' _ "$HARNESS" "$1"
+}
+
+@test "a resource failure is not reported as a model that cannot be loaded" {
+    run report_with resource_exhausted
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ran out of memory"* ]]
+    [[ "$output" != *"cannot be loaded at any ctx"* ]]
+    # and it must agree with the paragraph that disclaims a model verdict
+    [[ "$output" == *"not a verdict on the model"* ]]
+}
+
+@test "an architecture verdict keeps the sentence it earned" {
+    run report_with unsupported_arch
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cannot be loaded at any ctx"* ]]
+}
+
+@test "a rejected launch blames the invocation, not the model" {
+    run report_with launch_error
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rejected its launch"* ]]
+    [[ "$output" != *"cannot be loaded at any ctx"* ]]
 }
