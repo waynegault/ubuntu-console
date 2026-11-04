@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 101
+# Module Version: 102
 #   v99 (2026-11-04): a DETECTED cause reaches the writer.  The row that OOM'd at ctx 8192
 #   was SIGKILLed, so the classifier was handed an empty log and recorded "unclassified"
 #   while /tmp/at-metrics-$$ already said oom - the detected-and-discarded reason.  Only
@@ -386,6 +386,10 @@ CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
 # _fail — the one refusal path for a pre-measurement check.  It routes through the repo's
 # shared UI helper (item 10.7's sanctioned form) and falls back to stdout when the helper is
 # unavailable, so no call site adds an ad-hoc stderr redirect.
+# Wall-clock budget for the server health wait. ONE constant: the two waits and the
+# two >= tests must read the same value, or a lowered window turns a timeout into a pass.
+AT_WINDOW_S="${AT_WINDOW_S:-300}"
+
 _fail() {
     if declare -f __tac_info >/dev/null; then
         __tac_info "Autotune" "[ERROR: $*]" "${C_Error:-}"
@@ -1255,7 +1259,7 @@ _bench_spawn() {
         _BENCH_PID=$!
         _bump_cuda_cycle
         hw=0
-        while [[ $hw -lt 90 ]]; do
+        while [[ $hw -lt "$AT_WINDOW_S" ]]; do
             sleep 1; hw=$((hw + 1))
             kill -0 "$_BENCH_PID" 2>/dev/null || return 1
             curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
@@ -1336,13 +1340,21 @@ _bench_spawn() {
                 ;;
         esac
     }
-    if [[ $hw -ge 90 ]]; then
+    if [[ $hw -ge "$AT_WINDOW_S" ]]; then
         # Tell a *stall* apart from a real load failure: the process is still
         # alive and the log has no architecture/GGUF error, so the server simply
         # never became healthy — the dxgkrnl degradation signature.  (A
         # legitimately over-large start ctx looks the same, hence the
         # consecutive threshold rather than a single trip.)
         local _sft; _sft=$(_startup_fail_type)
+        # NO ERROR SIGNATURE IS NOT AN OOM (Wayne, 2026-11-04, option 1A). Reaching this line MEANS
+        # the readiness window expired - that is the loop's own exit condition - so 'window_timeout'
+        # is a reading and 'oom' was never one: it was the else arm of a grep, with no VRAM read, no
+        # kernel read and no liveness test behind it. Measured 2026-11-04: 16 'OOM at this ctx' lines
+        # at 95,516-95,646 MiB FREE, and the same model then loaded in 87.1s under a 300s window.
+        # Naming it moves no branch: this block stops the server and records load_fail either way,
+        # and __autotune_fa_retry is never called from here, so the descend does not change.
+        if [[ "$_sft" == "oom" ]]; then _sft=window_timeout; fi
         if kill -0 "$_BENCH_PID" 2>/dev/null && [[ "$_sft" != "load_fail" ]]; then
             _cuda_stall_bump
             # Say it out loud.  The metrics field below keeps writing load_fail
@@ -1350,7 +1362,7 @@ _bench_spawn() {
             # combos instead of descending — the right response for a stall too —
             # but a stall is not an unsupported model, and the operator reading
             # "unsupported model" is sent to the wrong place entirely.
-            echo "  the server never became healthy in 90s while the process stayed alive — dxgkrnl degradation, NOT an unsupported model" >&2
+            echo "  the readiness window (${AT_WINDOW_S}s) expired with no error signature in the server log and the process stayed alive — dxgkrnl degradation or a model that simply needs longer, NOT an OOM and NOT an unsupported model" >&2
         else
             _cuda_stall_reset
         fi
@@ -2995,7 +3007,7 @@ ttft_probe() {
         pid=$!
         _bump_cuda_cycle
         hw=0
-        while [[ $hw -lt 90 ]]; do
+        while [[ $hw -lt "$AT_WINDOW_S" ]]; do
             sleep 1; hw=$((hw + 1))
             kill -0 "$pid" 2>/dev/null || return 1
             curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
@@ -3009,7 +3021,7 @@ ttft_probe() {
             _launch_ttft_server || true
         fi
     }
-    if [[ $hw -ge 90 ]]; then
+    if [[ $hw -ge "$AT_WINDOW_S" ]]; then
         _bench_stop "$pid"
         echo ""; return 1
     fi
