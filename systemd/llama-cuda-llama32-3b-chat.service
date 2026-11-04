@@ -16,7 +16,7 @@ StartLimitBurst=6
 [Service]
 # Clears the CUDA card before this lane loads, and REFUSES to start while another
 # run owns the card — one LLM on the CUDA card, ever.  See docs/llm.md.
-ExecStartPre=%h/.local/bin/llama-gpu-clear.sh
+ExecStartPre=%h/.local/bin/llama-gpu-clear.sh %n
 # --cache-ram 0 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
 # MiB of host RAM for the prompt cache — larger than this unit's own MemoryMax
 # below — and nothing budgets it.  0 is explicit-disable; the number that should

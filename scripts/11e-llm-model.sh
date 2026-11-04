@@ -1,6 +1,8 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 82
+#   v82 (2026-11-04): `model use` displaces the CUDA lanes the PROFILE declares (the gated lane plus every llama-cuda-* row in LLAMA_LANE_SPECS) instead of the x86 box's two literals — on the arm64 box that stopped nothing and left the LIVE lane serving.
 # Module Version: 81
 #   v81 (2026-11-04): every bench TSV row carries BUILD IDENTITY in four appended columns —
 #   driver, CUDA, engine build (commit) and embedded arch.  A t/s figure without the binary
@@ -1184,9 +1186,31 @@ function __model_use_claim_cuda_card() {
     fi
 
     # 2. Displace our own CUDA service lanes.  Never the Xe ones.
+    #    WHICH lanes those are is a fact about the box, so it comes from the profile:
+    #    the gated lane plus every `llama-cuda-*` unit in the resident lane table.  A
+    #    hardcoded pair named the x86 box's chat and pipeline lanes, so on the arm64
+    #    box this stopped nothing and left the LIVE lane serving — two LLMs, one card.
     local _unit
-    for _unit in llama-cuda-llama32-3b-chat.service llama-cuda-qwen35-4b-pipeline.service
+    local -a _cuda_lanes=()
+    [[ -n "${LLAMA_CUDA_LANE_UNIT:-}" ]] && _cuda_lanes+=("$LLAMA_CUDA_LANE_UNIT")
+    while IFS='|' read -r _lane _port
     do
+        [[ "$_lane" == llama-cuda-* ]] || continue
+        [[ " ${_cuda_lanes[*]-} " == *" $_lane "* ]] && continue
+        _cuda_lanes+=("$_lane")
+    done <<< "${LLAMA_LANE_SPECS:-}"
+    if (( ${#_cuda_lanes[@]} == 0 ))
+    then
+        # NO PROFILE: fall back to the lanes this repo shipped before the profile existed.
+        # They are the x86 box's, so on any other box they simply are not active — the
+        # point is that an unresolved shell behaves as it always did rather than silently
+        # displacing nothing.  Never an Xe unit.
+        _cuda_lanes=(llama-cuda-llama32-3b-chat.service llama-cuda-qwen35-4b-pipeline.service)
+        __tac_info "CUDA" "[no host profile — displacing the default CUDA lanes]" "$C_Dim"
+    fi
+    for _unit in "${_cuda_lanes[@]-}"
+    do
+        [[ -n "$_unit" ]] || continue
         # swallow-ok: the probe's failure IS the answer: a unit that is not active has nothing to stop
         if systemctl --user is-active --quiet "$_unit" 2>/dev/null
         then
@@ -4275,7 +4299,7 @@ function llm-build() {
         # swallow-ok: a diagnostic for the build report: an unresolved lane target leaves the row blank rather than failing the report
         lane_target=$(readlink -f "$HOME/.local/bin/cuda-llama-server" 2>/dev/null || true)
         if [[ "$lane_target" == "$root/build/"* ]]; then
-            lane_impact="the LIVE CUDA lane (llama-cuda-llama32-3b-chat.service) serves $lane_target - a rebuild replaces the binary under it (the running process keeps its copy; the next restart picks up the new one)"
+            lane_impact="the LIVE CUDA lane (${LLAMA_CUDA_LANE_UNIT:-unresolved}) serves $lane_target - a rebuild replaces the binary under it (the running process keeps its copy; the next restart picks up the new one)"
         fi
     fi
 

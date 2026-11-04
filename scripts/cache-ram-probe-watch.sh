@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 6
+#   v6 (2026-11-04): the CUDA-in-use ceiling is the profile's LLAMA_GPU_FREE_THRESHOLD_MIB, not a fixed 800 MiB (3500 on the arm64 box).
 # Module Version: 5
 #   v5 (2026-10-12): gate 4's VRAM READING comes from the shared `_tac_gpu_used_mib`
 #   (bin/_tac-bin-lib.sh) instead of an inline nvidia-smi pipeline.  The v4 multi-GPU
@@ -64,7 +66,14 @@ source "$REPO/bin/_tac-bin-lib.sh"
 HEAVY="$REPO/bin/heavy-job"
 LEDGER_MAX=50   # the boot's CUDA-cycle budget share to spend before a bench
 LOAD_MAX=4      # /proc/loadavg 1-min ceiling for a "quiet" box
-VRAM_MAX=800    # MiB; above this the card is occupied by someone else (gate 4, v3)
+# MiB USED above which the card belongs to someone else (gate 4).  The number stays a
+# LITERAL here because tests/unit/57-cache-ram-probe.bats extracts the gate bounds from
+# this file and runs gate_ok with them; the profile may then raise it through
+# LLAMA_GPU_FREE_THRESHOLD_MIB (the arm64 box declares 3500).  The variable is named for
+# FREE VRAM but its consumers (bin/autotune-rows.sh, bin/bench-rows.sh) pass it to
+# _tac_gpu_wait_used_below, so the unit is USED MiB — same number, same gate.
+VRAM_MAX=800
+VRAM_MAX="${LLAMA_GPU_FREE_THRESHOLD_MIB:-$VRAM_MAX}"
 ROW=21
 OPT_ORDER="BABA"
 OPT_OUT="logs/cache-ram-probe"

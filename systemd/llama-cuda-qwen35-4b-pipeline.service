@@ -19,7 +19,7 @@ StartLimitIntervalSec=600
 StartLimitBurst=6
 
 [Service]
-ExecStartPre=%h/.local/bin/llama-gpu-clear.sh
+ExecStartPre=%h/.local/bin/llama-gpu-clear.sh %n
 # --cache-ram 0 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
 # MiB of host RAM for the prompt cache, unbudgeted here; 0 is explicit-disable.
 # The number that should replace it waits on investigator card

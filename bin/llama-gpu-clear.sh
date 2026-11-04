@@ -7,6 +7,8 @@
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 11
+#   v11 (2026-11-04): the recovery probe asks the CALLING unit (`ExecStartPre=... %n`) instead of naming the x86 box's lane; LLAMA_CUDA_LANE_UNIT is the fallback for a hand-run.
 # Module Version: 10
 #   v10 (2026-10-12): the VRAM drain wait uses the shared `_tac_gpu_wait_used_below`
 #   (bin/_tac-bin-lib.sh) instead of an inline loop.  The inline form read the FIRST
@@ -58,19 +60,27 @@ _inv_gpu_foreign_owner() {
 #    During ExecStartPre the unit's own process isn't running yet, so Result
 #    still reflects the last completed run.
 #
-#    One unit calls this script (the CUDA chat lane), so it is read directly.
-#    Only a failure Result sets RECOVERY=1: a clean `success` is not a recovery
-#    start, and the crash-recovery short grace period must not apply to it.
-_unit_result=$(systemctl --user show llama-cuda-llama32-3b-chat.service -p Result --value 2>/dev/null | tr -d ' \n' || true)
-case "$_unit_result" in
-    exit-code|signal|core-dump|timeout|watchdog|resources|oom-kill|start-limit-hit)
-        RECOVERY=1
-        log "recovery start (previous run: $_unit_result)"
-        ;;
-    *)
-        RECOVERY=0
-        ;;
-esac
+#    The CALLING unit supplies its own name (`ExecStartPre=... %n`), so this script
+#    carries no box's lane name: on the x86 box the chat lane calls it, and any
+#    future profile's lane that does needs no edit here.  The environment override
+#    is the fallback for a hand-run, where %n does not exist.
+_unit="${1:-${LLAMA_CUDA_LANE_UNIT:-}}"
+if [[ -z "$_unit" ]]; then
+    RECOVERY=0
+    log "no calling unit and no LLAMA_CUDA_LANE_UNIT — skipping the recovery probe"
+else
+    # swallow-ok: the probe's failure IS an answer here — an unknown unit reports empty, which the case below treats as "not a recovery start"
+    _unit_result=$(systemctl --user show "$_unit" -p Result --value 2>/dev/null | tr -d ' \n' || true)
+    case "$_unit_result" in
+        exit-code|signal|core-dump|timeout|watchdog|resources|oom-kill|start-limit-hit)
+            RECOVERY=1
+            log "recovery start (previous run: $_unit_result)"
+            ;;
+        *)
+            RECOVERY=0
+            ;;
+    esac
+fi
 
 # 2. Kill stale CUDA-card llama-server processes.
 #

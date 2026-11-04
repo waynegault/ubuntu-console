@@ -360,7 +360,13 @@ watch_layout() {
 
 # watch_run <nvidia-smi-output-MiB> — run the copy with a 1s poll and a 0s budget.
 watch_run() {
+    # PIN the gate-4 knob to the bound this suite extracted from the script.  The watch
+    # script now reads LLAMA_GPU_FREE_THRESHOLD_MIB from the profile (3500 on the arm64
+    # box), which would otherwise move the wall these cases are written against — a
+    # "busy" fixture of 3293 MiB is over 800 but UNDER 3500, so the window opened and the
+    # probe launched.  Both sides now name the same number on either box.
     run env PATH="$W_STUBBIN:$PATH" W_VRAM_OUT="$1" W_LAUNCHES="$W_LAUNCHES" \
+        LLAMA_GPU_FREE_THRESHOLD_MIB="$VRAM_MAX" \
         bash "$W_SCRIPT" --poll 1 --max-wait 0 --out "$W_OUT"
 }
 
