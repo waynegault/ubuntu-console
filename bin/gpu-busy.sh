@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
-# Version: 1.9.2 (2026-11-02: docs/inspection.md §18.3 9.5 — SANCTIONED_LANE_PORT sat
+# Version: 1.10.0 (2026-11-04: a benchmark a TEST HARNESS started is no longer a declared
+#          workload. tests/unit/08-autotune-workload.bats executes the repo's own
+#          scripts/autotune-model.sh at its real path, so the probe answered correctly and the
+#          watchdog stopped the fleet's default CUDA lane to serve a unit test — 14:02:56Z from a
+#          local bats loop, 14:09:53Z from a VS Code bats run (bats-exec-suite <- timeout 400 bats
+#          <- the qwen-code companion). _under_test_harness walks the declared workload's ancestry
+#          and suppresses the match, appending suppressed:test-harness so the suppression is
+#          visible rather than reading like a probe that found nothing. The script is real; the
+#          intent is a test. Version 1.9.2 (2026-11-02: docs/inspection.md §18.3 9.5 — SANCTIONED_LANE_PORT sat
 #          between the doc comment and sanctioned_lane_serving(), so the function counted
 #          as "no comment directly above" and raised the ratchet by one. Moved the
 #          assignment above the comment block. No behaviour change; measured 9.5 122->121.
@@ -83,7 +91,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 16
+# Module Version: 18
 # Version: 1.7.1 (2026-11-02: comment-only. The `# swallow-ok:` reason for the ldconfig
 #          probe moved from the END of the code line to the line directly above it: the
 #          marker is 180 characters of rationale riding on a non-comment line, so §18.3
@@ -561,6 +569,38 @@ _process_executes() {
     return 1
 }
 
+# _under_test_harness <pid> — 0 when the process descends from a test harness.
+#
+# 2026-11-04: tests/unit/08-autotune-workload.bats runs the REPO's own scripts/autotune-model.sh
+# at its real path, so this probe answered correctly -- a real autotune script WAS executing --
+# and the watchdog stopped the fleet's default CUDA lane to serve a unit test. Twice: 14:02:56Z
+# from a bats loop, 14:09:53Z from a VS Code bats run (bats-exec-suite <- timeout 400 bats <-
+# the qwen-code companion extension).
+#
+# The script is real; the intent is a test. A benchmark a test harness started is not a declared
+# workload, and the name must be the executable token: a process whose argv merely contains
+# 'bats' does not match.
+_under_test_harness() {
+    local p="$1" n=0 _comm _args
+    local _harness='^(bats|bats-exec-test|bats-exec-file|bats-exec-suite|pytest) ?( |$)'
+    while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( n < 15 )); do
+        # swallow-ok: an exited process has no comm; absent must read "not a harness"
+        _comm=$(ps -o comm= -p "$p" 2>/dev/null | tr -d ' \n')
+        if [[ "$_comm" =~ ^(bats|bats-exec-test|bats-exec-file|bats-exec-suite|pytest)$ ]]; then
+            return 0
+        fi
+        # swallow-ok: no argv is not evidence of a harness
+        _args=$(ps -o args= -p "$p" 2>/dev/null)
+        if [[ "$_args" =~ (^|/)(bats|bats-exec-test|bats-exec-file|bats-exec-suite|pytest)( |$) ]]; then
+            return 0
+        fi
+        # swallow-ok: the top of the chain has no parent; that ends the walk
+        p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' \n')
+        n=$((n + 1))
+    done
+    return 1
+}
+
 # _any_executing_process <pgrep -f pattern> <artefact name>... — 0 when a process
 # outside this probe's own process chain is EXECUTING one of the artefacts, 1
 # otherwise.  The pattern only SELECTS candidates by command line (cheap, and it
@@ -579,7 +619,14 @@ _any_executing_process() {
             [[ "$_pid" == "$_s" ]] && _is_self=1
         done
         (( _is_self )) && continue
-        _process_executes "$_pid" "$@" && return 0
+        _process_executes "$_pid" "$@" || continue
+        if _under_test_harness "$_pid"; then
+            # Visible, never silent: a suppression a reader cannot see is indistinguishable from a
+            # probe that found nothing, which is the defect class this repo keeps paying for.
+            REASONS+=("suppressed:test-harness pid=$_pid")
+            continue
+        fi
+        return 0
     done < <(pgrep -f "$_pat" 2>/dev/null)
     return 1
 }
