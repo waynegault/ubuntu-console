@@ -2,7 +2,13 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-11-04): the CUDA llama.cpp toolchain (CUDA_HOME, PATH,
+#   LD_LIBRARY_PATH, llama-cli/llama-server aliases) moves here from ~/.bashrc.
+#   It had been appended below the loader's interactive guard, which made
+#   ~/.bashrc 1752 bytes against a canonical 1484 and mode 0664 against 0444,
+#   so test_shell_loader_gates.py went red on two tests (read-only + canonical
+#   form) for a shell env that was only ever reaching interactive shells.
 #   v21 (2026-11-01): init creates $LLM_STATE_DIR at profile load.
 #   v19 (2026-10-24): the loopback0 check no longer reports an UNREADABLE boot
 #   state as "loopback0 missing".  Measured 2026-10-24: boot 19:02:56, the unit
@@ -108,6 +114,27 @@ then
     export PATH="$HOME/.grok/bin:$PATH"
 fi
 [[ -r "$HOME/.grok/completions/bash/grok.bash" ]] && source "$HOME/.grok/completions/bash/grok.bash"
+
+# CUDA llama.cpp toolchain — moved here from ~/.bashrc to keep the loader thin
+# (the loader is asserted byte-exact AND read-only by test_shell_loader_gates.py,
+# so an export block appended to it is a red gate, not a local tweak). Guarded
+# like the Grok block: only export when the tree exists, and never prepend a
+# PATH or LD_LIBRARY_PATH entry that is already there.
+if [[ -d /usr/local/cuda-13.4 ]]
+then
+    export CUDA_HOME=/usr/local/cuda-13.4
+    [[ ":$PATH:" == *":$CUDA_HOME/bin:"* ]] || export PATH="$CUDA_HOME/bin:$PATH"
+    [[ ":$LD_LIBRARY_PATH:" == *":$CUDA_HOME/lib64:"* ]] \
+        || export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+fi
+if [[ -x "$HOME/llama.cpp/build-cuda/bin/llama-cli" ]]
+then
+    # Single-quoted on purpose: the alias body must expand when the alias is USED,
+    # not once at definition time (SC2139) -- otherwise a later reassignment of
+    # HOME leaves the alias pointing at the old tree.
+    alias llama-cli='$HOME/llama.cpp/build-cuda/bin/llama-cli'
+    alias llama-server='$HOME/llama.cpp/build-cuda/bin/llama-server'
+fi
 
 # Homebrew Node@24 — specific Node version (before general Homebrew PATH)
 if [[ -d "/home/linuxbrew/.linuxbrew/opt/node@24/bin" ]] \
