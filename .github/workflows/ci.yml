@@ -136,7 +136,7 @@ jobs:
         # shellcheck is pinned, so the version cannot drift with PATH order.
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       # The fast suite's shellcheck tests skip when shellcheck is absent, so
@@ -215,7 +215,7 @@ jobs:
         # shellcheck is pinned, so the version cannot drift with PATH order.
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Run unit tests
@@ -472,7 +472,7 @@ jobs:
       - name: Install bats
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       # The BATS-bridge suites call tools/lint.sh in places; install the pin so those

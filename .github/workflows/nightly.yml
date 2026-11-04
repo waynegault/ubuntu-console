@@ -41,7 +41,7 @@ jobs:
         # shellcheck is pinned, so the version cannot drift with PATH order.
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Install shellcheck (pinned)
