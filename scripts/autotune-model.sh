@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 102
+# Module Version: 103
+#   v103 (2026-11-04): a SELFTEST run may not take the real watchdog hold.  The harness stubs
+#   nvidia-smi/pkill/pgrep/systemctl, but the hold is a FILE WRITE, so a selftest acquired
+#   /dev/shm/llama-watchdog-cuda.suspend, the watchdog honoured it, and the production CUDA lane
+#   was stood down to let a unit test assert a decision -- measured twice in four minutes while
+#   VS Code's pytest ran 08-autotune-workload.bats.  A stub cannot cover a path, so the selftest
+#   now redirects the hold unless the caller names one explicitly.
 #   v99 (2026-11-04): a DETECTED cause reaches the writer.  The row that OOM'd at ctx 8192
 #   was SIGKILLed, so the classifier was handed an empty log and recorded "unclassified"
 #   while /tmp/at-metrics-$$ already said oom - the detected-and-discarded reason.  Only
@@ -579,6 +585,13 @@ fi
 # this hold since 2026-09-15; the direct entry point had no hold, so a 40-minute autotune
 # would have had the lane restored underneath it and every later measurement taken on a
 # contended card.  The release is owner-checked and idempotent, so the EXIT trap is safe.
+if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" && -z "${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-}" ]]; then
+    # Stubs cannot reach this: the hold is a file, not a command.  Under selftest the hold goes to
+    # a private path, so a test run can never stand a live service down.  The caller can still pick
+    # its own path by exporting LLAMA_WATCHDOG_CUDA_SUSPEND_FILE (the harness does, per case).
+    LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="${TMPDIR:-/tmp}/autotune-selftest-$$.suspend"
+    echo "selftest: suspend hold redirected to $LLAMA_WATCHDOG_CUDA_SUSPEND_FILE (never the real one)"
+fi
 _LANE_SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 # The suspend helpers live in bin/_tac-bin-lib.sh — the ONE reviewed implementation of
 # "held by a live pid".  Sourced by realpath so a repo path and an installed copy agree.

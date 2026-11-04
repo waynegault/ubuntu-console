@@ -386,6 +386,7 @@ _selftest_run() {
         CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
         LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 \
         LLM_AUTOTUNE_VRAM_CAP_MULT=4194304 \
+        LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$sandbox/watchdog-cuda.suspend" \
         LLM_AUTOTUNE_RESULT_FILE="$sandbox/autotune.result" "$@" \
         bash "$REPO_ROOT/scripts/autotune-model.sh" 1 --workload chat 2>&1
 }
@@ -405,6 +406,37 @@ _selftest_run() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"12.0 tps"* ]]
     [[ "$output" != *"recording best-effort config"* ]]
+}
+
+@test "autotune-selftest: a selftest run never touches the REAL watchdog suspend hold" {
+    # The harness stubs nvidia-smi/pkill/pgrep/systemctl, which covers every COMMAND the autotune
+    # uses -- but the suspend hold is a file WRITE, so a selftest run took the real
+    # /dev/shm/llama-watchdog-cuda.suspend, the watchdog honoured it, and the production CUDA lane
+    # was stood down so that a unit test could assert a decision.  Measured 2026-11-04: VS Code's
+    # pytest run stopped llama-cuda-qwen3coder-30b-chat twice in four minutes this way.
+    # Assert on the FILE, not on the code that is supposed to avoid it: a stub cannot cover a path.
+    local hold="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
+    local before after
+    before="absent"; [[ -e "$hold" ]] && before="$(cat "$hold")"
+    run _selftest_run "$BATS_TEST_TMPDIR/hold"
+    [[ "$status" -eq 0 ]]
+    after="absent"; [[ -e "$hold" ]] && after="$(cat "$hold")"
+    [[ "$after" == "$before" ]]
+}
+
+@test "autotune-selftest: with no hold path named, the selftest still refuses the real one" {
+    # The harness above passes its own hold path, so it would keep a leaky script green: the test
+    # would be asserting the harness's care, not the script's.  This case names NO path (an empty
+    # assignment arrives last in the env list and wins), which is the caller a future harness is,
+    # and requires the script itself to redirect.
+    local hold="/dev/shm/llama-watchdog-cuda.suspend"
+    local before after
+    before="absent"; [[ -e "$hold" ]] && before="$(cat "$hold")"
+    run _selftest_run "$BATS_TEST_TMPDIR/noredirect" LLAMA_WATCHDOG_CUDA_SUSPEND_FILE=
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"suspend hold redirected"* ]]
+    after="absent"; [[ -e "$hold" ]] && after="$(cat "$hold")"
+    [[ "$after" == "$before" ]]
 }
 
 @test "autotune-selftest: a certification below the floor descends at the certification's sample count" {
