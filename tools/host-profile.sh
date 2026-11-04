@@ -28,6 +28,13 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 9
+#   v9 (2026-11-04): detection no longer NEEDS the GPU.  A profile may declare
+#   TAC_HOST_PROFILE_CPU and is then matched on the CPU model (readable via lscpu with
+#   no device access), outranking the arch/CUDA/render facts.  Measured on the arm64
+#   runner, which reads cuda=0 in a bare environment and so matched no profile at all —
+#   three BATS cases failed because install.sh refused.  An unreadable CPU refuses
+#   rather than falling back to a device fact that may describe another box.
 # Module Version: 8
 #   v8 (2026-11-03): TAC_HOST_GPU_POOL_BYTES — the GPU-addressable pool, MEASURED once
 #   per boot and exported. 11d used to clamp the card's figure to MemTotal on a
@@ -137,6 +144,38 @@ tac_host_profile_meta() {
     return 1
 }
 
+# tac_host_cpu — this machine's CPU model, a DEVICE-INDEPENDENT identity.
+#
+# `arch + cuda + render` reads the GPU, and a CI runner in a bare environment cannot
+# always see the card.  Measured 2026-11-04 on the arm64 runner: detection read
+# `arch=aarch64 cuda=0 render=1`, matched no profile, and install.sh refused — three
+# BATS cases failed — while the SAME box in an interactive shell read cuda=1 and matched.
+# A box's CPU model is readable through /proc and lscpu with no device access, so a
+# profile that declares TAC_HOST_PROFILE_CPU is matched on that identity and the GPU
+# facts are not consulted at all.
+#
+# TAC_HOST_CPU_OVERRIDE states it directly — the suite's seam, and the escape for a box
+# whose CPU string cannot be read.
+tac_host_cpu() {
+    if [[ -n "${TAC_HOST_CPU_OVERRIDE:-}" ]]
+    then
+        printf '%s\n' "$TAC_HOST_CPU_OVERRIDE"
+        return 0
+    fi
+    local _cpu=""
+    if command -v lscpu >/dev/null 2>&1
+    then
+        # swallow-ok: a best-effort probe guarded by `command -v`; an unreadable lscpu leaves _cpu empty, and every caller treats an empty id as "cannot identify this box" and refuses
+        _cpu="$(lscpu 2>/dev/null | sed -n 's/^Model name: *//p' | head -n 1)"
+    fi
+    if [[ -z "$_cpu" && -r /proc/cpuinfo ]]
+    then
+        _cpu="$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -n 1)"
+        [[ -n "$_cpu" ]] || _cpu="$(sed -n 's/^Hardware[[:space:]]*: //p' /proc/cpuinfo | head -n 1)"
+    fi
+    printf '%s\n' "$_cpu"
+}
+
 # tac_host_facts — this machine as `arch cuda render` (each 0/1 except arch).
 # CUDA is a driver/tool test, not a model list: nvidia-smi on PATH or a device
 # node.  A render node is the directory pyopencl/Xe enumerate from.
@@ -179,6 +218,22 @@ tac_host_profile_match() {
     local _file _parch _pcuda _prender
     _file="$(tac_host_profile_file "$_id")" || return 2   # 2 = no such profile
     _parch="$(tac_host_profile_meta "$_file" TAC_HOST_PROFILE_ARCH)" || return 2   # 2 = profile declares no arch
+    # A DECLARED CPU IDENTITY outranks the GPU facts, because the GPU is exactly what a
+    # runner may not be able to see (measured 2026-11-04: cuda=0 on the arm64 runner, so
+    # no profile matched and install.sh refused).  A profile without this key keeps the
+    # arch/CUDA/render match unchanged.
+    local _pcpu _cpu_lc _pcpu_lc
+    if _pcpu="$(tac_host_profile_meta "$_file" TAC_HOST_PROFILE_CPU)"
+    then
+        [[ "$_parch" == "$_arch" ]] || return 1
+        _cpu_lc="$(tac_host_cpu | tr '[:upper:]' '[:lower:]')"
+        _pcpu_lc="$(printf '%s' "$_pcpu" | tr '[:upper:]' '[:lower:]')"
+        # An unreadable CPU refuses rather than falling back to the device facts: a
+        # wrong profile silently applies another box's lanes and tuning.
+        [[ -n "$_cpu_lc" ]] || return 1
+        [[ "$_cpu_lc" == *"$_pcpu_lc"* ]] || return 1
+        return 0
+    fi
     _pcuda="$(tac_host_profile_meta "$_file" TAC_HOST_PROFILE_CUDA)" || _pcuda="any"
     _prender="$(tac_host_profile_meta "$_file" TAC_HOST_PROFILE_RENDER)" || _prender="any"
     [[ "$_parch" == "$_arch" ]] || return 1
