@@ -466,10 +466,15 @@ _selftest_run() {
     [[ "$output" == *"recording best-effort config"* ]]
 }
 
-@test "autotune-selftest: a model that cannot load at any ctx exits non-zero" {
+@test "autotune-selftest: a model that runs out of memory at every ctx exits non-zero" {
+    # The fixture is an OOM at every rung, so the class is resource exhaustion — the
+    # "cannot be loaded / unsupported" wording belongs to the load_fail case below,
+    # which pins it against the fixture that actually produces a load failure.  Asserting
+    # it here was stale: it survived while the classifier gained resource_exhausted
+    # (fe933be6) and the run started naming the shape "model cannot run at any ctx".
     run _selftest_run "$BATS_TEST_TMPDIR/unloadable" _SELFTEST_OOM_ABOVE=2048
     [[ "$status" -eq 1 ]]
-    [[ "$output" == *"cannot be loaded"* || "$output" == *"unsupported"* ]]
+    [[ "$output" == *"model cannot run at any ctx"* ]]
 }
 
 # ── load_fail aborts the ctx walk; an OOM still walks (2026-10-14) ───────────
