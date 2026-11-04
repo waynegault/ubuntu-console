@@ -2444,7 +2444,7 @@ build** — `llama-server --help` lists exactly the three above and nothing cont
 And something IS passed: every lane unit pins `--reasoning off` in its ExecStart
 (`systemd/llama-cuda-llama32-3b-chat.service`, `llama-cuda-qwen35-4b-pipeline.service`,
 `llama-xe-minicpm5-1b-chat.service`, and — added since this item was written —
-`llama-xe-llama32-3b-chat.service` (installed) and `llama-cpu-qwen25-3b-chat.service` (not installed); five at
+`llama-xe-llama32-3b-chat.service` and `llama-cpu-qwen25-3b-chat.service`; five at
 2026-10-25), confirmed against the live processes. That is the
 deliberate choice — thinking traces off for the served lanes.
 
