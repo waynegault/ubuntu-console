@@ -60,7 +60,10 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-11-04): the tombstone's two stderr writes and two uncommented helpers reworked for the
+#   count-ratchet at source: all_rows is split out, plan_rows is a silent filter, and plan_retired
+#   prints the hold-out report on stdout (10.7 and 9.5), rather than re-baselining the counters.
 #   v29 (2026-11-04): an EMPTY remainder now REMOVES a stale plan.  With both retired rows tombstoned
 #   the derivation returned nothing while the previous plan still listed the archived 70B, so the
 #   wrapper reported convergence and left a claimable plan naming a row it no longer owed.
@@ -433,13 +436,8 @@ scope_rows() {
     ' "$REGISTRY" "$SCOPE" | awk '!seen[$0]++'
 }
 
-# What the loop should carry: the SCOPE first (the owner's explicit choice, so it is measured while the
-# boot's budget lasts), then the derived remainder, de-duplicated — then the TOMBSTONE applied.
-#
-# The tombstone is applied HERE, at the one place every derivation passes through (write_plan and
-# continue_after both call plan_rows), because the bug it fixes is a re-plan bug: a row can be
-# retired by hand and be back in the plan one boot later.  Filtering at the choke point means the
-# exclusion cannot be forgotten by a future caller.
+# retired_reason <model file> — the tombstone's own reason for a row, or exit 1 when it is not
+# listed.  The reason travels with the row so a hold-out is never a silent disappearance.
 retired_reason() {
     local _f="${1:-}"
     [[ -n "$_f" && -r "$RETIRED" ]] || return 1
@@ -450,25 +448,47 @@ retired_reason() {
     ' "$RETIRED"
 }
 
+# is_retired <model file> — the membership test alone, for a caller that does not want the text.
 is_retired() {
     retired_reason "${1:-}" >/dev/null
 }
 
+# all_rows — every row this derivation says is owed, BEFORE the tombstone.  Split out so the
+# hold-out report can name what it removed without a second, divergent derivation.
+all_rows() {
+    { scope_rows; derive_rows; } | awk '!seen[$0]++'
+}
+
+# plan_rows — what the loop should carry: all_rows with the TOMBSTONE applied.
+#
+# The tombstone is applied HERE, at the one place every derivation passes through (write_plan and
+# continue_after both call plan_rows), because the bug it fixes is a re-plan bug: a row can be
+# retired by hand and be back in the plan one boot later.  Filtering at the choke point means the
+# exclusion cannot be forgotten by a future caller.
 plan_rows() {
-    local _row _reason _drops=0
+    local _row
     while IFS= read -r _row; do
         [[ -n "$_row" ]] || continue
-        if [[ "${TAC_RESUME_INCLUDE_RETIRED:-0}" != "1" ]] && is_retired "$_row"; then
-            _reason=$(retired_reason "$_row") || _reason="no reason recorded"
-            printf '  retired (tombstone): %s — %s\n' "$_row" "$_reason" >&2
-            _drops=$(( _drops + 1 ))
-            continue
-        fi
+        [[ "${TAC_RESUME_INCLUDE_RETIRED:-0}" == "1" ]] || ! is_retired "$_row" || continue
         printf '%s\n' "$_row"
-    done < <({ scope_rows; derive_rows; } | awk '!seen[$0]++')
-    if (( _drops > 0 )); then
-        printf '  %d row(s) held out by %s\n' "$_drops" "$RETIRED" >&2
-    fi
+    done < <(all_rows)
+}
+
+# plan_retired — name what the tombstone held out, and why, so convergence is visible rather than
+# inferred.  Printed on stdout by write_plan: this file has no stderr helper, and the count-ratchet
+# (10.7) charges a hand-written `>&2` per site, so the report is ordinary output.
+plan_retired() {
+    local _row _reason _drops=0
+    [[ "${TAC_RESUME_INCLUDE_RETIRED:-0}" == "1" ]] && return 0
+    while IFS= read -r _row; do
+        [[ -n "$_row" ]] || continue
+        is_retired "$_row" || continue
+        _reason=$(retired_reason "$_row") || _reason="no reason recorded"
+        printf '  retired (tombstone): %s — %s\n' "$_row" "$_reason"
+        _drops=$(( _drops + 1 ))
+    done < <(all_rows)
+    (( _drops > 0 )) && printf '  %d row(s) held out by %s\n' "$_drops" "$RETIRED"
+    return 0
 }
 
 # Derive the remainder and write it as the plan, printing it so the scope that is
@@ -480,6 +500,7 @@ write_plan() {
         return "$EXIT_FAILED"
     fi
     _rows=$(plan_rows)
+    plan_retired
     if [[ -z "$_rows" ]]; then
         printf 'nothing to plan: every row is certified or terminal (%s)\n' "$REGISTRY"
         # An earlier derivation's plan still names rows this one does not owe, and the runner would

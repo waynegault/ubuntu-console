@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 108
+# Module Version: 109
+#   v109 (2026-11-04): the count-ratchet's four rises from this session cleared AT SOURCE, not by
+#   re-baselining — the window-expiry case gains its `*)` arm (4.2.4), the stop action moves out of
+#   _bench_spawn into a commented _bench_stop_unknown (10.4 and 9.5), leaving the function under the
+#   100-line bound it had crossed.
 #   v108 (2026-11-04): _startup_fail_type calls __autotune_oom_evidence (11b v38) instead of a nested
 #   copy, so the witness is testable; with 11b absent the token falls to loader_crash_unknown rather
 #   than claiming an OOM.
@@ -1120,6 +1124,20 @@ _bench_stop() {
     kill -9 "$_p" 2>/dev/null || true
 }
 
+# _bench_stop_unknown — the stop action for a death with NEITHER an OOM witness NOR a load
+# signature.  Neither follow-on action is available: descending measures a ctx the failure never
+# implicated, and an FA-off retry asks for MORE host memory (the 2026-11-03 path).  It records the
+# observation and leaves the row stopped.  Reads its context from the CALLER's scope deliberately —
+# bash dynamic scoping — because _BENCH_PID, c/b/u, effective_ngl and kv_k/kv_v are _bench_spawn's
+# locals; it is only ever called from that function's fa-retry arm.
+_bench_stop_unknown() {
+    warn "  no OOM evidence and no load-failure signature — stopping this row (no descent, no FA retry)"
+    _bench_stop "${_BENCH_PID:-}"
+    _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" "loader_crash_unknown"
+    echo "0|0|loader_crash_unknown" > "/tmp/at-metrics-$$"
+    _BENCH_FAIL_TYPE="loader_crash_unknown"
+}
+
 # ---------------------------------------------------------------------------
 # _bench_spawn — launch llama-server once (flash-attn retry), pre-flight, and
 #   warm up the GPU.  On success sets the module globals _BENCH_PID,
@@ -1347,45 +1365,47 @@ _bench_spawn() {
         done
         return 1
     }
-    # Classify a failed startup from the server log: a hard load failure
-    # (unsupported/corrupt GGUF, missing file) must not be mistaken for OOM —
-    # OOM descends to a smaller ctx, a load failure aborts the remaining
-    # combos. When the process dies, only the log tells the two apart.
-    #
-    # The matched line goes to stderr as well as the label going to stdout: the
-    # server log is deleted when the spawn unwinds, so a bare "unsupported model"
-    # left no evidence at all behind it.  Two consecutive row-4 failures on
-    # 2026-09-16 (legalparam, which loads fine in 3 s under the same flags) were
-    # un-diagnosable for exactly that reason — the one line that named the cause
-    # had already been thrown away.  Never discard the only witness.
-    # `requires ctx_other to be set` is the arch-level hard stop a DRAFT/assistant
-    # GGUF hits when served STANDALONE (llama-context.cpp: the draft arch needs its
-    # target's context).  It is a load failure, not memory — ctx cannot supply the
-    # missing context, and the string is emitted only when that pointer is null, so
-    # it cannot mask a real OOM (2026-10-14: dflash2-qwen38-27b-Q8_0 walked
-    # 180,224 -> 2,816 classified OOM and helped exhaust the boot's cycle ledger).
+    # _startup_witness <pattern> — print the log line that produced a load_fail verdict.  The server
+    # log is deleted when the spawn unwinds, so this line is the only surviving evidence; a caller
+    # that will re-attempt suppresses it and leaves the one authoritative print to where the
+    # classification is USED (the pre-flight probe).
+    _startup_witness() {
+        local _w
+        _w=$(grep -iE "$1" "$_BENCH_LOG" 2>/dev/null | tail -1)
+        echo "  server log said: $_w" >&2
+    }
+    # _startup_load_fail <quiet|anything> — 0 when the server log names a load failure.  Holds the
+    # signature list next to the only consumer that prints it, so the pattern and its witness cannot
+    # drift apart.  `requires ctx_other to be set` belongs here, not with the arch patterns elsewhere:
+    # it is the hard stop a DRAFT/assistant GGUF hits when served STANDALONE (the draft arch needs its
+    # target's context), ctx cannot supply it, and the string is emitted only when that pointer is
+    # null — so it cannot mask a real OOM (2026-10-14: dflash2-qwen38-27b-Q8_0 walked 180,224 -> 2,816
+    # as OOM and helped exhaust the boot's cycle ledger).
+    _startup_load_fail() {
+        local _pat='unknown model architecture|failed to load model|error loading model|'
+        _pat+='unsupported (model|architecture)|failed to open|no such file|'
+        _pat+='requires ctx_other to be set'
+        grep -qiE "$_pat" "$_BENCH_LOG" 2>/dev/null || return 1
+        [[ "${1:-}" == "quiet" ]] || _startup_witness "$_pat"
+        return 0
+    }
+    # _oom_witness_present — the 11b evidence test, guarded for a partial tree (no 11b, no claim).
+    _oom_witness_present() {
+        declare -f __autotune_oom_evidence &>/dev/null \
+            && __autotune_oom_evidence "$_BENCH_LOG" "${_BENCH_PID:-}"
+    }
+    # _startup_fail_type <quiet> — load_fail | oom | loader_crash_unknown, from the log and the kernel.
+    # Neither branch is a default: `oom` needs a witness (11b's __autotune_oom_evidence) and a death
+    # with none gets a name that claims nothing — the old `else` printed `oom` here, which is how the
+    # 70B spent a day reading as a memory failure: 16 "OOM at this ctx" lines while the card reported
+    # 95,516 MiB free and the kernel held zero OOM lines, the real cause being an 87.1 s load against
+    # a 90 s window.
     _startup_fail_type() {
-        local _pat='unknown model architecture|failed to load model|error loading model|unsupported (model|architecture)|failed to open|no such file|requires ctx_other to be set'
-        if grep -qiE "$_pat" "$_BENCH_LOG" 2>/dev/null; then
-            # The witness line is the evidence the deleted server log leaves behind;
-            # "quiet" is for a caller that classifies a failure it will re-attempt
-            # anyway, leaving the one authoritative print to the point the
-            # classification is USED (the pre-flight probe).
-            if [[ "${1:-}" != "quiet" ]]; then
-                local _wit
-                _wit=$(grep -iE "$_pat" "$_BENCH_LOG" 2>/dev/null | tail -1)
-                echo "  server log said: $_wit" >&2
-            fi
+        if _startup_load_fail "${1:-}"; then
             printf 'load_fail'
-        elif declare -f __autotune_oom_evidence &>/dev/null \
-             && __autotune_oom_evidence "$_BENCH_LOG" "${_BENCH_PID:-}"; then
+        elif _oom_witness_present; then
             printf 'oom'
         else
-            # Neither a load signature nor an OOM witness.  The old `else` printed `oom` here, and
-            # that is how the 70B spent a day reading as a memory failure: 16 "OOM at this ctx" lines
-            # were emitted while the card reported 95,516 MiB free and the kernel held zero OOM
-            # lines, and the real cause was an 87.1 s load against a 90 s window.  A death with no
-            # evidence gets a name that claims nothing.
             printf 'loader_crash_unknown'
         fi
     }
@@ -1422,15 +1442,7 @@ _bench_spawn() {
                 _bench_stop "$_BENCH_PID"
                 ;;
             stop)
-                # No OOM witness and no load signature: the death is unexplained, so neither action
-                # that follows a diagnosis is available.  Descending would measure a ctx the failure
-                # never implicated, and an FA-off retry asks for MORE host memory.  Record the
-                # observation and stop the row.
-                warn "  no OOM evidence and no load-failure signature — stopping this row (no descent, no FA retry)"
-                _bench_stop "$_BENCH_PID"
-                _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" "loader_crash_unknown"
-                echo "0|0|loader_crash_unknown" > "/tmp/at-metrics-$$"
-                _BENCH_FAIL_TYPE="loader_crash_unknown"
+                _bench_stop_unknown
                 return 1
                 ;;
             *)
@@ -1460,6 +1472,7 @@ _bench_spawn() {
         # before a signature" at this call site and are named for it.
         case "$_sft" in
             oom|loader_crash_unknown) _sft=window_timeout ;;
+            *) ;;
         esac
         if kill -0 "$_BENCH_PID" 2>/dev/null && [[ "$_sft" != "load_fail" ]]; then
             _cuda_stall_bump
