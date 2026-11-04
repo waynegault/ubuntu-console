@@ -39,11 +39,17 @@ jobs:
         # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted
         # runner, so it never decided which bats the .bats gate ran; install the pin the way
         # shellcheck is pinned, so the version cannot drift with PATH order.
-        run: sudo tools/install-bats.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Install shellcheck (pinned)
         id: install_shellcheck
-        run: sudo tools/install-shellcheck.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-shellcheck.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Set up Python
         id: setup_python

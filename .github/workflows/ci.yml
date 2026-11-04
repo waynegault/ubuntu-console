@@ -58,7 +58,10 @@ jobs:
           pip install -r .github/ci-requirements.txt
 
       - name: Install shellcheck (pinned)
-        run: sudo tools/install-shellcheck.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-shellcheck.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Loader integrity guard
         run: |
@@ -131,12 +134,18 @@ jobs:
         # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted
         # runner, so it never decided which bats the .bats gate ran; install the pin the way
         # shellcheck is pinned, so the version cannot drift with PATH order.
-        run: sudo tools/install-bats.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       # The fast suite's shellcheck tests skip when shellcheck is absent, so
       # install the same pinned version the lint job uses rather than no-op them.
       - name: Install shellcheck (pinned)
-        run: sudo tools/install-shellcheck.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-shellcheck.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       # No count in this step's name: it read "62" while the suite had 64, and drifted twice in
       # one day. The count's authority is the README table, which tools/docs-sync-check.sh
@@ -204,7 +213,10 @@ jobs:
         # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted
         # runner, so it never decided which bats the .bats gate ran; install the pin the way
         # shellcheck is pinned, so the version cannot drift with PATH order.
-        run: sudo tools/install-bats.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Run unit tests
         run: |
@@ -459,13 +471,17 @@ jobs:
         uses: ./.github/actions/which-box
       - name: Install bats
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       # The BATS-bridge suites call tools/lint.sh in places; install the pin so those
       # cases run instead of skipping on a missing shellcheck.
       - name: Install shellcheck (pinned)
-        run: sudo tools/install-shellcheck.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-shellcheck.sh -p "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Set up Python
         uses: actions/setup-python@v7
