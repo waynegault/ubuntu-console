@@ -29,12 +29,35 @@ permissions:
 # CI-WATCH-CONSOLE-001 exists to make visible.  Each cap below is sized from a measured green
 # run (2026-09-26, run 36272668820) with headroom, in the posture the investigator's
 # unittest.yml states: cap generously, then tighten once a green run gives the real duration.
+# ── Which box is this? ─────────────────────────────────────────────────────────────
+# The repo serves TWO boxes from one clone: an x86_64 Intel-Xe box and the arm64 RTX
+# Spark box, with per-box lanes, model store and tuning in config/hosts.d/<id>.conf.
+# A job whose verdict does not say WHICH box produced it is ambiguous — and a job that
+# only works on one of them is a trap.  Every job therefore states its box from the
+# repo's own resolvers (they refuse rather than guess), and FAILS if the profile cannot
+# be resolved: a box-blind verdict is not a verdict.
+x-box-step: &box_step
+  name: Which box is this
+  run: |
+    set -uo pipefail
+    source tools/host-profile.sh
+    tac_host_profile_apply
+    source tools/arch.sh
+    box="$(hostname)"; arch="$(tac_host_arch)"
+    printf 'box=%s arch=%s profile=%s matched=%s\n' \
+      "$box" "$arch" "${TAC_HOST_PROFILE:-unresolved}" "${TAC_HOST_PROFILE_MATCHED:-0}"
+    if [[ "${TAC_HOST_PROFILE_MATCHED:-0}" != 1 ]]; then
+      echo "::error::no host profile resolved on ${box} (${arch}) — this job's expectations are per-box, so it must not run box-blind"
+      exit 1
+    fi
+
 jobs:
   lint:
     name: Lint & Static Analysis
     runs-on: [self-hosted, wsl-console]
     timeout-minutes: 20
     steps:
+      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -107,6 +130,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     timeout-minutes: 30
     steps:
+      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -159,6 +183,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     timeout-minutes: 20
     steps:
+      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -172,6 +197,7 @@ jobs:
     # is also the longest a hang can hold the single runner.
     timeout-minutes: 45
     steps:
+      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -266,6 +292,7 @@ jobs:
                tests/unit/60-gpu-busy-sanctioned-tree.bats \
                tests/unit/60-wsl-restart.bats \
                tests/unit/61-autotune-resume.bats \
+               tests/unit/61-gpu-busy-test-harness-not-a-tenant.bats \
                tests/unit/62-vscode-companion-state-trim.bats \
                tests/unit/63-ctx-profile-check.bats \
                tests/unit/64-fleet-quiesce.bats \
@@ -298,6 +325,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     timeout-minutes: 20
     steps:
+      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -368,6 +396,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     timeout-minutes: 20
     steps:
+      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -439,6 +468,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     timeout-minutes: 120
     steps:
+      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 

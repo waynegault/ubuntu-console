@@ -853,6 +853,40 @@ YAML
     [ "$output" = "" ]
 }
 
+@test "ci: every job states which box it is running on" {
+    # This repo serves TWO boxes from one clone (x86_64 Intel-Xe, arm64 RTX Spark) with
+    # per-box profiles, lanes and tuning.  A job that does not say which box produced its
+    # verdict is ambiguous, and a job written for one box's expectations is a trap on the
+    # other — measured 2026-11-04: every job demanded one label and the only runner behind
+    # it was the other box, so nothing ran at all.  Each workflow therefore defines the
+    # shared `x-box-step` anchor, and EVERY job's step list must begin with it.
+    local f bad=0
+    for f in "$REPO_ROOT"/.github/workflows/*.yml
+    do
+        if ! grep -qx 'x-box-step: &box_step' "$f"
+        then
+            echo "FAIL: ${f##*/} defines no x-box-step anchor"
+            bad=1
+            continue
+        fi
+        # Sweep once: no `steps:` may be followed by anything but the shared step.
+        if awk 'prev == "    steps:" && $0 != "      - *box_step" { bad = 1 } { prev = $0 } END { exit bad }' "$f"
+        then
+            :
+        else
+            echo "FAIL: a job in ${f##*/} does not start with '*box_step'"
+            bad=1
+        fi
+    done
+    (( bad == 0 ))
+
+    # Teeth: the same sweep must catch a job that drops the step, or this case proves
+    # nothing.  Mutate a copy rather than trusting the files to stay well-formed.
+    run bash -c "sed '0,/      - \*box_step/{/      - \*box_step/d}' '$REPO_ROOT/.github/workflows/ci.yml' > '$BATS_TEST_TMPDIR/mutated.yml';
+        awk 'prev == \"    steps:\" && \$0 != \"      - *box_step\" { bad = 1 } { prev = \$0 } END { exit bad }' '$BATS_TEST_TMPDIR/mutated.yml'"
+    [ "$status" -ne 0 ]
+}
+
 @test "ci: every job names a self-hosted runner (no billing)" {
     # Wayne's standing rule (2026-09-16): no workflow may run on a GitHub-HOSTED
     # runner — hosted minutes are metered, and once the allowance ran out every
