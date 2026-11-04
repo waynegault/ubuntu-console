@@ -1,8 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 81
+#   v81 (2026-11-04): every bench TSV row carries BUILD IDENTITY in four appended columns —
+#   driver, CUDA, engine build (commit) and embedded arch.  A t/s figure without the binary
+#   that produced it cannot separate "this model is slower" from "this binary lost its arch
+#   target after a rebuild", and this box rebuilds llama.cpp for a new architecture (sm_121
+#   on RTX Spark).  Appended, not inserted: every consumer reads $1-$4 by position
+#   (__model_bench_diff, __model_bench_latest, 11d's file resolver), so the existing five
+#   columns keep their places.  A field that cannot be read is "unknown", never empty.
 # Module Version: 80
-#   v80 (2026-11-02): seven over-long lines wrapped and two new functions documented (8.1.8, 9.5).
+#   v80 (2026-11-02): seven over-long lines wrapped
 #   Formatting only: the read/printf argument lists were diffed token-for-token against the
 #   previous blob (48/20/23 tokens, identical).
 # Module Version: 79
@@ -2317,6 +2325,61 @@ function __autotune_script_path() {
 }
 
 # ---------------------------------------------------------------------------
+# __bench_build_identity — the build a throughput number came from
+# @description Echo four TAB-separated fields: driver, cuda, build, arch.
+# @returns 0 always.  An unreadable field is echoed as "unknown", never as empty.
+#
+# Read once per bench run, not per row: the file is written when the run ends, so this
+# costs one nvidia-smi, one --version and one strings over the CUDA backend library.
+# Measured on this box 2026-11-04: 621.12 / 13.5 / commit 3c809f4 / sm_121.
+# ---------------------------------------------------------------------------
+function __bench_build_identity() {
+    local _drv="unknown" _cuda="unknown" _build="unknown" _arch="unknown"
+    local _out=""
+
+    # swallow-ok: a host without nvidia-smi gets "unknown" fields, not a refused bench.
+    if command -v nvidia-smi >/dev/null 2>&1
+    then
+        # swallow-ok: no NVIDIA driver is a legitimate reading of "unknown", not a refused bench.
+        _out=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n1)
+        [[ -n "$_out" ]] && _drv="$_out"
+        # The banner names it "CUDA Version" on older drivers, "CUDA UMD Version" now.
+        # swallow-ok: the banner is informational; its absence yields "unknown", not a refusal.
+        _out=$(nvidia-smi 2>/dev/null | grep -oE 'CUDA (UMD )?Version: *[0-9]+(\.[0-9]+)*' | head -n1)
+        _out="${_out##*: }"
+        [[ -n "$_out" ]] && _cuda="$_out"
+    fi
+
+    local _bin="${LLAMA_SERVER_BIN:-}"
+    if [[ -n "$_bin" && -x "$_bin" ]]
+    then
+        # --version writes to STDERR, not stdout: measured 2026-11-04, and the first
+        # version of this probe read the wrong stream and recorded "unknown" while the
+        # binary answered perfectly.
+        _out=$(timeout 10 "$_bin" --version 2>&1 | grep -oE 'commit [0-9a-f]+' | head -n1)
+        [[ -n "$_out" ]] && _build="${_out#commit }"
+        local _lib
+        _lib="$(dirname "$_bin")/libggml-cuda.so"
+        # swallow-ok: a missing "strings" is answered by the elif branch below, not hidden.
+        if [[ -r "$_lib" ]] && command -v strings >/dev/null 2>&1
+        then
+            # Arch targets are baked in at build time.  An empty set is the failure this
+            # column exists to make visible, so it is named rather than left blank.
+            # swallow-ok: an unreadable library is reported as "unreadable" further down.
+            _out=$(timeout 20 strings "$_lib" 2>/dev/null | grep -oE 'sm_[0-9]+' | sort -u | paste -sd, -)
+            [[ -n "$_out" ]] && _arch="$_out"
+        elif [[ -r "$_lib" ]]
+        then
+            _arch="unreadable"
+        else
+            _arch="no-cuda-lib"
+        fi
+    fi
+
+    printf '%s\t%s\t%s\t%s\n' "$_drv" "$_cuda" "$_build" "$_arch"
+}
+
+# ---------------------------------------------------------------------------
 # __bench_autotune_failure_why <result-file> <rc> — WHY an autotune failed, in the
 # autotuner's own words.  DEF-024: the bench used to print "(no working config)" for
 # EVERY non-zero return, including the measured case where the autotuner had refused
@@ -2798,12 +2861,17 @@ function __model_bench() {
 
     local bench_file
     bench_file="$LLM_STATE_DIR/bench_$(date +%Y%m%d_%H%M%S).tsv"
+    # Build identity is read ONCE for the file, not per row: every row in one run came from
+    # the same binary, and a per-row probe would invent a difference that does not exist.
+    local _bi_drv _bi_cuda _bi_build _bi_arch
+    IFS=$'\t' read -r _bi_drv _bi_cuda _bi_build _bi_arch < <(__bench_build_identity)
     {
-        printf "#\tmodel\tsize\ttps\tnotes\n"
+        printf "#\tmodel\tsize\ttps\tnotes\tdriver\tcuda\tbuild\tarch\n"
         for i in "${!b_num[@]}"
         do
-            printf "%s\t%s\t%s\t%s\t%s\n" \
-                "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}" "${b_notes[$i]:-}"
+            printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+                "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}" "${b_notes[$i]:-}" \
+                "${_bi_drv:-unknown}" "${_bi_cuda:-unknown}" "${_bi_build:-unknown}" "${_bi_arch:-unknown}"
         done
     } > "$bench_file"
     __tac_info "Saved" "$bench_file" "$C_Dim"
