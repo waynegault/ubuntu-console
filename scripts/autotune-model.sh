@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 106
+# Module Version: 107
+#   v107 (2026-11-04): OOM requires POSITIVE EVIDENCE.  _startup_fail_type's else arm used to print
+#   `oom` for "nothing matched", so a silent death was filed as a memory verdict and descended; the
+#   70B spent a day that way.  _oom_evidence now supplies the witness (the server's own allocation
+#   line, or a kernel OOM line naming THIS pid) and an unwitnessed death is loader_crash_unknown,
+#   which stops the row — no descent, no FA-off retry.  Carried through _bench_class_from_startup
+#   and named by __autotune_failure_label; the window-expiry arm keeps its window_timeout reading.
 #   v106 (2026-11-04): a split GGUF is refused before launch when its largest shard cannot be
 #   staged in host RAM (insufficient_host_staging), sized against MemAvailable with a 4 GiB
 #   margin (LLM_AUTOTUNE_STAGING_MARGIN_MB).  Single files are exempt — they are mmapped and
@@ -435,6 +441,10 @@ __autotune_failure_label() {
 (the server rejected its invocation)" ;;
         insufficient_host_staging) printf "the largest shard cannot be staged in host memory \
 (split GGUFs stage one shard; guest RAM is the wall, not VRAM)" ;;
+        loader_crash_unknown) printf "the launch died with no OOM witness and no load signature \
+(unexplained — stopped without a descent, so nothing was measured)" ;;
+        window_timeout)     printf "the readiness window expired with no error signature \
+(a slow load or a degraded adapter, NOT an OOM)" ;;
         certified)          printf 'certified' ;;
         *)                  printf 'unclassified (the launch output matched no known signature)' ;;
     esac
@@ -1236,6 +1246,10 @@ __autotune_classify_failure() {
 _bench_class_from_startup() {
     case "${1:-}" in
         oom) printf 'resource_exhausted' ;;
+        # Carried through under its own name: this is not an OOM, and filing it as one is the defect
+        # the token exists to end.  It is a terminal observation for the row, not a classification of
+        # the model, so it must reach the result file saying exactly what it is.
+        loader_crash_unknown) printf 'loader_crash_unknown' ;;
         *)   printf '' ;;
     esac
 }
@@ -1360,9 +1374,42 @@ _bench_spawn() {
                 echo "  server log said: $_wit" >&2
             fi
             printf 'load_fail'
-        else
+        elif _oom_evidence "${_BENCH_PID:-}"; then
             printf 'oom'
+        else
+            # Neither a load signature nor an OOM witness.  The old `else` printed `oom` here, and
+            # that is how the 70B spent a day reading as a memory failure: 16 "OOM at this ctx" lines
+            # were emitted while the card reported 95,516 MiB free and the kernel held zero OOM
+            # lines, and the real cause was an 87.1 s load against a 90 s window.  A death with no
+            # evidence gets a name that claims nothing.
+            printf 'loader_crash_unknown'
         fi
+    }
+    # _oom_evidence <pid> — positive evidence that THIS launch died for memory.  OOM is a CLAIM, so
+    # it needs a witness; the absence of a signature is not one (see _startup_fail_type's else arm).
+    # Two sources, both attributable to this launch:
+    #   1. the server's own log carries the allocation text it printed while dying, and
+    #   2. the kernel names THIS pid in an OOM line.
+    # A cgroup counter was rejected on measurement: the autotune runs under the user manager, where
+    # the counter is a systemd slice path, and this shell's own /sys/fs/cgroup/non-systemd/memory.events
+    # read oom_kill 0 immediately after a real kill (2026-11-04).  dmesg is read through a variable so
+    # an unreadable buffer cannot be mistaken for "no OOM line" — it simply matches nothing.
+    _oom_evidence() {
+        local _pid="${1:-}" _re _dm
+        _re='out of memory|out-of-memory|oom-kill|cuda error: out of memory|cudamalloc|'
+        _re+='failed to allocate|unable to allocate|insufficient memory|cuda_host|'
+        _re+='not enough (vram|memory|gpu memory)|alloc_buffer: allocating|'
+        _re+='ggml_backend_(cuda|cpu|vulkan)_buffer_type_alloc_buffer'
+        if [[ -r "${_BENCH_LOG:-}" ]] && grep -qiE "$_re" "$_BENCH_LOG"; then
+            return 0
+        fi
+        if [[ "$_pid" =~ ^[0-9]+$ ]]; then
+            _dm=$(dmesg 2>&1) || _dm=""
+            if grep -qE "Out of memory: Killed process ${_pid} " <<< "$_dm"; then
+                return 0
+            fi
+        fi
+        return 1
     }
     _launch_server || {
         # The REASON must be READ, never assumed: labelling every launch failure
@@ -1396,6 +1443,18 @@ _bench_spawn() {
                 warn "  OOM at this ctx — NOT retrying with --flash-attn off (that needs more memory); descending"
                 _bench_stop "$_BENCH_PID"
                 ;;
+            stop)
+                # No OOM witness and no load signature: the death is unexplained, so neither action
+                # that follows a diagnosis is available.  Descending would measure a ctx the failure
+                # never implicated, and an FA-off retry asks for MORE host memory.  Record the
+                # observation and stop the row.
+                warn "  no OOM evidence and no load-failure signature — stopping this row (no descent, no FA retry)"
+                _bench_stop "$_BENCH_PID"
+                _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" "loader_crash_unknown"
+                echo "0|0|loader_crash_unknown" > "/tmp/at-metrics-$$"
+                _BENCH_FAIL_TYPE="loader_crash_unknown"
+                return 1
+                ;;
             *)
                 # Unreachable through __autotune_fa_retry, but a silent fall-through
                 # would leave flash_attn "on" with the failure unclassified.
@@ -1418,7 +1477,12 @@ _bench_spawn() {
         # at 95,516-95,646 MiB FREE, and the same model then loaded in 87.1s under a 300s window.
         # Naming it moves no branch: this block stops the server and records load_fail either way,
         # and __autotune_fa_retry is never called from here, so the descend does not change.
-        if [[ "$_sft" == "oom" ]]; then _sft=window_timeout; fi
+        # A death here is a WINDOW read, not a memory claim: _startup_fail_type now returns
+        # loader_crash_unknown when no OOM witness exists, so both tokens mean "the window expired
+        # before a signature" at this call site and are named for it.
+        case "$_sft" in
+            oom|loader_crash_unknown) _sft=window_timeout ;;
+        esac
         if kill -0 "$_BENCH_PID" 2>/dev/null && [[ "$_sft" != "load_fail" ]]; then
             _cuda_stall_bump
             # Say it out loud.  The metrics field below keeps writing load_fail

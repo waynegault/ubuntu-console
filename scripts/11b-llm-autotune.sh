@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 36
+# Module Version: 37
+#   v37 (2026-11-04): __autotune_fa_retry gains `loader_crash_unknown -> stop`.  A launch that dies
+#   with no OOM witness and no load signature must not descend (nothing was measured) and must not
+#   retry with flash attention off (that asks for MORE host memory — the 2026-11-03 path).
 #   v36 (2026-11-04): __autotune_staged_shard_bytes + __autotune_staging_fits — the host-RAM
 #   leg a split GGUF needs and a single file does not.  A single file is mmapped (120b: 62,340
 #   MiB certified on 16,052 MiB available); a split set stages one whole shard as a CUDA_Host
@@ -273,6 +276,14 @@ function __autotune_fa_retry() {
     [[ "$fa" == "on" ]] || { printf 'noop\n'; return 0; }
     if [[ "$fail" == "oom" ]]; then
         printf 'descend\n'
+        return 0
+    fi
+    # A death with neither an OOM witness nor a load signature is not evidence of either.  It must
+    # not descend (nothing was measured to descend from) and it must not retry with flash attention
+    # OFF, which asks for MORE host memory — the 2026-11-03 path that got the gateway killed 7 times.
+    # Stopping the row is the only action that claims nothing.
+    if [[ "$fail" == "loader_crash_unknown" ]]; then
+        printf 'stop\n'
         return 0
     fi
     printf 'retry\n'

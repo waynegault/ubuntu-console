@@ -278,6 +278,17 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     [ "$(__autotune_fa_retry oom on)" = "descend" ]
 }
 
+@test "fa-retry: a death with no evidence STOPS — it neither descends nor retries" {
+    # Criterion (2026-11-04): OOM is a CLAIM and needs a witness. When the launch leaves no OOM
+    # line, no kernel line naming its pid and no load signature, neither action that follows a
+    # diagnosis is available — descending measures a ctx the failure never implicated, and an
+    # FA-off retry asks for MORE host memory (the 2026-11-03 path that killed the gateway 7x).
+    # Fails if: the unexplained death is retried as `other` (hazard back), descended as `oom`
+    # (an unproven memory verdict), or retried with FA already off.
+    [ "$(__autotune_fa_retry loader_crash_unknown on)" = "stop" ]
+    [ "$(__autotune_fa_retry loader_crash_unknown off)" = "noop" ]
+}
+
 @test "fa-retry: a model load failure still gets one retry with flash attention off" {
     # Fails if: the gate becomes blanket and an FA-incompatible arch loses the only
     # recovery this script has for it.
