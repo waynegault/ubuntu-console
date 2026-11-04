@@ -417,7 +417,7 @@ PROFILE
     printf '#!/bin/sh\nexit 1\n' > "$stub/nvidia-smi"
     chmod +x "$stub/nvidia-smi"
     printf '#|name|file\n' > "$BATS_TEST_TMPDIR/registry.conf"
-    run env LLM_HOST_PROFILE="bare" TAC_HOST_PROFILE_DIR="$prof" \
+    run env -u TAC_HOST_GPU_POOL_BYTES LLM_HOST_PROFILE="bare" TAC_HOST_PROFILE_DIR="$prof" \
         TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" PATH="$stub:$PATH" \
         TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache" TAC_STATE_DIR="$BATS_TEST_TMPDIR/state-bare" \
         bash -c 'source "$1" >/dev/null 2>&1; PATH="$2:$PATH"; \

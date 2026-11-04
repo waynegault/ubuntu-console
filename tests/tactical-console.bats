@@ -867,8 +867,11 @@ EOF
 }
 
 @test "calc: __calc_gpu_layers returns 0 for large model (> VRAM)" {
-    # 8GB file, 40 layers, generic arch
-    result=$(__calc_gpu_layers $((8 * 1024 * 1024 * 1024)) 40 "llama")
+    # Sized from the card, not a fixed 8 GiB: on a unified-memory host the pool is far
+    # larger than 8 GiB, so a hardcoded size is not "> VRAM" there and the case would
+    # assert the opposite of its own name (measured 2026-11-04 on the 96 GiB arm64 box).
+    local usable=$(( $(__tac_vram_total_bytes) * VRAM_USABLE_PCT / 100 ))
+    result=$(__calc_gpu_layers $((usable + 1)) 40 "llama")
     [[ "$result" -eq 0 ]]
 }
 
@@ -891,8 +894,10 @@ EOF
 }
 
 @test "calc: __calc_ctx_size caps CPU-only models at MOE_DEFAULT_CTX" {
-    # 8GB model (exceeds VRAM threshold), native ctx 131072
-    result=$(__calc_ctx_size $((8 * 1024 * 1024 * 1024)) 131072 "llama")
+    # Above the card's CPU-only threshold, whatever that threshold is on this box —
+    # a fixed 8 GiB is well inside a unified-memory pool and never reaches the cap.
+    local threshold=$(( $(__tac_vram_total_bytes) * VRAM_THRESHOLD_PCT / 100 ))
+    result=$(__calc_ctx_size $((threshold + 1)) 131072 "llama")
     [[ "$result" -eq "$MOE_DEFAULT_CTX" ]]
 }
 
@@ -1208,10 +1213,15 @@ EOF
 # 16. CROSS-SCRIPT CONSISTENCY
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "cross-script: watchdog LLM_SERVICE_PORT default matches bashrc" {
-    local wd_port
+@test "cross-script: watchdog LLM_SERVICE_PORT default matches the canonical constant" {
+    # Compared against 01-constants' own literal, NOT the running profile's value: the
+    # profile legitimately overrides the port per box (asus-n1n-rtx-spark declares 18087),
+    # so comparing with $LLM_SERVICE_PORT asserted that ONE box's override in a
+    # cross-script contract test and went red on the other box (measured 2026-11-04).
+    local wd_port const_port
     wd_port=$(grep -oP 'LLM_SERVICE_PORT="\$\{LLM_SERVICE_PORT:-\K[0-9]+' "$REPO_ROOT/bin/llama-watchdog.sh")
-    [[ "$wd_port" == "$LLM_SERVICE_PORT" ]]
+    const_port=$(grep -oP 'LLM_SERVICE_PORT="\$\{LLM_SERVICE_PORT:-\K[0-9]+' "$REPO_ROOT/scripts/01-constants.sh")
+    [[ -n "$wd_port" && "$wd_port" == "$const_port" ]]
 }
 
 @test "cross-script: all scripts have VERSION variable or Module Version comment" {
