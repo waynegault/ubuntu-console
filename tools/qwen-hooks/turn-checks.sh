@@ -18,7 +18,10 @@
 # returns today) degrades to silence, not a broken turn.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-04): end with the repo's `# end of file` sentinel; the hygiene case over
+#   tools/qwen-hooks/*.sh was red because this file stopped on code.
+#   v1 (2026-10-31): first versioned form.
 
 set -u
 
@@ -34,3 +37,5 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 "$DIR/memory-markdownlint.sh"
 
 exit 0
+
+# end of file

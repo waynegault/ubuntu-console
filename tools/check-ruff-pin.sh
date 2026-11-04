@@ -16,7 +16,9 @@
 # and not the other, which the push-time whole-tree lint still sees.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-11-04): end with the repo's `# end of file` sentinel; the hygiene case over
+#   tools/*.sh was red because this file stopped on code.
 #   v2 (2026-11-01): route the five hand-written `>&2` sites through one warn() helper
 #   and wrap the over-long lines, clearing the §18.3 10.7 and 8.1.8 rises.
 set -uo pipefail
@@ -78,3 +80,5 @@ fi
 
 echo "check-ruff-pin: ruff $ci_rev consistent (pre-commit, CI, venv)"
 exit 0
+
+# end of file

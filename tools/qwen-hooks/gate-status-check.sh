@@ -7,7 +7,9 @@
 # clears the marker itself — only a real PASS does that.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-11-04): end with the repo's `# end of file` sentinel; the hygiene case over
+#   tools/qwen-hooks/*.sh was red because this file stopped on code.
 #   v2 (2026-11-01): `[ -f ]` -> `[[ -f ]]`, clearing the §18.3 6.7 rise.
 #   v1 (2026-10-31): moved from a bare, unversioned file in ~/.qwen/hooks/ into
 #   tools/qwen-hooks/ so it is reviewed and diffed beside the other hooks; no
@@ -21,3 +23,5 @@ marker="$HOME/.qwen/debug/qwen-gate-FAILED"
 echo "qwen-gate FAILED — the store suite is red."
 sed -n '1,12p' "$marker"
 echo "Fix the failing case; the next PASS removes the marker."
+
+# end of file
