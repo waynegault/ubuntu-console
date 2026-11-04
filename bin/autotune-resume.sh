@@ -60,7 +60,15 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 29
+#   v29 (2026-11-04): an EMPTY remainder now REMOVES a stale plan.  With both retired rows tombstoned
+#   the derivation returned nothing while the previous plan still listed the archived 70B, so the
+#   wrapper reported convergence and left a claimable plan naming a row it no longer owed.
+#   v28 (2026-11-04): a durable TOMBSTONE, applied inside plan_rows.  A retired row was coming back
+#   one boot after it was held out — a hand-written 3-row plan survived exactly one claim before the
+#   re-plan re-added the 88 GiB Flash-Next row.  $STATE_DIR/autotune-retired.rows now names retired
+#   model files with an optional reason, every derivation filters through it, and the log names what
+#   was held out and why.  TAC_RESUME_INCLUDE_RETIRED=1 is the explicit override.
 #   v27 (2026-11-03): the chunk is handed AUTOTUNE_QUIET_GATE_PASSED=1. The entry point now asks
 #   the quiet-fleet gate itself, and this loop is the path that already asked it - one question,
 #   one answer, instead of a second probe that could refuse a chunk the arm had just approved.
@@ -251,6 +259,14 @@ PLAN="${TAC_RESUME_PLAN:-$STATE_DIR/autotune-resume.rows}"
 # `certified` is dropped so the plan keeps shrinking.  This is what carries a hand-written plan past
 # the first boot.
 SCOPE="${TAC_RESUME_SCOPE:-$STATE_DIR/autotune-resume.scope.rows}"
+# The owner-written TOMBSTONE (v28): rows RETIRED from the campaign — a wrong artefact, a model that
+# cannot fit this box — which are NOT owed and must not be re-derived.  It lives beside the plan but
+# outlives it on purpose: the plan is regenerated on every boot, so a hold-out that exists only in
+# the plan is re-added by the next derivation (measured 2026-11-04: a hand-written 3-row plan lasted
+# exactly one claim before the re-plan put the 88 GiB row back, and every claim since carried four).
+# One model file per line, optional `|<reason>`; `#` starts a comment; blank lines ignored.
+# Re-including a retired row takes TAC_RESUME_INCLUDE_RETIRED=1, and the log says so.
+RETIRED="${TAC_RESUME_RETIRED:-$STATE_DIR/autotune-retired.rows}"
 RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
 
 # The loop's knobs, all overridable so a test drives them without touching Windows.
@@ -418,9 +434,41 @@ scope_rows() {
 }
 
 # What the loop should carry: the SCOPE first (the owner's explicit choice, so it is measured while the
-# boot's budget lasts), then the derived remainder, de-duplicated.
+# boot's budget lasts), then the derived remainder, de-duplicated — then the TOMBSTONE applied.
+#
+# The tombstone is applied HERE, at the one place every derivation passes through (write_plan and
+# continue_after both call plan_rows), because the bug it fixes is a re-plan bug: a row can be
+# retired by hand and be back in the plan one boot later.  Filtering at the choke point means the
+# exclusion cannot be forgotten by a future caller.
+retired_reason() {
+    local _f="${1:-}"
+    [[ -n "$_f" && -r "$RETIRED" ]] || return 1
+    awk -F'|' -v f="$_f" '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        $1 == f { print ($2 == "" ? "no reason recorded" : $2); found = 1; exit }
+        END { exit(found ? 0 : 1) }
+    ' "$RETIRED"
+}
+
+is_retired() {
+    retired_reason "${1:-}" >/dev/null
+}
+
 plan_rows() {
-    { scope_rows; derive_rows; } | awk '!seen[$0]++'
+    local _row _reason _drops=0
+    while IFS= read -r _row; do
+        [[ -n "$_row" ]] || continue
+        if [[ "${TAC_RESUME_INCLUDE_RETIRED:-0}" != "1" ]] && is_retired "$_row"; then
+            _reason=$(retired_reason "$_row") || _reason="no reason recorded"
+            printf '  retired (tombstone): %s — %s\n' "$_row" "$_reason" >&2
+            _drops=$(( _drops + 1 ))
+            continue
+        fi
+        printf '%s\n' "$_row"
+    done < <({ scope_rows; derive_rows; } | awk '!seen[$0]++')
+    if (( _drops > 0 )); then
+        printf '  %d row(s) held out by %s\n' "$_drops" "$RETIRED" >&2
+    fi
 }
 
 # Derive the remainder and write it as the plan, printing it so the scope that is
@@ -434,6 +482,14 @@ write_plan() {
     _rows=$(plan_rows)
     if [[ -z "$_rows" ]]; then
         printf 'nothing to plan: every row is certified or terminal (%s)\n' "$REGISTRY"
+        # An earlier derivation's plan still names rows this one does not owe, and the runner would
+        # claim it.  Measured 2026-11-04: once both retired rows were tombstoned the remainder was
+        # EMPTY while the previous plan still listed the archived 70B — so convergence was reported
+        # and a stale claim was left armed in the same breath.
+        if [[ -e "$PLAN" ]]; then
+            printf '  removing the stale plan %s (it names rows this derivation no longer owes)\n' "$PLAN"
+            rm -- "$PLAN"
+        fi
         report_parked
         return 0
     fi

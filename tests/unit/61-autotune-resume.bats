@@ -159,6 +159,52 @@ teardown() {
     ! grep -qE '^[0-9]+$' "$TAC_RESUME_PLAN"
 }
 
+@test "autotune-resume: a tombstoned row is held out of the plan, and named with its reason" {
+    # Measured 2026-11-04: a hand-written 3-row plan lasted exactly ONE claim before the re-plan
+    # put the held-out 88 GiB row back, and every claim after it carried four. A hold-out that
+    # lives only in the plan cannot survive a derivation; this one lives beside it.
+    # Fails if: plan_rows ignores the tombstone, and the row returns at the next --plan.
+    printf '%s\n' '# retired rows' \
+        'uncertified.gguf|88 GiB weights cannot fit a 72 GiB pool' \
+        > "$TAC_RESUME_STATE_DIR/autotune-retired.rows"
+
+    run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+
+    ! grep -q '^uncertified.gguf$' "$TAC_RESUME_PLAN"
+    # The reason reaches the operator, so a silent disappearance cannot read as a bug.
+    [[ "$output" == *"retired (tombstone): uncertified.gguf"* ]]
+    [[ "$output" == *"88 GiB weights cannot fit a 72 GiB pool"* ]]
+    # It filters ONLY the named row: a filter that dropped everything would pass the lines above.
+    grep -q '^flagged.gguf$' "$TAC_RESUME_PLAN"
+    grep -q '^law-chat-Q2_K.gguf$' "$TAC_RESUME_PLAN"
+}
+
+@test "autotune-resume: TAC_RESUME_INCLUDE_RETIRED=1 puts a retired row back" {
+    # The tombstone needs a way out that is explicit and visible, or a retired row is unreachable
+    # without hand-editing state. Fails if: the override is ignored, or the default flips.
+    printf '%s\n' 'uncertified.gguf|retired deliberately' \
+        > "$TAC_RESUME_STATE_DIR/autotune-retired.rows"
+
+    TAC_RESUME_INCLUDE_RETIRED=1 run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    grep -q '^uncertified.gguf$' "$TAC_RESUME_PLAN"
+}
+
+@test "autotune-resume: an empty remainder removes a stale plan instead of leaving it claimable" {
+    # Measured 2026-11-04: once both retired rows were tombstoned the derivation returned nothing
+    # while the PREVIOUS plan still listed the archived 70B — so the wrapper reported convergence
+    # and left a claimable plan naming a row it no longer owed.
+    # Fails if: the empty branch returns without clearing the plan the runner would claim next.
+    printf '%s\n' 'Meta-Llama-3-70B-Instruct-Q6_K-00001-of-00002.gguf' > "$TAC_RESUME_PLAN"
+    { _row 1 certified.gguf 3.00 yes 1.00; } > "$TAC_RESUME_REGISTRY"
+
+    run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    [ ! -e "$TAC_RESUME_PLAN" ]
+    [[ "$output" == *"removing the stale plan"* ]]
+}
+
 @test "autotune-resume: an embedding model (arch contains 'embedding') is never owed a run" {
     # An embedding model has no generation to measure, so derive_rows must skip it even
     # when it reads autotuned != yes — otherwise the sweep burns a row on a probe that
