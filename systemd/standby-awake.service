@@ -1,0 +1,12 @@
+# standby-awake.service — one decision per tick: should standby-keeper be running?
+#
+# ExecStart is the whole decision; the signals and the cost argument live in bin/standby-awake.sh.
+# Type=oneshot with a 90 s bound: gpu-busy.sh takes ~4 s when it runs at all, and a wedged probe must
+# fail visibly rather than pile up behind the timer.
+[Unit]
+Description=Decide whether standby-keeper should run (only during measurements)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/standby-awake.sh
+TimeoutStartSec=90

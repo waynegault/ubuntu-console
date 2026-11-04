@@ -1,0 +1,21 @@
+# standby-keeper.service — keep the box out of Modern Standby WHILE A RUN IS IN PROGRESS.
+#
+# NO [Install] SECTION ON PURPOSE. This unit is STATIC: it must never be enabled. It is started and
+# stopped by standby-awake.timer / bin/standby-awake.sh as runs begin and end (Wayne, 2026-11-04:
+# "standby-keeper.service should only operate during runs"). While it was WantedBy=default.target it
+# woke the box 24/7, which costs battery and heat and stops the machine ever idling into S0ix.
+#
+# Shared infrastructure, not a lane: no `# install-profile:` marker, so install.sh links it on every
+# box in the fleet. That is correct — the damping it defends against is a Windows-host behaviour.
+[Unit]
+Description=Keep the box out of Modern Standby while a run is in progress (started by standby-awake)
+Documentation=file:%h/github-wsl/ubuntu-console/bin/standby-keeper.sh
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/standby-keeper.sh
+Restart=on-failure
+RestartSec=5
+
+# Not a lane, and never enabled: `systemctl --user enable standby-keeper.service` fails by design.

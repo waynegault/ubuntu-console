@@ -1,0 +1,16 @@
+# standby-awake.timer — every 30 s, ask whether a run is in progress.
+#
+# 30 s is chosen against the thing it defends: Windows needs minutes of idle input before it enters
+# Modern Standby, so a tick that is late by 30 s cannot admit a damped row. OnUnitActiveSec (not
+# OnCalendar) keeps the period honest even when the previous tick ran long.
+[Unit]
+Description=Check every 30s whether a run is in progress and the keeper is needed
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=standby-awake.service
+
+[Install]
+WantedBy=timers.target
