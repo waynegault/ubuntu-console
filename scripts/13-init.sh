@@ -2,13 +2,16 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 22
+# Module Version: 23
 #   v22 (2026-11-04): the CUDA llama.cpp toolchain (CUDA_HOME, PATH,
 #   LD_LIBRARY_PATH, llama-cli/llama-server aliases) moves here from ~/.bashrc.
 #   It had been appended below the loader's interactive guard, which made
-#   ~/.bashrc 1752 bytes against a canonical 1484 and mode 0664 against 0444,
+#   ~/.bashrc 1752 bytes against a canonical 1468 and mode 0664 against 0444,
 #   so test_shell_loader_gates.py went red on two tests (read-only + canonical
 #   form) for a shell env that was only ever reaching interactive shells.
+#   v23 (2026-11-04): v22's entry quoted the canonical ~/.bashrc as 1484 bytes. It is
+#   1468, measured three ways (live file, EXPECTED_BASHRC.encode(), the 1752-byte pre-fix
+#   backup). 1484 would make a correct file read 16 bytes short. Comment only, no behaviour.
 #   v21 (2026-11-01): init creates $LLM_STATE_DIR at profile load.
 #   v19 (2026-10-24): the loopback0 check no longer reports an UNREADABLE boot
 #   state as "loopback0 missing".  Measured 2026-10-24: boot 19:02:56, the unit
