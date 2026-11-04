@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 # standby-keeper.sh — keep this box OUT of Windows Modern Standby (S0ix) while a run is in progress.
-# Version: 1.0.0 (2026-11-04). INSTALLED and LIVE; reached through this repo's bin/ symlink.
+#   v1 (2026-11-04). INSTALLED and LIVE; reached through this repo's bin/ symlink.
 #
 # WHY THIS EXISTS. S0ix clamps the dGPU to 663-942 MHz / ~4 W with no error anywhere. Measured
 # 2026-11-04: identical binary, model and flags gave 3.3x at c=1 and 2.3x at c=16 depending only on
@@ -43,3 +45,5 @@ while true; do
   echo "$TS,$S" >> "$LOG"
   sleep "$INTERVAL"
 done
+
+# end of file

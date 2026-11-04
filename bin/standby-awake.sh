@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 # standby-awake.sh — the only thing that decides whether standby-keeper runs.
-# Version: 1.0.0 (2026-11-04). INSTALLED and LIVE; reached through this repo's bin/ symlink.
+#   v1 (2026-11-04). INSTALLED and LIVE; reached through this repo's bin/ symlink.
 #
 # WHY A SUPERVISOR AND NOT A FLAG. The keeper must be on for EVERY measurement, whoever started it:
 # my campaign cells, the autotune engine (a separate systemd unit), or a one-off bench. A wrapper only
@@ -59,3 +61,5 @@ else
   fi
 fi
 exit 0
+
+# end of file
