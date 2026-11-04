@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 35
+# Module Version: 36
+#   v36 (2026-11-04): __autotune_staged_shard_bytes + __autotune_staging_fits — the host-RAM
+#   leg a split GGUF needs and a single file does not.  A single file is mmapped (120b: 62,340
+#   MiB certified on 16,052 MiB available); a split set stages one whole shard as a CUDA_Host
+#   buffer, which is what the kernel OOM-killed at 16:29:45 with 34.8 GiB of shmem.  Sized
+#   against MemAvailable, never `free`, with a margin the caller sets.
 #   v35 (2026-11-04): __autotune_model_bytes — the size of the model a row NAMES, summed
 #   across its shard set.  A row points at one file of a -00001-of-00003.gguf set, so a
 #   stat on that path reports shard 1 and under-counts by roughly half; measured in this
@@ -765,6 +770,45 @@ function __autotune_model_bytes() {
     single=$(stat --format=%s "$path") || single=0
     [[ "$single" =~ ^[0-9]+$ ]] || single=0
     printf '%s' "$single"
+}
+
+# __autotune_staged_shard_bytes <path> — bytes a LOAD must stage in HOST RAM.
+# @stdout the largest single shard of a split GGUF; 0 for a single file.
+#
+# The asymmetry is measured, not assumed. A single-file model is mmapped and never
+# needs its own size in guest RAM: gpt-oss-120b (62,340 MiB, one file) certified on
+# 2026-11-03 with only 16,052 MiB of MemAvailable. A SPLIT model is different — the
+# loader takes one whole shard as a CUDA_Host buffer, and on 2026-11-04 that killed
+# the 88 GiB Flash-Next row outright:
+#   Out of memory: Killed process 11291 (llama-server) ... shmem-rss:36494880kB
+# 34.8 GiB staged into a ~35 GiB guest, after a launch that had 70,351 MiB of VRAM
+# free — so the wall was host RAM, not the card.
+# Returning 0 for a single file is what keeps this gate from refusing every large
+# model that mmap handles perfectly well today.
+function __autotune_staged_shard_bytes() {
+    local path="${1:-}" max=0 f part
+    [[ -n "$path" ]] || { printf '0'; return 0; }
+    [[ "$path" =~ ^(.*)-[0-9]{5}-of-[0-9]{5}\.gguf$ ]] || { printf '0'; return 0; }
+    local stem="${BASH_REMATCH[1]}"
+    for f in "$stem"-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].gguf; do
+        [[ -f "$f" ]] || continue
+        part=$(stat --format=%s "$f") || part=0
+        [[ "$part" =~ ^[0-9]+$ ]] || part=0
+        (( part > max )) && max=$part
+    done
+    printf '%s' "$max"
+}
+
+# __autotune_staging_fits <staged_bytes> <memavailable_bytes> <margin_bytes>
+# @exit 0 when the shard can be staged with the margin intact, 1 when it cannot.
+# A non-split model (staged_bytes 0) always fits — see __autotune_staged_shard_bytes.
+function __autotune_staging_fits() {
+    local staged="${1:-0}" avail="${2:-0}" margin="${3:-0}"
+    [[ "$staged" =~ ^[0-9]+$ ]] || staged=0
+    [[ "$avail" =~ ^[0-9]+$ ]] || avail=0
+    [[ "$margin" =~ ^[0-9]+$ ]] || margin=0
+    (( staged == 0 )) && return 0
+    (( staged + margin <= avail ))
 }
 
 # ---------------------------------------------------------------------------

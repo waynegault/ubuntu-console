@@ -410,3 +410,47 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
 @test "model-bytes: the symbol exists (a missing one passes the cases above vacuously)" {
     declare -f __autotune_model_bytes >/dev/null
 }
+
+# --- host staging: a split set stages one shard, a single file stages nothing ---
+# The asymmetry is measured: a single file is mmapped (gpt-oss-120b, 62,340 MiB, certified
+# on 16,052 MiB of MemAvailable), while a split set takes one WHOLE shard as a CUDA_Host
+# buffer — the 88 GiB row staged 34.8 GiB and the kernel OOM killer ended it at 16:29:45
+# with 70,351 MiB of VRAM free. A gate that applied to single files would refuse the 120b.
+
+@test "staging: the LARGEST shard is the cost, not shard 1 and not the sum" {
+    # Fails if: the gate sizes on the named shard (1000) or the whole set (12000). The
+    # loader stages one shard, so 9000 is the figure that decides whether it can run.
+    mkdir -p "$TMPDIR_BATS"
+    local stem="$TMPDIR_BATS/staged-model"
+    head -c 1000 /dev/zero > "$stem-00001-of-00003.gguf"
+    head -c 9000 /dev/zero > "$stem-00002-of-00003.gguf"
+    head -c 2000 /dev/zero > "$stem-00003-of-00003.gguf"
+    run __autotune_staged_shard_bytes "$stem-00001-of-00003.gguf"
+    [ "$status" -eq 0 ]
+    [ "$output" = "9000" ]
+}
+
+@test "staging: a single-file model stages nothing (the mmap exemption)" {
+    # Fails if: the gate treats a single file as a shard to stage — that is the regression
+    # which would refuse every large model mmap already handles.
+    mkdir -p "$TMPDIR_BATS"
+    local f="$TMPDIR_BATS/single-staged.gguf"
+    head -c 50000 /dev/zero > "$f"
+    run __autotune_staged_shard_bytes "$f"
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
+}
+
+@test "staging: the margin decides the boundary, and equality fits" {
+    # Fails if: the comparison is exclusive at the boundary (a row that exactly fits would be
+    # refused) or the margin is ignored (a shard within margin of the wall would be launched).
+    __autotune_staging_fits 1000 5000 4000      # 5000 <= 5000
+    ! __autotune_staging_fits 1001 5000 4000    # 5001 > 5000
+    ! __autotune_staging_fits 9000 5000 0
+    __autotune_staging_fits 0 0 0               # non-split always fits
+}
+
+@test "staging: both symbols exist (a missing one passes the cases above vacuously)" {
+    declare -f __autotune_staged_shard_bytes >/dev/null
+    declare -f __autotune_staging_fits >/dev/null
+}

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 105
+# Module Version: 106
+#   v106 (2026-11-04): a split GGUF is refused before launch when its largest shard cannot be
+#   staged in host RAM (insufficient_host_staging), sized against MemAvailable with a 4 GiB
+#   margin (LLM_AUTOTUNE_STAGING_MARGIN_MB).  Single files are exempt — they are mmapped and
+#   the 120b certified with 16 GiB available — so the gate only fires where a shard stages.
 #   v105 (2026-11-04): MODEL_BYTES comes from __autotune_model_bytes (11b v35), so a split
 #   GGUF is sized on its whole shard set rather than on the one file the row names.  The
 #   single-file reading survives only as a stated fallback for a partial tree.
@@ -429,6 +433,8 @@ __autotune_failure_label() {
         unsupported_arch)   printf 'unsupported architecture / no matching backend' ;;
         launch_error)       printf "launch or flag error, or a model the server could not load \
 (the server rejected its invocation)" ;;
+        insufficient_host_staging) printf "the largest shard cannot be staged in host memory \
+(split GGUFs stage one shard; guest RAM is the wall, not VRAM)" ;;
         certified)          printf 'certified' ;;
         *)                  printf 'unclassified (the launch output matched no known signature)' ;;
     esac
@@ -749,6 +755,31 @@ then
     echo "  pools: gpu ${VRAM_TOTAL} MiB (free ${FREE_VRAM}) | host avail ${_HOST_AVAIL_MB} MiB | model ${MODEL_MB} MiB"
 else
     warn "  pools: gpu ${VRAM_TOTAL} MiB (free ${FREE_VRAM}) | host avail UNREADABLE | model ${MODEL_MB} MiB"
+fi
+
+# SPLIT-GGUF STAGING PREFLIGHT (2026-11-04).  A split model is loaded by staging one
+# whole shard into host RAM: the 88 GiB Flash-Next row took 34.8 GiB that way and the
+# kernel OOM killer ended it (shmem-rss:36494880kB, 16:29:45) while the card reported
+# 70,351 MiB free — the wall was guest RAM, never VRAM.  A single FILE is mmapped and
+# needs none of this (gpt-oss-120b, 62,340 MiB in one file, certified with 16,052 MiB
+# available), so the gate fires only where a shard would actually be staged: refusing
+# costs a second, while discovering it at launch costs a CUDA cycle and an OOM kill.
+if declare -f __autotune_staged_shard_bytes &>/dev/null \
+   && declare -f __autotune_staging_fits &>/dev/null; then
+    _staged_bytes=$(__autotune_staged_shard_bytes "$MODEL_PATH")
+    [[ "$_staged_bytes" =~ ^[0-9]+$ ]] || _staged_bytes=0
+    _staged_mb=$(( _staged_bytes / 1048576 ))
+    _staging_margin_mb="${LLM_AUTOTUNE_STAGING_MARGIN_MB:-4096}"
+    [[ "$_staging_margin_mb" =~ ^[0-9]+$ ]] || _staging_margin_mb=4096
+    if (( _staged_mb > 0 )); then
+        echo "  staging: largest shard ${_staged_mb} MiB + ${_staging_margin_mb} MiB margin, host avail ${_HOST_AVAIL_MB:-0} MiB"
+        if [[ "$_HOST_AVAIL_MB" =~ ^[0-9]+$ ]] \
+           && ! __autotune_staging_fits "$_staged_bytes" \
+                "$(( _HOST_AVAIL_MB * 1048576 ))" "$(( _staging_margin_mb * 1048576 ))"; then
+            _preflight_refuse insufficient_host_staging 1 \
+                "largest shard ${_staged_mb} MiB cannot be staged: MemAvailable ${_HOST_AVAIL_MB} MiB less the ${_staging_margin_mb} MiB margin"
+        fi
+    fi
 fi
 
 if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/null; then
