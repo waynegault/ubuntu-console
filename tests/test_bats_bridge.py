@@ -6,6 +6,7 @@ import re
 import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,9 @@ import _bats_suites
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BATS_EXECUTABLE = "bats"
+#: How long a killed group may refuse to die between SIGTERM and SIGKILL.  The same figure
+#: test_bats_unittest uses for the same job, so the two bridges stop a run alike.
+_GROUP_STOP_GRACE_S = 5.0
 
 # ── BATS suite definitions ─────────────────────────────────────────────────
 # The table itself is tests/bats-suites.tsv — the file the stdlib bridge
@@ -112,22 +116,37 @@ def _read_temp_files(tf_out, tf_err) -> tuple[str, str]:
 
 
 def _kill_process_group(pid: int) -> None:
+    """Take a timed-out run's whole process group down: SIGTERM, then SIGKILL.
+
+    The group id is resolved ONCE, before the first signal, and every later probe uses
+    it.  Reading it back from *pid* is what made the SIGKILL never land: bats exits on
+    SIGTERM, so ``os.getpgid(pid)`` then raises ProcessLookupError while the group still
+    holds the ``bats-exec-*`` children that ignored or deferred the signal.  The old loop
+    read that error as "the group is gone" and returned before signalling again —
+    measured 2026-11-04, against the survivors still writing into the run directory bats's
+    EXIT trap had already deleted, so each of their remaining cases failed at ``source``
+    with "bats.<pid>.src: No such file or directory".
+
+    Group-wide on purpose, and polled rather than waited on: nothing drains the child's
+    output pipe here, and a full pipe would block it instead of exiting.  Same shape as
+    test_bats_unittest._stop_process_group, which already did this correctly.
+    """
     try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except (ProcessLookupError, OSError):
+        pgid = os.getpgid(pid)
+    except ProcessLookupError, OSError:
         return
-    import time as _time
-    deadline = _time.monotonic() + 5
-    while _time.monotonic() < deadline:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
-            os.killpg(os.getpgid(pid), 0)
-        except (ProcessLookupError, OSError):
+            os.killpg(pgid, sig)
+        except ProcessLookupError, OSError:
             return
-        _time.sleep(0.25)
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
-    except (ProcessLookupError, OSError):
-        pass
+        deadline = time.monotonic() + _GROUP_STOP_GRACE_S
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError, OSError:
+                return
+            time.sleep(0.25)
 
 
 def _run_bats(
@@ -162,8 +181,10 @@ def _run_bats(
     if timeout_bin is not None:
         cmd = [timeout_bin, "-k", "5", str(timeout_s + 15)] + cmd
 
-    with tempfile.NamedTemporaryFile(mode="w+", suffix=".bats-stdout", delete=False) as tf_out, \
-         tempfile.NamedTemporaryFile(mode="w+", suffix=".bats-stderr", delete=False) as tf_err:
+    with (
+        tempfile.NamedTemporaryFile(mode="w+", suffix=".bats-stdout", delete=False) as tf_out,
+        tempfile.NamedTemporaryFile(mode="w+", suffix=".bats-stderr", delete=False) as tf_err,
+    ):
         stdout_path = tf_out.name
         stderr_path = tf_err.name
 
@@ -201,8 +222,8 @@ def _run_bats(
 #   ok 1 quick in 19ms
 #   not ok 2 slow in 2033ms # timeout after 2s     <- BATS_TEST_TIMEOUT
 #   ok 3 skipped in 9ms # skip not today
-_TAP_LINE_RE = re.compile(r'^(ok|not ok)\s+\d+\s+(.*)$')
-_TAP_TIMING_RE = re.compile(r'\s+in\s+(\d+(?:\.\d+)?)(ms|s|sec)$')
+_TAP_LINE_RE = re.compile(r"^(ok|not ok)\s+\d+\s+(.*)$")
+_TAP_TIMING_RE = re.compile(r"\s+in\s+(\d+(?:\.\d+)?)(ms|s|sec)$")
 # Trailing markers bats appends after the name (and after the timing suffix).
 _TAP_MARKERS = (" # skip", " # timeout after")
 
@@ -228,7 +249,7 @@ def _parse_bats_tap(stdout: str) -> dict[str, dict[str, Any]]:
     the name, which is how a skipped case came back as "skipped in 9ms" and was
     then reported to the caller as "not found in output".
     """
-    diagnostic_re = re.compile(r'^#\s+(.*)')
+    diagnostic_re = re.compile(r"^#\s+(.*)")
     results: dict[str, dict[str, Any]] = {}
     current_test: str | None = None
     diagnostics: dict[str, list[str]] = {}
@@ -252,7 +273,7 @@ def _parse_bats_tap(stdout: str) -> dict[str, dict[str, Any]]:
                 raw_name = raw_name[:marker_at]
             elif raw_name.startswith("# skip"):
                 close_paren = raw_name.find(") ", 7)
-                raw_name = raw_name[close_paren + 2:] if close_paren >= 0 else ""
+                raw_name = raw_name[close_paren + 2 :] if close_paren >= 0 else ""
             timing = _TAP_TIMING_RE.search(raw_name)
             if timing:
                 value = float(timing.group(1))
@@ -311,9 +332,7 @@ def _run_and_cache_bats(
     results: dict[str, dict[str, Any]] = {}
     if run_whole_file:
         try:
-            result = _run_bats(
-                bats_file, file_timeout_s, per_test_timeout_s=per_test_timeout_s
-            )
+            result = _run_bats(bats_file, file_timeout_s, per_test_timeout_s=per_test_timeout_s)
         except subprocess.TimeoutExpired as exc:
             # Keep whatever the run managed to report: BATS_TEST_TIMEOUT marks the
             # cases that overran, and the process budget only proves the file as a
@@ -411,9 +430,7 @@ for _suite, _p in _bats_suites.suite_files(_BATS_SUITES):
     _CASE_COUNT_BY_STEM.setdefault(_stem, len(_case_names))
     _marker = getattr(pytest.mark, _suite.marker)
     for _tname, _raw in zip(_case_names, _raw_names, strict=True):
-        _INDIVIDUAL_TESTS.append(
-            (_stem, _tname, _raw, _marker, _suite.per_case_timeout_s, _suite.file_timeout_s)
-        )
+        _INDIVIDUAL_TESTS.append((_stem, _tname, _raw, _marker, _suite.per_case_timeout_s, _suite.file_timeout_s))
 
 
 def _session_selected_every_case(request: pytest.FixtureRequest, bats_file: Path) -> bool:
@@ -481,9 +498,9 @@ def _make_test(
 
     # Sanitize: VS Code's vscode_pytest plugin chokes on test IDs with
     # spaces, colons, slashes, asterisks, or other special characters.
-    safe_stem = re.sub(r'[^a-zA-Z0-9_]', '_', stem)
-    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', test_name)
-    safe_name = re.sub(r'_+', '_', safe_name).strip('_') or "unnamed"
+    safe_stem = re.sub(r"[^a-zA-Z0-9_]", "_", stem)
+    safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", test_name)
+    safe_name = re.sub(r"_+", "_", safe_name).strip("_") or "unnamed"
 
     # Long names are truncated for readability, but the truncation must NOT be the
     # only thing distinguishing two tests.  It used to be: the name was cut at 60
@@ -551,6 +568,7 @@ for _stem, _tname, _raw, _marker, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
 # VS Code's test explorer, `pytest <node-id>`, and every saved "run this test"
 # action key off these strings.  They were derived from a 60-character cut plus a
 # position-dependent counter, which is what broke on 2026-09-15.
+
 
 def _generated_tests() -> dict[str, Any]:
     """The bridge's generated per-BATS-case tests (identified by their attributes)."""
@@ -653,10 +671,7 @@ def test_bridge_parse_decodes_a_quoted_name_the_way_bats_reports_it(tmp_path) ->
     """
     probe = tmp_path / "quoted-name.bats"
     probe.write_text(
-        "#!/usr/bin/env bats\n"
-        '@test "cl report: not \\"no ghost units\\"" {\n'
-        "    true\n"
-        "}\n",
+        '#!/usr/bin/env bats\n@test "cl report: not \\"no ghost units\\"" {\n    true\n}\n',
         encoding="utf-8",
     )
     parsed = _parse_bats_tests(probe)
@@ -704,6 +719,47 @@ def test_filtered_run_matches_a_case_whose_name_carries_an_escaped_quote() -> No
         filter_name=raw,
     )
     assert results[decoded]["passed"] is True, results[decoded]["output"]
+
+
+def test_kill_process_group_reaps_a_child_that_outlives_the_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed-out run must leave NOTHING behind, not merely a dead leader.
+
+    Catches: the SIGKILL never being sent because the group id was resolved from the
+    leader inside the wait loop.  Measured 2026-11-04 — bats exits on SIGTERM, the next
+    ``os.getpgid(pid)`` raises ProcessLookupError, the loop read that as "group gone" and
+    returned, and the child below survived.  Those survivors are what re-created bats's
+    run directory after its EXIT trap deleted it and failed every remaining case at
+    ``source``.
+
+    The observable is the GROUP: ``killpg(pgid, 0)`` succeeds while any member lives, so
+    the case fails if a single child outlives the call.  The grace period is shortened
+    through the module constant so a passing run costs ~0.5 s, not 5.
+    """
+    monkeypatch.setattr("test_bats_bridge._GROUP_STOP_GRACE_S", 0.5)
+    proc = subprocess.Popen(
+        ["bash", "-c", "trap 'exit 0' TERM; ( trap '' TERM; sleep 60 ) & wait"],
+        start_new_session=True,
+    )
+    pgid = os.getpgid(proc.pid)
+    try:
+        _kill_process_group(proc.pid)
+        proc.wait(timeout=10)
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return
+            assert time.monotonic() < deadline, "a process outlived the group kill"
+            time.sleep(0.1)
+    finally:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError, OSError:
+            pass
+        proc.wait(timeout=10)
 
 
 def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:

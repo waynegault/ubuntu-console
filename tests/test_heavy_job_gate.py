@@ -188,3 +188,89 @@ def test_a_python_only_selection_does_not_queue(tmp_path: Path, monkeypatch: pyt
 
     assert conftest._HEAVY_JOB_FD is None
     assert config.cleanups == []
+
+
+def test_a_queued_run_says_so_instead_of_costing_silence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catches the measured 2026-11-04 shape: a panel run that queues INVISIBLY.
+
+    A panel run queued behind tools/run-tests.sh and executed no test for six minutes
+    with nothing in its output; the run read as hung, and the operator's report was
+    "so many tests are not running".  Wrong outcome detected: the wait begins and
+    nothing names the holder, or the wait is not bounded.
+    """
+    lock_path = tmp_path / "heavy-job.lock"
+    monkeypatch.setenv("HEAVY_JOB_LOCK", str(lock_path))
+    monkeypatch.setenv("TAC_HEAVY_JOB_WAIT_S", "1")
+    monkeypatch.setenv("TEST_RUN_PIPE", "/run/user/1000/python-test-results-test")
+
+    config = _StubConfig()
+    with _held_by_heavy_job(lock_path):
+        with pytest.raises(Exception) as excinfo:
+            conftest.ensure_heavy_job_session(config, [_StubItem("bats_unit")])
+
+    err = capsys.readouterr().err
+    assert "VS Code panel queued behind" in err, err
+    assert "pid=" in err, f"the holder must be NAMED, got: {err!r}"
+    # Bounded: the failure names the budget rather than hanging out the hour.
+    assert "still held after 1s" in str(excinfo.value)
+
+
+def test_the_queue_bound_is_an_hour_for_every_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wayne's 2026-11-04 ruling: the panel WAITS, it does not get a shorter leash.
+
+    Catches: a later "make it fail fast" edit that quietly gives the interactive runner a
+    smaller default, so a panel run refuses while a suite is still working.
+    """
+    monkeypatch.delenv("TAC_HEAVY_JOB_WAIT_S", raising=False)
+    monkeypatch.delenv("TEST_RUN_PIPE", raising=False)
+    monkeypatch.delenv("RUN_TEST_IDS_PIPE", raising=False)
+    assert conftest.heavy_job_wait_s() == 3600
+    monkeypatch.setenv("TEST_RUN_PIPE", "/run/user/1000/python-test-results-test")
+    assert conftest.heavy_job_wait_s() == 3600
+    monkeypatch.setenv("TAC_HEAVY_JOB_WAIT_S", "7")
+    assert conftest.heavy_job_wait_s() == 7
+
+
+def test_a_dash_k_python_selection_does_not_queue_behind_a_held_lock(tmp_path: Path) -> None:
+    """Catches the measured 2026-11-04 queue: a one-test Python selection waiting an hour.
+
+    Importing tests/test_bats_bridge.py registers one item per BATS case (~1000) in its
+    module globals, and the gate used to run in pytest_collection_modifyitems — BEFORE
+    -k removes any — so `pytest tests -k one_python_test` saw a BATS-carrying collection
+    and queued behind whatever held the heavy-job lock.  That is what made a panel run
+    execute no test at all.
+
+    This runs the real conftest in a subprocess against a lock the real bin/heavy-job
+    holds, with a 2 s wait budget: a gate that still fired would exit 3, and the selected
+    test would never run.  Wrong outcome detected: rc != 0, or the case not reported.
+    """
+    lock_path = tmp_path / "heavy-job.lock"
+    env = _heavy_env(lock_path)
+    env["TAC_HEAVY_JOB_WAIT_S"] = "2"
+    env.pop("TEST_RUN_PIPE", None)
+    with _held_by_heavy_job(lock_path):
+        proc = subprocess.run(
+            [
+                str(REPO_ROOT / ".venv" / "bin" / "python"),
+                "-m",
+                "pytest",
+                "tests",
+                "-k",
+                "test_the_queue_bound_is_an_hour_for_every_runner",
+                "-q",
+                "--no-header",
+                "-p",
+                "no:cacheprovider",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, f"the selection queued or failed (rc={proc.returncode}):\n{combined}"
+    assert "1 passed" in combined, combined

@@ -286,6 +286,13 @@ done
 link "tools/vscode-pytest-log/vscode-pytest-log-patch.py" "$HOME/.local/bin/vscode-pytest-log-patch.py"
 link "tools/vscode-pytest-log/vscode_pytest_log.py" "$HOME/.local/lib/vscode-pytest-log/vscode_pytest_log.py"
 
+# The VS Code BATS test-runner's spawn-timeout patcher (2026-11-04) — the same
+# FOREIGN-bundle class as its sibling above, and the same delivery: onto ~/.local/bin,
+# where bin/qwen-guard-selfheal.sh probes it by absolute path.  A repaired FILE is not a
+# running patch: the extension host evaluates the bundle once at activation, so the
+# operator reloads the window after an --apply, which the tool now says itself.
+link "tools/vscode-bats-timeout/vscode-bats-timeout-patch.py" "$HOME/.local/bin/vscode-bats-timeout-patch.py"
+
 # Historical launcher names, forwarding to the canonical card launchers.  The
 # investigator's pipeline/gpu/_llama_procs.py knows these names, so they must keep
 # resolving; new work uses llama-cuda-server / llama-xe-server.

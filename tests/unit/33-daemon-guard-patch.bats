@@ -507,6 +507,92 @@ MOCK
     grep -q 'agentmail) patch="\$AGENTMAIL"; label="agentmail dist patch"; apply_args=(--apply)' "$sh"
 }
 
+# The VS Code BATS panel's spawn carries `timeout: 1e4`, so NODE kills every run at 10 s;
+# bats's EXIT trap then deletes its run dir under live children, and the remaining cases
+# fail at `source` with "bats.<pid>.src: No such file or directory".  Measured 2026-11-04
+# 22:16 GMT: 70 cases reported as errors in one sweep, and a killed suite still running two
+# hours after its run ended.  The patcher exists (tools/vscode-bats-timeout/, its own
+# battery is 76-vscode-bats-timeout-patch.bats) but had been applied BY HAND at 17:13
+# against a host activated at 16:30, so nothing repaired it and nothing told the operator
+# that a reload was owed.  The tick must probe the installed copy and re-apply it.
+#
+# Its --check is NOT boolean either: rc 2 (no extension installed) is a legitimate state,
+# and rc 3 (a bundle shape the tool does not recognise) cannot be repaired by --apply at
+# all, so only rc 1 is queued for repair and rc 3 is reported.
+#
+# What this case is for, and what it is NOT.  It is a REGRESSION NET for the wiring — it
+# fails if a future edit drops the eighth tool from the tick, the role the agentmail case
+# above plays for the seventh.  Being a static assertion, it cannot see a mutation the
+# tool's own battery misses: the TOOL's behaviour lives in
+# tests/unit/76-vscode-bats-timeout-patch.bats, and this split keeps the case hermetic (it
+# reads the tick's own text and install.sh's link line; no live bundle, no real ~/.local).
+@test "self-heal: the tick probes the VS Code bats-timeout patcher" {
+    local sh="$REPO_ROOT/bin/qwen-guard-selfheal.sh"
+    local link='link "tools/vscode-bats-timeout/vscode-bats-timeout-patch.py"'
+    grep -q '^BATSTIMEOUT="/home/wayne/.local/bin/vscode-bats-timeout-patch.py"' "$sh"
+    grep -q 'needed+=(bats-timeout)' "$sh"
+    grep -q 'bats-timeout) patch="\$BATSTIMEOUT"' "$sh"
+    grep -q 'label="VS Code bats-timeout patch"; apply_args=(--apply)' "$sh"
+    grep -q 'BATSTIMEOUT="\$QSH_TOOL_ROOT/vscode-bats-timeout-patch.py"' "$sh"
+    grep -q "$link" "$REPO_ROOT/install.sh"
+    grep -q "$link.*HOME/.local/bin/vscode-bats-timeout-patch.py" "$REPO_ROOT/install.sh"
+}
+
+# The bats-runner STUB answers $1 to --check until --apply is called, after which it answers
+# 0 — it models a repair, so the tick's own `--check after` proves something.  Every argv is
+# recorded, so "was it re-applied?" is read from the CALL, not from the log's wording.
+batstimeout_exits() {
+    cat >"$TOOLS/vscode-bats-timeout-patch.py" <<EOF
+#!/usr/bin/env bash
+printf 'called:%s\n' "\$*" >>"$BATS_TEST_TMPDIR/bats-calls"
+case "\$*" in
+  *--apply*) touch "$BATS_TEST_TMPDIR/bats-patched"; exit 0 ;;
+esac
+[[ -e "$BATS_TEST_TMPDIR/bats-patched" ]] && exit 0
+exit $1
+EOF
+    chmod +x "$TOOLS/vscode-bats-timeout-patch.py"
+}
+
+@test "self-heal: a reverted bats-timeout patch is re-applied with --apply, and the reload is named" {
+    # Catches: a tick that queues the tool but invokes it bare (the sibling tools with no
+    # default action logged their usage text instead — measured 2026-10-07), and a repair
+    # reported as done without the one step a cron tick cannot take: the extension host
+    # keeps the old bundle in memory until the window is reloaded.
+    witness_tools
+    batstimeout_exits 1
+    run_tick
+    [ "$status" -eq 0 ]
+    grep -q 'called:--apply' "$BATS_TEST_TMPDIR/bats-calls"
+    grep -q 'VS Code bats-timeout patch was missing; re-applying' "$LOGS/selfheal.log"
+    grep -q 'RELOAD REQUIRED' "$LOGS/selfheal.log"
+}
+
+@test "self-heal: no bats extension (rc 2) is quiet, not a repair queued every tick" {
+    # Catches: treating "no extension installed" as a reversion.  That fires on every tick,
+    # writes a log line each time and never clears — the shape this file refuses.
+    witness_tools
+    batstimeout_exits 2
+    run_tick
+    [ "$status" -eq 0 ]
+    run grep -q -- '--apply' "$BATS_TEST_TMPDIR/bats-calls"
+    [ "$status" -ne 0 ]
+    [ ! -s "$LOGS/selfheal.log" ]
+}
+
+@test "self-heal: an unrecognised bats bundle (rc 3) is reported, never re-applied" {
+    # Catches: retrying a repair --apply refuses (an upstream shape change must be read by
+    # a human, not patched blind), and silence on that state.
+    witness_tools
+    batstimeout_exits 3
+    run_tick
+    [ "$status" -eq 1 ]
+    run grep -q -- '--apply' "$BATS_TEST_TMPDIR/bats-calls"
+    [ "$status" -ne 0 ]
+    grep -q 'bundle is not a shape this tool' "$LOGS/selfheal.log"
+    grep -q 'RELOAD the VS Code window' "$LOGS/selfheal.log"
+}
+
 # ==============================================================================
 # The self-heal tick's WITNESS CLASSES (2026-10-25, T-JARVIS-094)
 # ==============================================================================
@@ -548,7 +634,8 @@ witness_tools() {
     local t
     for t in qwen-guard-patch.sh qwen-memory-index-patch.sh qwen-memory-style-patch.sh \
              workboard-commentcap-patch.sh workboard-proofcap-patch.sh \
-             vscode-pytest-log-patch.py skill-denlink.sh agentmail-dist-patch.sh; do
+             vscode-pytest-log-patch.py vscode-bats-timeout-patch.py skill-denlink.sh \
+             agentmail-dist-patch.sh; do
         printf '#!/usr/bin/env bash\nexit 0\n' >"$TOOLS/$t"
         chmod +x "$TOOLS/$t"
     done

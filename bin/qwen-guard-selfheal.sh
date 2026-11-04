@@ -59,6 +59,26 @@
 # upstream as openclaw/openclaw#167991 and recorded as workspace-jarvis issue 0037.  Its
 # --check is boolean (0 clean, 1 needs repair), like the four older patchers.
 #
+# The SEVENTH (2026-11-04) is the VS Code BATS Test Runner's spawn-timeout patch,
+# ~/.local/bin/vscode-bats-timeout-patch.py.  It patches a FOREIGN bundle too -- the
+# kherring.bats-test-runner dist/extension.js -- whose spawn carries `timeout: 1e4`, so
+# NODE kills every run at 10 s; bats's EXIT trap then deletes its run dir under live
+# children, and each remaining case fails at `source` with
+# "bats.<pid>.src: No such file or directory".  Measured 2026-11-04 22:16 GMT: one sweep
+# reported 70 cases as errors and a suite was still running 2 hours after its run ended.
+# Every extension update replaces the bundle and reverts it.  Its --check is rc-aware (0
+# patched, 1 a reverted copy, 2 no extension installed, 3 an unrecognised bundle shape),
+# so only rc 1 is auto-repairable: --apply REFUSES on rc 3 (upstream changed shape), and
+# this tick REPORTS that rather than retrying a repair that cannot land.
+#
+# A RE-APPLIED BATS PATCH NEEDS THE EXTENSION HOST RELOADED.  Unlike the results-logger
+# patch, whose module is imported fresh by every pytest run, this bundle is evaluated
+# once at extension activation: the tick can repair the FILE and the running host goes on
+# killing at 10 s until the window is reloaded.  That step is the operator's, the same
+# split as the Workboard patch's gateway restart.  Measured 2026-11-04: the patch was
+# written at 17:13 against a host activated at 16:30, and the next sweep reproduced the
+# whole failure class -- a repaired file is not a running patch.
+#
 # Run from cron. Deliberately quiet when healthy: it does nothing and prints
 # nothing when every patch is already in place, and it only writes a record when
 # it actually had to act. When it CANNOT restore a patch it exits non-zero, so a
@@ -77,7 +97,15 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-11-04): a SEVENTH tool is announced -- the VS Code BATS Test Runner's
+#   spawn-timeout patcher (~/.local/bin/vscode-bats-timeout-patch.py), probed rc-aware
+#   like the test-log and agentmail tools (0 patched / 1 reverted / 2 no extension /
+#   3 an unrecognised bundle shape).  Only rc 1 is queued for --apply; rc 2 is quiet,
+#   and rc 3 is REPORTED because --apply refuses an unrecognised bundle rather than
+#   guessing.  Measured 2026-11-04: the patch had been written to disk at 17:13 while
+#   the extension host was activated at 16:30, so the panel went on killing every run
+#   at 10 s and reported 70 errors in one sweep.
 #   v12 (2026-10-25): wrap the class remedies and comment witness_class (ratchet).
 #   v11 (2026-10-25, T-JARVIS-094): each store-witness class now has its OWN status, marker
 #   and exit status instead of every non-zero witness rc exiting 1.  Measured 2026-10-25T09:23Z:
@@ -193,10 +221,14 @@ DENLINK="/home/wayne/.openclaw/scripts/skill-denlink.sh"
 # The agentmail dist patch (2026-10-13).  Named by path like the comment-cap patcher (it
 # lives in the OTHER repo); its --check is rc-aware, so it is probed separately below.
 AGENTMAIL="/home/wayne/.openclaw/scripts/agentmail-dist-patch.sh"
+# The VS Code BATS Test Runner's spawn-timeout patcher (2026-11-04).  Same foreign-bundle
+# class as the test-log patch; install.sh links it here from tools/vscode-bats-timeout/.
+# Its --check is rc-aware, so it is probed separately below.
+BATSTIMEOUT="/home/wayne/.local/bin/vscode-bats-timeout-patch.py"
 WITNESS="/home/wayne/github-wsl/ubuntu-console/scripts/qwen-memory-index-check.py"
 # TEST SEAM (T-JARVIS-094).  Relocate every PROBED tool into one scratch directory so a suite
 # can drive each witness class through the real script without touching a live bundle or the
-# real log.  Cron never sets it, and the nine production literals above stay exactly as they
+# real log.  Cron never sets it, and the ten production literals above stay exactly as they
 # are -- the wiring net's cases grep those lines -- so this block only ever runs under a test.
 QSH_TOOL_ROOT="${QSH_TOOL_ROOT:-}"
 if [[ -n "$QSH_TOOL_ROOT" ]]; then
@@ -208,6 +240,7 @@ if [[ -n "$QSH_TOOL_ROOT" ]]; then
   TESTLOG="$QSH_TOOL_ROOT/vscode-pytest-log-patch.py"
   DENLINK="$QSH_TOOL_ROOT/skill-denlink.sh"
   AGENTMAIL="$QSH_TOOL_ROOT/agentmail-dist-patch.sh"
+  BATSTIMEOUT="$QSH_TOOL_ROOT/vscode-bats-timeout-patch.py"
   WITNESS="$QSH_TOOL_ROOT/qwen-memory-index-check.py"
 fi
 LOG_DIR="${QSH_LOG_DIR:-/home/wayne/.local/share/qwen-guard}"
@@ -278,6 +311,22 @@ if [[ -x "$TESTLOG" ]]; then
   fi
 fi
 
+# The BATS-runner tool's --check is rc-aware too (0 patched, 1 a reverted copy, 2 no
+# extension copy, 3 a bundle shape this tool does not recognise).  Same split as the
+# test-log tool: rc 1 is auto-repairable, rc 2 is quiet (the extension is simply not
+# installed), and rc 3 cannot be repaired by --apply -- it REFUSES rather than guessing
+# between spawn sites -- so it is carried to the report below.
+batstimeout_rc=0
+batstimeout_report=""
+if [[ -x "$BATSTIMEOUT" ]]; then
+  "$BATSTIMEOUT" --check >/dev/null 2>&1 || batstimeout_rc=$?
+  if [[ "$batstimeout_rc" -eq 1 ]]; then
+    needed+=(bats-timeout)
+  elif [[ "$batstimeout_rc" -eq 3 ]]; then
+    batstimeout_report="$("$BATSTIMEOUT" --check 2>&1)"
+  fi
+fi
+
 # The STORE-SIDE witness: a health signal separate from the patches.  The patches prove
 # the BUNDLE is patched; this proves the STORES are sound -- a patched bundle still holds
 # links that a pre-patch daemon chopped.  It runs every tick, independently of the patch
@@ -345,11 +394,11 @@ before assuming a daemon or a patch failure." ;;
 }
 witness_class "$witness_rc"
 
-# Every patch already in place, every store clean AND the test-log tool not in its
+# Every patch already in place, every store clean AND neither rc-aware tool in its
 # unreachable rc==3 state: stay silent, write nothing.  A CLEAN witness (rc=0) is the only
 # class that lets this tick stay silent -- every other class carries its own marker and its
 # own exit status (see the class table above), so an absent store still pages.
-if [[ "${#needed[@]}" -eq 0 && "$witness_exit" -eq 0 && -z "$testlog_report" ]]; then
+if [[ "${#needed[@]}" -eq 0 && "$witness_exit" -eq 0 && "$testlog_rc" -ne 3 && "$batstimeout_rc" -ne 3 ]]; then
   exit 0
 fi
 
@@ -379,6 +428,7 @@ for tool in "${needed[@]}"; do
     denlink) patch="$DENLINK"; label="plugin-skill hardlink"; apply_args=(--apply) ;;
     testlog) patch="$TESTLOG"; label="test-log patch"; apply_args=(--apply) ;;
     agentmail) patch="$AGENTMAIL"; label="agentmail dist patch"; apply_args=(--apply) ;;
+    bats-timeout) patch="$BATSTIMEOUT"; label="VS Code bats-timeout patch"; apply_args=(--apply) ;;
   esac
 
   {
@@ -387,6 +437,11 @@ for tool in "${needed[@]}"; do
     if "$patch" --check >/dev/null 2>&1
     then
       echo "    --check after: ok"
+      if [[ "$tool" == "bats-timeout" ]]; then
+        echo "    RELOAD REQUIRED: the file is patched, but the running VS Code extension"
+        echo "    host keeps the old bundle in memory — reload the window or the panel"
+        echo "    goes on killing every run at 10 s."
+      fi
     else
       echo "    --check after: STILL-NEEDS-ATTENTION"
       rc=1
@@ -398,12 +453,29 @@ done
 # would load nothing and --apply refuses before it touches a wrapper.  A cron tick
 # cannot restore that file, so it is a REPORT (log + non-zero exit), like the store
 # witness below — and the record names the file to restore.
-if [[ -n "$testlog_report" ]]; then
+if [[ "$testlog_rc" -eq 3 ]]; then
   {
     echo "=== $(date -Is) - the test-log patch cannot be re-applied: its recorder is"
     echo "    missing from ~/.local/lib/vscode-pytest-log/vscode_pytest_log.py; restore"
     echo "    that file (the patch tool refuses on rc==3), then re-apply with --apply"
     printf '%s\n' "$testlog_report"
+  } >>"$LOG" 2>&1
+  rc=1
+fi
+
+# Report the BATS-runner tool's rc==3 state: the installed bundle is not a shape the tool
+# recognises -- upstream moved or duplicated the spawn site -- so --apply refuses rather
+# than replacing the wrong `timeout:`.  No cron tick can decide which literal is the spawn
+# site, so it is a REPORT with the tool's own words, and it names the reload step a tick
+# cannot take either.
+if [[ "$batstimeout_rc" -eq 3 ]]; then
+  {
+    echo "=== $(date -Is) - the VS Code bats-timeout patch cannot be re-applied: the"
+    echo "    installed kherring.bats-test-runner bundle is not a shape this tool"
+    echo "    recognises (upstream changed the spawn site).  Inspect it, then re-apply"
+    echo "    with vscode-bats-timeout-patch.py --apply and RELOAD the VS Code window:"
+    echo "    the extension host keeps the old bundle in memory until it restarts."
+    printf '%s\n' "$batstimeout_report"
   } >>"$LOG" 2>&1
   rc=1
 fi

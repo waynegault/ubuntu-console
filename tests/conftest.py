@@ -162,28 +162,70 @@ def heavy_job_lock_path() -> Path:
     return Path(os.environ.get("HEAVY_JOB_LOCK", "/tmp/heavy-job.lock"))
 
 
-def acquire_heavy_job_lock(lock_path: Path, wait_s: int, owner: str) -> int:
+def _holder_text(lock_path: Path) -> str:
+    """The holder's advisory record, or '' when it cannot be read.
+
+    Advisory only: the flock decides that the lock is busy, and this text only NAMES the
+    process that took it, so an unreadable record must not make the wait fail.
+    """
+    try:
+        return lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        # swallow-ok: advisory as bin/heavy-job's own read says — an unreadable record means "no holder named", and the flock, never this text, decided the lock was busy
+        return ""
+
+
+def _is_interactive_runner() -> bool:
+    """True for a VS Code Testing run, false for a terminal or CI pytest.
+
+    The Python extension's ``run_pytest_script.py`` exports TEST_RUN_PIPE (and
+    RUN_TEST_IDS_PIPE) for the run it spawns; nothing else does.  It names the runner in
+    the wait's own line, so an operator reading the panel can tell which launch is queued.
+    """
+    return bool(os.environ.get("TEST_RUN_PIPE") or os.environ.get("RUN_TEST_IDS_PIPE"))
+
+
+def heavy_job_wait_s() -> int:
+    """How long this session queues for the heavy-job lock.
+
+    An hour for every runner: that is the 2026-11-04 ruling — a panel run WAITS behind a
+    heavy job instead of competing with it, and giving up is `bin/heavy-job`'s own
+    ``--timeout`` contract, not the default here.  `TAC_HEAVY_JOB_WAIT_S` overrides it for
+    a caller that would rather fail fast than queue.
+    """
+    return int(os.environ.get("TAC_HEAVY_JOB_WAIT_S", "3600"))
+
+
+def acquire_heavy_job_lock(
+    lock_path: Path, wait_s: int, owner: str, announce: Callable[[str], None] | None = None
+) -> int:
     """Take the heavy-job lock, waiting up to ``wait_s`` seconds.
 
     Raises :class:`HeavyJobBusy` rather than hanging: a bounded poll is what lets the
     message name the job still holding the box instead of dying at the harness timeout.
+
+    *announce* is called once, with the holder's own advisory record, if the first
+    attempt finds the lock busy.  The VS Code Testing panel shows nothing while a
+    collection-time wait runs, so without it an interactive run sits silent for the whole
+    bound and reads as hung (measured 2026-11-04: a panel run queued behind
+    tools/run-tests.sh and ran no test for six minutes).
     """
     deadline = time.monotonic() + wait_s
+    announced = False
     while True:
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             os.close(fd)
+            if not announced:
+                announced = True
+                if announce is not None:
+                    announce(_holder_text(lock_path))
             if time.monotonic() >= deadline:
-                try:
-                    holder = lock_path.read_text(encoding="utf-8").strip()
-                except OSError:
-                    # swallow-ok: the body is advisory, as bin/heavy-job's own read says — an unreadable record means "no holder named", and the flock above, never this text, decided the lock was busy
-                    holder = ""
                 raise HeavyJobBusy(
                     f"the heavy-job lock {lock_path} was still held after {wait_s}s"
-                    + (f" (holder: {holder})" if holder else "")
+                    + (f" (holder: {_holder_text(lock_path)})" if _holder_text(lock_path) else "")
                 ) from None
             time.sleep(1)
             continue
@@ -225,10 +267,22 @@ def ensure_heavy_job_session(
     if not any(_is_bats_item(item) for item in items):
         return
 
-    wait_s = int(os.environ.get("TAC_HEAVY_JOB_WAIT_S", "3600"))
+    wait_s = heavy_job_wait_s()
     owner = f"pytest {' '.join(sys.argv[1:])}"[:160]
+    lock_path = heavy_job_lock_path()
+
+    def _announce(holder: str) -> None:
+        # Stderr and unbuffered: a collection-time wait produces no test output, so this
+        # line is the only thing that says the run is QUEUED rather than hung.
+        runner = "VS Code panel" if _is_interactive_runner() else "pytest"
+        print(
+            f"heavy-job: {runner} queued behind {holder or 'an unnamed holder'} — waiting up to {wait_s}s",
+            file=sys.stderr,
+            flush=True,
+        )
+
     try:
-        _HEAVY_JOB_FD = acquire_heavy_job_lock(heavy_job_lock_path(), wait_s, owner)
+        _HEAVY_JOB_FD = acquire_heavy_job_lock(lock_path, wait_s, owner, announce=_announce)
     except HeavyJobBusy as exc:
         pytest.exit(
             f"heavy-job: {exc}\nheavy-job: refusing to start a saturating run beside it — see `bin/heavy-job --status`",
@@ -246,9 +300,18 @@ def _release_heavy_job_session() -> None:
         _HEAVY_JOB_FD = None
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Gate a BATS-carrying session behind the box's heavy-job lock."""
-    ensure_heavy_job_session(config, items, collect_only=_is_vscode_discovery())
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Gate a BATS-carrying SELECTION behind the box's heavy-job lock.
+
+    Deliberately NOT pytest_collection_modifyitems: that hook sees every item the
+    session COLLECTED, before -k/--deselect remove any, and importing
+    tests/test_bats_bridge.py registers one item per BATS case (~1000 of them) in
+    ``globals()``.  So a `-k one_python_test` selection collected the whole BATS table
+    and queued for the heavy-job lock anyway — measured 2026-11-04, a one-test Python run
+    waiting behind a full tools/run-tests.sh.  ``session.items`` here is the selection
+    after deselection, which is what the gate's "no BATS item, no queue" rule means.
+    """
+    ensure_heavy_job_session(session.config, session.items, collect_only=_is_vscode_discovery())
 
 
 @pytest.fixture(autouse=True)
