@@ -1,0 +1,12 @@
+# actionlint configuration — declared so `actionlint .github/workflows/*.yml` is a
+# usable gate rather than a wall of "unknown label" noise.  These labels are carried by
+# the fleet's self-hosted runners (see README "Which box"): `wsl-console` is the fleet
+# label both boxes register, and the two arch labels exist so a job that genuinely needs
+# one machine can pin it.  A runner label that is not listed here is a mistake worth
+# seeing.
+self-hosted-runner:
+  labels:
+    - wsl-console
+    - wsl-console-arm64
+    - console-x64
+    - console-arm64

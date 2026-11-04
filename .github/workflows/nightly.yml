@@ -8,28 +8,6 @@ on:
 
 # Job timeout, for the same reason ci.yml sets them: nothing here set one, so a hang was
 # bounded only by GitHub's 360-minute default while holding the single self-hosted runner.
-# ── Which box is this? ─────────────────────────────────────────────────────────────
-# The repo serves TWO boxes from one clone: an x86_64 Intel-Xe box and the arm64 RTX
-# Spark box, with per-box lanes, model store and tuning in config/hosts.d/<id>.conf.
-# A job whose verdict does not say WHICH box produced it is ambiguous — and a job that
-# only works on one of them is a trap.  Every job therefore states its box from the
-# repo's own resolvers (they refuse rather than guess), and FAILS if the profile cannot
-# be resolved: a box-blind verdict is not a verdict.
-x-box-step: &box_step
-  name: Which box is this
-  run: |
-    set -uo pipefail
-    source tools/host-profile.sh
-    tac_host_profile_apply
-    source tools/arch.sh
-    box="$(hostname)"; arch="$(tac_host_arch)"
-    printf 'box=%s arch=%s profile=%s matched=%s\n' \
-      "$box" "$arch" "${TAC_HOST_PROFILE:-unresolved}" "${TAC_HOST_PROFILE_MATCHED:-0}"
-    if [[ "${TAC_HOST_PROFILE_MATCHED:-0}" != 1 ]]; then
-      echo "::error::no host profile resolved on ${box} (${arch}) — this job's expectations are per-box, so it must not run box-blind"
-      exit 1
-    fi
-
 jobs:
   full-suite:
     name: Full BATS + Python Suite
@@ -48,13 +26,14 @@ jobs:
     # red is the root cause and is named directly above it; what must never happen is one
     # suite's assertion failure hiding a different suite.
     steps:
-      - *box_step
       - name: Checkout
         uses: actions/checkout@v7
 
       # ---- prerequisites.  install_bats and python_deps GATE the suites below (each suite
       # ---- is guarded on its own prerequisite's outcome, never on the step before it);
       # ---- shellcheck and the Python toolchain are what those suites actually use.
+      - name: Which box is this
+        uses: ./.github/actions/which-box
       - name: Install bats (pinned)
         id: install_bats
         # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted

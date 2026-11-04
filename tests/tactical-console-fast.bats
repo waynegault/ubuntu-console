@@ -858,32 +858,53 @@ YAML
     # per-box profiles, lanes and tuning.  A job that does not say which box produced its
     # verdict is ambiguous, and a job written for one box's expectations is a trap on the
     # other — measured 2026-11-04: every job demanded one label and the only runner behind
-    # it was the other box, so nothing ran at all.  Each workflow therefore defines the
-    # shared `x-box-step` anchor, and EVERY job's step list must begin with it.
+    # it was the other box, so nothing ran at all.
+    #
+    # The step is a COMPOSITE ACTION rather than a YAML anchor: an anchor needs a
+    # top-level key to hang on, and GitHub rejects any workflow key it does not know, so
+    # the first version of this made all three workflows invalid and every run failed in
+    # 0 s with "This run likely failed because of a workflow file issue".  A local action
+    # must follow a checkout (it lives in the repo), so it is the SECOND step of each job.
     local f bad=0
+    local action="$REPO_ROOT/.github/actions/which-box/action.yml"
+    [[ -f "$action" ]] || { echo "FAIL: $action is missing"; return 1; }
+    grep -q 'tac_host_profile_apply' "$action" \
+        || { echo "FAIL: the box action does not resolve the host profile"; return 1; }
+    grep -q 'exit 1' "$action" \
+        || { echo "FAIL: the box action cannot fail on an unresolved profile"; return 1; }
     for f in "$REPO_ROOT"/.github/workflows/*.yml
     do
-        if ! grep -qx 'x-box-step: &box_step' "$f"
+        # One box step per checkout: a job that checks out must state its box, and no job
+        # may carry one without the other.
+        local checkouts boxes
+        # `grep -c` exits 1 on a ZERO count; the number is the signal here, not its status.
+        checkouts=$(grep -c '^        uses: actions/checkout@' "$f" || true)
+        boxes=$(grep -c '^        uses: \./\.github/actions/which-box$' "$f" || true)
+        if (( checkouts != boxes ))
         then
-            echo "FAIL: ${f##*/} defines no x-box-step anchor"
+            echo "FAIL: ${f##*/} has $checkouts checkout(s) but $boxes box step(s)"
             bad=1
-            continue
         fi
-        # Sweep once: no `steps:` may be followed by anything but the shared step.
-        if awk 'prev == "    steps:" && $0 != "      - *box_step" { bad = 1 } { prev = $0 } END { exit bad }' "$f"
+        # ...and it sits where a local action must: immediately after the checkout block.
+        if ! awk '
+            /^        uses: actions\/checkout@/ { seen = 1; next }
+            seen && /^      - / { if ($0 !~ /- name: Which box is this$/) { bad = 1 } ; seen = 0 }
+            END { exit bad }
+        ' "$f"
         then
-            :
-        else
-            echo "FAIL: a job in ${f##*/} does not start with '*box_step'"
+            echo "FAIL: a job in ${f##*/} does not put the box step directly after checkout"
             bad=1
         fi
     done
     (( bad == 0 ))
 
-    # Teeth: the same sweep must catch a job that drops the step, or this case proves
+    # Teeth: the box-step count must catch a job that loses the step, or this case proves
     # nothing.  Mutate a copy rather than trusting the files to stay well-formed.
-    run bash -c "sed '0,/      - \*box_step/{/      - \*box_step/d}' '$REPO_ROOT/.github/workflows/ci.yml' > '$BATS_TEST_TMPDIR/mutated.yml';
-        awk 'prev == \"    steps:\" && \$0 != \"      - *box_step\" { bad = 1 } { prev = \$0 } END { exit bad }' '$BATS_TEST_TMPDIR/mutated.yml'"
+    run bash -c "sed '0,/^        uses: \.\/\.github\/actions\/which-box$/{/^        uses: \.\/\.github\/actions\/which-box$/d}' \
+        '$REPO_ROOT/.github/workflows/ci.yml' > '$BATS_TEST_TMPDIR/mutated.yml';
+        c=\$(grep -c '^      - .*actions/checkout@' '$BATS_TEST_TMPDIR/mutated.yml');
+        b=\$(grep -c '^        uses: \./\.github/actions/which-box\$' '$BATS_TEST_TMPDIR/mutated.yml');
+        [ \"\$c\" = \"\$b\" ]"
     [ "$status" -ne 0 ]
 }
 

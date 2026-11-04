@@ -1,0 +1,26 @@
+name: Which box is this
+description: >-
+  State the machine this job is running on (host, architecture, resolved host
+  profile) and refuse to continue when no profile resolves.  This repo serves two
+  boxes from one clone — an x86_64 Intel-Xe box and the arm64 RTX Spark box — with
+  per-box lanes, model store, ports and tuning in config/hosts.d/<id>.conf.  A
+  verdict that does not say which box produced it is ambiguous, and a job written
+  for one box's expectations must not run on the other.
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the box
+      shell: bash
+      run: |
+        set -uo pipefail
+        source tools/host-profile.sh
+        tac_host_profile_apply
+        source tools/arch.sh
+        box="$(hostname)"; arch="$(tac_host_arch)"
+        printf 'box=%s arch=%s profile=%s matched=%s\n' \
+          "$box" "$arch" "${TAC_HOST_PROFILE:-unresolved}" "${TAC_HOST_PROFILE_MATCHED:-0}"
+        if [[ "${TAC_HOST_PROFILE_MATCHED:-0}" != 1 ]]; then
+          echo "::error::no host profile resolved on ${box} (${arch}) — this job's expectations are per-box, so it must not run box-blind"
+          exit 1
+        fi
