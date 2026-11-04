@@ -368,3 +368,45 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     __autotune_spec_sweep_stop 2
     __autotune_spec_sweep_stop 3
 }
+
+# --- model sizing across a shard set ---------------------------------------
+# A row names ONE file and llama.cpp loads the whole SET, so a stat on the named path
+# reports shard 1 and under-counts the model. Measured 2026-11-04 in this box's log:
+# the 88.0 GiB Flash-Next row printed "model 42788 MiB" (shard 1 of 3) and derived
+# START_CTX 262144 from it; the 53.9 GiB 70B row printed "model 38016 MiB".
+# The fixtures are synthetic sizes so the cases assert the arithmetic, not this box.
+
+@test "model-bytes: a split GGUF is the sum of its shards, not the named one" {
+    # Fails if: sizing reads only the path the row names (7168 -> 4096), which is the
+    # defect that made BUDGET and START_CTX describe half a model.
+    mkdir -p "$TMPDIR_BATS"
+    local stem="$TMPDIR_BATS/split-model"
+    head -c 4096 /dev/zero > "$stem-00001-of-00003.gguf"
+    head -c 2048 /dev/zero > "$stem-00002-of-00003.gguf"
+    head -c 1024 /dev/zero > "$stem-00003-of-00003.gguf"
+    run __autotune_model_bytes "$stem-00001-of-00003.gguf"
+    [ "$status" -eq 0 ]
+    [ "$output" = "7168" ]
+}
+
+@test "model-bytes: a single-file model is its own size" {
+    # The other direction: a non-split path must not be inflated or zeroed.
+    mkdir -p "$TMPDIR_BATS"
+    local f="$TMPDIR_BATS/single-model.gguf"
+    head -c 5000 /dev/zero > "$f"
+    run __autotune_model_bytes "$f"
+    [ "$status" -eq 0 ]
+    [ "$output" = "5000" ]
+}
+
+@test "model-bytes: an absent path yields 0 rather than an error" {
+    # Fails if: a missing model aborts under `set -e` instead of being reported as 0 —
+    # the row then dies before it can refuse with a reason.
+    run __autotune_model_bytes "$TMPDIR_BATS/absent-00001-of-00002.gguf"
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
+}
+
+@test "model-bytes: the symbol exists (a missing one passes the cases above vacuously)" {
+    declare -f __autotune_model_bytes >/dev/null
+}

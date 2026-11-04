@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-11-04): __autotune_model_bytes — the size of the model a row NAMES, summed
+#   across its shard set.  A row points at one file of a -00001-of-00003.gguf set, so a
+#   stat on that path reports shard 1 and under-counts by roughly half; measured in this
+#   box's own log the same afternoon (88.0 GiB row printed 42788 MiB and derived ctx
+#   262144 from it; 53.9 GiB 70B printed 38016 MiB).  BUDGET and START_CTX inherit it.
 #   v29 (2026-11-02): __llm_autotune_mark_state — DEF-024's registry half.  A model the
 #   backend cannot load stays in the registry indistinguishable from a certified one (its
 #   FIT and TPS columns still carry values), so every consumer believes it is usable.  This
@@ -729,7 +734,41 @@ function __llm_autotune_mark_state() {
 
 
 # ---------------------------------------------------------------------------
-# __kv_mb_per_1k M-bM-^@M-^T Estimate KV cache cost per 1K tokens (G-5 audit).
+# __autotune_model_bytes <path> — the WEIGHT FOOTPRINT of the model a row names.
+# @stdout bytes (0 when nothing is readable)
+#
+# A row names ONE FILE, but llama.cpp loads the whole shard SET: a split GGUF is
+# written <stem>-00001-of-00003.gguf and the loader opens every shard. A stat on
+# the named path therefore reports shard 1 and under-counts the model — measured
+# 2026-11-04 in this box's own log, twice in one afternoon:
+#   * the 88.0 GiB Flash-Next row printed "model 42788 MiB" (shard 1 of 3) and
+#     derived START_CTX 262144 from it;
+#   * the 53.9 GiB 70B row printed "model 38016 MiB" (shard 1 of 2).
+# Every consumer of MODEL_BYTES inherits the shortfall: BUDGET and START_CTX are
+# sized against a model roughly half its real size, so the probe starts far above
+# what can fit and the failure arrives as a launch error instead of a refusal.
+function __autotune_model_bytes() {
+    local path="${1:-}" total=0 f
+    [[ -n "$path" ]] || { printf '0'; return 0; }
+    if [[ "$path" =~ ^(.*)-[0-9]{5}-of-[0-9]{5}\.gguf$ ]]; then
+        local stem="${BASH_REMATCH[1]}" part
+        for f in "$stem"-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].gguf; do
+            [[ -f "$f" ]] || continue
+            part=$(stat --format=%s "$f") || part=0
+            [[ "$part" =~ ^[0-9]+$ ]] || part=0
+            total=$(( total + part ))
+        done
+        printf '%s' "$total"
+        return 0
+    fi
+    local single
+    single=$(stat --format=%s "$path") || single=0
+    [[ "$single" =~ ^[0-9]+$ ]] || single=0
+    printf '%s' "$single"
+}
+
+# ---------------------------------------------------------------------------
+# __kv_mb_per_1k — Estimate KV cache cost per 1K tokens (G-5 audit).
 # Uses n_layers when available (from GGUF metadata), falls back to 48.0 MB/1K.
 # The old sqrt(model_mb)*0.08 heuristic was 8-48x too optimistic.
 # Reference: llama.cpp KV cache = (K_dtype + V_dtype) * n_embd_head * n_kv_heads * n_layers

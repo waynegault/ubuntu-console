@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 104
+# Module Version: 105
+#   v105 (2026-11-04): MODEL_BYTES comes from __autotune_model_bytes (11b v35), so a split
+#   GGUF is sized on its whole shard set rather than on the one file the row names.  The
+#   single-file reading survives only as a stated fallback for a partial tree.
 #   v104 (2026-11-04): clear the two §18.3 rises the lane's own commits left behind, at source
 #   rather than by re-baselining — the launch_error label and the readiness-window message are
 #   wrapped (same output, no single line over 120 columns), and `_fail` gains the comment above
@@ -706,7 +709,18 @@ if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
 fi
 # Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
 _cuda_guard_or_exit
-MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
+# The row names one file; llama.cpp loads the whole shard SET. Summing the set is what
+# makes MODEL_MB, BUDGET and START_CTX describe the model instead of its first shard —
+# an 88.0 GiB row printed 42788 MiB and probed ctx 262144 before this (2026-11-04).
+if declare -f __autotune_model_bytes &>/dev/null; then
+    MODEL_BYTES=$(__autotune_model_bytes "$MODEL_PATH")
+else
+    # 11b is mandatory for this script, so reaching here means a partial tree: keep the
+    # old single-file reading rather than refuse, and say which one was used.
+    warn "  __autotune_model_bytes is not loaded — sizing on the named file alone (split GGUFs under-count)"
+    MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
+fi
+[[ "$MODEL_BYTES" =~ ^[0-9]+$ ]] || MODEL_BYTES=0
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
 
 # Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
