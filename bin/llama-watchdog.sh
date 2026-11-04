@@ -148,7 +148,7 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 24
+# Module Version: 25
 #   v24 (2026-11-02): a DRIVER-level probe failure no longer stops a lane that is
 #   demonstrably SERVING.  Measured live: at 11:40:41 nvidia-smi answered rc=9 and
 #   gpu-busy reported nvidia-smi-unavailable while the same card was prefilling a
@@ -675,8 +675,9 @@ gpu_classify_driver_failclosed() {
             _msg="GPU busy driver-level: classified UNAVAILABLE — the CUDA card's passthrough is BROKEN,"
             _msg+=" not in use (${_reason}; dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min,"
             _msg+=" via gpu-passthrough-check.sh)."
-            _msg+=" The lane is down on a DRIVER fault, not on a workload: the Xe lane serves,"
-            _msg+=" and the fix is host-side (wsl --shutdown / GPU driver update)."
+            _msg+=" The lane is down on a DRIVER fault, not on a workload, so stopping it frees"
+            _msg+=" nothing and no local lane takes over; the fix is host-side"
+            _msg+=" (wsl --shutdown / GPU driver update)."
             log "$_msg"
             ;;
         ok)
@@ -862,7 +863,7 @@ supervise_cuda_lane() {
         # Strikes reset so a resumed lane does not inherit strikes accrued while it
         # was deliberately stopped.
         if [[ "$cuda_state" == "active" ]]; then
-            log "CUDA lane suspended — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)"
+            log "CUDA lane suspended — stopping $CUDA_UNIT (a deliberate suspend, not a fault)"
             if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
             then
                 log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
@@ -876,7 +877,16 @@ supervise_cuda_lane() {
         gpustop_clear
         strike_reset "$STRIKE_CUDA"
     elif gpu_busy; then
-        # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
+        # GPU in use by a declared workload -> free VRAM for it.
+        #
+        # This comment used to read "-> Xe lane serves (Wayne policy)", and the log line
+        # below printed it as fact.  That was true when an Xe lane unit was installed and it
+        # is FALSE on a host with none: measured 2026-11-04, `systemctl --user list-units
+        # 'llama*'` lists the CUDA embedding lane, this chat lane and two watchdog units --
+        # no Xe lane.  So the one line an operator reads after a kill asserted a replacement
+        # that did not exist, while every fleet turn was failing over to the cloud model.
+        # The STOP is the measurement; what serves afterwards is the gateway's business and
+        # this script cannot see it, so it no longer claims to.
         # Before acting on "busy", say WHICH busy this is when the gate failed closed
         # for a driver-level reason (v3.13): the probe's own reason cannot distinguish
         # "a workload holds the card" from "the driver is gone", and those need
@@ -904,7 +914,7 @@ supervise_cuda_lane() {
             strike_reset "$STRIKE_CUDA"
         else
             if [[ "$cuda_state" == "active" ]]; then
-                log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
+                log "GPU busy — stopping $CUDA_UNIT to free VRAM for the declared workload${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
                 if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
                 then
                     log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
