@@ -4,14 +4,18 @@ BATS suites run shellcheck on all ~24 scripts and source the full tactical
 profile.  Running multiple suites in parallel saturates CPU/disk and causes
 hangs when the thread-based timeout cannot interrupt blocked I/O.
 """
+
 from __future__ import annotations
 
 import fcntl
 import os
+import sys
 import tempfile
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator, Iterable
+from datetime import datetime
 from pathlib import Path
+from typing import Any, Protocol
 
 import pytest
 
@@ -57,7 +61,7 @@ def _proc_start_time(pid: int) -> str:
     rparen = data.rfind(")")
     if rparen < 0:
         return ""
-    fields = data[rparen + 2:].split()
+    fields = data[rparen + 2 :].split()
     return fields[19] if len(fields) > 19 else ""
 
 
@@ -122,6 +126,131 @@ def _is_vscode_discovery() -> bool:
     return "--collect-only" in __import__("sys").argv
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Heavy-job serialisation: a pytest run QUEUES, it does not starve
+# ═══════════════════════════════════════════════════════════════════════
+# bin/heavy-job exists because two lanes running mypy/pytest/kgraph together
+# oversubscribe all 16 cores — its own header names pytest.  tools/run-tests.sh
+# routes through it, but the test panel's runner does not, so a VS Code run
+# competed with whatever heavy job already held the box: measured 2026-11-04, load
+# average 181 while bin/autotune-rows.sh swept three models, every bridged suite
+# 8-15x slower, and suites reported failed that pass in isolation.
+#
+# Taking the SAME lock makes such a run wait for its turn instead.  It is taken once,
+# at collection, so the wait is charged to no test's timeout, and HEAVY_JOB_HELD is
+# exported for the whole session: a heavy entry point invoked *inside* a test then
+# passes through rather than blocking on the lock its own session holds.  That is
+# bin/heavy-job's nested-invocation rule, and it is not an optimisation — flock is held
+# per open file description, so a descendant taking the lock again would deadlock
+# against its own session, not re-enter it.
+
+_HEAVY_JOB_FD: int | None = None
+
+
+class HeavyJobBusy(RuntimeError):
+    """The box's heavy-job lock stayed held for the whole bounded wait."""
+
+
+class _CleanupRegistrar(Protocol):
+    """The one Config capability this module needs (tests pass a stub)."""
+
+    def add_cleanup(self, func: Callable[[], None]) -> None: ...
+
+
+def heavy_job_lock_path() -> Path:
+    """Return the lock bin/heavy-job uses, read from the same variable it reads."""
+    return Path(os.environ.get("HEAVY_JOB_LOCK", "/tmp/heavy-job.lock"))
+
+
+def acquire_heavy_job_lock(lock_path: Path, wait_s: int, owner: str) -> int:
+    """Take the heavy-job lock, waiting up to ``wait_s`` seconds.
+
+    Raises :class:`HeavyJobBusy` rather than hanging: a bounded poll is what lets the
+    message name the job still holding the box instead of dying at the harness timeout.
+    """
+    deadline = time.monotonic() + wait_s
+    while True:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            if time.monotonic() >= deadline:
+                try:
+                    holder = lock_path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    # swallow-ok: the body is advisory, as bin/heavy-job's own read says — an unreadable record means "no holder named", and the flock above, never this text, decided the lock was busy
+                    holder = ""
+                raise HeavyJobBusy(
+                    f"the heavy-job lock {lock_path} was still held after {wait_s}s"
+                    + (f" (holder: {holder})" if holder else "")
+                ) from None
+            time.sleep(1)
+            continue
+        # Advisory record in bin/heavy-job's own format, so its --status attributes the
+        # box to this session rather than to the previous holder.
+        started = datetime.now().astimezone().isoformat(timespec="seconds")
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid={os.getpid()} started={started} cmd={owner}\n".encode())
+        return fd
+
+
+def release_heavy_job_lock(fd: int) -> None:
+    """Release and close a lock returned by :func:`acquire_heavy_job_lock`."""
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+
+
+def _is_bats_item(item: Any) -> bool:
+    """Return True for a test item carrying any ``bats*`` marker."""
+    return any(marker.name.startswith("bats") for marker in item.iter_markers())
+
+
+def ensure_heavy_job_session(
+    config: _CleanupRegistrar,
+    items: Iterable[Any],
+    *,
+    collect_only: bool = False,
+) -> None:
+    """Queue this session behind any heavy job holding the box, once.
+
+    No-op when the selection carries no BATS suite (pure-Python runs are not
+    saturating), during discovery, or when an enclosing job already holds the lock.
+    """
+    global _HEAVY_JOB_FD
+    if _HEAVY_JOB_FD is not None:
+        return
+    if collect_only or os.environ.get("HEAVY_JOB_HELD"):
+        return
+    if not any(_is_bats_item(item) for item in items):
+        return
+
+    wait_s = int(os.environ.get("TAC_HEAVY_JOB_WAIT_S", "3600"))
+    owner = f"pytest {' '.join(sys.argv[1:])}"[:160]
+    try:
+        _HEAVY_JOB_FD = acquire_heavy_job_lock(heavy_job_lock_path(), wait_s, owner)
+    except HeavyJobBusy as exc:
+        pytest.exit(
+            f"heavy-job: {exc}\nheavy-job: refusing to start a saturating run beside it — see `bin/heavy-job --status`",
+            returncode=3,
+        )
+    os.environ["HEAVY_JOB_HELD"] = "1"
+    config.add_cleanup(_release_heavy_job_session)
+
+
+def _release_heavy_job_session() -> None:
+    """Release the session's heavy-job lock, if this session took one."""
+    global _HEAVY_JOB_FD
+    if _HEAVY_JOB_FD is not None:
+        release_heavy_job_lock(_HEAVY_JOB_FD)
+        _HEAVY_JOB_FD = None
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Gate a BATS-carrying session behind the box's heavy-job lock."""
+    ensure_heavy_job_session(config, items, collect_only=_is_vscode_discovery())
+
+
 @pytest.fixture(autouse=True)
 def _serialize_bats_suites(request: pytest.FixtureRequest):
     """Acquire a per-BATS-file lock so BATS suites never run concurrently.
@@ -138,9 +267,7 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
         yield
         return
 
-    is_bats = any(
-        marker.name.startswith("bats") for marker in request.node.iter_markers()
-    )
+    is_bats = _is_bats_item(request.node)
     if not is_bats:
         yield
         return
@@ -199,9 +326,7 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
     # process start time is stored alongside the pid so a recycled PID is
     # detected as stale rather than mistaken for a live holder.
     _self_pid = os.getpid()
-    pid_path.write_text(
-        f"{_self_pid} {_proc_start_time(_self_pid)}".strip(), encoding="utf-8"
-    )
+    pid_path.write_text(f"{_self_pid} {_proc_start_time(_self_pid)}".strip(), encoding="utf-8")
     try:
         yield
     finally:
@@ -229,14 +354,16 @@ def _load_durations() -> dict[str, list[float]]:
         return {}
     try:
         import json
+
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
 
 
 def _save_durations(durations: dict[str, list[float]]) -> None:
     """Persist duration baselines to cache."""
     import json
+
     path = Path(__file__).resolve().parent.parent / _DURATIONS_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(durations, indent=2), encoding="utf-8")
@@ -267,10 +394,7 @@ def _check_regression(item: pytest.Item, duration_s: float) -> str | None:
     median = sorted_hist[len(sorted_hist) // 2]
     ratio = duration_s / median if median > 0 else 0
     if ratio > _REGRESSION_THRESHOLD:
-        return (
-            f"\033[33m⚠ {key} took {duration_s:.1f}s "
-            f"({ratio:.1f}× historical median {median:.1f}s)\033[0m"
-        )
+        return f"\033[33m⚠ {key} took {duration_s:.1f}s ({ratio:.1f}× historical median {median:.1f}s)\033[0m"
     return None
 
 
@@ -278,6 +402,7 @@ def _check_regression(item: pytest.Item, duration_s: float) -> str | None:
 def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
     """Wrap each test to capture its wall-clock duration."""
     import time as _time
+
     start = _time.monotonic()
     yield
     elapsed = _time.monotonic() - start
@@ -286,6 +411,7 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
         warning = _check_regression(item, elapsed)
         if warning:
             import sys as _sys
+
             print(warning, file=_sys.stderr)
 
 
