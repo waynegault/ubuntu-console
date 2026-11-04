@@ -31,8 +31,16 @@ setup() {
 }
 
 # run_installer — runs install.sh against the temp HOME with the stubs first on PATH.
+# LLM_HOST_PROFILE pins the box: the temp HOME has no ~/.llm/host-profile, so the
+# installer would fall back to DETECTION, and detection only finds a profile whose
+# facts match. On the arm64 CI runner (arch=aarch64 cuda=0 render=1) nothing matches
+# and install.sh correctly refuses — which made the three cases below assert the
+# runner's hardware rather than the drop-in logic. Every drop-in is `any`-owned, so a
+# pinned profile exercises the same code; the other installer cases in
+# 74-host-profiles.bats pin theirs the same way.
 run_installer() {
-    run env HOME="$FAKE_HOME" PATH="$STUB_DIR:$PATH" bash "$REPO_ROOT/install.sh"
+    run env HOME="$FAKE_HOME" PATH="$STUB_DIR:$PATH" LLM_HOST_PROFILE="intel-xe-cuda" \
+        bash "$REPO_ROOT/install.sh"
 }
 
 @test "drop-in sources: every systemd/*.conf declares a well-formed destination" {

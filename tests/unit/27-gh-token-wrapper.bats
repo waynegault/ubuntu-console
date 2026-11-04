@@ -172,7 +172,12 @@ run_shim() {
     printf '#!/usr/bin/env bash\nexit 1\n' > "$stub_dir/sudo"
     chmod +x "$stub_dir/sudo"
 
-    run env HOME="$home_dir" PATH="$stub_dir:$PATH" bash "$REPO_ROOT/install.sh"
+    # The temp HOME has no ~/.llm/host-profile, so without a pin install.sh falls back
+    # to detection — which refuses on a box whose facts match no profile (the arm64 CI
+    # runner reports arch=aarch64 cuda=0 render=1). Pin it, as the installer cases in
+    # 74-host-profiles.bats do, so this case tests the gh link and not the runner.
+    run env HOME="$home_dir" PATH="$stub_dir:$PATH" LLM_HOST_PROFILE="intel-xe-cuda" \
+        bash "$REPO_ROOT/install.sh"
     [ "$status" -eq 0 ]
     [ -L "$home_dir/.local/bin/gh" ]
     [ "$(readlink -f "$home_dir/.local/bin/gh")" = "$REPO_ROOT/bin/gh" ]
