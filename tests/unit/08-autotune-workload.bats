@@ -331,6 +331,12 @@ _selftest_isolate() {
 
 _selftest_run() {
     local sandbox="$1"; shift
+    # AUTOTUNE_SELFTEST=1 replaces the engine with canned curves, but the script still PACES its
+    # polls with `sleep 1`, so a case measured 35.9s wall against 1.8s of CPU — it was waiting,
+    # not testing, and the retry COUNTS (not the elapsed time) are what the cases assert.
+    # Exported, because the script runs in a child bash: a plain function would not reach it.
+    sleep() { :; }
+    export -f sleep
     mkdir -p "$sandbox/home/.llm" "$sandbox/drive/active" "$sandbox/home/models"
     _selftest_isolate
     # _SELFTEST_FIXTURE=<case> plants a REAL metadata fixture (make-gguf-fixture.py) instead

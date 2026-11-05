@@ -1265,6 +1265,12 @@ ENVD
     __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=cache-value'"
     __mock_command_local systemctl \
         "printf '%s\\n' \"GH_TOKEN=\\\$'cache-value'\""
+    # The push ends in a restart, and the code then polls once a second — up to the
+    # 120-iteration convergence bound — for a gateway phase this fixture never serves.
+    # Without this the case spends the whole bound in wall time: measured 2m08.6 with
+    # 2.3s of CPU, i.e. it was sleeping, not testing. Stubbing `sleep` (a function
+    # shadows the binary, as in the six sibling cases) leaves the decode it is about.
+    sleep() { :; }
     mkdir -p "$HOME/.config/environment.d"
     printf 'GH_TOKEN=cache-value\n' > "$HOME/.config/environment.d/90-openclaw.conf"
 
