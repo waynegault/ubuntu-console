@@ -2,7 +2,13 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 51
+# Module Version: 52
+#   v52 (2026-11-05): LLM_PORT, ACTIVE_LLM_FILE, LLM_LOG_FILE and LLM_TPS_CACHE become
+#   overridable (`${VAR:-default}`), like their neighbours.  Assigned unconditionally, they
+#   discarded every caller's value on source: tests/unit/25 exports a free LLM_PORT, then
+#   _load_console re-sourced this file, so the witness probed the REAL 8081 - where this
+#   box's CPU lane listens - and __llm_server_stop added that live lane to its kill set.
+#   Four cases went red on the box and in CI; the same trap awaited suites 07/31/56.
 #   v50 (2026-11-02): LLAMA_LANE_KEEP_UNITS is declared and exported beside
 #   LLAMA_LANE_SPECS.  The always-on embedding lane must survive a VRAM drain; without a
 #   named keep-list every declared lane is a candidate, and the alternative was a unit-name
@@ -351,9 +357,9 @@ export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|
 export LLM_STATE_DIR="${LLM_STATE_DIR:-$HOME/.llm}"
 export LLM_REGISTRY="${LLM_REGISTRY:-$LLM_STATE_DIR/models.conf}"
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLM_STATE_DIR/default_model.conf}"
-export ACTIVE_LLM_FILE="/dev/shm/active_llm"
-export LLM_LOG_FILE="/dev/shm/llama-server.log"
-export LLM_TPS_CACHE="/dev/shm/last_tps"
+export ACTIVE_LLM_FILE="${ACTIVE_LLM_FILE:-/dev/shm/active_llm}"
+export LLM_LOG_FILE="${LLM_LOG_FILE:-/dev/shm/llama-server.log}"
+export LLM_TPS_CACHE="${LLM_TPS_CACHE:-/dev/shm/last_tps}"
 # Sidecar for the window-invariant check (11e-llm-model.sh): a non-destructive
 # per-run note, never written back into LLM_REGISTRY — a bench-time mismatch
 # reflects whatever else shared the GPU during that run, not a re-certified
@@ -557,7 +563,12 @@ export COPILOT_CLI_DIR="$HOME/.vscode-server/data/User/globalStorage/github.copi
 export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
 
 # ---- Network & API ----
-export LLM_PORT=8081
+# Overridable like its neighbours: sourcing this file must not discard a caller's
+# port.  Unconditional until 2026-11-05, which defeated every BATS sandbox that
+# exports a free LLM_PORT before loading the console - tests/unit/25 then probed
+# the REAL port, found this box's CPU lane on 8081, and both the witness and
+# __llm_server_stop treated that live lane as a backend the stop owned.
+export LLM_PORT="${LLM_PORT:-8081}"
 # The lane `so` treats as the production server (gateway baseUrl target).  Which
 # lane that is belongs to the host: this box's Xe 3B lane on 18081, an empty
 # table on a box with no resident lanes yet.  The generic 18081 remains the
