@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 85
+#   v85 (2026-11-05): the quiet gate sees CI.  `bin/heavy-job` cannot: the workflow calls bats
+#   directly, so a 77-file suite ran while the gate reported "free" and a rebuild was cleared
+#   into it.  `llm-build` now counts `Runner.Worker` processes and treats any as NOT quiet,
+#   naming the count and the override (`LLAMA_BUILD_ALLOW_CI=1`) rather than refusing silently
+#   - the requirement it implements is "quieted and stays quiet, or it does not build".
 # Module Version: 84
 #   v84 (2026-11-05): `llm-build` refuses to build into a BUSY box, and holds the box's own
 #   heavy-job lock while cmake runs, so nothing else starts behind it.  The quiet gate reads
@@ -4349,6 +4355,21 @@ function llm-build() {
         esac
     fi
 
+    # CI jobs do not take bin/heavy-job - the workflow calls bats directly - so the lock
+    # cannot see them, and a suite beside a -j20 CUDA compile slows both and can redden
+    # timing-sensitive cases (measured 2026-11-05: a rebuild was cleared as "free" while a
+    # 77-file BATS suite was running).  A runner worker therefore counts as NOT quiet;
+    # LLAMA_BUILD_ALLOW_CI=1 is the deliberate override for building through one.  The
+    # pattern is bracketed so the probe cannot match its own command line.
+    local ci_workers=0
+    # swallow-ok: no pgrep, or no match, reads as no CI job - the lock above still decides
+    ci_workers=$(pgrep -fc '[R]unner\.Worker' 2>/dev/null) || ci_workers=0
+    if [[ -z "${LLAMA_BUILD_ALLOW_CI:-}" && "$lock_busy" != "true" && "$ci_workers" -gt 0 ]]
+    then
+        lock_busy=true
+        lock_note="${ci_workers} CI runner worker(s) active - set LLAMA_BUILD_ALLOW_CI=1 to build anyway"
+    fi
+
     # ---- Pre-flight plan: what would actually change, and what does it affect?
     # The thing a rebuild replaces is the binary the CUDA lane launches, so name THAT tree.
     # This used to test the retired `~/.local/bin/cuda-llama-server` symlink, which no
@@ -4400,6 +4421,7 @@ function llm-build() {
     fi
     echo "  build:    $build_dir   ($build_mode)"
     echo "  lock:     $lock_note"
+    echo "  ci:       ${ci_workers} runner worker(s)${LLAMA_BUILD_ALLOW_CI:+ - override set, building anyway}"
     echo "  lane:     $lane_impact"
     echo ""
 

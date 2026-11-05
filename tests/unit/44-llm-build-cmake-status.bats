@@ -39,6 +39,10 @@ setup() {
     # case targets the real serving tree (measured: build-cuda/ was configured into a case
     # whose LLAMA_ROOT was a temp dir; llm-build now refuses that mismatch outright).
     unset LLAMA_BUILD_DIR LLAMA_CUDA_ARCH
+    # The quiet gate (v85) counts Runner.Worker processes.  These cases run ON a CI runner or
+    # beside one, so without this every build case would refuse for a reason it is not testing;
+    # the two CI cases below unset/set it explicitly.
+    export LLAMA_BUILD_ALLOW_CI=1
     LLAMA_ROOT="$(mktemp -d)"
     mkdir -p "$LLAMA_ROOT/build/bin"
     # A STALE binary: this is what the pre-fix path reports as "built".
@@ -315,4 +319,55 @@ _run_build() {
     [ "$(grep -c 'no-lock' "$CMAKE_LOCK_LOG")" -eq 0 ]
     # and heavy-job released it on exit rather than leaking the box's lock
     flock -n "$HEAVY_JOB_LOCK" -c true
+}
+
+# ---- v85 (2026-11-05): the quiet gate sees CI ---------------------------------
+# A workflow job never takes bin/heavy-job (the workflow calls bats directly), so the
+# lock alone reported "free" while a 77-file suite was running.  These cases stand in a
+# process whose argv reads Runner.Worker and check both directions of the new gate.
+
+@test "llm-build: refuses when a CI runner job is active (v85)" {
+    # Catches: the gate clearing a rebuild into a running CI suite - measured 2026-11-05,
+    # when only the heavy-job lock was consulted and it read free.
+    unset LLAMA_BUILD_ALLOW_CI
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    # argv[0] is what pgrep -f reads, so this stands in for a real Runner.Worker
+    bash -c 'exec -a Runner.Worker sleep 10' &
+    local stand_in=$!
+    sleep 0.4
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    kill "$stand_in" 2>/dev/null || true
+    wait "$stand_in" 2>/dev/null || true
+
+    [ "$rc" -ne 0 ]
+    [[ "$out" == *"CI runner worker"* ]]
+    [[ "$out" != *"Done"* ]]
+    [ ! -s "$CMAKE_LOG" ]
+}
+
+@test "llm-build: LLAMA_BUILD_ALLOW_CI=1 builds through an active CI job (v85)" {
+    # The control that keeps the case above honest: the override must actually override,
+    # or "refuses on CI" could be refusing for any reason at all.
+    export LLAMA_BUILD_ALLOW_CI=1
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    bash -c 'exec -a Runner.Worker sleep 10' &
+    local stand_in=$!
+    sleep 0.4
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    kill "$stand_in" 2>/dev/null || true
+    wait "$stand_in" 2>/dev/null || true
+
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"Done"* ]]
+    [ -s "$CMAKE_LOG" ]
 }

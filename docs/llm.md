@@ -1793,7 +1793,7 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > `git checkout --detach b<tag>` and then `llm-build --no-pull`, not an install.
 > A local commit or a diverged branch makes the pull fail loudly rather than merge.
 >
-> **The quiet gate (v84).** A rebuild saturates the box and rewrites the tree both
+> **The quiet gate (v84, extended v85).** A rebuild saturates the box and rewrites the tree both
 > lanes execute from, so `llm-build` refuses to start when `bin/heavy-job` is BUSY
 > (a bench, autotune, BATS-carrying pytest session or ingest holds it), naming the
 > holder — and it checks before pulling, so a refused build cannot leave
@@ -1802,6 +1802,13 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > the build. `LLAMA_BUILD_LOCK_WAIT_S` (default `0` = do not wait) bounds the
 > step-level wait; losing the lock mid-flow is reported as a refusal, not as a
 > build failure.
+>
+> **v85: the gate also sees CI.** The lock cannot see a workflow job, because `bats` is called
+> directly and never takes `bin/heavy-job` — measured 2026-11-05, a 77-file suite was running
+> while the gate reported `free`. `llm-build` now counts `Runner.Worker` processes and treats
+> any as NOT quiet, naming the count; `LLAMA_BUILD_ALLOW_CI=1` is the deliberate override for
+> building through one. That is the literal reading of "quieted and stays quiet, or it does not
+> build".
 
 ---
 
