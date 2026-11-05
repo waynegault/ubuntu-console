@@ -643,7 +643,7 @@ Counts are enforced by `tools/docs-sync-check.sh`; the suite list and its per-ca
 | Full behavioural | `tactical-console.bats` | 397 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 68 | 300s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 1069 | 300s | 600s |
+| Unit | `tests/unit/*.bats` | 1069 | 300s | 900s |
 | Integration | `tests/integration/*.bats` | 163 | 300s | 1200s |
 | Python | `tests/test_*.py` | 819 | 1000s (`pytest.ini`) | — |
 | **Total** | | **2518** | | |

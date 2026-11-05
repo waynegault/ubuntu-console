@@ -26,7 +26,15 @@
 # fails on a unit file no .github/workflows/*.yml names by path, and on 2026-09-27 a
 # new unit suite went red on exactly that (33-daemon-guard-patch.bats).  A new SUITE
 # (a new directory) needs a line, because its timeouts cannot be inferred from a glob.
-tests/unit/*.bats	bats_unit	300	600
+#
+# The file budget is a HANG bound, so it must sit above the slowest honest file.  It
+# read 600 until 2026-11-05, when 08-autotune-workload.bats measured 669.81 s for all
+# 54 cases (35-38 s each for the ~15 end-to-end selftest cases; all green, rc=0).  The
+# bridge kills a whole-file run at this figure + 15 s, so the kill truncated the file
+# and the remaining cases were reported FAILED — a running suite presented as a broken
+# one.  Sizing the bound to the measurement is the fix; the per-case figure is what
+# catches one stuck case, and it is unchanged.
+tests/unit/*.bats	bats_unit	300	900
 tests/tactical-console.bats	bats_full	900	2700
 tests/tactical-console-fast.bats	bats_fast	300	900
 tests/tactical-console-function-availability.bats	bats_fast	60	300
