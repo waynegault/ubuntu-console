@@ -1,6 +1,17 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 93
+#   v93 (2026-11-05): the registry's file column is a path RELATIVE to the store, and the scan
+#   WALKS it instead of globbing the top level — Wayne: "i want to be able to use all llms in
+#   active or below. cant we point to the appropriate file nomatter where it is nested in
+#   active?"  A flat name is a relative path with no directory component, so the
+#   "$LLAMA_MODEL_DIR/$file" join every consumer already uses needs no change, and `find -L`
+#   follows an HF snapshot symlink to its blob.  Shard siblings are looked for in the file's OWN
+#   directory (both helpers take the relative path), and a nested entry whose basename exists at
+#   the top level is skipped as the same model seen twice — so flatten-then-rescan is idempotent
+#   (measured: byte-identical registry).  v91/v92's nested-GGUF report is removed: recursion makes
+#   the omission it warned about impossible.
 # Module Version: 92
 #   v92 (2026-11-05): the nested-GGUF report counts only entries with NO flat counterpart.  Once
 #   an entry is flattened (hardlinked by name into the store root) its model scans, so reporting it
@@ -272,9 +283,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/_tac-bin-lib.sh"
 #
 # Pure on purpose — no logging, no profile dependencies — so a test can extract this body
 # and exercise it against fixture shards without sourcing the console.
-# __model_split_shards_missing <model-dir> <basename> — the shard file names this split
-# GGUF declares but the directory does not hold, one per line; EMPTY when the set is
-# complete or the file is not a split at all.
+# __model_split_shards_missing <model-dir> <relative-path> — the shard file names this
+# split GGUF declares but the file's OWN DIRECTORY does not hold, one per line; EMPTY when
+# the set is complete or the file is not a split at all.
+#
+# Takes the path RELATIVE to the store (Wayne, 2026-11-05: a model may sit "nowhere in
+# particular" under active/), so siblings are looked for beside the file — a nested
+# download's shards live in its own directory, never in the store root.
 #
 # DEF-023 (UAT 2026-11-02): __model_scan_row_bytes sums the shards it FINDS, so a
 # half-downloaded model registered happily with shard 1's bytes and looked loadable.
@@ -285,7 +300,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/_tac-bin-lib.sh"
 # Pure on purpose (no logging, no profile dependencies), like its neighbour, so a test can
 # extract the body and exercise it against fixture shards without sourcing the console.
 function __model_split_shards_missing() {
-    local _dir="$1" _fname="$2" _i _expected _prefix _want
+    local _dir="$1" _rel="$2" _sub="" _fname _i _expected _prefix _want
+    [[ "$_rel" == */* ]] && _sub="${_rel%/*}"
+    _fname="${_rel##*/}"
     [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]] || return 0
     _expected=$(( 10#${BASH_REMATCH[2]} ))
     (( _expected > 1 )) || return 0
@@ -293,20 +310,24 @@ function __model_split_shards_missing() {
     for (( _i = 1; _i <= _expected; _i++ ))
     do
         printf -v _want '%s-%05d-of-%05d.gguf' "$_prefix" "$_i" "$_expected"
-        [[ -f "$_dir/$_want" ]] || printf '%s\n' "$_want"
+        [[ -f "$_dir/${_sub:+$_sub/}$_want" ]] || printf '%s\n' "$_want"
     done
 }
 
 # __model_scan_row_bytes — total on-disk size of a row's model file plus its shards.
+# <relative-path> is resolved against the store and its shard siblings are looked for in the
+# file's OWN directory, so a nested split model is sized correctly too.
 function __model_scan_row_bytes() {
-    local _dir="$1" _fname="$2" _fbytes _shard _shard_bytes _total=0
+    local _dir="$1" _rel="$2" _sub="" _fname _fbytes _shard _shard_bytes _total=0
+    [[ "$_rel" == */* ]] && _sub="${_rel%/*}"
+    _fname="${_rel##*/}"
     # swallow-ok: the numeric test on the next line is the guard: no usable size means this returns no value at all
-    _fbytes=$(stat --format=%s "$_dir/$_fname" 2>/dev/null || stat -f%z "$_dir/$_fname" 2>/dev/null)
+    _fbytes=$(stat --format=%s "$_dir/$_rel" 2>/dev/null || stat -f%z "$_dir/$_rel" 2>/dev/null)
     [[ "$_fbytes" =~ ^[0-9]+$ ]] || return 0
     if [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]]
     then
         [[ "${BASH_REMATCH[1]}" != "00001" ]] && return 0
-        for _shard in "$_dir/${_fname%-[0-9][0-9][0-9][0-9][0-9]-of-*}"-*-of-"${BASH_REMATCH[2]}".gguf
+        for _shard in "$_dir/${_sub:+$_sub/}${_fname%-[0-9][0-9][0-9][0-9][0-9]-of-*}"-*-of-"${BASH_REMATCH[2]}".gguf
         do
             [[ -f "$_shard" ]] || continue
             # swallow-ok: the numeric test on the next line decides whether the shard is counted, so an unread size is simply not added
@@ -316,39 +337,6 @@ function __model_scan_row_bytes() {
         (( _total > 0 )) && _fbytes=$_total
     fi
     printf '%s\n' "$_fbytes"
-}
-
-# __model_scan_report_nested <model-dir> — name the GGUF files a flat scan cannot see.
-#
-# The scan globs `"$LLAMA_MODEL_DIR"/*.gguf`, which is deliberate: the store is FLAT, and a
-# bare `hf download` used to nest HuggingFace's hub-cache tree inside it
-# (`models--<org>--<repo>/snapshots/<rev>/<file>.gguf` -> `blobs/<sha>`).  Those weights are
-# real and loadable, and the scan passes over them without a word — measured 2026-11-05,
-# seven such trees holding 210.8 GiB, two of them complete models, while `model scan` said
-# "No models found".  Reporting the count, with one example, is what turns a silent
-# omission into a decision.  Depth 2 because a DIRECT child .gguf is the flat store itself.
-# @returns 0 always — a report, never a gate.
-function __model_scan_report_nested() {
-    local _dir="$1" _f _name _invisible=0 _eg="" _msg _nested
-    # Count only what is GENUINELY invisible: a nested entry whose basename also exists at
-    # the top level has been flattened (hardlinked), so it already scans.  Reporting those
-    # would nag forever about models that are registered.
-    # swallow-ok: an unreadable store is reported by the caller's own mount/store check
-    _nested=$(find "$_dir" -mindepth 2 -name '*.gguf' 2>/dev/null)
-    while IFS= read -r _f
-    do
-        [[ -n "$_f" ]] || continue
-        _name="${_f##*/}"
-        [[ -e "$_dir/$_name" ]] && continue
-        _invisible=$(( _invisible + 1 ))
-        [[ -n "$_eg" ]] || _eg="${_f#"$_dir"/}"
-    done <<< "$_nested"
-    (( _invisible > 0 )) || return 0
-    _msg="$_invisible GGUF file(s) sit BELOW $_dir with no flat counterpart (e.g. $_eg), so they get"
-    _msg+=" no registry row — this scan reads the top level only.  Flatten them with 'llm-pull',"
-    _msg+=" or re-download through the 'hf' wrapper, which lands files flat."
-    __tac_info "Warning" "$_msg" "$C_Warning"
-    return 0
 }
 
 # __model_is_embedding — true when a GGUF is an embedding export, which must never become a
@@ -423,30 +411,34 @@ function __model_scan() {
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
-    # BEFORE the loop, and unconditionally: a store that hides models is a state the
-    # operator has to hear about even when the flat half scans cleanly.  Measured
-    # 2026-11-05 — seven `models--*/` trees sat under the store holding 210.8 GiB of
-    # weights behind snapshots/** symlinks into blobs/, and `model scan` reported
-    # "No models found" (or a short list) with no mention of them.
-    __model_scan_report_nested "$LLAMA_MODEL_DIR"
-    local gguf
-    for gguf in "$LLAMA_MODEL_DIR"/*.gguf
+    # WALK the store, do not glob its top level.  Wayne, 2026-11-05: "i want to be able to
+    # use all llms in active or below. cant we point to the appropriate file nomatter where
+    # it is nested in active?"  The row's file column is the path RELATIVE to the store, so
+    # a flat name is unchanged (no directory component) and a nested one resolves through the
+    # same "$LLAMA_MODEL_DIR/$file" join every consumer already uses.  `-L` because a
+    # HuggingFace snapshot entry is a SYMLINK to blobs/<sha>, and following it is the point.
+    local rel fname gguf
+    while IFS= read -r gguf
     do
-        [[ ! -f "$gguf" ]] && continue
-        local fname
-        fname="${gguf##*/}"
+        [[ -f "$gguf" ]] || continue
+        rel="${gguf#"$LLAMA_MODEL_DIR"/}"
+        fname="${rel##*/}"
+        # The same model seen twice: a nested entry whose basename also exists at the top
+        # level is a flattened hardlink, and the FLAT one scans.  Without this a rescan after
+        # flattening would add a second row for every model that was flattened.
+        [[ "$rel" == */* && -e "$LLAMA_MODEL_DIR/$fname" ]] && continue
         local fbytes
-        fbytes=$(__model_scan_row_bytes "$LLAMA_MODEL_DIR" "$fname")
+        fbytes=$(__model_scan_row_bytes "$LLAMA_MODEL_DIR" "$rel")
         # A split model missing any shard cannot load, so it must not become a row at all:
         # the registry is what every consumer selects from, and a half-download presented
         # as a model is worse than an absent one (DEF-023, measured 2026-11-02).
         local _missing_shards
-        _missing_shards=$(__model_split_shards_missing "$LLAMA_MODEL_DIR" "$fname")
+        _missing_shards=$(__model_split_shards_missing "$LLAMA_MODEL_DIR" "$rel")
         if [[ -n "$_missing_shards" ]]
         then
             local _missing_list
             _missing_list=$(printf '%s' "$_missing_shards" | tr '\n' ' ')
-            __tac_info "Skipping" "incomplete split model $fname — missing $_missing_list" "$C_Warning"
+            __tac_info "Skipping" "incomplete split model $rel — missing $_missing_list" "$C_Warning"
             continue
         fi
         # Empty byte count = a LATER shard of a split GGUF: it gets no row of its own, and
@@ -464,7 +456,7 @@ function __model_scan() {
         # removed by hand on 2026-11-05 (see the Module Version note).
         if __model_is_embedding "$gguf" "$march"
         then
-            __tac_info "Skipping" "embedding model $fname — the registry holds chat models only" "$C_Dim"
+            __tac_info "Skipping" "embedding model $rel — the registry holds chat models only" "$C_Dim"
             continue
         fi
 
@@ -524,7 +516,7 @@ function __model_scan() {
         if [[ -f "$LLM_REGISTRY" ]]
         then
             local prev_row
-            prev_row=$(awk -F'|' -v f="$fname" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
+            prev_row=$(awk -F'|' -v f="$rel" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
             if [[ -n "$prev_row" ]]
             then
                 IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill prev_spec_type prev_spec_draft_model prev_spec_n_max prev_spec_ngl prev_spec_device prev_spec_accept_len prev_workload prev_ttft prev_bench_ctx prev_bench_max_chunks prev_bench_avg_prompt_tokens prev_repeat_penalty prev_repeat_last_n <<< "$prev_row"
@@ -561,7 +553,7 @@ function __model_scan() {
         # undo a name the operator set.  A genuinely new file still takes the GGUF's name
         # on its first scan, which is what makes the name editable at all.
         local _row_name="${_pname:-${_mname:-$fname}}"
-        local _reg_line="${num}|${_row_name}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}"
+        local _reg_line="${num}|${_row_name}|${rel}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}"
         _reg_line+="|${_final_ctx}|${threads}"
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         _reg_line+="|${prev_prefill}|${prev_p2_ctx}|${prev_p2_batch}|${prev_p2_ubatch}|${prev_p2_tps}|${prev_p2_prefill}"
@@ -579,7 +571,8 @@ function __model_scan() {
         echo "$_reg_line" >> "$tmpconf"
 
         # Progress: not printing each model individually
-    done
+    # swallow-ok: an unreadable store is reported by the caller's own mount/store check
+    done < <(find -L "$LLAMA_MODEL_DIR" -name '*.gguf' 2>/dev/null | sort)
 
     if (( num == 0 ))
     then

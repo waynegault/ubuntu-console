@@ -203,35 +203,67 @@ __fake_gguf() {
     head -c 512 /dev/zero | tr '\0' 'x' >> "$1"
 }
 
-@test "model scan: a GGUF nested below the store is counted and named, never silently skipped" {
-    # Measured 2026-11-05 — seven `models--*/` trees sat under ~/models/active holding
-    # 210.8 GiB of weights behind snapshots/** symlinks into blobs/, and `model scan`
-    # reported "No models found" without a word about them.  The scan's glob is
-    # deliberately flat (the store IS flat); the defect was the silence, not the glob.
-    mkdir -p "$LLAMA_MODEL_DIR/models--org--repo/snapshots/rev"
-    printf 'GGUF' > "$LLAMA_MODEL_DIR/models--org--repo/snapshots/rev/m.gguf"
+@test "model scan: a model nested below the store is registered by its relative path" {
+    # Wayne, 2026-11-05: "i want to be able to use all llms in active or below. cant we point
+    # to the appropriate file nomatter where it is nested in active?"  The row's file column
+    # is the path RELATIVE to the store, which a flat name already satisfies, and which the
+    # "$LLAMA_MODEL_DIR/$file" join every consumer uses resolves unchanged.
+    local d="$LLAMA_MODEL_DIR/models--org--repo/snapshots/rev"
+    mkdir -p "$d"
+    truncate -s 400M "$d/nested.gguf"        # sparse: over the 300 MB floor, no real blocks
+    # The WALK and the stored path are what this pins; the GGUF parser has its own coverage,
+    # so a fabricated header here would test the parser rather than the walk.
+    __gguf_metadata() { printf 'Nested model|qwen2|40|8192|8\n'; }
 
     run __model_scan
-    [ "$status" -eq 1 ]                      # no flat models, so no registry is written
-    [[ "$output" == *"1 GGUF file(s) sit BELOW"* ]] \
-        || { echo "a nested model was not counted: $output"; return 1; }
-    [[ "$output" == *"models--org--repo"* ]] \
-        || { echo "the report names no example: $output"; return 1; }
+    [ "$status" -eq 0 ] || { echo "scan failed: $output"; return 1; }
+    local rel
+    rel=$(awk -F'|' '$3 ~ /nested\.gguf$/ {print $3}' "$LLM_REGISTRY")
+    [ "$rel" = "models--org--repo/snapshots/rev/nested.gguf" ] \
+        || { echo "row did not keep the relative path: '$rel'"; return 1; }
+    [[ -f "$LLAMA_MODEL_DIR/$rel" ]] \
+        || { echo "the stored path does not resolve through the store join"; return 1; }
+}
 
-    # Flattened = a same-named file at the top level.  Once that exists the model scans, so
-    # the warning must go quiet — otherwise it nags about models that ARE registered.
-    : > "$LLAMA_MODEL_DIR/m.gguf"
-    run __model_scan
-    [[ "$output" != *"sit BELOW"* ]] \
-        || { echo "still reported a flattened (hardlinked) model: $output"; return 1; }
-    rm -f "$LLAMA_MODEL_DIR/m.gguf"
+@test "model scan: a flattened hardlink and its nested original are ONE row" {
+    # The same inode under two paths must not become two rows: flattening then rescanning
+    # would otherwise duplicate every model it flattened.
+    local d="$LLAMA_MODEL_DIR/models--org--repo/snapshots/rev"
+    mkdir -p "$d"
+    truncate -s 400M "$d/dupe.gguf"
+    ln "$d/dupe.gguf" "$LLAMA_MODEL_DIR/dupe.gguf"     # the flattened copy
+    __gguf_metadata() { printf 'Dupe|qwen2|40|8192|8\n'; }
 
-    # Control: the same scan on a flat-only store says nothing about nesting.  Without
-    # this, a helper that always printed would pass the assertions above.
-    mv "$LLAMA_MODEL_DIR/models--org--repo" "$BATS_TEST_TMPDIR/moved-repo"
     run __model_scan
-    [ "$status" -eq 1 ]
-    [[ "$output" != *"sit BELOW"* ]] || { echo "reported nesting on a flat store: $output"; return 1; }
+    [ "$status" -eq 0 ] || { echo "scan failed: $output"; return 1; }
+    [ "$(awk -F'|' '$3 ~ /dupe\.gguf/ {n++} END {print n+0}' "$LLM_REGISTRY")" -eq 1 ] \
+        || { echo "one model produced several rows:"; grep -F 'dupe.gguf' "$LLM_REGISTRY"; return 1; }
+    # ...and the FLAT name wins, so row numbers do not move for a flattened model.
+    [ "$(awk -F'|' '$3 == "dupe.gguf" {print $3}' "$LLM_REGISTRY")" = "dupe.gguf" ] \
+        || { echo "the nested copy was registered instead of the flat one"; return 1; }
+}
+
+@test "model scan: a split model's shards are looked for in its OWN directory" {
+    # A nested download keeps its shards beside it, never in the store root — grouping them
+    # at the root would report every nested split model as incomplete.
+    local d="$TMPDIR_BATS/deep/sub/dir"
+    mkdir -p "$d"
+    : > "$d/split-00001-of-00002.gguf"
+    run __model_split_shards_missing "$TMPDIR_BATS/deep" "sub/dir/split-00001-of-00002.gguf"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"split-00002-of-00002.gguf"* ]] \
+        || { echo "the missing shard was not reported: $output"; return 1; }
+
+    : > "$d/split-00002-of-00002.gguf"
+    run __model_split_shards_missing "$TMPDIR_BATS/deep" "sub/dir/split-00001-of-00002.gguf"
+    [ -z "$output" ] || { echo "a complete set was reported incomplete: $output"; return 1; }
+
+    # Control: a FLAT path (no directory component) keeps working — the relative-path form
+    # must not have replaced the bare-name case.
+    : > "$LLAMA_MODEL_DIR/flat-00001-of-00002.gguf"
+    run __model_split_shards_missing "$LLAMA_MODEL_DIR" "flat-00001-of-00002.gguf"
+    [[ "$output" == *"flat-00002-of-00002.gguf"* ]] \
+        || { echo "the flat case broke: $output"; return 1; }
 }
 
 @test "register-trained: refuses without the --benchmark/--held-out that make a row answerable" {
