@@ -37,8 +37,10 @@ esac
 SH
     cat > "$STUB_STATE/stub/gpu-busy.sh" <<'SH'
 #!/usr/bin/env bash
-# stub: prints a reason, exits with the test's chosen verdict (0 free, non-zero busy)
-printf "stub-reason\n"
+# stub: prints a reason, exits with the test's chosen verdict (0 free, non-zero busy). A
+# silent verdict is a real shape: gpu-busy.sh has exited non-zero with no text on this box
+# (standby-awake.log, 2026-11-04T23:59:13Z, logged only "gpu:").
+[[ -e "$STUB_STATE/busy_silent" ]] || printf "stub-reason\n"
 exit "$(cat "$STUB_STATE/busy_rc")"
 SH
     chmod +x "$STUB_STATE/stub/systemctl" "$STUB_STATE/stub/gpu-busy.sh"
@@ -104,6 +106,17 @@ SH
     [ "$status" -eq 0 ]
     [ ! -s "$STUB_STATE/calls" ]
     [ ! -s "$STANDBY_AWAKE_LOG" ]
+}
+
+@test "a silent GPU verdict still says why the box is being held awake" {
+    # Fail-safe direction: a non-zero exit keeps the keeper on. But an empty reason made the log
+    # entry unreadable ("gpu:"), so the exit code must appear in it.
+    printf "3\n" > "$STUB_STATE/busy_rc"
+    : > "$STUB_STATE/busy_silent"
+    run bash "$SCRIPT"
+    [ "$status" -eq 0 ]
+    grep -qx "start standby-keeper.service" "$STUB_STATE/calls"
+    grep -q "START keeper because gpu:gpu-busy.sh exited 3 with no output" "$STANDBY_AWAKE_LOG"
 }
 
 @test "the GPU probe is not run when a cheap signal already answers" {

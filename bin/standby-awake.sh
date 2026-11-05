@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # standby-awake.sh — the only thing that decides whether standby-keeper runs.
+#   v2 (2026-11-05). A silent GPU verdict is logged with its exit code instead of a bare "gpu:";
+#                    the timer-tick latency below is stated. No signal or decision changes.
 #   v1 (2026-11-04). INSTALLED and LIVE; reached through this repo's bin/ symlink.
 #
 # WHY A SUPERVISOR AND NOT A FLAG. The keeper must be on for EVERY measurement, whoever started it:
@@ -21,6 +23,12 @@
 #
 # FAIL-SAFE DIRECTION. An unreadable probe keeps the keeper running: awake costs power, damped clocks
 # cost a whole campaign of wrong numbers (see bin/standby-keeper.sh for the 3.3x measurement).
+#
+# LATENCY, MEASURED. The keeper starts on the next timer tick, so a run that begins just after one
+# waits up to 30 s for protection. Measured 2026-11-05: marker created ~00:19:49Z, "START keeper
+# because marker" logged 00:19:51Z (~2 s); removal stopped it 00:20:26Z, also one tick. The tick
+# itself survives Modern Standby — 45 of 46 expected fires landed inside the 22:43:56-23:06:44Z
+# standby window — so the wait is a scheduler delay, never a frozen clock.
 #
 # Known gap, stated rather than hidden: a measurement started with NONE of those three signals present
 # will run on a damped card. Add a signal here rather than a flag at the call site.
@@ -49,7 +57,16 @@ esac
 now=$(systemctl --user is-active "$KEEPER" 2>/dev/null)
 if [[ -z "$why" ]]; then
   out=$(gpu-busy.sh 2>&1); rc=$?
-  [[ "$rc" -ne 0 ]] && why="gpu:$(printf %s "$out" | tr "\n" " " | cut -c1-120)"
+  if [[ "$rc" -ne 0 ]]; then
+    if [[ -n "$out" ]]; then
+      why="gpu:$(printf %s "$out" | tr "\n" " " | cut -c1-120)"
+    else
+      # A non-zero exit with no text is the fail-safe direction (hold the box awake), but it used to
+      # log the reason as a bare "gpu:" — unreadable later (standby-awake.log, 2026-11-04T23:59:13Z).
+      # Name the code so the entry says why an unknown workload kept the box up.
+      why="gpu:gpu-busy.sh exited $rc with no output"
+    fi
+  fi
 fi
 if [[ -n "$why" ]]; then
   if [[ "$now" != "active" ]]; then
