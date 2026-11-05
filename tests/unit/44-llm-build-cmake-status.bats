@@ -312,8 +312,16 @@ _run_build() {
     out="${result#*$'\n'}"
     [ "$rc" -eq 0 ]
     [[ "$out" == *"Done"* ]]
-    # one line per cmake step (configure + build), each recorded while the lock was held
-    [ "$(grep -c . "$CMAKE_LOCK_LOG")" -eq 2 ]
+    # EVERY cmake step recorded the lock held: one record per invocation.  The equality,
+    # not a literal, so a step added to the flow cannot run unrecorded - the old "2"
+    # (configure + build) went stale the moment the companion-tool builds joined the pass,
+    # and it failed a correct build.
+    [ -s "$CMAKE_LOG" ]
+    [ "$(grep -c . "$CMAKE_LOCK_LOG")" -eq "$(grep -c . "$CMAKE_LOG")" ]
+    # the two steps that must exist at all, so the equality above cannot be satisfied by a
+    # shorter flow (and an unconfigured/unbuilt run cannot pass as quiet)
+    grep -qF -- "-B $LLAMA_ROOT/build" "$CMAKE_LOG"
+    grep -qF -- "--target llama-server" "$CMAKE_LOG"
     # every recorded step saw the lock held (`! grep` would never fail here: errexit is
     # suppressed for negated commands)
     [ "$(grep -c 'no-lock' "$CMAKE_LOCK_LOG")" -eq 0 ]
