@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 89
+#   v89 (2026-11-05): `model use` now REPORTS the always-on lane's measured state after the new
+#   model is up — unit active, and llama-server's /health on its declared port — instead of leaving
+#   "unaffected" to inference (Wayne's requirement).  A lane that is stopped, or active but not
+#   answering, is named as such: then memory search is down and this model is not the cause.  Silent
+#   under __BENCH_MODE, whose output is parsed.
 # Module Version: 88
 #   v88 (2026-11-05): `model use` no longer displaces a lane named in LLAMA_LANE_KEEP_UNITS.  The
 #   claim stopped every `llama-cuda-*` unit in the profile's lane table, the always-on embedding
@@ -1325,6 +1331,74 @@ function __model_use_claim_cuda_card() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_use_confirm_kept_lanes
+# @description Report, with a witness, that this box's always-on lanes are still
+#   serving once the new model holds the card.
+#
+#   Wayne's requirement (2026-11-05): "provide confirmation in 'model use N' that
+#   the embedding model is unaffected and still operational".  A reassuring line is
+#   not that: the claim no longer stops the lane (v88), and after the load it must
+#   still ANSWER.  So each kept lane is probed — `is-active` for the unit, and
+#   llama-server's /health on its declared port (/health needs no key, unlike
+#   /v1/models on the Xe lane, which sits behind --api-key-file).
+#
+#   A lane that is stopped, or active but not answering, is NAMED as such, because
+#   then memory search is down and this model is not the cause.  An unconditional
+#   "unaffected" would be a success message with no witness behind it.
+# @returns 0 always — this is a report, never a gate.
+# ---------------------------------------------------------------------------
+function __model_use_confirm_kept_lanes() {
+    # Bench output is parsed; the notice printer next door is silent for the same reason.
+    [[ -z "${__BENCH_MODE:-}" ]] || return 0
+    local _unit _lane _port _candidate _active _health _declared _msg
+    for _unit in ${LLAMA_LANE_KEEP_UNITS:-}
+    do
+        _port="" _declared=0
+        while IFS='|' read -r _lane _candidate
+        do
+            if [[ "$_lane" == "$_unit" ]]
+            then
+                _port="$_candidate"
+                _declared=1
+                break
+            fi
+        done <<< "${LLAMA_LANE_SPECS:-}"
+        _active=0
+        # swallow-ok: is-active exits non-zero for inactive OR unknown; either way the lane is not serving
+        systemctl --user is-active --quiet "$_unit" 2>/dev/null && _active=1
+        _health=""
+        if (( _active )) && [[ -n "$_port" ]] && command -v curl >/dev/null 2>&1
+        then
+            # swallow-ok: an unanswered probe IS the finding, and it is reported by name below
+            _health=$(curl -fsS -m 2 "http://127.0.0.1:$_port/health" 2>/dev/null || true)
+        fi
+        if (( _active )) && [[ "$_health" == *'"status":"ok"'* ]]
+        then
+            _msg="always-on lane $_unit untouched and still serving on :$_port"
+            _msg+=" (health ok) — memory search is unaffected by this model"
+            __tac_info "Memory" "$_msg" "$C_Dim"
+        elif (( _active ))
+        then
+            _msg="[always-on lane $_unit is active${_port:+ on :$_port} but /health did not answer ok"
+            _msg+=" — memory search is NOT confirmed. This model did not stop it;"
+            _msg+=" read the lane's journal.]"
+            __tac_info "Warning" "$_msg" "$C_Warning"
+        elif (( _declared ))
+        then
+            _msg="[always-on lane $_unit is NOT running — memory search is down, and the"
+            _msg+=" suspend marker this model wrote keeps the watchdog off it."
+            _msg+=" Start it when the card allows: systemctl --user start $_unit]"
+            __tac_info "Warning" "$_msg" "$C_Warning"
+        else
+            _msg="[$_unit is named in LLAMA_LANE_KEEP_UNITS but is not in this box's lane table"
+            _msg+=" — memory search cannot be confirmed; the profile and the keep list disagree]"
+            __tac_info "Warning" "$_msg" "$C_Warning"
+        fi
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __model_use_build_command
 # @description Build the server command array and configure mmap behavior.
 # @uses llm_backend, model_path, ctx, batch_size, ubatch_size, threads,
@@ -1902,7 +1976,11 @@ function __model_use() {
     local _launch_t0=$SECONDS
     __model_use_launch_server || return 1
     __model_use_wait_healthy "$_model_swap" "$(( SECONDS - _launch_t0 ))"
-    return $?
+    local _health_rc=$?
+    # Reported AFTER the model is up, so "still operational" is measured with the
+    # card already taken — the point of keeping the lane, not a claim about intent.
+    __model_use_confirm_kept_lanes
+    return $_health_rc
 }
 
 # ---------------------------------------------------------------------------

@@ -418,6 +418,69 @@ EOS
         || { echo "the spared lane was passed over in silence: $output"; return 1; }
 }
 
+# Wayne's requirement (2026-11-05): "provide confirmation in 'model use N' that the
+# embedding model is unaffected and still operational".  The confirmation has to be
+# MEASURED, so the failure this catches is the tempting shortcut — printing
+# "unaffected" from the keep-list alone.  That would read identically on a box where
+# the lane is stopped or answering nothing, which is exactly when the operator needs
+# to be told memory search is down.
+@test "gpu-exclusivity: model use's memory-search line is a measured report, not a reassurance" {
+    local sb="$TAC_TEST_TMPDIR/kept-lane-report"
+    mkdir -p "$sb/bin"
+    awk '/^function __model_use_confirm_kept_lanes\(\)/,/^}/' "$REPO_ROOT/scripts/11e-llm-model.sh" > "$sb/confirm.sh"
+    grep -q '__model_use_confirm_kept_lanes' "$sb/confirm.sh"
+
+    cat > "$sb/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+unit="${@: -1}"
+case "$*" in
+    *"is-active"*) [[ "$unit" == "${ACTIVE_UNIT:-}" ]] && exit 0; exit 3 ;;
+esac
+exit 0
+EOS
+    cat > "$sb/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+[[ "${HEALTH_OK:-0}" == "1" ]] || exit 7
+printf '{"status":"ok"}\n'
+EOS
+    chmod +x "$sb/bin/systemctl" "$sb/bin/curl"
+    cat > "$sb/probe.sh" <<'EOS'
+set -uo pipefail
+C_Dim=""
+C_Warning=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+source "$1"
+__model_use_confirm_kept_lanes
+EOS
+    local -r lane=llama-cuda-qwen3embedding-embed.service
+    local -r spec="$lane|18080"
+
+    # 1. Serving: named, with the port and a health witness.
+    run env PATH="$sb/bin:$PATH" LLAMA_LANE_SPECS="$spec" LLAMA_LANE_KEEP_UNITS="$lane" \
+        ACTIVE_UNIT="$lane" HEALTH_OK=1 bash "$sb/probe.sh" "$sb/confirm.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$lane untouched and still serving on :18080 (health ok)"* ]] \
+        || { echo "no witness in the confirmation: $output"; return 1; }
+
+    # 2. Active but not answering: must NOT claim it is unaffected.
+    run env PATH="$sb/bin:$PATH" LLAMA_LANE_SPECS="$spec" LLAMA_LANE_KEEP_UNITS="$lane" \
+        ACTIVE_UNIT="$lane" HEALTH_OK=0 bash "$sb/probe.sh" "$sb/confirm.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NOT confirmed"* ]] || { echo "silent about a dead endpoint: $output"; return 1; }
+    [[ "$output" != *"is unaffected"* ]] \
+        || { echo "claimed 'unaffected' for a lane that did not answer: $output"; return 1; }
+
+    # 3. Stopped: named as down, with the remedy, and never as operational.
+    run env PATH="$sb/bin:$PATH" LLAMA_LANE_SPECS="$spec" LLAMA_LANE_KEEP_UNITS="$lane" \
+        ACTIVE_UNIT="" HEALTH_OK=1 bash "$sb/probe.sh" "$sb/confirm.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"is NOT running"* ]] || { echo "silent about a stopped lane: $output"; return 1; }
+    [[ "$output" == *"systemctl --user start $lane"* ]] \
+        || { echo "no remedy named: $output"; return 1; }
+    [[ "$output" != *"still serving"* ]] \
+        || { echo "reported a stopped lane as serving: $output"; return 1; }
+}
+
 # The watchdog can only stand down for another run if gpu-busy.sh knows about it,
 # and its foreign-app signal CANNOT tell the two apart (same binary name).  The
 # ownership signal is evaluated in isolation here — gpu-busy.sh itself runs its
