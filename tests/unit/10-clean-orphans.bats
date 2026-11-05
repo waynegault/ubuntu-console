@@ -134,17 +134,21 @@ EOS
     [[ "$output" != *"PID=$SLEEP_PID"* ]]
 }
 
-# _stub_systemctl <is-active> <is-enabled> — answer the watchdog probe and record
-# every invocation, so the restart can be asserted without touching the real
-# user manager.
+# _stub_systemctl ACTIVE_STATE ENABLED_STATE — pin what the unit reports, and record
+# every invocation so the restart can be asserted without touching the real user
+# manager.  The values are interpolated HERE, into the stub's text.  Inside the stub
+# they would be its OWN arguments (`$1` is `--user`, `$2` the verb), which is how
+# these cases silently read the HOST's timer state: green on a box whose timer is
+# active, red on the runner where it was inactive (measured 2026-11-05).
 _stub_systemctl() {
+    local _active="$1" _enabled="$2"
     mkdir -p "$TAC_TEST_TMPDIR/bin"
     cat > "$TAC_TEST_TMPDIR/bin/systemctl" <<EOS
 #!/usr/bin/env bash
 echo "\$*" >> "$TAC_TEST_TMPDIR/systemctl.calls"
 case "\$*" in
-    *is-active*) echo "$1" ;;
-    *is-enabled*) echo "$2" ;;
+    *is-active*) echo "$_active" ;;
+    *is-enabled*) echo "$_enabled" ;;
     *start*) exit 0 ;;
 esac
 exit 0

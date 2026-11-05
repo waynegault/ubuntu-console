@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-11-05): the "Stopped unit" line is reported ONLY when something else
+#   proves a kill — an orphan, a stale lock/PID, or a stale keeper file.  The step's
+#   own comment already said "enabled but inactive proves nothing on its own"; the
+#   report ignored that and claimed a kill with no evidence, so a deliberate
+#   `systemctl --user stop` read as a leftover.  Caught by the runner, where the real
+#   timer was inactive (this box's was active, so the case passed locally).
 # ==============================================================================
 # clean-orphans.sh — Kill orphaned model bench infrastructure.
 #
@@ -253,7 +259,7 @@ done
 # 6. A killed bench stops llama-watchdog.timer and restarts it in a `finally`,
 #    which SIGKILL skips. On its own, "enabled but inactive" proves nothing — it
 #    is also what a deliberate `systemctl --user stop` looks like — so this is
-#    only acted on when something above proves a kill actually happened.
+#    REPORTED (and acted on) only when a stale lock/PID/keeper file proves a kill.
 WATCHDOG_TIMER="${LLAMA_WATCHDOG_TIMER_UNIT:-llama-watchdog.timer}"
 WATCHDOG_STOPPED=0
 if command -v systemctl >/dev/null 2>&1; then
@@ -283,7 +289,12 @@ fi
 (( STALE_LOCK == 1 )) && echo "  Stale lock: $BENCH_LOCK_FILE"
 (( STALE_PID == 1 )) && echo "  Stale PID:  $BENCH_PID_FILE"
 (( STALE_KEEPERS == 1 )) && echo "  Stale keeper PID files in $KEEPER_DIR/llm-keeper.*.pid"
-if (( WATCHDOG_STOPPED == 1 )); then
+# The evidence is the bench's OWN artifacts — a stale lock, PID or keeper file.
+# An orphan process is NOT evidence: a live keeper on a shared box can be reported
+# (measured 2026-10-20), so it must not decide this line either.
+if (( WATCHDOG_STOPPED == 1 )) \
+   && (( STALE_LOCK == 1 || STALE_PID == 1 || STALE_KEEPERS == 1 ))
+then
     echo "  Stopped unit: $WATCHDOG_TIMER (enabled, so a kill left it off rather than a deliberate stop)"
 fi
 
