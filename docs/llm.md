@@ -1506,6 +1506,15 @@ complex with no current runtime impact. Deferred.
 
 ## Purpose
 
+**llama.cpp lives in WSL only.** There is no Windows checkout, no Windows build and
+no Windows toolchain, and none is to be added (Wayne, 2026-11-05: _"lets not put
+llama.cpp tooling on windows. lets keep it exclusively on wsl"_). Measured the same
+day: the Windows host has git but no MSVC, cmake, CUDA toolkit or llama.cpp source,
+and the Windows driver reports the **same** 72 GiB GPU pool the guest sees, so a
+second lane would buy no model class while adding a build to keep in step. If a
+Windows binary is ever needed, take upstream's official
+`llama-b<tag>-bin-win-cuda-<ver>-<arch>.zip` as a binary — never build one here.
+
 The Tactical Console uses a **custom-tuned** `llama-server` binary built from
 source at [`github.com/ggml-org/llama.cpp`](https://github.com/ggml-org/llama.cpp)
 with CUDA acceleration. Building from source rather than using a generic prebuilt
