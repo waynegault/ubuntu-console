@@ -234,11 +234,18 @@
 # messages through warn() to stay at the old counts.  Recorded here as a deliberate act
 # so the provenance is visible; reverting the floor needs their two sites FIXED, not this
 # row lowered.  Carried through --update, which preserves this block (_preserved_comments).
+# 2026-11-05: 8.1.8 284 -> 283 — MY change-set.  `llm-build`'s lane-impact row used to test
+# the retired ~/.local/bin/cuda-llama-server symlink and print the served tree in one
+# 219-char line; it now compares LLAMA_CUDA_SERVER_BIN with the build tree and states the
+# result in a line under the limit.  The count FELL because code was fixed, not because a
+# check was relaxed — the guard it carried (name the tree a rebuild replaces) is now a
+# behavioural case in tests/unit/44.  Hand-edited, not --update, which rewrites the file
+# and drops other lanes' hand-added notes.
 4.2.4	20
 4.2.6	9
 4.3.6	31
 6.7	107
-8.1.8	284
+8.1.8	283
 9.5	118
 9.7	79
 10.4	41

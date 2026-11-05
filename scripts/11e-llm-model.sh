@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 84
+#   v84 (2026-11-05): `llm-build` refuses to build into a BUSY box, and holds the box's own
+#   heavy-job lock while cmake runs, so nothing else starts behind it.  The quiet gate reads
+#   `bin/heavy-job --status`'s WORD - that command exits 0 whether the lock is free or BUSY,
+#   so a status-code check would have read busy as quiet.  The gate runs BEFORE the pull, so a
+#   refusal leaves both the source and LLAMA_BUILD_VERSION where they were.  Both cmake steps
+#   run under `heavy-job --timeout ${LLAMA_BUILD_LOCK_WAIT_S:-0}`; losing the lock mid-flow
+#   (exit 3) is named as a refusal, not as a build failure.
 # Module Version: 83
 #   v83 (2026-11-05): `llm-build` builds the tree this box actually serves, and stops inventing a
 #   CUDA architecture.  It configured `$LLAMA_ROOT/build` unconditionally, so on the arm64 box -
@@ -4308,14 +4316,52 @@ function llm-build() {
     # launcher reads and leave the serving tree untouched.  Declared by the host
     # profile (LLAMA_BUILD_DIR); build/ remains the default for a box that declares none.
     local build_dir="${LLAMA_BUILD_DIR:-$root/build}"
+    # The tree must live inside the checkout being pulled.  The host profile exports an
+    # absolute LLAMA_BUILD_DIR, so a caller that overrides LLAMA_ROOT alone would pull one
+    # tree and build another - and report Done.  Measured 2026-11-05: a test fixture with a
+    # temp LLAMA_ROOT was configuring the real build-cuda/ through this gap.
+    if [[ "$build_dir" != "$root"/* ]]
+    then
+        __tac_info "Error" "LLAMA_BUILD_DIR (${build_dir}) is outside the checkout (${root}) - refusing" "$C_Error"
+        return 1
+    fi
+
+    # ---- Quiet gate -------------------------------------------------------------
+    # A rebuild saturates the box and rewrites the tree both lanes execute from, so it may
+    # only run into a QUIET box, and it takes the same lock other heavy jobs queue behind
+    # (bin/heavy-job).  `--status` exits 0 whether the lock is free or BUSY - the WORD is
+    # the answer, never the status - and an unreadable lock file is reported as not quiet,
+    # which is the safe reading.
+    local heavy_job="${TACTICAL_REPO_ROOT:?}/bin/heavy-job"
+    local lock_wait="${LLAMA_BUILD_LOCK_WAIT_S:-0}"
+    local lock_busy=false lock_note="free"
+    if [[ -n "${HEAVY_JOB_HELD:-}" ]]
+    then
+        lock_note="inside a heavy-job session (already held)"
+    else
+        local lock_state=""
+        # swallow-ok: an unreadable lock state is treated as NOT quiet by the branch below
+        lock_state="$("$heavy_job" --status 2>&1)"
+        case "$lock_state" in
+            *"heavy-job: free"*) ;;
+            *BUSY*) lock_busy=true; lock_note="${lock_state#heavy-job: }" ;;
+            *) lock_busy=true; lock_note="lock state unreadable: ${lock_state}" ;;
+        esac
+    fi
 
     # ---- Pre-flight plan: what would actually change, and what does it affect?
-    local lane_target="" lane_impact="nothing live serves this tree"
-    if [[ -L "$HOME/.local/bin/cuda-llama-server" ]]; then
-        # swallow-ok: a diagnostic for the build report: an unresolved lane target leaves the row blank rather than failing the report
-        lane_target=$(readlink -f "$HOME/.local/bin/cuda-llama-server" 2>/dev/null || true)
-        if [[ "$lane_target" == "$root/build/"* ]]; then
-            lane_impact="the LIVE CUDA lane (${LLAMA_CUDA_LANE_UNIT:-unresolved}) serves $lane_target - a rebuild replaces the binary under it (the running process keeps its copy; the next restart picks up the new one)"
+    # The thing a rebuild replaces is the binary the CUDA lane launches, so name THAT tree.
+    # This used to test the retired `~/.local/bin/cuda-llama-server` symlink, which no
+    # longer exists, so it printed "nothing live serves this tree" while both units ran
+    # build-cuda/ (measured 2026-11-05 - a false reassurance before a destructive rebuild).
+    local lane_target="${LLAMA_CUDA_SERVER_BIN:-}"
+    local lane_unit="${LLAMA_CUDA_LANE_UNIT:-unit unset}"
+    local lane_impact="no CUDA lane binary resolves in this environment"
+    if [[ -n "$lane_target" ]]; then
+        if [[ "${lane_target%/bin/llama-server}" == "$build_dir" ]]; then
+            lane_impact="the CUDA lane (${lane_unit}) serves THIS tree - a rebuild replaces its binary"
+        else
+            lane_impact="the CUDA lane serves ${lane_target}, NOT this tree"
         fi
     fi
 
@@ -4352,9 +4398,18 @@ function llm-build() {
         echo "  pull:     ${upstream} -> ${target:-?}   (${behind:-?} commits behind)"
         echo "  flags:    ${churn:-?}"
     fi
-    echo "  build:    $root/build   ($build_mode)"
+    echo "  build:    $build_dir   ($build_mode)"
+    echo "  lock:     $lock_note"
     echo "  lane:     $lane_impact"
     echo ""
+
+    # Refuse BEFORE the pull: a pull that moved the source while the build did not happen
+    # would leave LLAMA_BUILD_VERSION advertising a commit the serving binary is not.
+    if [[ "$lock_busy" == "true" ]]
+    then
+        __tac_info "Refused" "the box is not quiet, so nothing is pulled and nothing is built - ${lock_note}" "$C_Error"
+        return 1
+    fi
 
     if [[ "$no_pull" != "true" && "$yes" != "true" ]]; then
         if [[ -t 0 ]]; then
@@ -4421,7 +4476,7 @@ function llm-build() {
     # Configure with CMake (skip if --quick and CMakeCache exists)
     if [[ "$quick" != "true" || ! -f "$build_dir/CMakeCache.txt" ]]; then
         __tac_info "Configure" "Running CMake with CUDA flags (sm_${cuda_arch}) in ${build_dir} ..." "$C_Info"
-        cmake -B "$build_dir" \
+        "$heavy_job" --timeout "$lock_wait" cmake -B "$build_dir" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CUDA_ARCHITECTURES=${cuda_arch} \
             -DGGML_CUDA=ON \
@@ -4444,6 +4499,12 @@ function llm-build() {
         # between the pipeline and the assignment clobbers PIPESTATUS (measured), and
         # the expansion happens before the builtin runs, so this form is correct.
         local configure_rc=${PIPESTATUS[0]}
+        # 3 is bin/heavy-job's own status for "lock not acquired within --timeout" - not a
+        # cmake failure: the box stopped being quiet between the gate and this step.
+        if [[ $configure_rc -eq 3 ]]; then
+            __tac_info "Refused" "heavy-job lock not acquired for configure - box not quiet, nothing built" "$C_Error"
+            return 1
+        fi
         if [[ $configure_rc -ne 0 ]]; then
             __tac_info "Error" "CMake configuration failed (exit=$configure_rc)" "$C_Error"
             return 1
@@ -4454,11 +4515,16 @@ function llm-build() {
 
     # Build
     __tac_info "Build" "Compiling llama-server (${jobs} threads) ..." "$C_Info"
-    cmake --build "$build_dir" --target llama-server -j"$jobs" 2>&1 | tail -5
+    "$heavy_job" --timeout "$lock_wait" cmake --build "$build_dir" --target llama-server -j"$jobs" 2>&1 | tail -5
     # cmake's status, not tail's: `$?` here was tail's 0, so a failed build read as
     # success and the script then reported a binary it had not produced.  Captured in
     # the same command as `local` — see the configure check above for why.
     local rc=${PIPESTATUS[0]}
+    # 3 is bin/heavy-job's lock-timeout status, as at the configure step above.
+    if [[ $rc -eq 3 ]]; then
+        __tac_info "Refused" "heavy-job lock not acquired for the build - box not quiet" "$C_Error"
+        return 1
+    fi
     if [[ $rc -ne 0 ]]; then
         __tac_info "Error" "Build failed (exit=$rc)" "$C_Error"
         return $rc

@@ -34,24 +34,49 @@ _load_modules() {
 
 setup() {
     _load_modules
+    # 01-constants sources this box's host profile, which exports an ABSOLUTE
+    # LLAMA_BUILD_DIR/LLAMA_CUDA_ARCH.  The fixture must drive those instead, or every
+    # case targets the real serving tree (measured: build-cuda/ was configured into a case
+    # whose LLAMA_ROOT was a temp dir; llm-build now refuses that mismatch outright).
+    unset LLAMA_BUILD_DIR LLAMA_CUDA_ARCH
     LLAMA_ROOT="$(mktemp -d)"
     mkdir -p "$LLAMA_ROOT/build/bin"
     # A STALE binary: this is what the pre-fix path reports as "built".
     printf '#!/usr/bin/env bash\nexit 0\n' > "$LLAMA_ROOT/build/bin/llama-server"
     chmod +x "$LLAMA_ROOT/build/bin/llama-server"
     export LLAMA_ROOT
-    # cmake stub: `-B` is the configure step, `--build` the build step.  A stub runs
-    # in the pipeline subshell because shell functions are inherited there.  When
-    # CMAKE_LOG is set, every invocation's arguments are recorded so a case can assert
-    # WHICH tree and WHICH architecture reached cmake, not merely that it ran.
-    cmake() {
-        [[ -z "${CMAKE_LOG:-}" ]] || printf '%s\n' "$*" >> "$CMAKE_LOG"
-        case "${1:-}" in
-            -B) return "${STUB_CONFIGURE_RC:-0}" ;;
-            --build) return "${STUB_BUILD_RC:-0}" ;;
-            *) return 0 ;;
-        esac
-    }
+    # llm-build now runs every cmake step under bin/heavy-job, which EXECs the command:
+    # a shell function would not be inherited by that child, so cmake is a script on PATH.
+    # It records its arguments (CMAKE_LOG) and whether the heavy-job lock was held at that
+    # moment (CMAKE_LOCK_LOG) - "stays quiet" is the property, not "started".
+    MOCK_BIN_DIR="$BATS_TEST_TMPDIR/mockbin"
+    mkdir -p "$MOCK_BIN_DIR"
+    cat > "$MOCK_BIN_DIR/cmake" <<'CMAKE_STUB'
+#!/usr/bin/env bash
+[[ -z "${CMAKE_LOG:-}" ]] || printf '%s\n' "$*" >> "$CMAKE_LOG"
+if [[ -n "${CMAKE_LOCK_LOG:-}" && -n "${HEAVY_JOB_LOCK:-}" ]]; then
+    if flock -n "$HEAVY_JOB_LOCK" -c true 2>/dev/null; then
+        echo "no-lock" >> "$CMAKE_LOCK_LOG"
+    else
+        echo "locked" >> "$CMAKE_LOCK_LOG"
+    fi
+fi
+case "${1:-}" in
+    -B) exit "${STUB_CONFIGURE_RC:-0}" ;;
+    --build) exit "${STUB_BUILD_RC:-0}" ;;
+    *) exit 0 ;;
+esac
+CMAKE_STUB
+    chmod +x "$MOCK_BIN_DIR/cmake"
+    export PATH="$MOCK_BIN_DIR:$PATH"
+    # Exported, because the cmake stub is a child process now (it used to be a shell
+    # function).  A case may reassign it; an exported name stays exported.
+    export CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    # The box's real lock is /tmp/heavy-job.lock; these cases must never touch it, so the
+    # suite points heavy-job at its own file and starts from "not already inside a job".
+    export HEAVY_JOB_LOCK="$BATS_TEST_TMPDIR/heavy-job.lock"
+    : > "$HEAVY_JOB_LOCK"
+    unset HEAVY_JOB_HELD
 }
 
 teardown() {
@@ -63,16 +88,16 @@ teardown() {
 # test's cwd is untouched; `|| rc=$?` keeps it errexit-safe.
 _run_build() {
     local out rc=0
-    out="$(llm-build --no-pull --yes 2>&1)" || rc=$?
+    out="$(llm-build "$@" 2>&1)" || rc=$?
     printf '%s\n%s\n' "$rc" "$out"
 }
 
 @test "llm-build: a failed CONFIGURE is named and fails, not reported as done (card 50ab5c38)" {
     # Catches: the configure pipeline reading tail's 0, so a failed cmake is
     # invisible and the stale binary is reported as a fresh build.
-    STUB_CONFIGURE_RC=1
+    export STUB_CONFIGURE_RC=1
     local result rc out
-    result="$(_run_build)"
+    result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     out="${result#*$'\n'}"
     [ "$rc" -ne 0 ]
@@ -83,10 +108,10 @@ _run_build() {
 @test "llm-build: a failed BUILD is named and fails, not reported as done (card 50ab5c38)" {
     # Catches: `local rc=$?` reading tail's 0 after `cmake --build ... | tail -5`,
     # so a failed build returns success over the stale binary.
-    STUB_CONFIGURE_RC=0
-    STUB_BUILD_RC=1
+    export STUB_CONFIGURE_RC=0
+    export STUB_BUILD_RC=1
     local result rc out
-    result="$(_run_build)"
+    result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     out="${result#*$'\n'}"
     [ "$rc" -ne 0 ]
@@ -98,10 +123,10 @@ _run_build() {
     # The control that keeps the two cases above honest: both stubs succeed, so the
     # function must reach the Done report and return 0.  A "fix" that merely returned
     # non-zero would fail here.
-    STUB_CONFIGURE_RC=0
-    STUB_BUILD_RC=0
+    export STUB_CONFIGURE_RC=0
+    export STUB_BUILD_RC=0
     local result rc out
-    result="$(_run_build)"
+    result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     out="${result#*$'\n'}"
     [ "$rc" -eq 0 ]
@@ -126,7 +151,7 @@ _run_build() {
     chmod +x "$LLAMA_BUILD_DIR/bin/llama-server"
 
     local result rc out
-    result="$(_run_build)"
+    result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     out="${result#*$'\n'}"
     [ "$rc" -eq 0 ]
@@ -147,7 +172,7 @@ _run_build() {
     PATH="$BATS_TEST_TMPDIR/driver:$PATH"
 
     local result rc
-    result="$(_run_build)"
+    result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     [ "$rc" -eq 0 ]
     grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=121" "$CMAKE_LOG"
@@ -165,7 +190,7 @@ _run_build() {
     LLAMA_CUDA_ARCH=121
 
     local result rc
-    result="$(_run_build)"
+    result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     [ "$rc" -eq 0 ]
     grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=121" "$CMAKE_LOG"
@@ -183,11 +208,111 @@ _run_build() {
     unset LLAMA_CUDA_ARCH
 
     local result rc out
-    result="$(_run_build)"
+    result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     out="${result#*$'\n'}"
     [ "$rc" -ne 0 ]
     [[ "$out" == *"LLAMA_CUDA_ARCH"* ]]
     [[ "$out" != *"Done"* ]]
     [ ! -s "$CMAKE_LOG" ]
+}
+
+# ---- v84 (2026-11-05): the quiet gate --------------------------------------
+# A rebuild saturates the box and rewrites the tree both lanes execute from, so it
+# may only run into a QUIET box and must HOLD the lock while it does.  bin/heavy-job
+# is the box's one lock; `--status` exits 0 whether free or BUSY, which is why these
+# cases drive the lock itself rather than trusting a status code.
+
+@test "llm-build: refuses to build into a BUSY box, before the pull (v84)" {
+    # Catches: a build starting behind a bench/autotune/pytest that holds the lock - the
+    # two then fight for every core, and (worse) the pull moves the source under a live
+    # lane while the build waits.  --no-pull is deliberately NOT passed here, so a build
+    # that got past the gate would print "Fetching latest upstream"; refusal must come first.
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t \
+        commit -q --allow-empty -m fixture
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    # Hold the lock in THIS shell: a background holder leaks its `sleep` child, which
+    # inherits the locked descriptor and keeps the lock into the next case (measured - it
+    # made the v84 lock case pass against the v83 module).
+    exec 9>"$HEAVY_JOB_LOCK"
+    flock -x 9
+    # Control: the lock really is held, and a fresh open disagrees.  Written as a positive
+    # test because errexit is suppressed for `! cmd`, so `! flock ...` as a bare assertion
+    # can never fail this case.
+    local still_free=0
+    flock -n "$HEAVY_JOB_LOCK" -c true 2>/dev/null || still_free=1
+    [ "$still_free" -eq 1 ]
+
+    local result rc=0 out=""
+    # 9>&- keeps the descriptor out of the child, so the gate sees a BUSY lock the way a
+    # real second lane would, not an inherited one.
+    out="$( llm-build --yes 9>&- 2>&1 )" || rc=$?
+    exec 9>&-
+
+    [ "$rc" -ne 0 ]
+    [[ "$out" == *"not quiet"* ]]
+    [[ "$out" != *"Fetching latest upstream"* ]]
+    [ ! -s "$CMAKE_LOG" ]
+}
+
+@test "llm-build: the plan names the tree the lane serves (v84)" {
+    # Catches: the old check on the retired ~/.local/bin/cuda-llama-server symlink, which
+    # printed "nothing live serves this tree" while both units ran build-cuda/ - the row an
+    # operator reads immediately before a rebuild that replaces the serving binary.
+    export HOME="$BATS_TEST_TMPDIR/planhome"
+    mkdir -p "$HOME"
+    export LLAMA_CUDA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
+    export LLAMA_CUDA_LANE_UNIT="llama-test-lane.service"
+
+    local result out
+    result="$(_run_build --no-pull --yes)"
+    out="${result#*$'\n'}"
+    [[ "$out" == *"serves THIS tree"* ]]
+    [[ "$out" == *"llama-test-lane.service"* ]]
+    [[ "$out" != *"nothing live serves this tree"* ]]
+}
+
+@test "llm-build: refuses a build tree outside the checkout (v84)" {
+    # Catches: a build landing where the pull never went - the host profile exports an
+    # absolute LLAMA_BUILD_DIR, so overriding LLAMA_ROOT alone used to configure (and
+    # report Done for) a tree the checkout does not contain.  Measured 2026-11-05.
+    export LLAMA_BUILD_DIR="$BATS_TEST_TMPDIR/elsewhere"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -ne 0 ]
+    [[ "$out" == *"outside the checkout"* ]]
+    [ ! -s "$CMAKE_LOG" ]
+}
+
+@test "llm-build: holds the heavy-job lock while cmake runs (v84)" {
+    # Criterion (v84): "stays quiet".  Catches: a gate that checks the lock and then
+    # releases it, leaving the compile unprotected - a bench would start mid-build.
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    CMAKE_LOCK_LOG="$BATS_TEST_TMPDIR/cmake-lock.log"
+    : > "$CMAKE_LOG"
+    : > "$CMAKE_LOCK_LOG"
+    export CMAKE_LOG CMAKE_LOCK_LOG
+    # Precondition: nothing else holds the lock, so "locked" below can only be this build.
+    flock -n "$HEAVY_JOB_LOCK" -c true
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"Done"* ]]
+    # one line per cmake step (configure + build), each recorded while the lock was held
+    [ "$(grep -c . "$CMAKE_LOCK_LOG")" -eq 2 ]
+    # every recorded step saw the lock held (`! grep` would never fail here: errexit is
+    # suppressed for negated commands)
+    [ "$(grep -c 'no-lock' "$CMAKE_LOCK_LOG")" -eq 0 ]
+    # and heavy-job released it on exit rather than leaking the box's lock
+    flock -n "$HEAVY_JOB_LOCK" -c true
 }

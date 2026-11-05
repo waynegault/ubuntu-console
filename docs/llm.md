@@ -604,8 +604,9 @@ dodging it: it links neither `libcuda` nor `libOpenCL`, so it cannot create a
 context, cannot take a card from a lane that needs one, and leaves the dxgkrnl
 context-cycle ledger untouched (`--list-devices` reports none).
 
-`llm-build` builds only the CUDA tree (`-DGGML_CUDA=ON` into `build/`), so this one
-is configured directly.  Reproduce it with:
+`llm-build` builds only the CUDA tree (`-DGGML_CUDA=ON` into `${LLAMA_BUILD_DIR}` —
+`build-cuda/` here, `build/` on the x86 box), so this one is configured directly.
+Reproduce it with:
 
 ```bash
 cmake -S ~/llama.cpp -B ~/llama.cpp/build-cpu \
@@ -1754,6 +1755,22 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > runs its own `git pull --ff-only` before configuring and now refuses to
 > proceed without confirmation — the manual steps above bypass that guard, so
 > prefer `llm-build --no-pull` inside a validation window.
+>
+> **Where the code comes from.** `llm-build` takes the source from upstream's
+> default branch — `git pull --ff-only` on the tracked `origin/master` — never
+> from a release archive. A `b<tag>` tarball is a binary; pinning one means
+> `git checkout --detach b<tag>` and then `llm-build --no-pull`, not an install.
+> A local commit or a diverged branch makes the pull fail loudly rather than merge.
+>
+> **The quiet gate (v84).** A rebuild saturates the box and rewrites the tree both
+> lanes execute from, so `llm-build` refuses to start when `bin/heavy-job` is BUSY
+> (a bench, autotune, BATS-carrying pytest session or ingest holds it), naming the
+> holder — and it checks before pulling, so a refused build cannot leave
+> `LLAMA_BUILD_VERSION` advertising a commit the binary is not. Both cmake steps
+> then run under that same lock, so a queued job waits instead of compiling beside
+> the build. `LLAMA_BUILD_LOCK_WAIT_S` (default `0` = do not wait) bounds the
+> step-level wait; losing the lock mid-flow is reported as a refusal, not as a
+> build failure.
 
 ---
 
