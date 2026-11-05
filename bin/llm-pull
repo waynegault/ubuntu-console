@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# llm-pull - fetch GGUF files from Hugging Face straight into the model tree, FLAT.
+# The serving lanes pass an explicit -m "$HOME/models/active/<file>.gguf", so the
+# download must land at that path with no per-repo subdirectory. llama.cpp's own
+# `-hf` cannot do that: it always builds models--<org>--<repo>/blobs/<oid> plus
+# symlinked snapshots under the cache root, whatever LLAMA_CACHE is set to.
+# This wrapper stages with `hf download --local-dir`, then MOVES each matched file
+# into the destination, so the tree stays flat and the staging area is removed.
+# AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
+#   v1 (2026-11-05): first cut. Wayne asked for hf downloads to land in
+#   ~/models/active with no further folders inside it.
+VERSION="1.0.0"
+
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
+    echo "llm-pull $VERSION"
+    exit 0
+fi
+
+set -uo pipefail
+
+# warn - report a problem on stderr.  One home for the formatting, so a message
+# cannot drift between the note, the refusal and the failure paths.
+warn() {
+    printf '%s\n' "$@" >&2
+}
+
+# usage - print the interface and the two environment variables that move it.
+usage() {
+    cat <<'EOF'
+usage: llm-pull <repo> <include-glob> [--revision REV] [--force]
+
+  <repo>          Hugging Face repo, e.g. ggml-org/gpt-oss-120b-GGUF
+  <include-glob>  quoted glob of the files to take, e.g. '*MXFP4.gguf' or
+                  '*UD-IQ4_XS-0000*-of-00004.gguf' (shards come as a set)
+
+  --revision REV  git revision of the repo (branch, tag or commit)
+  --force         overwrite a file already in the destination
+
+Environment:
+  LLM_MODELS_DIR     destination, default $HOME/models/active
+  LLM_PULL_STAGING   staging root, default $HOME/models/.pull-staging
+                     (same filesystem as the destination, so the move is a rename)
+EOF
+}
+
+# err - report a failure on stderr and exit non-zero; no caller continues past it.
+err() {
+    warn "llm-pull: $*"
+    exit 1
+}
+
+repo=""
+include=""
+revision=""
+force=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -r|--revision)
+            [[ $# -ge 2 ]] || err "--revision needs a value"
+            revision="$2"
+            shift 2
+            ;;
+        --force)
+            force=1
+            shift
+            ;;
+        --)
+            shift
+            ;;
+        -*)
+            err "unknown option: $1 (see --help)"
+            ;;
+        *)
+            if [[ -z "$repo" ]]; then
+                repo="$1"
+            elif [[ -z "$include" ]]; then
+                include="$1"
+            else
+                err "unexpected extra argument: $1 (see --help)"
+            fi
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$repo" ]] || err "no repo given (see --help)"
+[[ -n "$include" ]] || err "no include glob given (see --help)"
+[[ "$repo" == */* ]] || err "repo must be <org>/<name>, got: $repo"
+
+command -v hf >/dev/null 2>&1 || err "hf not found on PATH (install huggingface_hub[cli])"
+
+dest_dir="${LLM_MODELS_DIR:-$HOME/models/active}"
+staging_root="${LLM_PULL_STAGING:-$HOME/models/.pull-staging}"
+
+mkdir -p "$dest_dir" || err "cannot create destination: $dest_dir"
+mkdir -p "$staging_root" || err "cannot create staging root: $staging_root"
+
+# Same note `model download` prints: gated and private repos need a token, and a
+# missing one fails later with a 401 that says nothing about the cause.
+if [[ -z "${HF_TOKEN:-}" ]]; then
+    warn 'llm-pull: note: HF_TOKEN is not set, so gated or private repos will fail.'
+    warn '          set it with: export HF_TOKEN=hf_...'
+fi
+
+stage="$(mktemp -d "$staging_root/$(printf '%s' "$repo" | tr '/' '_').XXXXXX")" \
+    || err "cannot create a staging directory under $staging_root"
+
+# cleanup - drop the staging directory on every exit path, including a refusal
+# after the download, so a failed run does not leave a second copy of the weights.
+cleanup() {
+    if [[ -d "$stage" ]]; then
+        rm -rf -- "$stage"
+    fi
+}
+trap cleanup EXIT
+
+hf_args=(download "$repo" --include "$include" --local-dir "$stage")
+if [[ -n "$revision" ]]; then
+    hf_args+=(--revision "$revision")
+fi
+
+printf 'llm-pull: %s  include=%s%s\n' "$repo" "$include" \
+    "${revision:+  revision=$revision}"
+
+if ! hf "${hf_args[@]}"; then
+    err "hf download failed for $repo ($include)"
+fi
+
+mapfile -d '' found < <(find "$stage" -type f -name '*.gguf' -print0 | sort -z)
+[[ ${#found[@]} -gt 0 ]] || err "hf reported success but no *.gguf matched '$include' under $stage"
+
+# basenames must be unique, or the move silently overwrites one shard with another.
+mapfile -t names < <(printf '%s\n' "${found[@]##*/}" | sort)
+dupes="$(printf '%s\n' "${names[@]}" | uniq -d)"
+[[ -z "$dupes" ]] || err "duplicate basenames in the download, refusing to flatten: $dupes"
+
+# check every destination BEFORE moving anything, so a refusal leaves the tree untouched.
+existing=()
+for src in "${found[@]}"; do
+    target="$dest_dir/${src##*/}"
+    if [[ -e "$target" && "$force" -eq 0 ]]; then
+        existing+=("$target")
+    fi
+done
+if [[ ${#existing[@]} -gt 0 ]]; then
+    warn 'llm-pull: already present (use --force to replace):' "${existing[@]/#/  }"
+    exit 1
+fi
+
+for src in "${found[@]}"; do
+    target="$dest_dir/${src##*/}"
+    if ! mv -f -- "$src" "$target"; then
+        err "move failed: $src -> $target"
+    fi
+    printf 'llm-pull: %s\n' "$target"
+done
+
+# llama.cpp takes the FIRST shard and finds the rest beside it. `found` is sorted,
+# so the first shard-numbered name wins; taking the last one would name shard N.
+first_shard=""
+for src in "${found[@]}"; do
+    base="${src##*/}"
+    if [[ -z "$first_shard" && ( "$base" == *-00001-of-* || "$base" == *-00002-of-* ) ]]; then
+        first_shard="$dest_dir/$base"
+    fi
+done
+
+printf '\nllm-pull: %d file(s) in %s\n' "${#found[@]}" "$dest_dir"
+if [[ -n "$first_shard" ]]; then
+    printf 'llm-pull: sharded set, pass the lowest shard:\n  -m %s\n' "$first_shard"
+elif [[ ${#found[@]} -eq 1 ]]; then
+    printf 'llm-pull: pass:\n  -m %s\n' "$dest_dir/${found[0]##*/}"
+fi

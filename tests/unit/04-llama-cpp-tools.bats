@@ -283,3 +283,89 @@ CURL
     # The build field is empty: `b7` is an ancestor segment, not a build tag.
     [[ "$output" == *"custom-tuned|$decoy||"* ]]
 }
+
+# ── bin/llm-pull ──────────────────────────────────────────────────────────────
+# llama.cpp's own `-hf` cannot satisfy "land flat in ~/models/active": it always
+# builds models--<org>--<repo>/blobs/<oid> over symlinked snapshots under the
+# cache root, and LLAMA_CACHE only moves that root. The lanes launch with an
+# explicit -m "$HOME/models/active/<file>.gguf", so the wrapper stages with
+# `hf download --local-dir` and MOVES the matched files out. These cases stub
+# `hf` and assert the OBSERVABLE — the final path, with no per-repo directory
+# left in the model tree — because a success message without a move is the shape
+# this wrapper exists to avoid.
+stub_hf() {
+    cat > "$MOCK_BIN_DIR/hf" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+localdir=""
+include=""
+while (($#)); do
+    case "$1" in
+        --local-dir) localdir="$2"; shift 2 ;;
+        --include) include="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "$localdir" && -n "$include" ]]
+# nest it, as unsloth's per-quant subdirectories do
+mkdir -p "$localdir/Q4_K_M"
+if [[ "$include" == *of-00002* ]]; then
+    printf 'w1' > "$localdir/Q4_K_M/tiny-00001-of-00002.gguf"
+    printf 'w2' > "$localdir/Q4_K_M/tiny-00002-of-00002.gguf"
+else
+    printf 'weights' > "$localdir/Q4_K_M/tiny-Q4_K_M.gguf"
+fi
+STUB
+    chmod +x "$MOCK_BIN_DIR/hf"
+}
+
+@test "llm-pull lands a nested download flat, with no per-repo directory" {
+    stub_hf
+    run "$REPO_ROOT/bin/llm-pull" acme/tiny '*tiny-Q4_K_M.gguf'
+    [ "$status" -eq 0 ]
+
+    [ -f "$HOME/models/active/tiny-Q4_K_M.gguf" ]
+    # the whole point: nothing but the file itself in the model tree
+    run find "$HOME/models/active" -mindepth 1 -type d
+    [ -z "$output" ]
+    # and the staging copy is gone rather than left as a second 60 GB tree
+    run find "$HOME/models/.pull-staging" -mindepth 1
+    [ -z "$output" ]
+}
+
+@test "llm-pull moves a sharded set and points at the lowest shard" {
+    stub_hf
+    run "$REPO_ROOT/bin/llm-pull" acme/tiny '*of-00002.gguf'
+    [ "$status" -eq 0 ]
+
+    [ -f "$HOME/models/active/tiny-00001-of-00002.gguf" ]
+    [ -f "$HOME/models/active/tiny-00002-of-00002.gguf" ]
+    [[ "$output" == *"-m $HOME/models/active/tiny-00001-of-00002.gguf"* ]]
+}
+
+@test "llm-pull refuses to overwrite a model unless --force is given" {
+    stub_hf
+    mkdir -p "$HOME/models/active"
+    printf 'older' > "$HOME/models/active/tiny-Q4_K_M.gguf"
+
+    run "$REPO_ROOT/bin/llm-pull" acme/tiny '*tiny-Q4_K_M.gguf'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already present"* ]]
+    # the existing file is untouched
+    [ "$(cat "$HOME/models/active/tiny-Q4_K_M.gguf")" = "older" ]
+
+    run "$REPO_ROOT/bin/llm-pull" acme/tiny '*tiny-Q4_K_M.gguf' --force
+    [ "$status" -eq 0 ]
+    [ "$(cat "$HOME/models/active/tiny-Q4_K_M.gguf")" = "weights" ]
+}
+
+@test "llm-pull warns about an unset HF_TOKEN and still succeeds" {
+    stub_hf
+    unset HF_TOKEN
+
+    run "$REPO_ROOT/bin/llm-pull" acme/tiny '*tiny-Q4_K_M.gguf'
+    [ "$status" -eq 0 ]
+    # the same note `model download` prints: a 401 later says nothing about the cause
+    [[ "$output" == *"HF_TOKEN is not set"* ]]
+    [ -f "$HOME/models/active/tiny-Q4_K_M.gguf" ]
+}

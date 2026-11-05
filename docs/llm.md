@@ -139,6 +139,28 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 | `wake` | Lock GPU persistence mode (`nvidia-smi -pm 1`) to prevent WDDM sleep |
 | `mlogs` | Open the llama-server log file in VS Code |
 
+### Where a download lands
+
+Every lane launches with an explicit `-m "$LLAMA_MODEL_DIR/<file>.gguf"`, so the
+model tree is deliberately **flat** — no per-repo subdirectories. Three download
+paths behave differently, and only the first two respect that.
+
+| Path | Lands in | Notes |
+|---|---|---|
+| `model download <repo>:<file>` | `$LLAMA_MODEL_DIR` (`~/models/active` on this host), flat | Calls `hf download --local-dir "$LLAMA_MODEL_DIR"`. The filename may **not** contain `/`, so this is for GGUF files at the repo root only, named exactly once per shard. |
+| `llm-pull <repo> <glob>` | `$LLAMA_MODEL_DIR`, flat | For per-quant subdirectories (`Q4_K_M/…`) and sharded sets. Stages under `$HOME/models/.pull-staging`, moves each match out, removes the staging copy, then prints the `-m` line (lowest shard for a split set). Refuses to overwrite an existing file without `--force`. |
+| `llama-server -hf <repo>` / `--spec-draft-hf` | `~/.cache/llama.cpp` | Always `models--<org>--<repo>/blobs/<oid>` plus **symlinked** `snapshots/<commit>/<file>`. `LLAMA_CACHE` relocates that root; it cannot flatten the layout. Copy out with `cp -L`, or delete the cache root and the runs that point at it break. |
+| bare `hf download <repo>` | `~/.cache/huggingface` (or `HF_HOME`) | The Python tooling's cache. Unrelated to llama.cpp. |
+
+`llm-pull` is the gap-filler, not a replacement: use `model download` for a plain
+root-level file, and `llm-pull` when the quant sits in a subdirectory or the model
+is split across shards, e.g.
+
+```bash
+llm-pull unsloth/GLM-4.5-Air-GGUF '*UD-Q4_K_XL-0000*-of-00002.gguf'
+llm-pull ggml-org/gpt-oss-120b-GGUF '*MXFP4.gguf' --revision main
+```
+
 ## State File
 
 When `model use N` starts a model, the **model FILE name** (the registry row's
@@ -1507,8 +1529,8 @@ complex with no current runtime impact. Deferred.
 ## Purpose
 
 **llama.cpp lives in WSL only.** There is no Windows checkout, no Windows build and
-no Windows toolchain, and none is to be added (Wayne, 2026-11-05: _"lets not put
-llama.cpp tooling on windows. lets keep it exclusively on wsl"_). Measured the same
+no Windows toolchain, and none is to be added (Wayne, 2026-11-05: *"lets not put
+llama.cpp tooling on windows. lets keep it exclusively on wsl"*). Measured the same
 day: the Windows host has git but no MSVC, cmake, CUDA toolkit or llama.cpp source,
 and the Windows driver reports the **same** 72 GiB GPU pool the guest sees, so a
 second lane would buy no model class while adding a build to keep in step. If a

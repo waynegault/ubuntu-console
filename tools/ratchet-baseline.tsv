@@ -1,7 +1,16 @@
 # docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh
 # id<TAB>count.  A count may FALL freely; raising one is a deliberate act.
 #
-# 2026-11-05 (latest): 10.7 233 -> 241 — CORPUS GROWTH, not drift.  tools/test-count.sh
+# 2026-11-05 (latest): 10.7 241 -> 242 — CORPUS GROWTH, not drift.  bin/llm-pull is a
+# new shell tool; its five hand-written `echo/printf … >&2` sites were routed through one
+# warn() helper at the source, so the +1 that remains is that helper's OWN definition line
+# — the irreducible site this counter's header documents (the tools/check-ruff-pin.sh
+# precedent, 2026-11-01).  9.5's +3 from the same file (usage/err/cleanup) was FIXED at
+# source with a comment above each definition, not re-baselined.  Corpus 136 -> 137 files.
+# Re-baselined by hand rather than with `count-ratchet.sh --update`, which rewrites the
+# whole file and drops other lanes' hand-added notes.
+#
+# 2026-11-05: 10.7 233 -> 241 — CORPUS GROWTH, not drift.  tools/test-count.sh
 # is a new 90-line shell tool and carries 8 hand-written `echo/printf … >&2` error
 # lines; the rise equals the patterns in that ONE newly added file, which is the case
 # this file's own guidance names as re-baseline-and-name-the-file.  No tracked file's
@@ -249,5 +258,5 @@
 9.5	118
 9.7	79
 10.4	41
-10.7	241
+10.7	242
 10.8	0
