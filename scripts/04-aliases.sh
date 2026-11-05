@@ -2,7 +2,11 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 36
+# Module Version: 37
+#   v37 (2026-11-05): a repo-relative GGUF path (`Q2_0/x.gguf`) is routed through
+#   llm-pull too.  `--local-dir` recreates the repo's directory, so the file landed
+#   nested and `model scan` could not see it — measured completing a 2-part set where
+#   only part 1 was visible at the store root.
 #   v36 (2026-11-05): `hf download` is wrapped so a GGUF lands flat in the model store.
 #   An --include glob is routed through llm-pull, and a bare repo download warns before
 #   hf writes the nested hub-cache layout.
@@ -465,6 +469,21 @@ function cop-ask() {
 alias chat:='local_chat'
 alias wtf='wtf_repl'
 
+# ---- llama.cpp binaries (the box's single LLM stack — single-quoted on purpose) ----
+# SINGLE quotes so the path expands when the alias is USED, not when it is defined:
+# 01-constants.sh is the exporter (LLAMA_SERVER_BIN -> build-cuda/, overridden by the
+# host profile's LLAMA_CUDA_SERVER_BIN), so a double-quoted alias would freeze whatever
+# this shell happened to hold at load and reproduce the stale-build/ literal the repo
+# swept out on 2026-11-01.  llama-cli has no exported variable of its own, so it derives
+# from the same bin/ directory the server resolves to.
+# Measured 2026-11-03: both binaries exist in ~/llama.cpp/build-cuda/bin/.
+alias llama-server='${LLAMA_CUDA_SERVER_BIN:?llama-server binary not configured (source the console)}'
+alias llama-cli='${LLAMA_CUDA_CLI_BIN:-${LLAMA_CUDA_SERVER_BIN%/*}/llama-cli}'
+
+# ---- Project Shortcuts ----
+# inv — Enter investigator project and run its CLI.
+alias inv='cd "$HOME/investigator" && .venv/bin/python3 -m pipeline.cli'
+
 # __hf_warn — one-line notice on stderr, prefixed so hf's own output stays clean.
 function __hf_warn() {
     printf 'hf: %s\n' "$*" >&2
@@ -501,6 +520,51 @@ function __hf_download_flat() {
     LLM_MODELS_DIR="$LLAMA_MODEL_DIR" "$_pull" "${_pull_args[@]}"
 }
 
+# __hf_download_paths — send each repo-relative GGUF path through llm-pull.
+# `--local-dir` recreates the repo's own directory, so `Q2_0/x.gguf` lands NESTED
+# inside the store and `model scan` never sees it; llm-pull stages each file and
+# moves it flat.  Returns 0 when every path was flattened, 1 when one was not.
+function __hf_download_paths() {
+    local _repo="$1" _revision="$2" _force="$3"
+    shift 3
+    local _path
+    for _path in "$@"
+    do
+        if ! __hf_download_flat "$_repo" "$_path" "$_revision" "$_force"
+        then
+            return 1
+        fi
+    done
+}
+
+# __hf_file_mode — classify positional names: `flat` for root-level GGUFs (one
+# --local-dir), `path` when any name is repo-relative (llm-pull per file), and an
+# empty string when a name is not a GGUF, which leaves the call to hf untouched.
+function __hf_file_mode() {
+    local _all_gguf=1 _repo_path=0 _file
+    for _file in "$@"
+    do
+        if [[ "${_file,,}" != *.gguf ]]
+        then
+            _all_gguf=0
+        fi
+        if [[ "$_file" == */* ]]
+        then
+            _repo_path=1
+        fi
+    done
+    if (( ! _all_gguf ))
+    then
+        return
+    fi
+    if (( _repo_path ))
+    then
+        printf 'path'
+    else
+        printf 'flat'
+    fi
+}
+
 # hf — the Hugging Face CLI, steered to the FLAT model store.
 #
 # `hf download` on its own writes the hub-cache layout under HF_HUB_CACHE: a
@@ -512,6 +576,7 @@ function __hf_download_flat() {
 # the entry point stops deciding whether a model becomes visible.
 #
 #   hf download <repo> <file.gguf>...    adds --local-dir "$LLAMA_MODEL_DIR"
+#   hf download <repo> <dir>/<file.gguf> routed through llm-pull (a repo path nests)
 #   hf download <repo> --include <glob>  routed through llm-pull (stage, then move flat)
 #   hf download <repo>                   passed through with a warning
 #
@@ -588,15 +653,19 @@ function hf() {
 
     if [[ ${#_files[@]} -gt 0 ]]
     then
-        local _file _all_gguf=1
-        for _file in "${_files[@]}"
-        do
-            if [[ "${_file,,}" != *.gguf ]]
+        local _mode
+        _mode="$(__hf_file_mode "${_files[@]}")"
+        if [[ "$_mode" == "path" ]]
+        then
+            if __hf_download_paths "$_repo" "$_revision" "$_force" "${_files[@]}"
             then
-                _all_gguf=0
+                return
             fi
-        done
-        if (( _all_gguf ))
+            __hf_warn "this path download keeps hf's nested layout"
+            command hf download "${_args[@]}"
+            return
+        fi
+        if [[ "$_mode" == "flat" ]]
         then
             __hf_warn "downloading flat into $LLAMA_MODEL_DIR (--local-dir)"
             command hf download "${_args[@]}" --local-dir "$LLAMA_MODEL_DIR"
@@ -609,21 +678,6 @@ function hf() {
     __hf_warn "sharded sets) or model download <repo>:<file>.gguf (a file at the repo root)."
     command hf download "${_args[@]}"
 }
-
-# ---- llama.cpp binaries (the box's single LLM stack — single-quoted on purpose) ----
-# SINGLE quotes so the path expands when the alias is USED, not when it is defined:
-# 01-constants.sh is the exporter (LLAMA_SERVER_BIN -> build-cuda/, overridden by the
-# host profile's LLAMA_CUDA_SERVER_BIN), so a double-quoted alias would freeze whatever
-# this shell happened to hold at load and reproduce the stale-build/ literal the repo
-# swept out on 2026-11-01.  llama-cli has no exported variable of its own, so it derives
-# from the same bin/ directory the server resolves to.
-# Measured 2026-11-03: both binaries exist in ~/llama.cpp/build-cuda/bin/.
-alias llama-server='${LLAMA_CUDA_SERVER_BIN:?llama-server binary not configured (source the console)}'
-alias llama-cli='${LLAMA_CUDA_CLI_BIN:-${LLAMA_CUDA_SERVER_BIN%/*}/llama-cli}'
-
-# ---- Project Shortcuts ----
-# inv — Enter investigator project and run its CLI.
-alias inv='cd "$HOME/investigator" && .venv/bin/python3 -m pipeline.cli'
 
 # ---- System Maintenance ----
 # wsl-up — Update WSL kernel and Microsoft distribution (requires Windows).

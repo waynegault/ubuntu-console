@@ -656,3 +656,34 @@ EOF
     [ "$(grep -c 'Whole-Model-Q4_K_M' "$LLM_REGISTRY")" -eq 1 ] || { cat "$LLM_REGISTRY"; return 1; }
     [ "$(awk -F'|' -v f='Whole-Model-Q4_K_M-00001-of-00002.gguf' '$3==f {print $4}' "$LLM_REGISTRY")" = "0.7G" ]
 }
+
+@test "integration: a split family split across directories is reunited before pairing" {
+    local sb="$TAC_TEST_TMPDIR/split-reunite"
+    mkdir -p "$sb/models/Q4_K_M"
+    # What an hf download with --local-dir leaves: part 1 at the root, part 2 nested.  Both
+    # halves are complete, but pairing looks in the file's own directory, so before the
+    # reunion BOTH read as "missing its sibling" and no row was written (measured 2026-11-05
+    # on two GSQ-RCO sets, 14 models where 15 were present).
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Split-Across-Dirs-Q4_K_M-00001-of-00002.gguf" >/dev/null
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Q4_K_M/Split-Across-Dirs-Q4_K_M-00002-of-00002.gguf" >/dev/null
+    truncate -s 400M "$sb/models/Split-Across-Dirs-Q4_K_M-00001-of-00002.gguf"
+    truncate -s 300M "$sb/models/Q4_K_M/Split-Across-Dirs-Q4_K_M-00002-of-00002.gguf"
+
+    export LLAMA_MODEL_DIR="$sb/models"
+    export LLM_REGISTRY="$sb/models.conf"
+    printf '%s\n' "$LLM_REGISTRY_HEADER" > "$LLM_REGISTRY"
+    __LLAMA_DRIVE_MOUNTED=1
+
+    run __model_scan
+    [[ "$status" -eq 0 ]] || { echo "status=$status out=$output"; return 1; }
+
+    # The stray shard now sits beside shard 1, which is where llama.cpp resolves it ...
+    [ -f "$sb/models/Split-Across-Dirs-Q4_K_M-00002-of-00002.gguf" ] || { find "$sb/models" -name '*.gguf'; return 1; }
+    # ... the operator was told what moved ...
+    [[ "$output" == *"Reunited"* ]] || { echo "out: $output"; return 1; }
+    # ... and the set registered ONCE, sized as the sum of both shards.
+    [ "$(grep -c 'Split-Across-Dirs-Q4_K_M' "$LLM_REGISTRY")" -eq 1 ] || { cat "$LLM_REGISTRY"; return 1; }
+    [ "$(awk -F'|' -v f='Split-Across-Dirs-Q4_K_M-00001-of-00002.gguf' '$3==f {print $4}' "$LLM_REGISTRY")" = "0.7G" ]
+}

@@ -74,6 +74,25 @@ STUB
     [ ! -s "$HF_CALL_LOG" ]
 }
 
+@test "a repo-relative GGUF path is routed through llm-pull, not nested" {
+    run hf download ISTA-DASLab/GSQ-RCO-GGUF Q2_0/model-00002-of-00002.gguf
+    [ "$status" -eq 0 ]
+
+    run grep -qF -- "dir=$MODEL_DIR ISTA-DASLab/GSQ-RCO-GGUF Q2_0/model-00002-of-00002.gguf" \
+        "$PULL_CALL_LOG"
+    [ "$status" -eq 0 ]
+    [ ! -s "$HF_CALL_LOG" ]
+}
+
+@test "two repo-relative GGUF paths each go through llm-pull" {
+    run hf download owner/repo Q2_0/a-00001-of-00002.gguf Q2_0/a-00002-of-00002.gguf
+    [ "$status" -eq 0 ]
+
+    run grep -c '^dir=' "$PULL_CALL_LOG"
+    [ "$output" -eq 2 ]
+    [ ! -s "$HF_CALL_LOG" ]
+}
+
 @test "a bare repo download warns that it nests and adds no --local-dir" {
     run hf download Qwen/Qwen3-8B-GGUF
     [ "$status" -eq 0 ]

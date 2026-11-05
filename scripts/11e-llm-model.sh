@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 95
+#   v95 (2026-11-05): a split family is REUNITED before it is paired.  v93/v94 made a nested
+#   model usable, but pairing still looks in the file's own directory (llama.cpp resolves
+#   -00002 beside the -m path), so a download that left one shard nested — part 1 at the store
+#   root, part 2 in <quant>/ — made BOTH halves read as "missing its sibling" and neither
+#   model registered, although the bytes were complete.  Measured on two GSQ-RCO sets; after
+#   the move, `model scan` read 14 models -> 15 with the paired sizes.  `mv -n`, and a
+#   destination that already exists wins, so a duplicate can never be overwritten.
 # Module Version: 94
 #   v94 (2026-11-05): the row's size is read with `stat -L`.  v93's walk follows a snapshot
 #   symlink, but `stat` does NOT follow by default, so a nested 2 GB model measured as its
@@ -368,6 +376,57 @@ function __model_is_embedding() {
     dd if="$fpath" bs=262144 count=1 2>/dev/null | grep -qa 'pooling_type'
 }
 
+# __model_split_shard_walk <dir> — every split-GGUF shard under the store, excluding the
+# store's own machinery directories (HF cache trees, blobs, backups, locks).
+function __model_split_shard_walk() {
+    local _dir="$1"
+    find "$_dir" \
+        \( -name '.cache' -o -name 'blobs' -o -name 'backups' -o -name 'xet' \
+           -o -name '.locks' -o -name 'models--*' \) -prune \
+        -o -type f -name '*-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].gguf' -print
+}
+
+# __model_split_shard_moves <dir> — print "src<TAB>dst" for shards of one split family that
+# sit in a different directory from that family's lowest-numbered shard.
+#
+# Scanning pairs shards INSIDE one directory, because llama.cpp resolves the later shards
+# beside the path it was given with -m.  A download can still leave part 1 in the store root
+# and part 2 in <quant>/ — measured 2026-11-05: both GSQ-RCO sets had one half nested, every
+# half was then skipped as "missing its sibling", and neither model registered although the
+# bytes were complete.  Pure on purpose: the caller performs and logs the moves.
+function __model_split_shard_moves() {
+    local _dir="$1" _f _base _idx _total _family
+    local -A _first=() _first_dir=()
+    # Pass 1: the lowest-numbered shard of each family decides the destination directory.
+    while IFS= read -r _f
+    do
+        _base="${_f##*/}"
+        [[ "$_base" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]] || continue
+        _idx=$(( 10#${BASH_REMATCH[1]} ))
+        _total="${BASH_REMATCH[2]}"
+        _family="${_base%-[0-9][0-9][0-9][0-9][0-9]-of-*.gguf}|$_total"
+        if [[ -z "${_first[$_family]:-}" ]] || (( _idx < _first[$_family] ))
+        then
+            _first[$_family]=$_idx
+            _first_dir[$_family]="${_f%/*}"
+        fi
+    done < <(__model_split_shard_walk "$_dir")
+    # Pass 2: every shard of that family outside the destination is a move.  An existing
+    # destination file wins — a duplicate is never overwritten, and the scan's own
+    # duplicate rule then decides which copy becomes the row.
+    while IFS= read -r _f
+    do
+        _base="${_f##*/}"
+        [[ "$_base" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]] || continue
+        _total="${BASH_REMATCH[2]}"
+        _family="${_base%-[0-9][0-9][0-9][0-9][0-9]-of-*.gguf}|$_total"
+        [[ "${_f%/*}" == "${_first_dir[$_family]}" ]] && continue
+        [[ -e "${_first_dir[$_family]}/$_base" ]] && continue
+        printf '%s\t%s\n' "$_f" "${_first_dir[$_family]}/$_base"
+    done < <(__model_split_shard_walk "$_dir")
+}
+
+# __model_scan — rebuild the registry from the store.
 function __model_scan() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
     then
@@ -421,6 +480,21 @@ function __model_scan() {
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
+    # Reunite a split family BEFORE pairing.  __model_split_shards_missing looks for a
+    # shard in the file's OWN directory (llama.cpp resolves the rest beside the -m path),
+    # so a part left in another directory reads as missing and the whole model is skipped.
+    # Measured 2026-11-05: two complete GSQ-RCO sets, one half nested each, neither registered.
+    local _src _dst
+    while IFS=$'\t' read -r _src _dst
+    do
+        [[ -n "$_src" && -n "$_dst" ]] || continue
+        if mv -n -- "$_src" "$_dst"
+        then
+            __tac_info "Reunited" "${_src##*/} -> ${_dst%/*}" "$C_Dim"
+        else
+            __tac_info "Warning" "could not move $_src beside its shards" "$C_Warning"
+        fi
+    done < <(__model_split_shard_moves "$LLAMA_MODEL_DIR")
     # WALK the store, do not glob its top level.  Wayne, 2026-11-05: "i want to be able to
     # use all llms in active or below. cant we point to the appropriate file nomatter where
     # it is nested in active?"  The row's file column is the path RELATIVE to the store, so
