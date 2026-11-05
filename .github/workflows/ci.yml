@@ -305,7 +305,8 @@ jobs:
                tests/unit/74-host-profiles.bats \
                tests/unit/75-pre-push-worktree-sweep.bats \
                tests/unit/76-vscode-bats-timeout-patch.bats \
-               tests/unit/77-standby-awake.bats
+               tests/unit/77-standby-awake.bats \
+               tests/unit/78-staged-shell-select.bats
 
       - name: Run integration tests
         run: |

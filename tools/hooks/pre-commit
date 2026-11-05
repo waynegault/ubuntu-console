@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pre-commit hook — bash -n + shellcheck on staged .sh files, the staged-file
+# pre-commit hook — bash -n + shellcheck on the staged shell files, the staged-file
 # swallow check, then the module version guard.
 #
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks.  Install
@@ -13,9 +13,13 @@ set -euo pipefail
 # repo root either way.
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
-# Staged shell files (added, modified, or copied — not deleted).  The shell lint
-# below is scoped to these; the secret scan is not — it reads the whole index.
-staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep '\.sh$' || true)
+# NO staged-shell selection here.  tools/lint.sh --staged owns it, so the corpus
+# rule exists in one place.  This hook used to carry its own (`grep '\.sh$'`) with an
+# early exit built on it, and the two halves of the same hook then disagreed about
+# what a shell script is: the extensionless `bin/*` entry points got no `bash -n` and
+# no shellcheck at commit time, and a commit staging only .py files exited BEFORE the
+# Python gates below, skipping them entirely (measured 2026-11-05 while adding
+# bin/llm-pull).
 
 rc=0
 
@@ -39,20 +43,10 @@ fi
 # a co-worker's in-flight file cannot refuse a commit that does not touch it.  The
 # scoping and the comparison live in tools/check-swallows-staged.sh (tracked, tested);
 # this hook only calls it.  It runs whatever the staged extension — the corpus covers
-# extensionless files in bin/ and tools/hooks/ — so it sits BEFORE the no-staged-.sh
-# early exit below.
+# extensionless files in bin/ and tools/hooks/.
 echo "=== pre-commit: staged swallow classification ==="
 if ! "$REPO_ROOT/tools/check-swallows-staged.sh"; then
     rc=1
-fi
-
-if [[ -z "$staged" ]]; then
-    if (( rc == 0 )); then
-        echo "pre-commit: no staged .sh files — shell lint skipped; secret scan and swallow check passed"
-    else
-        echo "pre-commit: some checks failed — commit aborted"
-    fi
-    exit "$rc"
 fi
 
 # ── Staged-file lint ───────────────────────────────────────────────────────
@@ -61,7 +55,7 @@ fi
 # once, and the two copies drifted the first time one of them changed
 # (2026-09-15: -x was added to lint.sh, and this hook went on rejecting the very
 # files lint.sh had just cleared).
-echo "=== pre-commit: staged .sh lint ==="
+echo "=== pre-commit: staged shell lint ==="
 if ! "$REPO_ROOT/tools/lint.sh" --staged; then
     rc=1
 fi

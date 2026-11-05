@@ -4,7 +4,7 @@
 # lint.sh — Static analysis for the ubuntu-console repository.
 # Runs bash -n syntax checks and shellcheck on all shell files.
 # Usage: ./tools/lint.sh            (whole repo)
-#        ./tools/lint.sh --staged   (only .sh files staged for commit)
+#        ./tools/lint.sh --staged   (only the shell files staged for commit)
 #        ./tools/lint.sh --files F  (an explicit list of files)
 #
 # Gates at --severity=warning.  Info-level findings are notices, not defects:
@@ -14,7 +14,14 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-11-05): --staged selects the same corpus the whole-tree loops do, not
+#   `.sh` alone — `bin/*`, `tools/hooks/*` and `tactical-console.bashrc` are shell
+#   without the suffix, and the pre-commit hook's own `.sh` filter never saw them, so a
+#   new bin/ script was committed with no `bash -n` and no shellcheck (measured while
+#   adding bin/llm-pull: "no staged .sh files" on the commit that added it).
+#   `_tac_is_shell` supplies the same `.py` exclusion as above; a
+#   non-work-tree `git diff` now says so instead of reading as "nothing staged".
 #   v28 (2026-10-19): the whole-tree loops skip a non-shell member of `bin/*`.
 #   bin/ is the entry-point directory and was pure shell; a tracked Python tool
 #   (bin/autotune-resume-quiet-gate.py) now lives there, and `bash -n` / ShellCheck
@@ -425,7 +432,7 @@ _tac_lint_graph() {
     return 1
 }
 
-# --staged: bash -n + shellcheck on ONLY the .sh files staged for commit — what
+# --staged: bash -n + shellcheck on ONLY the shell files staged for commit — what
 # the pre-commit hook needs, and nothing else.
 #
 # This mode exists because the hook used to inline that loop.  The hook is not
@@ -434,12 +441,38 @@ _tac_lint_graph() {
 # the hook went on rejecting the very files this mode had just cleared).  The
 # module-version check already delegates to tools/check-module-versions.sh for
 # exactly this reason; the persistent check belongs in a tracked, tested tool.
+#
+# The selection is the SAME corpus the whole-tree loops above cover, not `.sh`
+# alone: `bin/` and `tools/hooks/` carry extensionless shell entry points, and
+# `tactical-console.bashrc` is shell without the suffix.  A `.sh`-only filter was
+# the commit-time half of that corpus, so a new bin/ script went in with no
+# `bash -n` and no shellcheck (measured 2026-11-05: the hook printed "no staged
+# .sh files" on the commit that ADDED bin/llm-pull).  `_tac_is_shell` keeps the
+# one tracked Python tool under `bin/` out of it, as it does in the whole-tree
+# loops.
 if [[ "${1:-}" == "--staged" ]]
 then
-    staged=$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep '\.sh$' || true)
+    if ! staged=$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACM 2>/dev/null)
+    then
+        echo "  SKIP  not a git work tree — nothing is staged, so nothing to lint"
+        exit 0
+    fi
+    staged="$(
+        while IFS= read -r _p
+        do
+            [[ -n "$_p" ]] || continue
+            case "$_p" in
+                *.sh) printf '%s\n' "$_p" ;;
+                tactical-console.bashrc|bin/*|tools/hooks/*)
+                    if _tac_is_shell "$_p"; then printf '%s\n' "$_p"; fi
+                    ;;
+                *) ;;
+            esac
+        done <<< "$staged"
+    )"
     if [[ -z "$staged" ]]
     then
-        echo "  (no staged .sh files)"
+        echo "  (no staged shell files)"
         exit 0
     fi
     if ! command -v shellcheck >/dev/null 2>&1
@@ -481,9 +514,9 @@ then
     _tac_lint_coverage_guard || rc=1
     if (( rc == 0 ))
     then
-        echo "  All staged .sh files passed."
+        echo "  All staged shell files passed."
     else
-        echo "  Some staged .sh files failed." >&2
+        echo "  Some staged shell files failed." >&2
     fi
     exit "$rc"
 fi
