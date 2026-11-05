@@ -121,6 +121,24 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 11
+#   v11 (2026-11-05): 0.26.7 RENAMED THE BUILDER and, once that was accepted, all five components
+#   reported applied on the live chunk for the first time.
+#     * the index-builder precheck required exactly one `function assembleIndex(lines…)`, which
+#       0.26.7 does not ship - it has `trimIndexToBudgetDetailed(lines, priorityPrefixLength=0)`.
+#       The apply refused before any hunk ran, so --check said NEEDS on every copy.  The check now
+#       accepts either name and still requires exactly one definition.  This is the same shape as
+#       v8's predicate repair: the assertion was on the FORM of the upstream function, not on the
+#       thing the patch needs (an index builder to rewrite).
+#     * the renamed byte cap `MAX_INDEX_CHARS=25e3` and the line cap `MAX_INDEX_LINES=200` are the
+#       spellings this chunk carries, and the tables already knew both - the blocker was only the
+#       precheck.  After the fix: truncator upstream, pathcap/bytecap/titlecap/linecap applied,
+#       --check rc=0 on the npm-global CLI and both companions.
+#     * TRAP, measured the same day: patching those two constants BY HAND without the hunk's
+#       markers makes the copy read as `UNKNOWN shape` (the stock anchor is gone and no marker
+#       says why), and the apply then refuses.  A hand patch must write the marker
+#       (`LOCAL PATCH … (qwen-memory-index-bytecap|linecap)`) in the same edit, or re-apply the
+#       constant through this tool instead of editing the bundle.
 # Module Version: 10
 #   v8 (2026-10-25): 0.26.1 SHIPS A REWRITTEN BUILDER and the tooling only half-knows it.  Two
 #   predicates repaired, one blocker remains, and NO 0.26.1 COPY IS PATCHED BY THIS VERSION:
@@ -897,10 +915,14 @@ if ("var MAX_INDEX_BYTES = 25e3;" in src or "var MAX_INDEX_BYTES=25e3;" in src
 # bundle that was newer and better, which is the same defect as a marker assertion in --check:
 # it tests the form of the fix rather than the fix.  What must hold is that exactly one definition
 # exists and that the stock cap is gone (asserted above).
-_asm = re.findall(r"function assembleIndex\(lines(?:,\s*priorityPrefixLength\s*=\s*0)?\)", src)
+_asm = re.findall(
+    r"function (?:assembleIndex|trimIndexToBudgetDetailed)\(lines(?:,\s*priorityPrefixLength\s*=\s*0)?\)",
+    src,
+)
 if len(_asm) != 1:
     raise SystemExit(
-        f"refusing to patch: the assembleIndex definition count is {len(_asm)}, expected 1"
+        f"refusing to patch: the index-builder definition count is {len(_asm)}, expected 1 "
+        "(looked for assembleIndex and trimIndexToBudgetDetailed)"
     )
 if UPSTREAM:
     if "function truncateIndexField(" not in src:
