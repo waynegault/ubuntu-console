@@ -35,16 +35,22 @@ CLEAR="$REPO_ROOT/bin/llama-gpu-clear.sh"
 BIN_LIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
 
 # Every stand-in "server" in this file is a COPY of python3 carrying the right binary
-# name — the case a name-based match cannot separate from a real one.  A copy of a
-# RELOCATED CPython cannot find its stdlib from the copy's own path: measured
-# 2026-11-01 on this box, python3 is /Python/bin/python3 with prefix
-# /Python/cpython-3.14.10-linux-aarch64-gnu, so every copy died "Failed to import
-# encodings module" and the probe then reported whatever ELSE was resident.  Derive the
-# prefix once and export it; a system python3 resolves its own, so this is a no-op there.
+# name — the case a name-based match cannot separate from a real one.  A copy of
+# CPython cannot find its stdlib from the copy's own path, so it dies "Failed to import
+# encodings module" and the probe then reports whatever ELSE was resident.  The
+# directory to pin is sys.base_prefix, NOT sys.prefix: tests run through the repo venv,
+# whose python3 reports sys.prefix=<repo>/.venv — a prefix holding no stdlib at all, so
+# pinning that made every copy AND the case's own `python3` (a shim inheriting the same
+# PYTHONHOME) die at startup.  Measured 2026-11-05, the red the bridge reported for the
+# two cases below.  base_prefix is the install that owns lib/pythonX.Y; it is the same
+# value as prefix for a plain interpreter, so this is a no-op outside a venv.
 _python_stand_in() {  # _python_stand_in <dest>
     cp "$(command -v python3)" "$1" || return 1
-    PYTHONHOME="$("$(command -v python3)" -c 'import sys; print(sys.prefix)')"
+    PYTHONHOME="$("$(command -v python3)" -c 'import sys; print(sys.base_prefix)')"
     export PYTHONHOME
+    # Prove the stand-in before any case trusts a probe that reads it: a copy that never
+    # started reports NAMES/RUNS for the wrong reason, in either direction.
+    "$1" -c 'import sys' >/dev/null 2>&1
 }
 
 setup() {
@@ -53,6 +59,7 @@ setup() {
     export INVESTIGATOR_GPU_LOCK="$TAC_TEST_TMPDIR/gpu.lock"
     unset INVESTIGATOR_PRODUCTION_OUTPUT
     LOCK_HOLDER_PID=""
+    : > "$TAC_TEST_TMPDIR/bg.pids"
 
     cat > "$TAC_TEST_TMPDIR/probe.sh" <<'EOS'
 set -uo pipefail
@@ -72,7 +79,34 @@ EOS
 }
 
 teardown() {
-    [[ -n "${LOCK_HOLDER_PID:-}" ]] && kill -TERM "$LOCK_HOLDER_PID" 2>/dev/null || true
+    # No early `kill` of LOCK_HOLDER_PID here: it is recorded in bg.pids by _hold_lock and
+    # reaped below WITH its process group.  A `kill -TERM` first killed the setsid leader,
+    # so _bg_reap could no longer read its pgid, the `sleep 30` inside `flock -c` survived,
+    # and it held the suite's TAP pipe for its full 30 s — measured 2026-11-05, a 30.5 s
+    # wall for two cases that each report 48 ms.
+    # Every carrier a case starts is recorded by _bg, and reaped HERE rather than after
+    # the case's assertions.  A failing assertion aborts the test body in bats, so a
+    # `kill` at the end of the body never runs; the survivor then holds the write end of
+    # the suite's stdin pipe (an inherited fd), bats never sees EOF, and the whole run
+    # hangs — measured 2026-11-04, 26 minutes inside this file with two red cases, while
+    # the heavy-job lock stayed held.
+    #
+    # The `wait` below is TARGETED on purpose.  A bare `wait` waits for every child of
+    # this shell, and bats starts its per-case countdown as one of them
+    # (`bats_start_timeout_countdown "$BATS_TEST_TIMEOUT"` → `sleep 300`), aborting it
+    # only in the EXIT trap, i.e. AFTER teardown.  Measured 2026-11-05: a bare `wait`
+    # made every case pay its whole 300 s and die
+    # "`wait 2>/dev/null || true' failed due to timeout", so this file blew its 600 s
+    # whole-file budget and the bridge stamped the tail "BATS file timed out (600s)".
+    # Waiting only on the pids _bg recorded still reaps them (and `_detach`'s reparented
+    # carrier is not a child, so its `wait` returns at once), while leaving the
+    # watchdog alone.
+    local _p
+    local -a _pids=()
+    while IFS= read -r _p; do _pids+=("$_p"); _bg_reap "$_p"; done < "$TAC_TEST_TMPDIR/bg.pids"
+    if [[ ${#_pids[@]} -gt 0 ]]; then
+        wait "${_pids[@]}" 2>/dev/null || true
+    fi
     rm -rf "$TAC_TEST_TMPDIR" 2>/dev/null || true
 }
 
@@ -91,14 +125,60 @@ _clear_guards() {
 
 # _hold_lock — take the lock from another process until teardown.
 _hold_lock() {
-    flock "$INVESTIGATOR_GPU_LOCK" -c "sleep 30" &
+    # setsid: the holder becomes its own process-group leader, so _bg_reap's group kill
+    # takes the `sleep 30` INSIDE flock too.  Killing only flock's pid orphans that sleep,
+    # and the orphan then holds the suite's TAP pipe until it wakes — measured 2026-11-05,
+    # a 30.5 s wall for two cases that each report 48 ms.
+    setsid flock "$INVESTIGATOR_GPU_LOCK" -c "sleep 30" &
     LOCK_HOLDER_PID=$!
+    _bg "$LOCK_HOLDER_PID"
     local _i
     for _i in $(seq 1 40); do
         flock -n "$INVESTIGATOR_GPU_LOCK" -c true 2>/dev/null || return 0
         sleep 0.1
     done
     return 1
+}
+
+# _bg <pid> — record a background pid for teardown to reap (see teardown's comment).
+_bg() {
+    printf '%s\n' "$1" >> "$TAC_TEST_TMPDIR/bg.pids"
+}
+
+# _bg_reap <pid> — SIGKILL the process, and its process GROUP when it leads one.
+# A plain `kill` of a `bash -c 'sleep 60'` leaves the sleep alive as an orphan that
+# still holds the suite's inherited fds, so the group is taken when it is ours.
+_bg_reap() {
+    local _p="$1" _pg=""
+    [[ "$_p" =~ ^[0-9]+$ ]] || return 0
+    _pg=$(ps -o pgid= -p "$_p" 2>/dev/null | tr -d ' ')
+    if [[ -n "$_pg" && "$_pg" == "$_p" ]]; then
+        kill -KILL -- "-$_p" 2>/dev/null || true
+    fi
+    kill -KILL "$_p" 2>/dev/null || true
+}
+
+# _detach <pidfile> <command...> — start a process that is NOT a child of the harness.
+#
+# bin/gpu-busy.sh suppresses a declared workload whose ancestry contains bats or pytest
+# (a benchmark a test started is not a tenant — tests/unit/61-gpu-busy-test-harness-not-a-tenant.bats),
+# so a case that must look like a REAL foreign carrier or a real training tenant has to
+# reparent away from the harness.  The launcher backgrounds the command, writes its pid
+# and exits at once, so the grandchild is adopted by init — exactly 61's control arm.
+# The pid is recorded for teardown, so a detached process cannot outlive the suite.
+_detach() {
+    local _pf="$1" _q="" _i _pid
+    shift
+    printf -v _q '%q ' "$@"
+    rm -f "$_pf"
+    setsid bash -c "$_q >/dev/null 2>&1 & echo \$! > '$_pf'" </dev/null >/dev/null 2>&1
+    for _i in $(seq 1 40); do
+        [[ -s "$_pf" ]] && break
+        sleep 0.1
+    done
+    _pid=$(cat "$_pf" 2>/dev/null || true)
+    [[ "$_pid" =~ ^[0-9]+$ ]] || return 1
+    _bg "$_pid"
 }
 
 @test "gpu-exclusivity: the module probe reports FREE when the lock file is absent" {
@@ -455,7 +535,12 @@ EOS
     awk '/^_is_interpreter\(\)/,/^}/'        "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
     awk '/^_process_executes\(\)/,/^}/'      "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
     awk '/^_any_executing_process\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    # _any_executing_process consults the harness predicate (1.10.0), so it must come
+    # with it: without this the extraction raised "command not found" into the probe's
+    # stderr and the verdict line was never the only line compared.
+    awk '/^_under_test_harness\(\)/,/^}/'    "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
     grep -q '_any_executing_process' "$TAC_TEST_TMPDIR/decl.sh" || return 1
+    grep -q '_under_test_harness' "$TAC_TEST_TMPDIR/decl.sh" || return 1
 
     cat > "$TAC_TEST_TMPDIR/chain-probe.sh" <<'EOS'
 set -uo pipefail
@@ -473,14 +558,20 @@ EOS
     # only the old any-argv-element scan could see that, and dropping that scan
     # (2026-10-16, after a CI lint job's file list was read as a training tenant)
     # is the point — a name merely NAMED inside a command line is not a run.
+    #
+    # It must ALSO not descend from the bats harness: gpu-busy.sh suppresses a
+    # workload whose ancestry contains bats (a benchmark a test started is not a
+    # declared workload — tests/unit/61-gpu-busy-test-harness-not-a-tenant.bats), so
+    # a plain `bash … &` here is invisible by design.  Reparenting the carrier is
+    # what makes it foreign, exactly as 61's control arm does.
     printf 'while :; do sleep 1; done\n' > "$TAC_TEST_TMPDIR/$tok"
-    bash "$TAC_TEST_TMPDIR/$tok" &
-    local _carrier=$!
-    sleep 0.3
+    _detach "$TAC_TEST_TMPDIR/carrier.pid" bash "$TAC_TEST_TMPDIR/$tok" \
+        || { echo "could not start a detached carrier"; return 1; }
+    local _carrier
+    _carrier=$(cat "$TAC_TEST_TMPDIR/carrier.pid")
     run bash "$TAC_TEST_TMPDIR/chain-probe.sh" "$TAC_TEST_TMPDIR/decl.sh" "$tok" "$tok"
-    [[ "$output" == "FOREIGN" ]]
-    kill "$_carrier" 2>/dev/null || true
-    wait "$_carrier" 2>/dev/null || true
+    _bg_reap "$_carrier"
+    [[ "$output" == "FOREIGN" ]] || { echo "a foreign carrier must be seen, got: $output"; return 1; }
 
     # ...and when the only carrier is the CALLER's own command line, it must not be.
     run bash -c "bash '$TAC_TEST_TMPDIR/chain-probe.sh' '$TAC_TEST_TMPDIR/decl.sh' '$tok' '$tok'  # $tok"
@@ -535,12 +626,15 @@ EOS
     # The incident shape: the artefact's name is argv[0], the executable is not it.
     bash -c 'exec -a "$0" sleep 30' "$name" &
     local _liar=$!
+    _bg "$_liar"
     # A reader holding the file open.
     tail -f "$artefact" >/dev/null 2>&1 &
     local _reader=$!
+    _bg "$_reader"
     # A shell whose -c body names the file: one argv element, with a space in it.
     bash -c 'while :; do sleep 1; done' "cat $artefact" &
     local _mentioner=$!
+    _bg "$_mentioner"
     sleep 0.4
 
     run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_liar" "$name"
@@ -576,12 +670,15 @@ EOS
 
     bash "$artefact" &
     local _interpreted=$!
+    _bg "$_interpreted"
     "$artefact" &
     local _direct=$!
+    _bg "$_direct"
     local binname="tac-bin-$$-$RANDOM.sh"
-    _python_stand_in "$TAC_TEST_TMPDIR/$binname" || skip "cannot copy a binary here"
+    _python_stand_in "$TAC_TEST_TMPDIR/$binname" || skip "cannot build a runnable python3 stand-in here"
     "$TAC_TEST_TMPDIR/$binname" -c 'import time; time.sleep(30)' &
     local _compiled=$!
+    _bg "$_compiled"
     sleep 0.4
 
     run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_interpreted" "$name"
@@ -616,22 +713,27 @@ EOS
     # for the artefact: on Ubuntu 26.04 `sleep` is a Rust-coreutils multi-call that
     # refuses an unknown argv[0], while python3 is a standalone ELF that sleeps
     # in-process, so /proc/PID/exe resolves to this copy and the process stays alive.
-    _python_stand_in "$TAC_TEST_TMPDIR/llama-server" || skip "cannot copy a binary here"
+    _python_stand_in "$TAC_TEST_TMPDIR/llama-server" || skip "cannot build a runnable python3 stand-in here"
     "$TAC_TEST_TMPDIR/llama-server" -c 'import time; time.sleep(60)' &
     local _backend=$!
+    _bg "$_backend"
     # A backend started through a differently-named LAUNCHER (the legacy symlink
     # shape): exe resolves to the real artefact, so it is still identified.
     ln -s "$TAC_TEST_TMPDIR/llama-server" "$TAC_TEST_TMPDIR/cuda-llama-server"
     "$TAC_TEST_TMPDIR/cuda-llama-server" -c 'import time; time.sleep(60)' &
     local _launcher=$!
+    _bg "$_launcher"
     python3 -c 'import time; time.sleep(60)' llama_cpp.server &
     local _pybackend=$!
+    _bg "$_pybackend"
     # Neither of these is a backend: a plain process, and a shell whose ARGUMENTS
     # name the binaries the old command-line pattern matched on.
     sleep 60 &
     local _plain=$!
+    _bg "$_plain"
     bash -c 'sleep 60' llama-server llama-bench cuda-llama-bench &
     local _mentioner=$!
+    _bg "$_mentioner"
 
     run bash "$TAC_TEST_TMPDIR/is-server.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_backend"
     [[ "$output" == "LLAMA" ]]
@@ -831,6 +933,7 @@ EOS
     _foreign_apps_fixture
     "$TAC_TEST_TMPDIR/other/llama-server" -c 'import time; time.sleep(30)' &
     local spid=$!
+    _bg "$spid"
     run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
         LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
         LLAMA_XE_SERVER_BIN="$TAC_TEST_TMPDIR/absent/llama-server" \
@@ -847,6 +950,7 @@ EOS
     _foreign_apps_fixture
     "$TAC_TEST_TMPDIR/allowed/llama-server" -c 'import time; time.sleep(30)' &
     local spid=$!
+    _bg "$spid"
     run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
         LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
         LLAMA_XE_SERVER_BIN="$TAC_TEST_TMPDIR/absent/llama-server" \
@@ -864,6 +968,7 @@ EOS
     # Rust-coreutils multi-call that refuses an unknown argv[0] and would die at once.
     bash -c 'exec -a llama-server python3 -c "import time; time.sleep(30)"' &
     local spid=$!
+    _bg "$spid"
     run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
         LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
         LLAMA_XE_SERVER_BIN="$TAC_TEST_TMPDIR/absent/llama-server" \
@@ -929,6 +1034,7 @@ EOS
     local lock="$TAC_TEST_TMPDIR/train2.lock" log="$TAC_TEST_TMPDIR/train2.log"
     { flock -x 9; sleep 5; } 9>"$lock" &
     local holder=$!
+    _bg "$holder"
     sleep 1
     run env LLM_BENCH_LOCK_WAIT_SECONDS=1 "$REPO_ROOT/bin/train-timeout-runner.sh" \
         -l "$log" -L "$lock" sleep 1
@@ -961,12 +1067,18 @@ EOS
 # only running it says whether the identity is read or merely the name.
 @test "gpu-exclusivity: a running training tenant is named, not read as a foreign app" {
     local lock="$TAC_TEST_TMPDIR/tenant.lock" log="$TAC_TEST_TMPDIR/tenant.log"
-    "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$log" -L "$lock" sleep 6 &
-    local runner=$!
+    # A real tenant is never a child of the harness, and gpu-busy.sh suppresses a
+    # workload whose ancestry contains bats (tests/unit/61) — a test-started benchmark
+    # is not a tenant.  Reparent the runner so the probe has a genuinely foreign
+    # tenant to name; a plain `… &` here would be suppressed and prove nothing.
+    _detach "$TAC_TEST_TMPDIR/tenant.pid" "$REPO_ROOT/bin/train-timeout-runner.sh" \
+        -l "$log" -L "$lock" sleep 6 \
+        || { echo "could not start a detached training tenant"; return 1; }
+    local runner
+    runner=$(cat "$TAC_TEST_TMPDIR/tenant.pid")
     sleep 2
     run "$REPO_ROOT/bin/gpu-busy.sh" --json
-    kill "$runner" 2>/dev/null || true
-    wait "$runner" 2>/dev/null || true
+    _bg_reap "$runner"
     [ "$status" -eq 1 ]
     [[ "$output" == *'"declared:training'* ]]
 }
@@ -995,6 +1107,7 @@ EOS
     local own="$TAC_TEST_TMPDIR/inv-own.lock"
     { flock -x 9; sleep 5; } 9>"$inv" &
     local holder=$!
+    _bg "$holder"
     sleep 1
     run env INVESTIGATOR_GPU_LOCK="$inv" "$REPO_ROOT/bin/train-timeout-runner.sh" \
         -l "$log" -L "$own" sleep 1
@@ -1027,6 +1140,7 @@ EOS
     local lock="$TAC_TEST_TMPDIR/lane.lock" log="$TAC_TEST_TMPDIR/lane.log"
     "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$log" -L "$lock" sleep 8 &
     local runner=$!
+    _bg "$runner"
     sleep 1
     run bash -c 'source "$1"; __llm_train_lane_holder' bash "$MODULE"
     [[ "$status" -eq 0 ]] || { echo "the running tenant must be named, got: $output"; return 1; }
@@ -1047,9 +1161,11 @@ EOS
 @test "train-lane: a mere mention of the runner is not a tenant" {
     tail -f "$REPO_ROOT/bin/train-timeout-runner.sh" >/dev/null 2>&1 &
     local _reader=$!
+    _bg "$_reader"
     # A shell whose -c body names the file: one argv element, with a space in it.
     bash -c 'while :; do sleep 1; done' "cat $REPO_ROOT/bin/train-timeout-runner.sh" &
     local _mentioner=$!
+    _bg "$_mentioner"
     sleep 0.5
     run bash -c 'source "$1"; __llm_train_lane_holder' bash "$MODULE"
     kill "$_reader" "$_mentioner" 2>/dev/null || true
