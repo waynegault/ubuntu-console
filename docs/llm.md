@@ -1615,7 +1615,6 @@ cmake -B "${LLAMA_BUILD_DIR:-build}" \
   -DGGML_CUDA_NCCL=ON \
   -DGGML_CUDA_FORCE_MMQ=OFF \
   -DGGML_CUDA_COMPRESSION_MODE=size \
-  -DGGML_CUDA_NO_VMM=ON \
   -DGGML_NATIVE=ON \
   -DGGML_OPENMP=ON \
   -DGGML_CCACHE=ON \
@@ -1638,7 +1637,7 @@ cmake -B "${LLAMA_BUILD_DIR:-build}" \
 | `GGML_CUDA_NCCL` | `ON` | NCCL multi-GPU support (harmless when only one GPU is present) |
 | `GGML_CUDA_FORCE_MMQ` | `OFF` | Keep the default cuBLAS matmul path (MMQ is slower on Ampere) |
 | `GGML_CUDA_COMPRESSION_MODE` | `size` | Compresses the compiled CUDA **binary** (`nvcc -compress-mode`). It does **not** touch model weights and buys **no** VRAM headroom — see the note below. |
-| `GGML_CUDA_NO_VMM` | `ON` | Builds the CUDA backend without the virtual-memory-management pool, removing a 32 GiB per-process VA reservation by construction (runtime-verifiable as `NO_VMM = 1`). Present in the deployed `build/` — verified in `build/CMakeCache.txt`. Its benefit is **unproven, mechanism-justified, cheap**: it has not been shown to change the dxgkrnl counter or the failure rate. See `docs/llama-cpp-runtime-audit.md` §4. |
+| `GGML_CUDA_NO_VMM` | not passed | `llm-build` does not set this, so a tree keeps whatever its cache already holds: `ON` in the x86 box's `build/` (2026-09 audit, `build/CMakeCache.txt`) and `OFF` in this box's `build-cuda/` (measured 2026-11-05). Passing `-DGGML_CUDA_NO_VMM=ON` removes a 32 GiB per-process VA reservation by construction (runtime-verifiable as `NO_VMM = 1`), but its benefit is **unproven, mechanism-justified, cheap**: it has not been shown to change the dxgkrnl counter or the failure rate. Adding it is a deliberate override, not a default. See `docs/llama-cpp-runtime-audit.md` §4. |
 | `GGML_NATIVE` | `ON` | Detect host CPU and enable all available instruction sets (AVX2, FMA, BMI2 on i9-12900HK). Without this flag, only a portable baseline is used. |
 | `GGML_OPENMP` | `ON` | OpenMP parallelisation for CPU fallback layers. Essential when VRAM is tight and some layers land on CPU. |
 | `GGML_CCACHE` | `ON` | Cache compiled object files. With only 12 vCPUs this is marginal for clean builds but **significantly** speeds up incremental rebuilds after `git pull`. The cache lives at `~/.cache/ccache`; `ccache -s` reports ~0.9 GiB in use against a 5 GiB cap, so the cap is not a constraint at this scale. |
