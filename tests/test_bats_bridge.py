@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -15,7 +16,41 @@ import pytest
 import _bats_suites
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BATS_EXECUTABLE = "bats"
+
+
+def _resolve_bats() -> str:
+    """The bats executable: PATH first, then the known install paths.
+
+    A bare ``bats`` made every generated case fail with
+    ``FileNotFoundError: 'bats'`` in any caller whose PATH does not carry
+    ``~/.local/bin`` — and the VS Code extension host is exactly such a caller:
+    measured 2026-11-05, its PATH is
+    ``/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:…`` with no user
+    directory, so the Testing panel showed 1759 reds under this file for a bridge
+    that was healthy (reproduced outside VS Code with the same stripped PATH).
+    ``tools/install-bats.sh`` installs to ``$HOME/.local/bin``, and CI puts it at
+    ``$RUNNER_TEMP/bin`` (already on PATH there), so PATH still wins when it can.
+
+    Resolution is by absolute path, like the ``timeout`` binary below.  When none
+    exists the error names where it looked and how to install it, rather than
+    surfacing as a failure on the first case that ran.
+    """
+    found = shutil.which("bats")
+    if found:
+        return found
+    for candidate in (
+        Path.home() / ".local/bin/bats",
+        Path("/usr/local/bin/bats"),
+        Path("/usr/bin/bats"),
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    raise FileNotFoundError(
+        "bats not found on PATH or in ~/.local/bin, /usr/local/bin, /usr/bin — install it with tools/install-bats.sh"
+    )
+
+
+BATS_EXECUTABLE = _resolve_bats()
 #: How long a killed group may refuse to die between SIGTERM and SIGKILL.  The same figure
 #: test_bats_unittest uses for the same job, so the two bridges stop a run alike.
 _GROUP_STOP_GRACE_S = 5.0
@@ -779,3 +814,16 @@ def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:
         assert expected in generated, f"missing generated id {expected!r} for {test_name!r}"
         checked += 1
     assert checked, "expected some BATS test names longer than 60 characters"
+
+
+def test_bats_executable_is_resolved_by_absolute_path() -> None:
+    """The bridge must not depend on the caller's PATH.
+
+    Catches: a regression to ``BATS_EXECUTABLE = "bats"``, which failed every generated
+    case in the VS Code extension host — its PATH omits ``~/.local/bin`` (measured
+    2026-11-05), so the Testing panel showed 1759 reds under this file for a healthy
+    bridge, reproduced outside VS Code with the same stripped PATH.  The observable is
+    an absolute, executable path; WHICH path it is stays the resolver's business.
+    """
+    assert os.path.isabs(BATS_EXECUTABLE)
+    assert os.access(BATS_EXECUTABLE, os.X_OK)
