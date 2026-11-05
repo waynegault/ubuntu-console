@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 111
+#   v111 (2026-11-05): the tolerance comment named a value the profile does not declare
+#   (5000); it declares 3500, and the kept lane is now declared to the census instead.
 # Module Version: 110
 #   v110 (2026-11-05): the VRAM baseline verdict moves to bin/_tac-bin-lib.sh (shared with
 #   both batch wrappers, which never load 11d), and its holder identity comes from
@@ -733,7 +736,8 @@ fi
 # ("~430 MiB memory-core-local-embedding-worker") described a Node worker that this
 # box does not run and that the pkill above already removes, so it sized nothing.
 # Hosts that keep a lane size the tolerance to that measurement in their profile
-# (asus-n1n-rtx-spark: 5000); the arithmetic is in the comment there.
+# (asus-n1n-rtx-spark: 3500, the driver-only figure — its kept lane is declared to the
+# census below instead).  The arithmetic is in the profile's comment.
 BASELINE_GAP_MAX=${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}
 BASELINE_GAP=$(( VRAM_TOTAL - FREE_VRAM ))
 # CENSUS MODE (owner decision, 2026-11-05; card AUTOTUNE-BASELINE-002 v92).
