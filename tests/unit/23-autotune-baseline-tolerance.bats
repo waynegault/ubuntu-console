@@ -159,6 +159,58 @@ BINLIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
 }
 
 
+# ── The CUDA reap's attribution, and its selftest guard ───────────────────────
+# nvidia-smi lists NO compute app on this box even at 73 GiB used, so the reaper
+# killed nothing and a non-systemd server survived to refuse the census.  The
+# collector falls back to /proc/PID/exe; the reaper itself must never run under a
+# selftest, whose cases execute on a box whose real lanes are serving.
+
+@test "cuda sweep: an empty nvidia-smi list falls back to /proc by exe, and skips build-opencl" {
+    local root="$BATS_TEST_TMPDIR/llama.cpp"
+    mkdir -p "$root/build-cuda/bin" "$root/build-opencl/bin" "$BATS_TEST_TMPDIR/bin"
+    # A bash COPY, not /bin/sleep: this box's coreutils is uutils, a multicall binary
+    # that rejects a renamed copy ("unknown program 'llama-server'").
+    cp /bin/bash "$root/build-cuda/bin/llama-server"
+    cp /bin/bash "$root/build-opencl/bin/llama-server"
+    "$root/build-cuda/bin/llama-server" -c 'while :; do sleep 1; done' &
+    local cuda_pid=$!
+    "$root/build-opencl/bin/llama-server" -c 'while :; do sleep 1; done' &
+    local xe_pid=$!
+    # The stub answers the compute-app query with NOTHING — this box's real behaviour.
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$BATS_TEST_TMPDIR/bin/nvidia-smi"
+    chmod +x "$BATS_TEST_TMPDIR/bin/nvidia-smi"
+    sleep 0.2
+
+    run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash -c \
+        'source "$1"; __llm_cuda_server_pids' _ "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$cuda_pid"* ]]
+    [[ "$output" != *"$xe_pid"* ]]
+
+    kill "$cuda_pid" "$xe_pid" 2>/dev/null || true
+    wait "$cuda_pid" "$xe_pid" 2>/dev/null || true
+}
+
+@test "cuda sweep: a selftest never runs the reaper against the live card" {
+    # Catches: the /proc fallback making a SELFTEST reap the box's real lanes.  The
+    # guard must fire before the foreign-owner probe and the scan.
+    local root="$BATS_TEST_TMPDIR/llama.cpp"
+    mkdir -p "$root/build-cuda/bin"
+    cp /bin/bash "$root/build-cuda/bin/llama-server"
+    "$root/build-cuda/bin/llama-server" -c 'while :; do sleep 1; done' &
+    local pid=$!
+    sleep 0.2
+
+    run env AUTOTUNE_SELFTEST=1 bash -c \
+        'source "$1"; __llm_kill_cuda_llama_servers' _ "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"selftest"* ]]
+    kill -0 "$pid"   # still alive: no reap happened
+
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+
 @test "the stale 2026-08-28 sizing note is gone from the guard" {
     run grep -c "on this box, 2026-08-28" "$REPO_ROOT/scripts/autotune-model.sh"
     [ "$output" -eq 0 ]

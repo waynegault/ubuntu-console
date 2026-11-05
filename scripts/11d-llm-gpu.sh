@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 37
+#   v37 (2026-11-05): __llm_cuda_server_pids gives the CUDA reap an attribution that
+#   works on WSL2.  nvidia-smi's compute-app list is EMPTY here even at 73 GiB used, so
+#   __llm_kill_cuda_llama_servers killed nothing and a non-systemd `model use` server
+#   survived to make the VRAM census refuse every run as an unlisted holder.  The
+#   collector asks nvidia-smi first and falls back to /proc/PID/exe (same build-opencl
+#   exclusion), and the reaper now REFUSES to run under AUTOTUNE_SELFTEST=1 — without
+#   that guard a selftest would reap the live lanes the fallback just made visible.
 # Module Version: 36
 #   v36 (2026-11-05): __llm_thread_cap takes the ceiling from the HOST PROFILE
 #   (LLAMA_THREAD_CAP), not a repo constant.  It returned 6 on every box, so a 20-core
@@ -459,6 +467,48 @@ function __llm_train_lane_busy() {
 }
 
 # ---------------------------------------------------------------------------
+# __llm_cuda_server_pids — candidate CUDA llama-server PIDs, one per line.
+#
+# nvidia-smi's compute-app list is the precise source and is used whenever it
+# answers.  It is EMPTY on this WSL2 box even at 73 GiB used (measured 2026-11-05),
+# so a cleanup that trusted it alone killed nothing, and a non-systemd server (a
+# `model use` on :8081) survived to make the VRAM census refuse every measurement
+# with an unlisted holder.  When nvidia-smi EXISTS but lists nothing, attribute
+# from the PROCESS TABLE by /proc/PID/exe — the same test, so the Xe fleet
+# (build-opencl) stays out of scope.  A box with NO nvidia-smi still returns
+# nothing: no attribution is better than a name sweep.
+# ---------------------------------------------------------------------------
+function __llm_cuda_server_pids() {
+    local _smi _pid _d _exe
+    local -a _listed=()
+    # swallow-ok: a missing nvidia-smi selects the /proc fallback below, which is the intended answer
+    _smi=$(command -v nvidia-smi 2>/dev/null || true)
+    if [[ -n "$_smi" ]]
+    then
+        while read -r _pid
+        do
+            [[ "$_pid" =~ ^[0-9]+$ ]] && _listed+=("$_pid")
+        # swallow-ok: an unreadable compute-app list leaves _listed empty, which selects the /proc fallback below
+        done < <("$_smi" --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null || true)
+        if (( ${#_listed[@]} > 0 ))
+        then
+            printf '%s\n' "${_listed[@]}"
+            return 0
+        fi
+    fi
+    for _d in /proc/[0-9]*
+    do
+        # swallow-ok: a process that exits mid-scan has no exe link; it is not a candidate
+        _exe="$(readlink -f "$_d/exe" 2>/dev/null)" || continue
+        case "$_exe" in
+            */llama.cpp/build-opencl*/bin/llama-server) continue ;;
+            */llama.cpp/build*/bin/llama-server) printf '%s\n' "${_d#/proc/}" ;;
+            *) ;;   # any other executable: not a candidate
+        esac
+    done
+}
+
+# ---------------------------------------------------------------------------
 # __llm_kill_cuda_llama_servers — Kill ONLY CUDA-held llama.cpp processes.
 #
 # Two-card machine: the Xe fleet server (llama-xe-minicpm5-1b-chat.service, :18081) and
@@ -476,6 +526,17 @@ function __llm_train_lane_busy() {
 function __llm_kill_cuda_llama_servers() {
     local _unit _svc_pid _pid _exe _smi _skip _p _llm_wait _alive
     local -a _protected=() _cuda_pids=() _kill_pids=()
+
+    # A SELFTEST must not touch live state.  Its canned engine never launches a
+    # server and its cases run on a box whose real lanes ARE serving; with the /proc
+    # fallback below, an unguarded selftest would reap the live embedding lane and
+    # the operator's model (measured 2026-11-05).  The suite's own kill path is
+    # exercised through __llm_cuda_server_pids, never through this reaper.
+    if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]
+    then
+        warn "[llm-kill] selftest — not touching live CUDA servers"
+        return 0
+    fi
 
     # Never evict another agent's in-flight run.  When the investigator holds
     # the GPU lock the card belongs to that run and its llama-server is not
@@ -500,11 +561,10 @@ function __llm_kill_cuda_llama_servers() {
         fi
     done <<< "${LLAMA_LANE_SPECS:-}"
 
-    # CUDA attribution: only llama.cpp processes holding a CUDA compute
-    # context are candidates.  When nvidia-smi cannot attribute (absent or
-    # probe failure) we kill NOTHING rather than fall back to a name sweep —
-    # a name sweep would reintroduce the Xe collateral this helper exists to
-    # prevent.
+    # CUDA attribution: the shared collector asks nvidia-smi first and falls back to
+    # /proc/PID/exe when it lists nothing (WSL2 dxgkrnl — measured 2026-11-05).  A box
+    # with NO nvidia-smi still kills nothing: no attribution beats a name sweep, which
+    # would reintroduce the Xe collateral this helper exists to prevent.
     _smi=$(command -v nvidia-smi 2>/dev/null || true)
     if [[ -z "$_smi" ]]
     then
@@ -530,7 +590,7 @@ function __llm_kill_cuda_llama_servers() {
             *)
                 continue ;;
         esac
-    done < <("$_smi" --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null || true)
+    done < <(__llm_cuda_server_pids)
 
     if [[ ${#_cuda_pids[@]} -eq 0 ]]
     then
