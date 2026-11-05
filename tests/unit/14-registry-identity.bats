@@ -376,3 +376,33 @@ __row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
     # ...but the failure is REPORTED by name, not silently dropped.
     [[ "$output" == *"tuning-column remap failed"* ]]
 }
+
+# ------------------------------------------------------------------------------
+# `model scan` must not give an embedding export a registry row.
+# Wayne, 2026-11-05: "we really shouldnt have any embedding models in this registry".
+# The row was removed by hand the same day; these cases stop it coming back.  The two
+# signals are pinned SEPARATELY because they catch different exporters: the arch names
+# EmbeddingGemma, while Qwen3-Embedding exports arch `qwen3` and is visible only in its
+# pooling metadata.  The third case is the control — without it a predicate that always
+# returned true would pass both of the others.
+# ------------------------------------------------------------------------------
+
+@test "model scan: an embedding export is recognised by its ARCH" {
+    printf 'GGUF\x00\x00\x00\x00gemma-embedding\n' > "$TMPDIR_BATS/embed-arch.gguf"
+    run __model_is_embedding "$TMPDIR_BATS/embed-arch.gguf" gemma-embedding
+    [ "$status" -eq 0 ]
+}
+
+@test "model scan: an embedding export with a CHAT arch is caught by its pooling metadata" {
+    # The failure this exists for: Qwen3-Embedding's arch is `qwen3`, identical to a chat
+    # model's, so an arch-only test lets the model that prompted the ruling straight back in.
+    printf 'GGUFqwen3\x00qwen3.pooling_type\x00' > "$TMPDIR_BATS/embed-pool.gguf"
+    run __model_is_embedding "$TMPDIR_BATS/embed-pool.gguf" qwen3
+    [ "$status" -eq 0 ]
+}
+
+@test "model scan: a chat export with neither signal is NOT treated as embedding" {
+    printf 'GGUFqwen3\x00qwen3.block_count\x00' > "$TMPDIR_BATS/chat.gguf"
+    run __model_is_embedding "$TMPDIR_BATS/chat.gguf" qwen3
+    [ "$status" -eq 1 ]
+}

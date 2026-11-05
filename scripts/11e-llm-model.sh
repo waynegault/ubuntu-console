@@ -1,6 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 87
+#   v87 (2026-11-05): the case in `__model_is_embedding` carries an explanatory comment, because
+#   §18.3 item 4.2.4 counts a `case` with neither a `*)` arm nor one (20 -> 21 when the case was
+#   added).  No `*)` arm belongs there: every other arch must fall through to the pooling read.
+# Module Version: 86
+#   v86 (2026-11-05): `model scan` no longer gives an embedding export a registry row.  Wayne's
+#   ruling, after the EmbeddingGemma row was removed by hand the same day: "we really shouldnt
+#   have any embedding models in this registry".  The test is the arch OR the GGUF's pooling
+#   metadata, because Qwen3-Embedding's arch is plain `qwen3` — the same string a chat model
+#   carries — so arch alone would let exactly the model that prompted the ruling back in.
 # Module Version: 85
 #   v85 (2026-11-05): the quiet gate sees CI.  `bin/heavy-job` cannot: the workflow calls bats
 #   directly, so a 77-file suite ran while the gate reported "free" and a rebuild was cleared
@@ -278,6 +288,25 @@ function __model_scan_row_bytes() {
     printf '%s\n' "$_fbytes"
 }
 
+# __model_is_embedding — true when a GGUF is an embedding export, which must never become a
+# registry row (Wayne, 2026-11-05: "we really shouldnt have any embedding models in this
+# registry").  TWO signals, because the arch alone is not enough: EmbeddingGemma names itself
+# in the arch (`gemma-embedding`), while Qwen3-Embedding exports arch `qwen3` — the very string
+# a chat model carries — and is distinguishable only by the POOLING metadata an embedding
+# export declares and a chat export does not.  GGUF keys are plain UTF-8 in the header, so a
+# byte scan over the same 256 KiB window `__gguf_metadata` already reads is enough.
+function __model_is_embedding() {
+    local fpath="$1" arch="${2:-}"
+    case "${arch,,}" in
+        # Deliberately no `*)` arm: every other arch falls through to the metadata read below,
+        # which is the point of the second signal, so a default here would return early on
+        # every chat model.
+        *embed*|*bert*) return 0 ;;
+    esac
+    # swallow-ok: an unreadable file yields no match, i.e. "not an embedding export", which the scan then handles as before
+    dd if="$fpath" bs=262144 count=1 2>/dev/null | grep -qa 'pooling_type'
+}
+
 function __model_scan() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
     then
@@ -360,6 +389,15 @@ function __model_scan() {
         meta=$(__gguf_metadata "$gguf")
         local _mname march mblocks mctx mftype
         IFS='|' read -r _mname march mblocks mctx mftype <<< "$meta"
+
+        # The registry is the CHAT registry. An embedding lane declares its own model in its
+        # unit, so a row here is unused — and it is a re-add hazard for the very row Wayne had
+        # removed by hand on 2026-11-05 (see the Module Version note).
+        if __model_is_embedding "$gguf" "$march"
+        then
+            __tac_info "Skipping" "embedding model $fname — the registry holds chat models only" "$C_Dim"
+            continue
+        fi
 
         local size_gb
         size_gb=$(awk "BEGIN{printf \"%.1f\", $fbytes/1024/1024/1024}")
@@ -4302,7 +4340,7 @@ function llm-build() {
             --quick) quick=true; shift ;;
             --no-pull) no_pull=true; shift ;;
             --yes|-y) yes=true; shift ;;
-            *) __tac_info "Usage" "llm-build [--quick] [--no-pull] [--yes]" "$C_Warn"; return 1 ;;
+            *) __tac_info "Usage" "llm-build [--quick] [--no-pull] [--yes]" "$C_Warning"; return 1 ;;
         esac
     done
 
@@ -4551,6 +4589,25 @@ function llm-build() {
         __tac_info "Error" "Build failed (exit=$rc)" "$C_Error"
         return $rc
     fi
+
+    # Companion tools, each with a live consumer in this profile, measured at ~9 s
+    # apiece against a 40-60 minute llama-server build. They are built here because a
+    # FRESH tree (the monthly Jarvis rebuild makes one) would otherwise drop them:
+    #   llama-tokenize  token counting
+    #   llama-cli       scripts/13-init.sh defines its alias only if this binary exists,
+    #                   so a missing one silently removes `llama-cli` from the shell
+    #   llama-bench     bin/gpu-busy.sh names it as a GPU workload; manual benches only
+    # Deliberately non-fatal and deliberately a LIST: llama-server is the binary the
+    # lanes execute, and anything not named here is not built by this function.
+    local _tool _rc_tool
+    for _tool in llama-tokenize llama-cli llama-bench; do
+        __tac_info "Build" "Compiling ${_tool} ..." "$C_Dim"
+        "$heavy_job" --timeout "$lock_wait" cmake --build "$build_dir" --target "$_tool" -j"$jobs" 2>&1 | tail -3
+        _rc_tool=${PIPESTATUS[0]}
+        if [[ $_rc_tool -ne 0 ]]; then
+            __tac_info "Warn" "${_tool} did not build (exit=$_rc_tool) - llama-server is unaffected" "$C_Warning"
+        fi
+    done
 
     # Verify
     local bin="$build_dir/bin/llama-server"
