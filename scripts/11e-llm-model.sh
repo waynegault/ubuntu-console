@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 91
+#   v91 (2026-11-05): `model scan` NAMES the GGUFs it cannot see.  Its glob is deliberately flat,
+#   so a bare `hf download`'s nested `models--*/snapshots/**` entries were skipped in silence —
+#   measured 2026-11-05, seven such trees holding 210.8 GiB (two of them complete models) while
+#   the scan said "No models found".  The count and one example now print before the flat walk,
+#   with the remedy (`llm-pull`, or the `hf` wrapper, which lands files flat).
 # Module Version: 90
 #   v90 (2026-11-05): an INERT keep entry is named BEFORE anything is stopped.  Measured 17:20:
 #   a shell still exported the pre-rename embedding unit, the lane table had moved on, no keep
@@ -307,6 +313,32 @@ function __model_scan_row_bytes() {
     printf '%s\n' "$_fbytes"
 }
 
+# __model_scan_report_nested <model-dir> — name the GGUF files a flat scan cannot see.
+#
+# The scan globs `"$LLAMA_MODEL_DIR"/*.gguf`, which is deliberate: the store is FLAT, and a
+# bare `hf download` used to nest HuggingFace's hub-cache tree inside it
+# (`models--<org>--<repo>/snapshots/<rev>/<file>.gguf` -> `blobs/<sha>`).  Those weights are
+# real and loadable, and the scan passes over them without a word — measured 2026-11-05,
+# seven such trees holding 210.8 GiB, two of them complete models, while `model scan` said
+# "No models found".  Reporting the count, with one example, is what turns a silent
+# omission into a decision.  Depth 2 because a DIRECT child .gguf is the flat store itself.
+# @returns 0 always — a report, never a gate.
+function __model_scan_report_nested() {
+    local _dir="$1" _n _eg _msg
+    # swallow-ok: an unreadable store is reported by the caller's own mount/store check
+    _n=$(find "$_dir" -mindepth 2 -name '*.gguf' -print 2>/dev/null | wc -l)
+    (( _n > 0 )) || return 0
+    # An EXAMPLE, not the largest: these are hub-cache entries and usually symlinks, whose
+    # stat size is the link's, so "largest" would be a number that means nothing.
+    # swallow-ok: the example is a courtesy; the count above is the finding
+    _eg=$(find "$_dir" -mindepth 2 -name '*.gguf' 2>/dev/null | head -1)
+    _msg="$_n GGUF file(s) sit BELOW $_dir (e.g. ${_eg#"$_dir"/}) and get no registry row"
+    _msg+=" — this scan reads the top level only.  Flatten them with 'llm-pull', or re-download"
+    _msg+=" through the 'hf' wrapper, which lands files flat."
+    __tac_info "Warning" "$_msg" "$C_Warning"
+    return 0
+}
+
 # __model_is_embedding — true when a GGUF is an embedding export, which must never become a
 # registry row (Wayne, 2026-11-05: "we really shouldnt have any embedding models in this
 # registry").  TWO signals, because the arch alone is not enough: EmbeddingGemma names itself
@@ -379,6 +411,12 @@ function __model_scan() {
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
+    # BEFORE the loop, and unconditionally: a store that hides models is a state the
+    # operator has to hear about even when the flat half scans cleanly.  Measured
+    # 2026-11-05 — seven `models--*/` trees sat under the store holding 210.8 GiB of
+    # weights behind snapshots/** symlinks into blobs/, and `model scan` reported
+    # "No models found" (or a short list) with no mention of them.
+    __model_scan_report_nested "$LLAMA_MODEL_DIR"
     local gguf
     for gguf in "$LLAMA_MODEL_DIR"/*.gguf
     do

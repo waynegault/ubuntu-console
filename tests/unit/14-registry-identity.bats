@@ -203,6 +203,29 @@ __fake_gguf() {
     head -c 512 /dev/zero | tr '\0' 'x' >> "$1"
 }
 
+@test "model scan: a GGUF nested below the store is counted and named, never silently skipped" {
+    # Measured 2026-11-05 — seven `models--*/` trees sat under ~/models/active holding
+    # 210.8 GiB of weights behind snapshots/** symlinks into blobs/, and `model scan`
+    # reported "No models found" without a word about them.  The scan's glob is
+    # deliberately flat (the store IS flat); the defect was the silence, not the glob.
+    mkdir -p "$LLAMA_MODEL_DIR/models--org--repo/snapshots/rev"
+    printf 'GGUF' > "$LLAMA_MODEL_DIR/models--org--repo/snapshots/rev/m.gguf"
+
+    run __model_scan
+    [ "$status" -eq 1 ]                      # no flat models, so no registry is written
+    [[ "$output" == *"1 GGUF file(s) sit BELOW"* ]] \
+        || { echo "a nested model was not counted: $output"; return 1; }
+    [[ "$output" == *"models--org--repo"* ]] \
+        || { echo "the report names no example: $output"; return 1; }
+
+    # Control: the same scan on a flat-only store says nothing about nesting.  Without
+    # this, a helper that always printed would pass the assertions above.
+    mv "$LLAMA_MODEL_DIR/models--org--repo" "$BATS_TEST_TMPDIR/moved-repo"
+    run __model_scan
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"sit BELOW"* ]] || { echo "reported nesting on a flat store: $output"; return 1; }
+}
+
 @test "register-trained: refuses without the --benchmark/--held-out that make a row answerable" {
     __fake_gguf "$LLAMA_MODEL_DIR/alpha.gguf"
     run __model_register_trained alpha.gguf
