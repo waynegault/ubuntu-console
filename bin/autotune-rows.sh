@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-11-05): the pre-flight asks the SHARED baseline verdict, not a byte
+#   threshold.  The 3500 MiB wait was unsatisfiable on this box: the kept embedding
+#   lane's 4094 MiB gap exceeds it, so every batch aborted before row one (measured
+#   15:10:18 and 2026-11-04 13:23).  Census mode names the tenants that may be
+#   resident and caps the hold; no census = the exclusive bound unchanged.  The
+#   derived scopes also apply the autotune TOMBSTONE now, so --all-but-done can no
+#   longer re-select the archived 70B or the 88 GiB artefact (explicit files still
+#   pass; TAC_RESUME_INCLUDE_RETIRED=1 is the override).
 #   v11 (2026-11-03): a DIRECT run asks the quiet-fleet gate too. The gate only ever guarded
 #   the boot/resume path, so a hand-started sweep reached the card ungated (measured 22:07 that
 #   day, launched from a live shell). --force-live-fleet is the named override; the resume loop
@@ -94,6 +102,10 @@ for _arg in "$@"; do
 done
 set -- ${_args[@]+"${_args[@]}"}
 
+# 1 = ROWS came from a derived scope (--all / --all-but-done), so the tombstone
+# applies.  An explicit file argument is a deliberate override and is not filtered.
+DERIVED=0
+
 case "${1:-}" in
     # Embedding models (arch field 6, e.g. gemma-embedding) have no generation to
     # measure, so the sweep skips them instead of burning a row on a probe that can
@@ -109,16 +121,32 @@ case "${1:-}" in
         mapfile -t ROWS < <(awk -F'|' '
             $1 ~ /^[0-9]+$/ && $18 != "yes" && $18 != "slow" && tolower($6) !~ /embedding/ {print $3}
         ' "$REGISTRY" | sort)
+        DERIVED=1
         ;;
     --all)
         shift
         mapfile -t ROWS < <(awk -F'|' '
             $1 ~ /^[0-9]+$/ && tolower($6) !~ /embedding/ {print $3}
         ' "$REGISTRY" | sort)
+        DERIVED=1
         ;;
     '')             echo "usage: $(basename "$0") <row|file>... | --all-but-done | --all" >&2; exit 2 ;;
     *)              ROWS=("$@") ;;
 esac
+# The TOMBSTONE (shared with the resume loop): a retired row is NOT owed, and a
+# derived scope must not re-add it.  Measured 2026-11-05: --all-but-done still
+# selected the archived 70B and the 88 GiB artefact, one of which OOM-killed at
+# staging.  An explicit file argument is deliberate and is honoured; the documented
+# override for a derived scope is TAC_RESUME_INCLUDE_RETIRED=1.
+if [[ "$DERIVED" == 1 && "${TAC_RESUME_INCLUDE_RETIRED:-0}" != "1" ]]
+then
+    _kept=()
+    for _r in "${ROWS[@]}"
+    do
+        _tac_is_retired "$_r" || _kept+=("$_r")
+    done
+    ROWS=("${_kept[@]}")
+fi
 if (( ${#ROWS[@]} == 0 )); then
     echo "autotune-rows: no rows selected — nothing to do" >&2
     exit 0
@@ -180,18 +208,26 @@ trap '{ echo "=== WRAPPER KILLED by a signal — the rows were NOT measured to a
 # swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
 systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 
-# Require the card to be genuinely free before launching the batch — through the SHARED
-# wait (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM loop.  The loop this replaced
-# broke out on an UNREADABLE reading (a failing nvidia-smi launched the batch against a
-# card whose state was unknown) and FELL THROUGH on exhaustion, so a batch could start on
-# an occupied card and burn rows on a refused VRAM baseline.  The order is what makes the
-# bound satisfiable: the suspend hold is taken and the lane stopped ABOVE, so our own
-# ~3.4 GiB is gone by the time this runs.
-if ! _tac_gpu_wait_used_below "${LLAMA_GPU_FREE_THRESHOLD_MIB:-800}" 90 2; then
-    # The wait logged the last reading (or that the card was unreadable) and did not
-    # proceed.  ABORT rather than launch — the EXIT trap above releases the hold.
-    echo "=== ABORT: the card did not free after the lane stop — NOT launching the batch" \
-        | tee -a "$LOG"
+# Require a TRUSTWORTHY baseline before launching the batch — through the SHARED
+# verdict (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM threshold.  The byte
+# bound this replaces could not express this box: the guard deliberately spares the
+# embedding lane, whose 4094 MiB (driver included) exceeds the 3500 MiB threshold, so
+# every batch aborted before its first row (measured 2026-11-05 15:10:18 and again
+# 2026-11-04 13:23).  The census mode names the tenants that may be resident and
+# caps the whole-card hold; with no census configured it is the exclusive bound it
+# always was.  An unreadable card still fails CLOSED.
+_baseline_rc=0
+_baseline_out="$(_tac_gpu_wait_baseline 90 2)" || _baseline_rc=$?
+printf '%s\n' "$_baseline_out" | tee -a "$LOG"
+if (( _baseline_rc != 0 )); then
+    _baseline_reason=$(sed -n 's/^reason=//p' <<< "$_baseline_out" | head -1)
+    if (( _baseline_rc == 2 )); then
+        echo "=== ABORT: LLM_AUTOTUNE_CENSUS is set but LLM_AUTOTUNE_CENSUS_MAX_MIB is not" \
+             "a positive integer — a census with no bound is not a gate" | tee -a "$LOG"
+    else
+        echo "=== ABORT: the VRAM baseline is not clear (${_baseline_reason:-unknown})" \
+             "— NOT launching the batch" | tee -a "$LOG"
+    fi
     exit 1
 fi
 echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"

@@ -360,6 +360,64 @@ EOS
     [[ "$_claim" != *"llama-xe-embeddinggemma-embed.service"* ]]
 }
 
+# The always-on rule has TWO consumers: the autotune/bench stand-down
+# (__llm_stand_down_cuda_lanes) and `model use` claiming the card.  Only the first
+# honoured LLAMA_LANE_KEEP_UNITS, so serving a chat model took memory search down
+# with it — measured 2026-11-05 on the arm64 box, where `model use 1` printed
+# "stopping llama-cuda-qwen3embedding-embed.service (one LLM per card; this lane
+# takes it)" and nothing restarted the lane until the card was released.
+# Criterion: the host profile declares the embedding lane always-on, and it backs
+# memory search for every session, so no serve path may evict it.
+@test "gpu-exclusivity: model use spares an always-on lane and still displaces the chat lane" {
+    local sb="$TAC_TEST_TMPDIR/model-use-claim"
+    mkdir -p "$sb/bin"
+    awk '/^function __model_use_claim_cuda_card\(\)/,/^}/' "$REPO_ROOT/scripts/11e-llm-model.sh" > "$sb/claim.sh"
+    grep -q '__model_use_claim_cuda_card' "$sb/claim.sh"
+
+    cat > "$sb/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+unit="${@: -1}"
+case "$*" in
+    *"is-active"*) exit 0 ;;
+    *"stop"*) printf '%s\n' "$unit" >> "$STOP_LOG" ;;
+esac
+exit 0
+EOS
+    chmod +x "$sb/bin/systemctl"
+    cat > "$sb/probe.sh" <<'EOS'
+set -uo pipefail
+C_Dim=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+__llm_gpu_foreign_owner() { return 1; }
+_tac_suspend_acquire() { return 0; }
+_tac_suspend_pid() { return 0; }
+source "$1"
+__model_use_claim_cuda_card
+EOS
+    local -r spec=$'llama-cuda-qwen3coder-30b-chat.service|18087\nllama-cuda-qwen3embedding-embed.service|18080'
+
+    # Positive control: with no keep list BOTH lanes are displaced.  A harness that
+    # cannot stop the chat lane would prove nothing about the kept one.
+    : > "$sb/stopped"
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" LLAMA_LANE_SPECS="$spec" \
+        LLAMA_LANE_KEEP_UNITS='' bash "$sb/probe.sh" "$sb/claim.sh"
+    [ "$status" -eq 0 ]
+    grep -qx 'llama-cuda-qwen3coder-30b-chat.service' "$sb/stopped"
+    grep -qx 'llama-cuda-qwen3embedding-embed.service' "$sb/stopped"
+
+    # The kept lane survives; the chat lane is still displaced.
+    : > "$sb/stopped"
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" LLAMA_LANE_SPECS="$spec" \
+        LLAMA_LANE_KEEP_UNITS='llama-cuda-qwen3embedding-embed.service' \
+        bash "$sb/probe.sh" "$sb/claim.sh"
+    [ "$status" -eq 0 ]
+    grep -qx 'llama-cuda-qwen3coder-30b-chat.service' "$sb/stopped"
+    ! grep -qx 'llama-cuda-qwen3embedding-embed.service' "$sb/stopped" \
+        || { echo "evicted the always-on lane: $(cat "$sb/stopped")"; return 1; }
+    [[ "$output" == *"keeping llama-cuda-qwen3embedding-embed.service"* ]] \
+        || { echo "the spared lane was passed over in silence: $output"; return 1; }
+}
+
 # The watchdog can only stand down for another run if gpu-busy.sh knows about it,
 # and its foreign-app signal CANNOT tell the two apart (same binary name).  The
 # ownership signal is evaluated in isolation here — gpu-busy.sh itself runs its
@@ -465,7 +523,7 @@ EOS
         llama-cuda-llama32-3b-chat.service
         llama-cuda-qwen35-4b-pipeline.service
         llama-cuda-qwen3coder-30b-chat.service
-        llama-cuda-embeddinggemma-embed.service
+        llama-cuda-qwen3embedding-embed.service
         llama-cpu-qwen25-3b-chat.service
         llama-cpu-qwen3coder-30b-chat.service
         llama-cpu-heartbeat-qwen25-3b-chat.service
@@ -1334,8 +1392,8 @@ source "$1"
 __llm_stand_down_cuda_lanes
 EOS
     run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" \
-        LLAMA_LANE_SPECS='llama-cuda-embeddinggemma-embed.service|18080' \
-        LLAMA_LANE_KEEP_UNITS='llama-cuda-embeddinggemma-embed.service' \
+        LLAMA_LANE_SPECS='llama-cuda-qwen3embedding-embed.service|18080' \
+        LLAMA_LANE_KEEP_UNITS='llama-cuda-qwen3embedding-embed.service' \
         bash "$sb/probe.sh" "$sb/lane.sh"
     [[ "$status" -eq 0 ]]
     [ ! -s "$sb/stopped" ] || { echo "evicted an always-on lane: $(cat "$sb/stopped")"; return 1; }

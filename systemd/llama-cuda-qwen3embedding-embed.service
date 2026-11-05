@@ -1,10 +1,15 @@
 [Unit]
 # install-profile: asus-n1n-rtx-spark
 # CARD: CUDA0 (RTX Spark N1X, Blackwell sm_121a)   MODEL: Qwen3-Embedding-0.6B (Q8_0)   FUNCTION: embeddings
-# The UNIT NAME is historical — it still says embeddinggemma because the lane is identified by
-# its PORT (:18080) and by its alias, not by its filename. Same convention as the Xe chat lane
-# whose unit says qwen25-3b and serves Llama-3.2-3B. Renaming it would also mean editing the
-# lane table in config/hosts.d/asus-n1n-rtx-spark.conf and LLAMA_LANE_KEEP_UNITS for no gain.
+# The UNIT NAME carries the model, because a name that says `embeddinggemma` while the lane loads
+# Qwen3-Embedding is the one artifact a reader trusts first and verifies last — measured 2026-11-05,
+# Wayne read the filename and asked whether the Qwen swap had ever happened.  Renamed from
+# llama-cuda-embeddinggemma-embed.service the same day (install.sh retires the old link); the Xe
+# twin, llama-xe-embeddinggemma-embed.service, keeps that name because it really does serve
+# EmbeddingGemma.
+#
+# What identifies the lane is its PORT (:18080) and its alias — the port is what
+# `memory.search.remote.baseUrl` in ~/.openclaw/openclaw.json points at.
 #
 # SWAPPED 2026-11-05 (Wayne's order). The unit's own earlier note ended: "an embedding input
 # longer than 2048 tokens CANNOT be served by this model, however the flags are set" — true,
@@ -31,32 +36,20 @@ StartLimitIntervalSec=600
 StartLimitBurst=6
 
 [Service]
-# --embedding restricts the server to the embedding use case. --pooling mean matches how
-# EmbeddingGemma is trained/exported; the model default is read from the GGUF but naming it
-# keeps the vector space identical if the file is ever swapped for a re-quant of the same model.
+# --embeddings restricts the server to the embedding use case.  --pooling last is NOT optional:
+# Qwen3-Embedding is trained for LAST-token pooling (the GGUF's pooling_type is 3), so the mean
+# default would emit vectors the model never intended.  Naming it also keeps the vector space
+# identical if the file is ever swapped for a re-quant of the same model.
 #
-# --batch-size 8192 --ubatch-size 8192 --ctx-size 2048 --parallel 1 (REVISED 2026-11-01 10:47Z).
-# Settled state after three measurements, and the third one is the limit that actually binds:
+# --batch-size 8192 --ubatch-size 8192 --parallel 1 (measured 2026-11-01, carried over unchanged):
 #   ubatch 512  -> HTTP 500 "input (559 tokens) is too large... (current batch size: 512)"
 #   ubatch 2048 -> HTTP 500 the same shape at 2169 and 2470 tokens (42 failures, 00:38-10:43).
-#   ubatch 8192 -> the batch objection disappears and the real ceiling shows: n_ctx_slot is
-#                  pinned at 2048 because EmbeddingGemma's n_ctx_train is 2048, and llama-server
-#                  clamps the slot to the trained context. Inputs over 2048 tokens now fail
-#                  "input (2402 tokens) is larger than the max context size (2048 tokens)".
-# So raising --ctx-size buys nothing for input size: 2048 is the honest value, and it is also
-# what the watchdog's window check expects — the earlier --ctx-size 16384 advertised a window
-# the model cannot serve, and the watchdog flagged the mismatch (16384 vs 2048) every tick.
-# --parallel 1 keeps the single slot at the full 2048 (with --parallel 2 a 2048 ctx would halve
-# each slot to 1024); a 300M embedding model is fast enough that serialised requests are not a
-# bottleneck.  8192/8192 stops llama-server downgrading n_batch to n_ubatch.
-#
-# Consequence, stated plainly: an embedding input longer than 2048 tokens CANNOT be served by
-# this model, however the flags are set. The two ways to change that are both worse than the
-# symptom -- lowering memory chunkTokens changes the index identity and forces a fleet-wide
-# reindex of ~18.7k chunks; --rope-scaling shifts the whole vector space away from the vectors
-# already stored, silently degrading every existing hit. Index chunks measure <=1600 chars
-# (~500 tokens), so this only bites the handful of oversized inputs (2 per cycle, retried and
-# logged as "sync failed (watch)"), not normal indexing.
+#   ubatch 8192 -> the batch objection disappears; 8192/8192 also stops llama-server downgrading
+#                  n_batch to n_ubatch.
+# 8192 is in-distribution here: Qwen3-Embedding declares qwen3.context_length = 32768, and the
+# indexer's chunks measure <=1600 chars (~500 tokens), so this window is headroom rather than the
+# binding constraint it used to be under EmbeddingGemma's 2048.  --parallel 1 keeps the single
+# slot at the full window; with --parallel 2 it would halve.
 #
 # No --jinja, no --flash-attn, no KV cache quantisation: none apply to a pure embedding pass.
 # The launcher shim defaults to build/bin (the retired Intel build); this box's

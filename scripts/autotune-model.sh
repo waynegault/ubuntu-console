@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 110
+#   v110 (2026-11-05): the VRAM baseline verdict moves to bin/_tac-bin-lib.sh (shared with
+#   both batch wrappers, which never load 11d), and its holder identity comes from
+#   /proc/PID/exe — nvidia-smi's compute-apps list is empty on this WSL2 box, so the first
+#   cut of the census had nothing to check.  The cgroup unit is the LEAF .service (the old
+#   `head -1` named user@1000.service).  The refusal's unlisted-holder list now expands
+#   the variable (it was `"\$_VRAM_VERDICT"`, so it printed nothing), and the result file
+#   records baseline=/baseline_held_mib=/baseline_tenants= so a census row can never be
+#   read as clean-room.
 # Module Version: 109
 #   v109 (2026-11-04): the count-ratchet's four rises from this session cleared AT SOURCE, not by
 #   re-baselining — the window-expiry case gains its `*)` arm (4.2.4), the stop action moves out of
@@ -503,6 +512,19 @@ __autotune_write_result() {
         printf 'exit_rc=%s\n' "$_rc"
         printf 'model=%s\n' "${MODEL_FILE:-}"
         printf 'row=%s\n' "${MODEL:-}"
+        # The baseline provenance.  A census pass means the card was NOT empty: the
+        # declared tenants were resident, so the TPS describe a contended card.  Written
+        # unconditionally so a consumer can always tell which gate produced the row.
+        if [[ -n "${_BASELINE_MODE:-}" ]]; then
+            printf 'baseline=%s\n' "$_BASELINE_MODE"
+            printf 'baseline_as_of=%s\n' "${_BASELINE_AS_OF:-}"
+            if [[ "$_BASELINE_MODE" == "census" ]]; then
+                printf 'baseline_held_mib=%s\n' "${_BASELINE_HELD:-}"
+                printf 'baseline_cap_mib=%s\n' "${_BASELINE_CAP:-}"
+                printf 'baseline_tenants=%s\n' "${_BASELINE_TENANTS:-}"
+                printf 'baseline_tenant_count=%s\n' "${_BASELINE_TENANT_COUNT:-}"
+            fi
+        fi
         if [[ "$_stage" == "certified" ]]; then
             printf 'config=ctx=%s batch=%s ubatch=%s tps=%s\n' \
                 "${BEST_CTX:-0}" "${BEST_B:-}" "${BEST_U:-}" "${BEST_TPS:-}"
@@ -714,22 +736,88 @@ fi
 # (asus-n1n-rtx-spark: 5000); the arithmetic is in the comment there.
 BASELINE_GAP_MAX=${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}
 BASELINE_GAP=$(( VRAM_TOTAL - FREE_VRAM ))
-if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
-    echo "ERROR: VRAM baseline not cleared — ${FREE_VRAM} MiB free of ${VRAM_TOTAL} MiB (${BASELINE_GAP} MiB still held). Refusing to autotune against an untrustworthy baseline." >&2
+# CENSUS MODE (owner decision, 2026-11-05; card AUTOTUNE-BASELINE-002 v92).
+# The byte-only bound below cannot express this box: the guard deliberately spares
+# LLAMA_LANE_KEEP_UNITS, and here that lane is a CUDA llama-server holding a measured
+# composite gap of 4094 MiB (lane plus the driver reservation).  So the bound either
+# refuses every large-model row forever, or it is raised until it silently admits a real
+# serving lane - which is how three rows in the 2026-11-02 batch reported TPS below their
+# certified values.  A census answers the actual question ("who is resident, and are they
+# allowed to be?") instead of a proxy ("is the card empty?").
+#
+# The decision is delegated to LLM_AUTOTUNE_CENSUS / LLM_AUTOTUNE_CENSUS_MAX_MIB in the
+# host profile; with no census set, this gate is the byte-only bound it always was.  A
+# census pass is CONTENDED and says so: the run prints it, and a result file (when the
+# caller names one) records baseline=census.
+#
+# The holder list comes from bin/_tac-bin-lib.sh, which enumerates llama-server by
+# /proc/PID/exe: nvidia-smi cannot attribute memory on this box (it answers "No running
+# processes found" at 36 GiB used), so a census built on that list would check nothing.
+_VRAM_VERDICT=""
+_vram_rc=0
+if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
+    # A selftest replaces the engine with canned curves and NEVER launches a server, so
+    # there is no baseline to distrust.  The gate itself is exercised by the census suite
+    # with injected holders; without this branch every selftest case (16 of them) would
+    # be refused by whatever happens to hold the real card — measured 2026-11-05, with a
+    # peer's row server resident.
+    _VRAM_VERDICT=$'mode=selftest\nverdict=pass'
+elif declare -f _tac_vram_baseline_verdict &>/dev/null; then
+    _VRAM_VERDICT=$(_tac_vram_baseline_verdict "$FREE_VRAM" "$VRAM_TOTAL")
+    _vram_rc=$?
+else
+    # bin/_tac-bin-lib.sh is mandatory for this script; a partial tree keeps the old
+    # byte-only bound rather than passing the gate on an unexamined card.
+    if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
+        _VRAM_VERDICT=$'mode=exclusive\nverdict=refuse\nreason=gap-exceeds-bound'
+        _vram_rc=1
+    else
+        _VRAM_VERDICT=$'mode=exclusive\nverdict=pass'
+    fi
+fi
+_BASELINE_MODE=$(sed -n 's/^mode=//p' <<< "$_VRAM_VERDICT" | head -1)
+_BASELINE_HELD=$(sed -n 's/^held_mib=//p' <<< "$_VRAM_VERDICT" | head -1)
+_BASELINE_CAP=$(sed -n 's/^held_cap_mib=//p' <<< "$_VRAM_VERDICT" | head -1)
+_BASELINE_TENANTS=$(sed -n 's/^tenants=//p' <<< "$_VRAM_VERDICT" | head -1)
+_BASELINE_TENANT_COUNT=$(sed -n 's/^tenant_count=//p' <<< "$_VRAM_VERDICT" | head -1)
+_BASELINE_AS_OF=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if (( _vram_rc != 0 )); then
+    _BASELINE_REASON=$(sed -n 's/^reason=//p' <<< "$_VRAM_VERDICT" | head -1)
+    if [[ "$_BASELINE_REASON" == "census-unbounded" ]]; then
+        _fail "LLM_AUTOTUNE_CENSUS names tenants but LLM_AUTOTUNE_CENSUS_MAX_MIB is not" \
+              "a positive integer (${LLM_AUTOTUNE_CENSUS_MAX_MIB:-unset}) — a census with no bound is not a gate."
+    fi
+    echo "ERROR: VRAM baseline not cleared — ${FREE_VRAM} MiB free of ${VRAM_TOTAL} MiB" \
+         "(${BASELINE_GAP} MiB still held; ${_BASELINE_REASON})." \
+         "Refusing to autotune against an untrustworthy baseline." >&2
     # Name the holder.  Without this the operator has to go and run nvidia-smi to learn
     # which unit — and on this box the answer is a lane the sweep deliberately spared, so
     # the refusal's own cause is invisible from the byte count alone (2026-11-02).
     if declare -f __llm_vram_holder_report &>/dev/null; then
         warn "Held by:"
         __llm_vram_holder_report >&2 || true
+    elif declare -f _tac_vram_holder_identities &>/dev/null; then
+        warn "Held by:"
+        # swallow-ok: the holder list is a diagnostic; a failed scan must not replace the refusal with a shell error
+        _tac_vram_holder_identities >&2 || true
+    fi
+    if [[ "$_BASELINE_REASON" == "unlisted-holder" ]]; then
+        warn "Outside the declared census ${_BASELINE_TENANTS:-<unset>}:"
+        sed -n 's/^unlisted=//p' <<< "$_VRAM_VERDICT" | head -1 | tr ' ' '\n' | sed 's/^/  /' >&2
     fi
     warn "Remedy: stop the holding lane (model stop, or systemctl --user stop <unit>) and re-run; " \
          "a foreign run's GPU lock is never evicted by this check."
     # DEF-024: the card is held by someone else.  That is resource exhaustion from THIS
-    # run's point of view, and it is NOT a verdict on the model — the row is left alone.
+    # run point of view, and it is NOT a verdict on the model - the row is left alone.
     _preflight_refuse resource_exhausted 1 \
-        "VRAM baseline not cleared — ${BASELINE_GAP} MiB still held by another process"
+        "VRAM baseline not cleared — ${BASELINE_GAP} MiB still held by another process (${_BASELINE_REASON})"
 fi
+if [[ "$_BASELINE_MODE" == "census" ]]; then
+    warn "baseline: CENSUS — declared tenants resident: ${_BASELINE_TENANTS}"
+    warn "baseline: ${_BASELINE_HELD} MiB held of ${_BASELINE_CAP} allowed (${_BASELINE_AS_OF})"
+    warn "baseline: TPS from this run are CONTENDED, not clean-room."
+fi
+
 # Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
 _cuda_guard_or_exit
 # The row names one file; llama.cpp loads the whole shard SET. Summing the set is what

@@ -174,7 +174,7 @@ stub_uname() {
     [ "$status" -eq 0 ]
     [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]
     [[ "$output" == *"llama-cuda-qwen3coder-30b-chat.service|18087"* ]]
-    [[ "$output" == *"llama-cuda-embeddinggemma-embed.service|18080"* ]]
+    [[ "$output" == *"llama-cuda-qwen3embedding-embed.service|18080"* ]]
     [[ "$output" != *"llama-xe-"* ]]
     [[ "$output" != *"llama-cpu-qwen25"* ]]
 }

@@ -10,7 +10,7 @@
 # the lanes named in LLAMA_LANE_KEEP_UNITS — on this host the embedding lane.  So the
 # tolerated gap must cover the driver PLUS that spared lane's footprint.  It did not:
 #
-#   measured 2026-11-02, only `llama-cuda-embeddinggemma-embed.service` holding:
+#   measured 2026-11-02, only `llama-cuda-qwen3embedding-embed.service` holding:
 #     total 81920 MiB, free 77826 MiB -> gap 4094 MiB
 #   tolerance in the host profile: 3500 MiB
 #   -> refused by 594 MiB, and the refusal names no remedy that can help, because the
@@ -72,6 +72,92 @@ SPARED_LANE_FOOTPRINT_MIB=4094
     run grep -c "4094 MiB" "$REPO_ROOT/scripts/autotune-model.sh"
     [ "$output" -ge 1 ]
 }
+
+# ── The census (owner decision 2026-11-05, card AUTOTUNE-BASELINE-002) ─────────
+# The gate cannot use nvidia-smi for identity on this box: `--query-compute-apps`
+# answers "No running processes found" even at 36 GiB used (measured 2026-11-05).
+# Identity is therefore the process table, and every arm is driven through the
+# injection seam so no case depends on what happens to be resident.
+BINLIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
+
+@test "census: the LEAF unit is named, never the user manager" {
+    # Catches: `grep -o ... | head -1`, which answered user@1000.service for every
+    # user unit — measured in a real refusal ("pid 242004 user@1000.service").
+    run bash -c 'source "$1"; _tac_cgroup_unit "0::/user.slice/user-1000.slice/user@1000.service/app.slice/llama-x.service"' _ "$BINLIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "llama-x.service" ]
+}
+
+@test "census: a declared tenant resident is a CONTENDED pass" {
+    # Catches: a census that refuses the very lane its own profile says to keep.
+    printf '4242|llama-cuda-qwen3embedding-embed.service|llama-server\n' > "$BATS_TEST_TMPDIR/holders"
+    run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$BATS_TEST_TMPDIR/holders" \
+        LLM_AUTOTUNE_CENSUS=llama-cuda-qwen3embedding-embed.service \
+        LLM_AUTOTUNE_CENSUS_MAX_MIB=6144 \
+        bash -c 'source "$1"; _tac_vram_baseline_verdict 77826 81920' _ "$BINLIB"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"mode=census"* ]]
+    [[ "$output" == *"verdict=pass"* ]]
+    [[ "$output" == *"tenant_count=1"* ]]
+}
+
+@test "census: an UNLISTED holder refuses, and the refusal names it" {
+    # Catches: a byte-only cap silently admitting a foreign server.  The name must
+    # reach the operator — the first cut printed nothing because of "\$_VRAM_VERDICT".
+    printf '4242|llama-other.service|llama-server\n' > "$BATS_TEST_TMPDIR/holders"
+    run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$BATS_TEST_TMPDIR/holders" \
+        LLM_AUTOTUNE_CENSUS=llama-cuda-qwen3embedding-embed.service \
+        LLM_AUTOTUNE_CENSUS_MAX_MIB=6144 \
+        bash -c 'source "$1"; _tac_vram_baseline_verdict 77826 81920' _ "$BINLIB"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"reason=unlisted-holder"* ]]
+    [[ "$output" == *"4242:llama-other.service:llama-server"* ]]
+}
+
+@test "census: a hold above the declared cap refuses even with no holder derived" {
+    # Measures the cap as the real bound: with both lanes resident the gap was
+    # 36,147 MiB, so a cap of 6144 must refuse — this is the serving-chat-lane case.
+    : > "$BATS_TEST_TMPDIR/holders"
+    run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$BATS_TEST_TMPDIR/holders" \
+        LLM_AUTOTUNE_CENSUS=llama-cuda-qwen3embedding-embed.service \
+        LLM_AUTOTUNE_CENSUS_MAX_MIB=6144 \
+        bash -c 'source "$1"; _tac_vram_baseline_verdict 37581 73728' _ "$BINLIB"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"reason=held-exceeds-census-cap"* ]]
+}
+
+@test "census: a census with no bound is rc 2, never a pass" {
+    # Catches: LLM_AUTOTUNE_CENSUS set without a cap becoming an unbounded allow.
+    run env LLM_AUTOTUNE_CENSUS=llama-cuda-qwen3embedding-embed.service \
+        bash -c 'source "$1"; unset LLM_AUTOTUNE_CENSUS_MAX_MIB; _tac_vram_baseline_verdict 77826 81920' _ "$BINLIB"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"reason=census-unbounded"* ]]
+}
+
+@test "exclusive: with no census the byte bound is unchanged" {
+    # The control: a box that declares no tenant keeps the old behaviour exactly.
+    run env -u LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_BASELINE_GAP_MAX=800 \
+        bash -c 'source "$1"; _tac_vram_baseline_verdict 81120 81920; echo "---"; _tac_vram_baseline_verdict 81119 81920' _ "$BINLIB"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"mode=exclusive"* ]]
+    [[ "$output" == *"held_mib=800"* ]]
+    [[ "$output" == *"reason=gap-exceeds-bound"* ]]
+}
+
+@test "tombstone: a listed row is retired, and comments/blank lines are ignored" {
+    # Catches: run-autotune-batch.sh / --all-but-done re-selecting an archived row.
+    printf '# retired\n\na.gguf|wrong artefact\n\nb.gguf|too slow\n' > "$BATS_TEST_TMPDIR/retired"
+    run env TAC_RESUME_RETIRED="$BATS_TEST_TMPDIR/retired" \
+        bash -c 'source "$1"; _tac_is_retired a.gguf && ! _tac_is_retired c.gguf' _ "$BINLIB"
+    [ "$status" -eq 0 ]
+}
+
+@test "tombstone: an absent tombstone retires nothing" {
+    run env TAC_RESUME_RETIRED="$BATS_TEST_TMPDIR/absent.rows" \
+        bash -c 'source "$1"; _tac_is_retired a.gguf' _ "$BINLIB"
+    [ "$status" -eq 1 ]
+}
+
 
 @test "the stale 2026-08-28 sizing note is gone from the guard" {
     run grep -c "on this box, 2026-08-28" "$REPO_ROOT/scripts/autotune-model.sh"

@@ -21,6 +21,11 @@ TMPDIR_BATS="$(mktemp -d)"
 setup() {
     # shellcheck source=scripts/01-constants.sh
     source "$REPO_ROOT/scripts/01-constants.sh"
+    # 01-constants applies THIS box's profile, and the arm64 profile declares
+    # LLAMA_THREAD_CAP=0 (no ceiling).  These cases exercise the FALLBACK default —
+    # the hybrid P-core ceiling a box with no declaration gets — so the profile value
+    # must not decide them.  The profile values themselves are pinned in 74.
+    unset LLAMA_THREAD_CAP
     # shellcheck source=scripts/11d-llm-gpu.sh
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
     # shellcheck source=scripts/11a-llm-registry.sh
@@ -33,7 +38,9 @@ teardown() {
     rm -rf "$TMPDIR_BATS"
 }
 
-@test "spec-dec-002: __llm_thread_cap clamps every value to 6" {
+@test "spec-dec-002: with no profile ceiling the default cap is the 6 P-cores" {
+    # The fallback a host gets when its profile declares nothing.  A profile that
+    # declares 0 (homogeneous CPU) or another number is covered in 74.
     [[ "$(__llm_thread_cap 1)" == "1" ]]
     [[ "$(__llm_thread_cap 6)" == "6" ]]
     [[ "$(__llm_thread_cap 7)" == "6" ]]
@@ -41,6 +48,24 @@ teardown() {
     [[ "$(__llm_thread_cap 12)" == "6" ]]
     [[ "$(__llm_thread_cap 99)" == "6" ]]
     [[ "$(__llm_thread_cap junk)" == "6" ]]
+}
+
+@test "spec-dec-002: a profile ceiling of 0 means NO ceiling" {
+    # Catches: the hard-coded 6 surviving on a homogeneous 20-core box, where the
+    # profile's nproc-derived count must stand (measured 2026-11-05: 30 autotune
+    # rows at threads=6 of 20).
+    LLAMA_THREAD_CAP=0
+    [[ "$(__llm_thread_cap 16)" == "16" ]]
+    [[ "$(__llm_thread_cap 7)" == "7" ]]
+}
+
+@test "spec-dec-002: a declared ceiling other than 6 is honoured" {
+    LLAMA_THREAD_CAP=10
+    [[ "$(__llm_thread_cap 16)" == "10" ]]
+    [[ "$(__llm_thread_cap 4)" == "4" ]]
+    # An unrecognised value is not a licence to run uncapped.
+    LLAMA_THREAD_CAP=banana
+    [[ "$(__llm_thread_cap 16)" == "6" ]]
 }
 
 @test "spec-dec-002: __calc_threads never exceeds 6 for any offload mode" {

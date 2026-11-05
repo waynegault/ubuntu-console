@@ -28,6 +28,13 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 10
+#   v10 (2026-11-05): three profile facts join the clear/export set.  LLAMA_THREAD_CAP is
+#   the per-host compute-thread ceiling (6 on the i9's six P-cores, 0 = no ceiling on a
+#   homogeneous box); without it in the export set a child shell kept the default 6.  The
+#   two census knobs (LLM_AUTOTUNE_CENSUS / ..._MAX_MIB) are the declared VRAM tenants a
+#   measurement may share the card with; clearing them stops a parent shell's census from
+#   describing a different box.
 # Module Version: 9
 #   v9 (2026-11-04): detection no longer NEEDS the GPU.  A profile may declare
 #   TAC_HOST_PROFILE_CPU and is then matched on the CPU model (readable via lscpu with
@@ -383,7 +390,8 @@ tac_host_gpu_pool_bytes() {
 tac_host_profile_apply() {
     local _id _file _facts _arch _cuda _render _pool
     unset LLAMA_LANE_SPECS LLAMA_CUDA_LANE_UNIT LLAMA_GPU_FREE_THRESHOLD_MIB \
-          LLM_AUTOTUNE_BASELINE_GAP_MAX LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
+          LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
+          LLAMA_THREAD_CAP LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
           VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
           TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
           TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT \
@@ -433,6 +441,7 @@ tac_host_profile_apply() {
     export LLAMA_DRIVE_ROOT LLAMA_GPU_LAYERS LLAMA_FIT_TARGET_MB \
            LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLAMA_CUDA_LANE_UNIT \
            LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
+           LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB LLAMA_THREAD_CAP \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
            LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
            LLM_REGISTRY LLM_STATE_DIR \

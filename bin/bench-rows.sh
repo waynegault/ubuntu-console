@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-11-05): the pre-flight asks the SHARED baseline verdict, not a byte
+#   threshold.  The kept embedding lane's 4094 MiB gap exceeds the 3500 MiB bound, so
+#   every bench aborted before its first row (measured 15:10:18).  Census mode names
+#   the tenants that may be resident and caps the hold; no census = the exclusive
+#   bound unchanged.  An unreadable card still fails closed.
 #   v10 (2026-11-01): resolve the host profile (source 01-constants.sh) so the store
 #   and CUDA lane are THIS box's, not the generic ~/.llm / old-box lane.  LOGDIR now
 #   derives from the profile's LLM_STATE_DIR.
@@ -127,18 +132,26 @@ trap '_tac_suspend_release "$SUSPEND"' EXIT
 # swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
 systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 
-# Require the card to be genuinely free before launching the bench — through the SHARED
-# wait (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM loop.  The loop this replaced
-# broke out on an UNREADABLE reading (a failing nvidia-smi launched the bench against a
-# card whose state was unknown) and FELL THROUGH on exhaustion, so a bench could start on
-# an occupied card and measure contamination instead of the certified configuration.  The
-# order is what makes the bound satisfiable: the suspend hold is taken and the lane stopped
-# ABOVE, so our own ~3.4 GiB is gone by the time this runs.
-if ! _tac_gpu_wait_used_below "${LLAMA_GPU_FREE_THRESHOLD_MIB:-800}" 90 2; then
-    # The wait logged the last reading (or that the card was unreadable) and did not
-    # proceed.  ABORT rather than launch — the EXIT trap above releases the hold.
-    echo "=== ABORT: the card did not free after the lane stop — NOT launching the bench" \
-        | tee -a "$LOG"
+# Require a TRUSTWORTHY baseline before launching the bench — through the SHARED
+# verdict (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM threshold.  The byte
+# bound this replaces could not express this box: the guard deliberately spares the
+# embedding lane, whose 4094 MiB (driver included) exceeds the 3500 MiB threshold, so
+# every bench aborted before its first row (measured 2026-11-05 15:10:18).  Census
+# mode names the tenants that may be resident and caps the whole-card hold; with no
+# census configured it is the exclusive bound it always was.  An unreadable card
+# still fails CLOSED.
+_baseline_rc=0
+_baseline_out="$(_tac_gpu_wait_baseline 90 2)" || _baseline_rc=$?
+printf '%s\n' "$_baseline_out" | tee -a "$LOG"
+if (( _baseline_rc != 0 )); then
+    _baseline_reason=$(sed -n 's/^reason=//p' <<< "$_baseline_out" | head -1)
+    if (( _baseline_rc == 2 )); then
+        echo "=== ABORT: LLM_AUTOTUNE_CENSUS is set but LLM_AUTOTUNE_CENSUS_MAX_MIB is not" \
+             "a positive integer — a census with no bound is not a gate" | tee -a "$LOG"
+    else
+        echo "=== ABORT: the VRAM baseline is not clear (${_baseline_reason:-unknown})" \
+             "— NOT launching the bench" | tee -a "$LOG"
+    fi
     exit 1
 fi
 echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"

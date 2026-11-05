@@ -1,11 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 35
+# Module Version: 36
+#   v36 (2026-11-05): __llm_thread_cap takes the ceiling from the HOST PROFILE
+#   (LLAMA_THREAD_CAP), not a repo constant.  It returned 6 on every box, so a 20-core
+#   arm64 host launched every model — and measured all 30 autotune rows — at 6 threads
+#   while its profile asked for 10.  Intel declares 6 (its 6 P-cores); a homogeneous
+#   box declares 0 = no ceiling; an unrecognised value still falls back to 6.  The
+#   holder report also names the LEAF unit (the old head -1 printed user@1000.service).
 #   v33 (2026-11-02): the lane's new stderr writes go through one `warn` helper and one status
 #   line is wrapped — the §18.3 10.7 and 8.1.8 shapes its commits added, fixed at source rather
 #   than re-baselined.
-# Module Version: 32
 #   v32 (2026-11-02): the KEEP-lane note was factually wrong, and it is why the baseline
 #   refusal looked like a sweep bug.  It justified sparing the embedding lane with
 #   "evicting it to free ~0.5 GB" while that lane holds 4094 MiB, and claimed the baseline
@@ -588,8 +593,10 @@ function __llm_vram_holder_report() {
         # This host reports [N/A] for per-process memory (WSL2 dxgkrnl); print the figure
         # only when it is a number, so the line reads as fact rather than as a placeholder.
         case "$_mib" in ''|*[!0-9]*) _mib="" ;; esac
+        # The LEAF .service: the first match is the user manager
+        # (user@1000.service), measured 2026-11-05 in a real refusal.
         # swallow-ok: a process that exited since the nvidia-smi read has no cgroup to name
-        _unit=$(ps -o cgroup= -p "$_pid" 2>/dev/null | grep -o '[^/]*\.service' | head -1 || true)
+        _unit=$(ps -o cgroup= -p "$_pid" 2>/dev/null | grep -o '[^/]*\.service' | tail -n 1 || true)
         # swallow-ok: a process that exited since the nvidia-smi read has no exe to name
         _exe=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || true)
         printf '  pid %s  %s%s  %s\n' \
@@ -1274,25 +1281,30 @@ function __bench_latest_file() {
 }
 
 # ---------------------------------------------------------------------------
-# __llm_thread_cap — Clamp a compute-thread count to the i9-12900HK P-cores.
-# Usage: __llm_thread_cap <threads>  ->  prints min(threads, 6)
+# __llm_thread_cap — Clamp a compute-thread count to the HOST's declared ceiling.
+# Usage: __llm_thread_cap <threads>  ->  min(threads, LLAMA_THREAD_CAP)
 #
-# On the i9-12900HK (6 P-cores / 8 E-cores) any thread count above 6 spills
-# onto the efficiency cores and SLOWS generation via sync latency — the
-# DFlash article's hybrid-architecture pitfall.  WSL2 exposes 12 CPUs
-# (`processors=12` in .wslconfig → `nproc` = 12), so every nproc-derived
-# count must be capped here or it silently exceeds the P-core ceiling.
+# The ceiling is a per-machine fact, not a repo constant.  On the i9-12900HK
+# (6 P-cores / 8 E-cores) any count above 6 spills decode onto the efficiency
+# cores and SLOWS generation via sync latency — the DFlash article's
+# hybrid-architecture pitfall — so the Intel profile declares 6.  A homogeneous
+# arm64 box has no E-core split: its profile declares 0, meaning NO ceiling, and
+# the caller's nproc-derived count stands.  Measured 2026-11-05: this function
+# returned 6 unconditionally on a 20-core box, so every launch and all 30 autotune
+# rows measured at 6 threads while the profile's 10 was silently discarded.
+# An unrecognised value falls back to 6, the conservative hybrid default.
 #
 # REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
 # with DFlash" (Intel, TDS 2026)
 # https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
 function __llm_thread_cap() {
-    local _raw="${1:-6}"
+    local _raw="${1:-6}" _cap="${LLAMA_THREAD_CAP:-6}"
     [[ "$_raw" =~ ^[0-9]+$ ]] || _raw=6
-    if (( _raw > 6 )); then
-        echo "6"
-    else
+    [[ "$_cap" =~ ^[0-9]+$ ]] || _cap=6
+    if (( _cap == 0 )) || (( _raw <= _cap )); then
         echo "$_raw"
+    else
+        echo "$_cap"
     fi
 }
 
@@ -1439,9 +1451,9 @@ function __spec_launch_flags() {
 #   CPU-only  → 80% (all layers on CPU, maximise parallelism)
 #   Partial   → 70% (CPU handles remaining layers + KV-cache)
 #   Full GPU  → 50% (CPU only does prompt processing + sampling)
-# Result is hard-capped at 6 (__llm_thread_cap): on the i9-12900HK hybrid
-# architecture, more than 6 compute threads (the P-core count) spill onto
-# E-cores and slow generation (SPEC-DEC-002).
+# Result is clamped to the host's LLAMA_THREAD_CAP: 6 on the i9-12900HK hybrid
+# (more than 6 compute threads spill onto E-cores and slow generation,
+# SPEC-DEC-002), 0 = no ceiling on a homogeneous box.
 function __calc_threads() {
     local _gpu_layers=$1 _total_layers=$2
     local ncpu pct

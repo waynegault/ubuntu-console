@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 88
+#   v88 (2026-11-05): `model use` no longer displaces a lane named in LLAMA_LANE_KEEP_UNITS.  The
+#   claim stopped every `llama-cuda-*` unit in the profile's lane table, the always-on embedding
+#   lane included — measured on the arm64 box, `model use 1` stopped it and memory search stayed
+#   down for the life of the server, because the suspend marker keeps the watchdog from starting
+#   it again.  The kept lane is named in the output, and 12-gpu-exclusivity pins the behaviour
+#   against the pre-fix function.
 # Module Version: 87
 #   v87 (2026-11-05): the case in `__model_is_embedding` carries an explanatory comment, because
 #   §18.3 item 4.2.4 counts a `case` with neither a `*)` arm nor one (20 -> 21 when the case was
@@ -1230,6 +1237,16 @@ function __model_use_configure_params() {
 #   alone is not enough, because the watchdog would start it again on its next
 #   tick, and the card reads "free" to it while an idle server serves).
 #
+#   A lane in LLAMA_LANE_KEEP_UNITS is NOT stopped.  That list is the host
+#   profile's declaration of what is always-on, and on this box it is the
+#   embedding lane that backs memory search: evicting it to serve a chat model
+#   takes a different subsystem down for the life of the server.  Measured
+#   2026-11-05 on the arm64 box — `model use 1` printed "stopping
+#   llama-cuda-embeddinggemma-embed.service (one LLM per card; this lane takes
+#   it)" and nothing brought memory search back until the card was released.
+#   The incoming lane already sizes itself around what is free (build_command's
+#   --fit), so keeping a ~1.5 GB tenant is a considered trade, not an oversight.
+#
 #   CARD DISCIPLINE: the Xe card is a DIFFERENT card and is never touched here.
 #   Both Xe lanes keep serving throughout — llama-xe-minicpm5-1b-chat (:18081)
 #   and llama-xe-embeddinggemma-embed (:18080).
@@ -1251,7 +1268,7 @@ function __model_use_claim_cuda_card() {
     #    the gated lane plus every `llama-cuda-*` unit in the resident lane table.  A
     #    hardcoded pair named the x86 box's chat and pipeline lanes, so on the arm64
     #    box this stopped nothing and left the LIVE lane serving — two LLMs, one card.
-    local _unit
+    local _unit _keep _kept
     local -a _cuda_lanes=()
     [[ -n "${LLAMA_CUDA_LANE_UNIT:-}" ]] && _cuda_lanes+=("$LLAMA_CUDA_LANE_UNIT")
     while IFS='|' read -r _lane _port
@@ -1272,6 +1289,19 @@ function __model_use_claim_cuda_card() {
     for _unit in "${_cuda_lanes[@]-}"
     do
         [[ -n "$_unit" ]] || continue
+        # An always-on lane is not displaced: see this function's header.  It is named
+        # in the output rather than passed over, so the operator can see which tenant
+        # the incoming model is sharing the card with.
+        _kept=""
+        for _keep in ${LLAMA_LANE_KEEP_UNITS:-}
+        do
+            [[ "$_unit" == "$_keep" ]] && _kept=1
+        done
+        if [[ -n "$_kept" ]]
+        then
+            __tac_info "CUDA" "keeping $_unit (always-on; it backs memory search)" "$C_Dim"
+            continue
+        fi
         # swallow-ok: the probe's failure IS the answer: a unit that is not active has nothing to stop
         if systemctl --user is-active --quiet "$_unit" 2>/dev/null
         then

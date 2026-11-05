@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-11-05): the no-argument default applies the two rules the wrapper and the
+#   resume loop already apply — "slow" is terminal, and the autotune TOMBSTONE retires a
+#   row by name.  Measured 2026-11-05: this default re-selected the archived 70B (weights
+#   moved to archived/) and the 88 GiB artefact that OOM-killed at staging.  An explicit
+#   row list is untouched; TAC_RESUME_INCLUDE_RETIRED=1 is the documented override.
 #   v25 (2026-11-01): the default scope (no explicit rows) skips embedding models (arch
 #   field 6 contains "embedding") — they have no generation to measure.
 #   v23 (2026-10-20): a degraded paravirtualization (TAC_LOAD_DEGRADED=1) refuses at startup
@@ -114,14 +119,24 @@ source "$_SELF_DIR/../bin/_tac-bin-lib.sh"
 # after it).  Numbers are still accepted from the caller — autotune-model.sh resolves
 # them once and then works from the file name throughout.
 if [ $# -eq 0 ]; then
-    MODELS=$(awk -F'|' '
-        $1 ~ /^[0-9]+$/ && $18 != "yes" && tolower($6) !~ /embedding/ {print $3}
-    ' "$LLM_REGISTRY" | sort | tr '\n' ' ')
+    # "slow" is TERMINAL (a row measured below the floor at every ctx) and the
+    # tombstone retires a row by name — the same two rules autotune-rows.sh applies.
+    # Without them this default re-selected the archived 70B and the 88 GiB artefact.
+    mapfile -t MODEL_ARRAY < <(awk -F'|' '
+        $1 ~ /^[0-9]+$/ && $18 != "yes" && $18 != "slow" && tolower($6) !~ /embedding/ {print $3}
+    ' "$LLM_REGISTRY" | sort)
+    if [[ "${TAC_RESUME_INCLUDE_RETIRED:-0}" != "1" ]]; then
+        _kept=()
+        for _r in ${MODEL_ARRAY[@]+"${MODEL_ARRAY[@]}"}; do
+            _tac_is_retired "$_r" || _kept+=("$_r")
+        done
+        MODEL_ARRAY=(${_kept[@]+"${_kept[@]}"})
+    fi
+    MODELS="${MODEL_ARRAY[*]:-}"
 else
     MODELS="$*"
+    read -r -a MODEL_ARRAY <<< "$MODELS"
 fi
-
-read -r -a MODEL_ARRAY <<< "$MODELS"
 TOTAL=${#MODEL_ARRAY[@]}
 COUNT=0
 HALT_REASON=""

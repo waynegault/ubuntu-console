@@ -570,8 +570,11 @@ done
 # llama-xe-qwen25-3b-chat.service joins them as a RENAME, not a removal: it became
 # llama-xe-llama32-3b-chat.service on 2026-10-26 (the old name still claimed the
 # weights the 2026-10-02 bake-off replaced), and it is retired with no alias.
+# llama-cuda-embeddinggemma-embed.service is the same shape: the arm64 box's
+# embedding lane became llama-cuda-qwen3embedding-embed.service on 2026-11-05 when
+# the model was swapped from EmbeddingGemma to Qwen3-Embedding.
 for _stale in llama-cuda-phi4-mini-decompose.service llama-server-phi4.service \
-              llama-xe-qwen25-3b-chat.service
+              llama-xe-qwen25-3b-chat.service llama-cuda-embeddinggemma-embed.service
 do
     if [[ -L "$HOME/.config/systemd/user/$_stale" ]]; then
         rm -f "$HOME/.config/systemd/user/$_stale"

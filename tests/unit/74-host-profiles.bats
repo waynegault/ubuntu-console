@@ -182,6 +182,27 @@ selected_with() {
     [ "$output" = "18087|llama-cuda-qwen3coder-30b-chat.service" ]
 }
 
+@test "each profile declares the thread ceiling its CPU needs and exports it" {
+    # Criterion: the compute-thread ceiling is a HOST fact.  Catches: the repo-wide
+    # hard-coded 6 (the i9's P-core count) clamping a homogeneous 20-core box — it
+    # measured all 30 autotune rows at threads=6 while the profile asked for 10
+    # (2026-11-05) — and the arm64 census not reaching a child shell.
+    run env LLM_HOST_PROFILE="intel-xe-cuda" TAC_HOST_FACTS_OVERRIDE="x86_64 1 1" \
+        bash -c 'source "$1"; source "$2"; tac_host_profile_apply; \
+                 printf "%s|%s|%s\n" "$LLAMA_THREAD_CAP" "${LLM_AUTOTUNE_CENSUS:-}" \
+                 "$(__llm_thread_cap 16)"' _ "$LIB" "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "6||6" ]
+
+    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        bash -c 'source "$1"; source "$2"; tac_host_profile_apply; \
+                 printf "%s|%s|%s|%s\n" "$LLAMA_THREAD_CAP" "$LLM_AUTOTUNE_CENSUS" \
+                 "$LLM_AUTOTUNE_CENSUS_MAX_MIB" "$(__llm_thread_cap 16)"' \
+        _ "$LIB" "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "0|llama-cuda-qwen3embedding-embed.service|6144|16" ]
+}
+
 @test "an unmatched host keeps generic defaults and says so once" {
     # Catches: an unrecognised box aborting the shell (no console at all) or
     # inheriting a profile in silence, and a notice repeated on every source.
@@ -219,7 +240,7 @@ install_stub_env() {
     [ ! -e "$unit_dir/llama-cpu-qwen25-3b-chat.service" ]
     # This box's OWN CUDA lanes ARE linked — they name GGUFs in ~/models/active.
     [ -e "$unit_dir/llama-cuda-qwen3coder-30b-chat.service" ]
-    [ -e "$unit_dir/llama-cuda-embeddinggemma-embed.service" ]
+    [ -e "$unit_dir/llama-cuda-qwen3embedding-embed.service" ]
     # ...while a shared unit that must exist on every box is still installed.  The
     # watchdog is now profile-agnostic — it reads LLAMA_LANE_SPECS at run time — so it
     # installs on every box rather than travelling with one box's hardcoded lanes.

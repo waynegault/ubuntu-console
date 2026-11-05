@@ -16,7 +16,16 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-11-05): the VRAM BASELINE lives here, because the row script and BOTH batch
+#   wrappers need it and only this file is sourced by all three (11d is a profile module
+#   the wrappers do not load).  Identity comes from the PROCESS TABLE, not nvidia-smi:
+#   `--query-compute-apps` prints "No running processes found" on this WSL2 box even at
+#   36 GiB used (measured 2026-11-05), so a census built on it had no holders to check
+#   and its identity rule was vacuous.  Adds _tac_cgroup_unit (the LEAF unit — the first
+#   `.service` segment is user@1000.service), _tac_cuda_server_pids, the holder list, the
+#   exclusive/census verdict, and a bounded wait.  Also adds the autotune TOMBSTONE
+#   readers, so every entry point — not only the resume loop — can honour a retired row.
 #   v10 (2026-11-03): _tac_suspend_release waits (bounded) for gpu-busy.sh to report no
 #   foreign holder BEFORE unlinking the marker.  Measured at 22:34:13: the marker was
 #   released while gpu-busy still named the just-finished autotune, so the watchdog took
@@ -534,6 +543,231 @@ _tac_gpu_wait_used_below() {
         sleep "$_poll"
         _waited=$(( _waited + _poll ))
     done
+}
+
+# ── The VRAM BASELINE — who may be resident while we measure? ────────────────
+#
+# WHY IT LIVES HERE (2026-11-05).  The row script and BOTH batch wrappers need the
+# same answer, and only this file is sourced by all three.  `scripts/11d-llm-gpu.sh`
+# is a profile module the wrappers do not load.
+#
+# THE QUESTION IT ANSWERS.  A byte bound ("is the card empty?") cannot express a box
+# with a permanent tenant: this box keeps its embedding lane (LLAMA_LANE_KEEP_UNITS),
+# and driver + lane measured 4094 MiB against a 3500 MiB bound, so every autotune and
+# bench aborted before its first row (2026-11-05 15:10:18; again 2026-11-04 13:23).
+# Raising the bound is not the fix — it silently admits a real serving lane.  The
+# census asks the actual question: WHICH processes are resident, and are they allowed?
+#
+# IDENTITY IS THE PROCESS TABLE, NOT nvidia-smi.  On WSL2 dxgkrnl, `nvidia-smi
+# --query-compute-apps` answers "No running processes found" even at 36 GiB used
+# (measured 2026-11-05), so a census built on it has no holders to check.  Every
+# llama-server process is enumerated by /proc/PID/exe (a command line can be forged,
+# an exe cannot), and its unit is the LEAF .service of /proc/PID/cgroup.
+#
+# TWO MODES:
+#   exclusive (no census) — free must sit within LLM_AUTOTUNE_BASELINE_GAP_MAX of the
+#     card total.  Right for a box with no resident tenant.
+#   census (LLM_AUTOTUNE_CENSUS set) — every derived holder must be named, and the
+#     whole-card gap must sit within LLM_AUTOTUNE_CENSUS_MAX_MIB.  A pass is
+#     CONTENDED: it prints and records baseline=census, so no summary can present its
+#     TPS beside a clean-room row.
+
+# _tac_cgroup_unit <cgroup-path> — the LEAF .service in a cgroup path, or empty.
+#
+# The FIRST match is the wrong one: a user unit's path is
+# /user.slice/user-1000.slice/user@1000.service/app.slice/llama-....service, and
+# `head -1` answers user@1000.service.  Measured 2026-11-05 in a real refusal:
+# "pid 242004 user@1000.service".  Pure: a string in, a unit out.
+_tac_cgroup_unit() {
+    local _cg="${1:-}" _u=""
+    [[ -n "$_cg" ]] || return 0
+    # swallow-ok: no .service segment means a non-systemd process; the census reads an empty unit as unlisted
+    _u="$(printf '%s' "$_cg" | grep -o '[^/]*\.service' | tail -n 1 || true)"
+    printf '%s\n' "$_u"
+}
+
+# _tac_cuda_server_pids — pids whose /proc/PID/exe names llama-server, one per line.
+#
+# ANY build path matches, so a foreign server from another tree is seen and can be
+# refused.  Identity is the exe, never argv: `exec -a` can forge a command line and
+# cannot forge /proc/PID/exe (the discriminator bin/gpu-busy.sh also uses).
+_tac_cuda_server_pids() {
+    local _d _exe
+    for _d in /proc/[0-9]*
+    do
+        # swallow-ok: a process that exits mid-scan has no exe link; it cannot be named as a holder
+        _exe="$(readlink -f "$_d/exe" 2>/dev/null)" || continue
+        _exe="${_exe% (deleted)}"
+        [[ "${_exe##*/}" == "llama-server" ]] || continue
+        printf '%s\n' "${_d#/proc/}"
+    done
+}
+
+# _tac_vram_holder_identities — the resident CUDA servers as `pid|unit|exe`.
+#
+# INJECTION SEAM (LLM_AUTOTUNE_VRAM_HOLDERS_FILE): a gate whose input cannot be
+# injected cannot be tested, and a test that mocks the gate tests the mock.  When the
+# file is named and readable it IS the holder list; tests drive every arm through it.
+_tac_vram_holder_identities() {
+    local _f="${LLM_AUTOTUNE_VRAM_HOLDERS_FILE:-}"
+    if [[ -n "$_f" && -r "$_f" ]]
+    then
+        sed -e 's/[[:space:]]*$//' -e '/^$/d' "$_f"
+        return 0
+    fi
+    local _p _cg _unit _exe
+    while IFS= read -r _p
+    do
+        [[ -n "$_p" ]] || continue
+        # swallow-ok: a process that exits mid-scan leaves no cgroup; the empty unit reads as unlisted
+        _cg="$(ps -o cgroup= -p "$_p" 2>/dev/null)" || _cg=""
+        _unit="$(_tac_cgroup_unit "$_cg")"
+        # swallow-ok: the same exit leaves no exe; the empty basename is reported as unknown
+        _exe="$(readlink -f "/proc/$_p/exe" 2>/dev/null)" || _exe=""
+        _exe="${_exe% (deleted)}"
+        printf '%s|%s|%s\n' "$_p" "$_unit" "${_exe##*/}"
+    done < <(_tac_cuda_server_pids)
+}
+
+# _tac_vram_baseline_verdict <free_mib> <total_mib> — may a measurement start?
+#
+# @stdout key=value: mode=, verdict=pass|refuse, reason=, held_mib=, held_cap_mib=,
+#         tenants=, tenant_count=, unlisted=
+# @returns 0 pass, 1 refusal, 2 census misconfigured (a census with no bound is not a gate)
+_tac_vram_baseline_verdict() {
+    local _free="${1:-}" _total="${2:-}"
+    local _gap_max="${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}"
+    local _census="${LLM_AUTOTUNE_CENSUS:-}"
+    local _cap="${LLM_AUTOTUNE_CENSUS_MAX_MIB:-}"
+    local _gap _pid _unit _exe _t _matched _count _unlisted _holders
+    if ! [[ "$_free" =~ ^[0-9]+$ && "$_total" =~ ^[0-9]+$ ]]
+    then
+        printf 'mode=unknown\nverdict=refuse\nreason=unreadable-vram\n'
+        return 1
+    fi
+    # A free reading ABOVE the total is not a clean card; it is a card we cannot read.
+    if (( _free > _total ))
+    then
+        printf 'mode=unknown\nverdict=refuse\nreason=free-exceeds-total\n'
+        return 1
+    fi
+    _gap=$(( _total - _free ))
+    if [[ -z "$_census" ]]
+    then
+        printf 'mode=exclusive\nheld_mib=%s\nheld_cap_mib=%s\n' "$_gap" "$_gap_max"
+        if (( _gap > _gap_max ))
+        then
+            printf 'verdict=refuse\nreason=gap-exceeds-bound\n'
+            return 1
+        fi
+        printf 'verdict=pass\n'
+        return 0
+    fi
+    if ! [[ "$_cap" =~ ^[0-9]+$ ]] || (( _cap <= 0 ))
+    then
+        printf 'mode=census\nheld_mib=%s\nverdict=refuse\nreason=census-unbounded\n' "$_gap"
+        return 2  # 2 = a census with no bound is not a gate
+    fi
+    _holders="$(_tac_vram_holder_identities)"
+    _count=0
+    _unlisted=""
+    while IFS='|' read -r _pid _unit _exe
+    do
+        [[ -n "${_pid:-}" ]] || continue
+        _count=$(( _count + 1 ))
+        _matched=0
+        for _t in $_census
+        do
+            if [[ -n "$_unit" && "$_unit" == "$_t" ]] || [[ -n "$_exe" && "$_exe" == "$_t" ]]
+            then
+                _matched=1
+                break
+            fi
+        done
+        (( _matched )) || _unlisted+="${_pid}:${_unit:-no-unit}:${_exe:-unknown} "
+    done <<< "$_holders"
+    printf 'mode=census\ntenants=%s\ntenant_count=%s\nheld_mib=%s\nheld_cap_mib=%s\n' \
+        "$_census" "$_count" "$_gap" "$_cap"
+    if [[ -n "$_unlisted" ]]
+    then
+        printf 'verdict=refuse\nreason=unlisted-holder\nunlisted=%s\n' "${_unlisted% }"
+        return 1
+    fi
+    if (( _gap > _cap ))
+    then
+        printf 'verdict=refuse\nreason=held-exceeds-census-cap\n'
+        return 1
+    fi
+    printf 'verdict=pass\n'
+    return 0
+}
+
+# _tac_gpu_wait_baseline [timeout_s] [poll_s] — bounded wait for a PASSING verdict.
+#
+# 0 = the baseline cleared; 1 = it did not (an unreadable card fails CLOSED); 2 = the
+# census is misconfigured.  Prints the last verdict on stdout so the caller can log WHY
+# instead of only "the card did not free".
+_tac_gpu_wait_baseline() {
+    local _timeout="${1:-90}" _poll="${2:-2}" _waited=0 _free _total _verdict _rc
+    while :; do
+        # swallow-ok: an unreadable card yields empty, and the verdict refuses on a non-numeric reading
+        _free="$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+        # swallow-ok: same reading, other field; the verdict fails closed on either being unreadable
+        _total="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+        _verdict="$(_tac_vram_baseline_verdict "$_free" "$_total")"
+        _rc=$?
+        case "$_rc" in
+            0)
+                printf '%s\n' "$_verdict"
+                log "gpu-wait: baseline cleared after ${_waited}s"
+                return 0
+                ;;
+            2)
+                printf '%s\n' "$_verdict"
+                log "gpu-wait: the census is MISCONFIGURED — not proceeding"
+                return 2  # 2 = a census with no bound is not a gate
+                ;;
+            *)
+                # 1 (a refusal) is not terminal: the holder may exit, so keep waiting
+                # until the bound.  Every other code is treated the same way, and the
+                # exhaustion below prints the last verdict.
+                ;;
+        esac
+        if (( _waited >= _timeout ))
+        then
+            printf '%s\n' "$_verdict"
+            log "gpu-wait: baseline NOT cleared after ${_waited}s — NOT proceeding"
+            return 1
+        fi
+        sleep "$_poll"
+        _waited=$(( _waited + _poll ))
+    done
+}
+
+# ── The autotune TOMBSTONE — a retired row is not owed, at EVERY entry point ──
+#
+# The resume loop applies this to its own derivation, but `run-autotune-batch.sh`
+# (no args) and `autotune-rows.sh --all-but-done` re-selected the retired rows from
+# the registry.  Measured 2026-11-04/05: one row's weights had moved to archived/ and
+# the other is the 88 GiB artefact that OOM-killed at staging.
+#
+# _tac_autotune_retired_file — the tombstone path; TAC_RESUME_RETIRED wins.
+_tac_autotune_retired_file() {
+    local _state="${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tactical-console}"
+    printf '%s\n' "${TAC_RESUME_RETIRED:-$_state/autotune-retired.rows}"
+}
+
+# _tac_is_retired <model-file> — 0 when the tombstone lists it (first field, before `|`).
+_tac_is_retired() {
+    local _f="${1:-}" _list
+    [[ -n "$_f" ]] || return 1
+    _list="$(_tac_autotune_retired_file)"
+    [[ -r "$_list" ]] || return 1
+    awk -F'|' -v f="$_f" '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        $1 == f { found = 1; exit }
+        END { exit(found ? 0 : 1) }
+    ' "$_list"
 }
 
 # end of file
