@@ -28,6 +28,14 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 11
+#   v11 (2026-11-05): LLAMA_LANE_KEEP_UNITS joins the clear/export set — it was omitted when
+#   the always-on lane was introduced (01-constants v50), so a parent shell's copy survived the
+#   `:=` and the lane table refreshed AROUND a stale guard.  Measured 17:20: a shell still held
+#   llama-cuda-embeddinggemma-embed.service after the lane was renamed, `model use 1` matched no
+#   keep entry and stopped the embedding lane, and the only report of it was the post-load
+#   confirmation.  A guard that cannot match is worse than none: the operator believes memory
+#   search is protected.
 # Module Version: 10
 #   v10 (2026-11-05): three profile facts join the clear/export set.  LLAMA_THREAD_CAP is
 #   the per-host compute-thread ceiling (6 on the i9's six P-cores, 0 = no ceiling on a
@@ -389,7 +397,7 @@ tac_host_gpu_pool_bytes() {
 # export what the rest of the console reads.  Called once per shell.
 tac_host_profile_apply() {
     local _id _file _facts _arch _cuda _render _pool
-    unset LLAMA_LANE_SPECS LLAMA_CUDA_LANE_UNIT LLAMA_GPU_FREE_THRESHOLD_MIB \
+    unset LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT LLAMA_GPU_FREE_THRESHOLD_MIB \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
           LLAMA_THREAD_CAP LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
           VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
@@ -439,7 +447,7 @@ tac_host_profile_apply() {
     TAC_HOST_PROFILE_MATCHED=1
     export TAC_HOST_PROFILE TAC_HOST_PROFILE_MATCHED
     export LLAMA_DRIVE_ROOT LLAMA_GPU_LAYERS LLAMA_FIT_TARGET_MB \
-           LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLAMA_CUDA_LANE_UNIT \
+           LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT \
            LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
            LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB LLAMA_THREAD_CAP \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \

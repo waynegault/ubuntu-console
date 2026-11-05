@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 90
+#   v90 (2026-11-05): an INERT keep entry is named BEFORE anything is stopped.  Measured 17:20:
+#   a shell still exported the pre-rename embedding unit, the lane table had moved on, no keep
+#   entry matched, and `model use 1` stopped the lane — the operator only learned it after the
+#   load, from the confirmation line.  host-profile v11 clears the variable (the root cause);
+#   this makes a surviving disagreement (hand-set value, a profile mid-edit) loud and early.
 # Module Version: 89
 #   v89 (2026-11-05): `model use` now REPORTS the always-on lane's measured state after the new
 #   model is up — unit active, and llama-server's /health on its declared port — instead of leaving
@@ -1292,6 +1298,28 @@ function __model_use_claim_cuda_card() {
         _cuda_lanes=(llama-cuda-llama32-3b-chat.service llama-cuda-qwen35-4b-pipeline.service)
         __tac_info "CUDA" "[no host profile — displacing the default CUDA lanes]" "$C_Dim"
     fi
+    # An INERT keep entry is worse than none: the operator reads "always-on" and believes
+    # memory search is protected while the loop below stops it.  Measured 2026-11-05
+    # 17:20 — a shell still exported the pre-rename unit, the lane table had moved on,
+    # nothing matched, and the embedding lane was stopped with no warning until the
+    # post-load report.  host-profile v11 clears the variable; this names a disagreement
+    # that survives it (a hand-set value, a profile mid-edit) BEFORE it costs a lane.
+    local _keep_declared _inert_msg
+    for _keep in ${LLAMA_LANE_KEEP_UNITS:-}
+    do
+        _keep_declared=0
+        for _unit in "${_cuda_lanes[@]-}"
+        do
+            [[ "$_unit" == "$_keep" ]] && _keep_declared=1
+        done
+        if (( ! _keep_declared ))
+        then
+            _inert_msg="[LLAMA_LANE_KEEP_UNITS names $_keep, which is not in this box's lane"
+            _inert_msg+=" table — the always-on protection is INERT for this run (stale"
+            _inert_msg+=" environment?); lanes stopped below are listed as they go]"
+            __tac_info "Warning" "$_inert_msg" "$C_Warning"
+        fi
+    done
     for _unit in "${_cuda_lanes[@]-}"
     do
         [[ -n "$_unit" ]] || continue

@@ -453,6 +453,21 @@ PROFILE
     [[ "$output" == *"UNKNOWN"* ]]
 }
 
+@test "an inherited keep-list is cleared, so a renamed lane cannot leave it inert" {
+    # Measured 2026-11-05 17:20 — a shell still exported the PRE-RENAME embedding unit,
+    # host-profile did not clear LLAMA_LANE_KEEP_UNITS, the lane table refreshed around
+    # it, and `model use 1` therefore stopped the embedding lane: the always-on guard
+    # matched nothing and said nothing.  Catches: the keep list staying out of the clear
+    # set while LLAMA_LANE_SPECS is refreshed — the two must move together.
+    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        LLAMA_LANE_KEEP_UNITS="llama-cuda-embeddinggemma-embed.service" \
+        bash -c 'source "$1"; tac_host_profile_apply; printf "%s" "${LLAMA_LANE_KEEP_UNITS:-}"' \
+        _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "llama-cuda-qwen3embedding-embed.service" ] \
+        || { echo "a parent's keep list survived the profile apply: '$output'"; return 1; }
+}
+
 @test "a unified host with an unreadable card sizes to its per-boot pool, never to RAM" {
     # Criterion (2026-11-03, replaces "sizes to RAM"): RAM is NOT the pool. The pool is
     # the card's figure, measured once per boot and exported as TAC_HOST_GPU_POOL_BYTES

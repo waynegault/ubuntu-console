@@ -387,6 +387,7 @@ EOS
     cat > "$sb/probe.sh" <<'EOS'
 set -uo pipefail
 C_Dim=""
+C_Warning=""
 __tac_info() { printf '%s %s\n' "$1" "$2"; }
 __llm_gpu_foreign_owner() { return 1; }
 _tac_suspend_acquire() { return 0; }
@@ -416,6 +417,20 @@ EOS
         || { echo "evicted the always-on lane: $(cat "$sb/stopped")"; return 1; }
     [[ "$output" == *"keeping llama-cuda-qwen3embedding-embed.service"* ]] \
         || { echo "the spared lane was passed over in silence: $output"; return 1; }
+
+    # 3. A keep entry the profile does not declare protects nothing — and must SAY so
+    # before the stop, not after the load.  Measured 2026-11-05 17:20: a stale exported
+    # name from before the lane rename matched no lane, `model use 1` stopped the
+    # embedding lane, and the only report was the post-load confirmation.
+    : > "$sb/stopped"
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" LLAMA_LANE_SPECS="$spec" \
+        LLAMA_LANE_KEEP_UNITS='llama-cuda-embeddinggemma-embed.service' \
+        bash "$sb/probe.sh" "$sb/claim.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"always-on protection is INERT"* ]] \
+        || { echo "an unmatched keep entry was not named: $output"; return 1; }
+    grep -qx 'llama-cuda-qwen3embedding-embed.service' "$sb/stopped" \
+        || { echo "the case no longer describes the stop it warns about: $(cat "$sb/stopped")"; return 1; }
 }
 
 # Wayne's requirement (2026-11-05): "provide confirmation in 'model use N' that the
