@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 92
+#   v92 (2026-11-05): the nested-GGUF report counts only entries with NO flat counterpart.  Once
+#   an entry is flattened (hardlinked by name into the store root) its model scans, so reporting it
+#   again is a warning that can never clear.  Measured the same evening: after flattening all seven,
+#   a rescan still warned about them until this narrowed the count.
 # Module Version: 91
 #   v91 (2026-11-05): `model scan` NAMES the GGUFs it cannot see.  Its glob is deliberately flat,
 #   so a bare `hf download`'s nested `models--*/snapshots/**` entries were skipped in silence —
@@ -324,17 +329,24 @@ function __model_scan_row_bytes() {
 # omission into a decision.  Depth 2 because a DIRECT child .gguf is the flat store itself.
 # @returns 0 always — a report, never a gate.
 function __model_scan_report_nested() {
-    local _dir="$1" _n _eg _msg
+    local _dir="$1" _f _name _invisible=0 _eg="" _msg _nested
+    # Count only what is GENUINELY invisible: a nested entry whose basename also exists at
+    # the top level has been flattened (hardlinked), so it already scans.  Reporting those
+    # would nag forever about models that are registered.
     # swallow-ok: an unreadable store is reported by the caller's own mount/store check
-    _n=$(find "$_dir" -mindepth 2 -name '*.gguf' -print 2>/dev/null | wc -l)
-    (( _n > 0 )) || return 0
-    # An EXAMPLE, not the largest: these are hub-cache entries and usually symlinks, whose
-    # stat size is the link's, so "largest" would be a number that means nothing.
-    # swallow-ok: the example is a courtesy; the count above is the finding
-    _eg=$(find "$_dir" -mindepth 2 -name '*.gguf' 2>/dev/null | head -1)
-    _msg="$_n GGUF file(s) sit BELOW $_dir (e.g. ${_eg#"$_dir"/}) and get no registry row"
-    _msg+=" — this scan reads the top level only.  Flatten them with 'llm-pull', or re-download"
-    _msg+=" through the 'hf' wrapper, which lands files flat."
+    _nested=$(find "$_dir" -mindepth 2 -name '*.gguf' 2>/dev/null)
+    while IFS= read -r _f
+    do
+        [[ -n "$_f" ]] || continue
+        _name="${_f##*/}"
+        [[ -e "$_dir/$_name" ]] && continue
+        _invisible=$(( _invisible + 1 ))
+        [[ -n "$_eg" ]] || _eg="${_f#"$_dir"/}"
+    done <<< "$_nested"
+    (( _invisible > 0 )) || return 0
+    _msg="$_invisible GGUF file(s) sit BELOW $_dir with no flat counterpart (e.g. $_eg), so they get"
+    _msg+=" no registry row — this scan reads the top level only.  Flatten them with 'llm-pull',"
+    _msg+=" or re-download through the 'hf' wrapper, which lands files flat."
     __tac_info "Warning" "$_msg" "$C_Warning"
     return 0
 }

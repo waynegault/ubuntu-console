@@ -218,6 +218,14 @@ __fake_gguf() {
     [[ "$output" == *"models--org--repo"* ]] \
         || { echo "the report names no example: $output"; return 1; }
 
+    # Flattened = a same-named file at the top level.  Once that exists the model scans, so
+    # the warning must go quiet — otherwise it nags about models that ARE registered.
+    : > "$LLAMA_MODEL_DIR/m.gguf"
+    run __model_scan
+    [[ "$output" != *"sit BELOW"* ]] \
+        || { echo "still reported a flattened (hardlinked) model: $output"; return 1; }
+    rm -f "$LLAMA_MODEL_DIR/m.gguf"
+
     # Control: the same scan on a flat-only store says nothing about nesting.  Without
     # this, a helper that always printed would pass the assertions above.
     mv "$LLAMA_MODEL_DIR/models--org--repo" "$BATS_TEST_TMPDIR/moved-repo"
