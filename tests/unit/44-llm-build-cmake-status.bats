@@ -41,8 +41,11 @@ setup() {
     chmod +x "$LLAMA_ROOT/build/bin/llama-server"
     export LLAMA_ROOT
     # cmake stub: `-B` is the configure step, `--build` the build step.  A stub runs
-    # in the pipeline subshell because shell functions are inherited there.
+    # in the pipeline subshell because shell functions are inherited there.  When
+    # CMAKE_LOG is set, every invocation's arguments are recorded so a case can assert
+    # WHICH tree and WHICH architecture reached cmake, not merely that it ran.
     cmake() {
+        [[ -z "${CMAKE_LOG:-}" ]] || printf '%s\n' "$*" >> "$CMAKE_LOG"
         case "${1:-}" in
             -B) return "${STUB_CONFIGURE_RC:-0}" ;;
             --build) return "${STUB_BUILD_RC:-0}" ;;
@@ -103,4 +106,88 @@ _run_build() {
     out="${result#*$'\n'}"
     [ "$rc" -eq 0 ]
     [[ "$out" == *"Done"* ]]
+}
+
+# ---- v83 (2026-11-05): the tree and the architecture ------------------------
+# Both literal defaults this section guards were measured on the arm64 box, where
+# each produced a rebuild that served nothing: `cmake -B build` filled a tree no
+# launcher reads (the serving tree is build-cuda/), and a card the driver could not
+# answer for fell back to a hard-coded sm_86 on a 12.1 GPU.
+
+@test "llm-build: builds the tree LLAMA_BUILD_DIR names, not build/ (v83)" {
+    # Catches: the fixed $LLAMA_ROOT/build.  On the arm64 box a rebuild then lands in
+    # build/ while both lanes keep serving build-cuda/ - Done is reported and nothing
+    # that serves has changed.
+    export LLAMA_BUILD_DIR="$LLAMA_ROOT/build-cuda"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    mkdir -p "$LLAMA_BUILD_DIR/bin"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$LLAMA_BUILD_DIR/bin/llama-server"
+    chmod +x "$LLAMA_BUILD_DIR/bin/llama-server"
+
+    local result rc out
+    result="$(_run_build)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"Done"* ]]
+    grep -qF -- "-B $LLAMA_BUILD_DIR" "$CMAKE_LOG"
+    grep -qF -- "--build $LLAMA_BUILD_DIR" "$CMAKE_LOG"
+}
+
+@test "llm-build: the architecture is the card's, read from the driver (v83)" {
+    # Criterion (v83): -DCMAKE_CUDA_ARCHITECTURES carries the card's compute capability,
+    # so one command targets sm_121 on this box and sm_86 on the x86 box.
+    # Catches: any fixed default reaching a card it does not fit.
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    mkdir -p "$BATS_TEST_TMPDIR/driver"
+    printf '#!/usr/bin/env bash\nprintf "12.1\\n"\n' > "$BATS_TEST_TMPDIR/driver/nvidia-smi"
+    chmod +x "$BATS_TEST_TMPDIR/driver/nvidia-smi"
+    PATH="$BATS_TEST_TMPDIR/driver:$PATH"
+
+    local result rc
+    result="$(_run_build)"
+    rc="${result%%$'\n'*}"
+    [ "$rc" -eq 0 ]
+    grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=121" "$CMAKE_LOG"
+}
+
+@test "llm-build: a card that cannot be read is answered by LLAMA_CUDA_ARCH (v83)" {
+    # The host profile's declaration is the only fallback there is: an unreadable
+    # driver plus a declared 121 must configure for 121.
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    mkdir -p "$BATS_TEST_TMPDIR/nocard"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$BATS_TEST_TMPDIR/nocard/nvidia-smi"
+    chmod +x "$BATS_TEST_TMPDIR/nocard/nvidia-smi"
+    PATH="$BATS_TEST_TMPDIR/nocard:$PATH"
+    LLAMA_CUDA_ARCH=121
+
+    local result rc
+    result="$(_run_build)"
+    rc="${result%%$'\n'*}"
+    [ "$rc" -eq 0 ]
+    grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=121" "$CMAKE_LOG"
+}
+
+@test "llm-build: an unreadable card with no declared arch refuses instead of guessing (v83)" {
+    # Catches: the old `local cuda_arch="86"`, which compiled Ampere kernels on a
+    # Blackwell card and printed the guess as a stated fallback.  Nothing is configured.
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    mkdir -p "$BATS_TEST_TMPDIR/nocard"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$BATS_TEST_TMPDIR/nocard/nvidia-smi"
+    chmod +x "$BATS_TEST_TMPDIR/nocard/nvidia-smi"
+    PATH="$BATS_TEST_TMPDIR/nocard:$PATH"
+    unset LLAMA_CUDA_ARCH
+
+    local result rc out
+    result="$(_run_build)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -ne 0 ]
+    [[ "$out" == *"LLAMA_CUDA_ARCH"* ]]
+    [[ "$out" != *"Done"* ]]
+    [ ! -s "$CMAKE_LOG" ]
 }

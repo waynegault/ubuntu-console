@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 83
+#   v83 (2026-11-05): `llm-build` builds the tree this box actually serves, and stops inventing a
+#   CUDA architecture.  It configured `$LLAMA_ROOT/build` unconditionally, so on the arm64 box -
+#   which serves build-cuda/ - a 40-60 minute rebuild landed in a tree no launcher reads, and the
+#   run then warned that the launcher disagreed with it.  The tree is now
+#   `${LLAMA_BUILD_DIR:-$LLAMA_ROOT/build}`, declared per host profile.  The architecture keeps the
+#   driver read and adds the profile's LLAMA_CUDA_ARCH as the fallback: the old `86` literal
+#   compiled Ampere kernels on a 12.1 card when nvidia-smi could not answer, and an unknown card
+#   now names the variable and stops instead of guessing.
 # Module Version: 82
 #   v82 (2026-11-04): `model use` displaces the CUDA lanes the PROFILE declares (the gated lane plus every llama-cuda-* row in LLAMA_LANE_SPECS) instead of the x86 box's two literals — on the arm64 box that stopped nothing and left the LIVE lane serving.
 # Module Version: 81
@@ -4253,9 +4262,10 @@ function model() {
 # ---------------------------------------------------------------------------
 # __llm_build — Build or rebuild llama-server from source with CUDA.
 #
-# Pulls the latest upstream llama.cpp, configures with the optimal CMake
-# flags for this hardware (RTX 3050 Ti SM 86, i9-12900HK), builds the
-# llama-server binary, and updates the convenience symlink.
+# Pulls the latest upstream llama.cpp, configures with this repo's CUDA CMake flags for the
+# card the box actually has (compute capability read from the driver, the host profile's
+# LLAMA_CUDA_ARCH when it cannot be read), builds llama-server into ${LLAMA_BUILD_DIR}, and
+# reports the commit and size that landed.
 #
 # Usage:   llm-build [--quick] [--no-pull] [--yes]
 # Options:
@@ -4292,6 +4302,12 @@ function llm-build() {
     fi
 
     cd "$root" || return 1
+
+    # The tree to build in.  One tree per box: the arm64 host serves build-cuda/, so a
+    # rebuild that landed in build/ would spend 40-60 minutes producing a binary no
+    # launcher reads and leave the serving tree untouched.  Declared by the host
+    # profile (LLAMA_BUILD_DIR); build/ remains the default for a box that declares none.
+    local build_dir="${LLAMA_BUILD_DIR:-$root/build}"
 
     # ---- Pre-flight plan: what would actually change, and what does it affect?
     local lane_target="" lane_impact="nothing live serves this tree"
@@ -4371,16 +4387,18 @@ function llm-build() {
     # swallow-ok: a machine without nproc builds with 4 jobs, and the output names that choice
     jobs=$(nproc 2>/dev/null || echo 4)
 
-    # The CUDA compute architecture belongs to the CARD, not to this repo.  86 is
-    # the RTX 3050 Ti's (Ampere); an arm64 CUDA box reports differently (GB10
-    # 12.1, Jetson Orin 8.7), and nvcc refuses an architecture it does not know.
-    # Ask the driver, and fall back to this box's measured 86 with the choice
-    # PRINTED, so a card that cannot be read is stated rather than assumed.
-    local cuda_arch="86"
+    # The CUDA compute architecture belongs to the CARD, not to this repo: the RTX 3050 Ti
+    # is Ampere 8.6, the arm64 box's RTX Spark is 12.1, and nvcc refuses an architecture it
+    # does not know.  Ask the driver first; a box whose card cannot be read declares its own
+    # in its host profile (LLAMA_CUDA_ARCH).  An unknown card STOPS the build and names the
+    # variable - the old `86` literal compiled Ampere kernels on a 12.1 card and printed
+    # that as a fallback rather than a guess.
+    local cuda_arch=""
+    local cuda_arch_src="driver"
     local _cuda_cap=""
     if command -v nvidia-smi >/dev/null 2>&1
     then
-        # swallow-ok: an unreadable card leaves the value empty, and the guard below prints the fallback
+        # swallow-ok: an unreadable card leaves the value empty, and the error below names the variable to set
         _cuda_cap="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null)"
         _cuda_cap="${_cuda_cap%%$'\n'*}"
         _cuda_cap="${_cuda_cap// /}"
@@ -4389,13 +4407,21 @@ function llm-build() {
     then
         cuda_arch="${_cuda_cap/./}"
     else
-        __tac_info "CUDA" "compute capability unreadable - building for sm_${cuda_arch}" "$C_Dim"
+        cuda_arch="${LLAMA_CUDA_ARCH:-}"
+        cuda_arch_src="host profile"
+        if [[ -z "$cuda_arch" ]]
+        then
+            local guess_refusal="compute capability unreadable and LLAMA_CUDA_ARCH unset - refusing to guess"
+            __tac_info "Error" "${guess_refusal} (set LLAMA_CUDA_ARCH: 86 or 121)" "$C_Error"
+            return 1
+        fi
     fi
+    __tac_info "CUDA" "building for sm_${cuda_arch} (${cuda_arch_src})" "$C_Dim"
 
     # Configure with CMake (skip if --quick and CMakeCache exists)
-    if [[ "$quick" != "true" || ! -f "$root/build/CMakeCache.txt" ]]; then
-        __tac_info "Configure" "Running CMake with CUDA flags (sm_${cuda_arch}) ..." "$C_Info"
-        cmake -B build \
+    if [[ "$quick" != "true" || ! -f "$build_dir/CMakeCache.txt" ]]; then
+        __tac_info "Configure" "Running CMake with CUDA flags (sm_${cuda_arch}) in ${build_dir} ..." "$C_Info"
+        cmake -B "$build_dir" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CUDA_ARCHITECTURES=${cuda_arch} \
             -DGGML_CUDA=ON \
@@ -4428,7 +4454,7 @@ function llm-build() {
 
     # Build
     __tac_info "Build" "Compiling llama-server (${jobs} threads) ..." "$C_Info"
-    cmake --build build --target llama-server -j"$jobs" 2>&1 | tail -5
+    cmake --build "$build_dir" --target llama-server -j"$jobs" 2>&1 | tail -5
     # cmake's status, not tail's: `$?` here was tail's 0, so a failed build read as
     # success and the script then reported a binary it had not produced.  Captured in
     # the same command as `local` — see the configure check above for why.
@@ -4439,7 +4465,7 @@ function llm-build() {
     fi
 
     # Verify
-    local bin="$root/build/bin/llama-server"
+    local bin="$build_dir/bin/llama-server"
     if [[ -x "$bin" ]]; then
         local size; size=$(stat --format=%s "$bin" 2>/dev/null)
         local human_size
@@ -4457,9 +4483,10 @@ function llm-build() {
         # ~/.local/bin/llama-server-cuda, which was retired on 2026-09-15 as a third
         # CUDA name pointing at a build that serves nothing (install.sh removes it) —
         # recreating it on every build quietly undid that, and it was redundant: this
-        # builds $root/build, which IS LLAMA_CUDA_SERVER_BIN's default.  What matters
-        # instead is that the two still agree, so say so — or say loudly that they
-        # do not, which is the one-sided repoint the launcher test also guards.
+        # builds ${build_dir}, which is the tree the host profile points
+        # LLAMA_CUDA_SERVER_BIN at.  What matters instead is that the two still agree,
+        # so say so — or say loudly that they do not, which is the one-sided repoint
+        # the launcher test also guards.
         local launcher_bin="${LLAMA_CUDA_SERVER_BIN:-$bin}"
         if [[ "$launcher_bin" == "$bin" ]]; then
             __tac_info "Launcher" "llama-cuda-server resolves this build (${bin})" "$C_Dim"

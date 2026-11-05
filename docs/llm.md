@@ -1513,9 +1513,12 @@ release gives the best performance for this specific hardware:
 - **CPU-specific optimisations** — CMake with `-DGGML_NATIVE=ON` detects the
   exact CPU (i9-12900HK Alder Lake) and enables AVX2, FMA, BMI2, and other
   instruction sets that a generic binary cannot assume.
-- **CUDA architecture targeting** — `-DCMAKE_CUDA_ARCHITECTURES=86` targets
-  the RTX 3050 Ti's Ampere SM directly, avoiding fallback to generic CUDA
-  kernels.
+- **CUDA architecture targeting** — `-DCMAKE_CUDA_ARCHITECTURES` carries the
+  installed card's compute capability, read from `nvidia-smi` (`86` here, `121`
+  on the arm64 box), so the kernels target that SM directly instead of a generic
+  PTX path. The value is never a literal in the build code: a card the driver
+  cannot answer for is answered by the host profile's `LLAMA_CUDA_ARCH`, and a
+  card with neither stops the build rather than guessing.
 - **Shared library split** — `-DBUILD_SHARED_LIBS=ON` compiles GPU backends
   (`libggml-cuda.so`) as separate loadable modules so `llama-server` stays
   small and the GPU backend can be updated independently.
@@ -1550,9 +1553,10 @@ Disk:           build tree on the WSL2 ext4 VHD (/dev/sdd, 1 TB)
 > `.gitignore`; the numbers quoted here describe the x86_64 box as measured.
 >
 > **Why SM 86?** The RTX 3050 Ti is an Ampere GA107 chip with compute capability
-> 8.6 (not 8.0 like A100 or 8.9 like Ada). Setting `CMAKE_CUDA_ARCHITECTURES=86`
-> ensures CUDA kernels are compiled for this exact SM rather than falling back to
-> a generic PTX path that runs slower.
+> 8.6 (not 8.0 like A100 or 8.9 like Ada). Compiling for this exact SM rather than
+> a generic PTX path is what `llm-build` does with the value it reads from the
+> driver — on this box that resolves to `CMAKE_CUDA_ARCHITECTURES=86`; the arm64
+> box's RTX Spark resolves to `121`.
 
 ---
 
@@ -1599,9 +1603,11 @@ cd ~/llama.cpp
 ### 2. Configure with CMake
 
 ```bash
-cmake -B build \
+# The card's compute capability with the dot removed: 86 (RTX 3050 Ti), 121 (RTX Spark).
+cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '.')
+cmake -B "${LLAMA_BUILD_DIR:-build}" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CUDA_ARCHITECTURES=86 \
+  -DCMAKE_CUDA_ARCHITECTURES="$cap" \
   -DGGML_CUDA=ON \
   -DGGML_CUDA_FA=ON \
   -DGGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16" \
@@ -1624,7 +1630,7 @@ cmake -B build \
 | Flag | Value | Effect |
 |---|---|---|
 | `CMAKE_BUILD_TYPE` | `Release` | `-O3 -DNDEBUG` — full optimisation, no debug asserts |
-| `CMAKE_CUDA_ARCHITECTURES` | `86` | Compile CUDA kernels for Ampere GA107 (RTX 3050 Ti) |
+| `CMAKE_CUDA_ARCHITECTURES` | the card's, read from the driver | CUDA kernels for the installed card — `86` on the RTX 3050 Ti (Ampere GA107), `121` on the arm64 box's RTX Spark (Blackwell). `LLAMA_CUDA_ARCH` in the host profile answers a card `nvidia-smi` cannot; with neither, the build refuses rather than guessing. |
 | `GGML_CUDA` | `ON` | Enable NVIDIA CUDA GPU backend (the key flag) |
 | `GGML_CUDA_FA` | `ON` | Flash Attention v2 CUDA kernels — ~2× prompt processing speedup. Reduces memory bandwidth usage for the attention mechanism. |
 | `GGML_CUDA_FA_QUANTS` | `q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16` | FlashAttention K-V type combinations to compile (upstream's default list, pinned here so a future default change cannot silently alter our FA coverage). Replaces the deprecated `GGML_CUDA_FA_ALL_QUANTS=ON`, which warns on every configure (`ggml/cmake/common.cmake:59`) and compiles 49 pairs — our KV matrix needs `q8_0-q8_0` (every registry row) plus the autotune sweep's `q4_0-q4_0`. Quote the value: the `;` is a shell separator otherwise. |
@@ -1696,10 +1702,14 @@ ls -lh build/libggml-cuda.so
 
 ## Installing the Built Binary
 
-The Tactical Console's `LLAMA_CUDA_SERVER_BIN` points to
-`~/llama.cpp/build/bin/llama-server` (`scripts/01-constants.sh`), and the CUDA
-lane's launcher `~/.local/bin/llama-cuda-server` resolves it. No installation step
-is needed — the binary is used directly from the build directory.
+The Tactical Console's `LLAMA_CUDA_SERVER_BIN` points at the CUDA tree that exists:
+`scripts/01-constants.sh` resolves `~/llama.cpp/build-cuda` first and falls back to
+`~/llama.cpp/build`, and `llm-build` writes into `${LLAMA_BUILD_DIR}` — which each host
+profile sets to that same tree, so a rebuild replaces the binary the lane launches.
+The CUDA architecture is the card's, read from `nvidia-smi`; the profile's
+`LLAMA_CUDA_ARCH` answers a card that cannot be read. The CUDA lane's launcher
+`~/.local/bin/llama-cuda-server` resolves the binary. No installation step is
+needed — the binary is used directly from the build directory.
 
 There is deliberately **no `llama-server-cuda` convenience symlink any more.**
 Retired 2026-09-15: it was a third CUDA name, and its target was `build-cuda133`

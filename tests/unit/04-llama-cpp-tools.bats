@@ -247,12 +247,18 @@ CURL
     local src want_arch='DCMAKE_CUDA_ARCHITECTURES=${cuda_arch}'
     src="$(declare -f llm-build)"
     [[ "$src" == *"GGML_CUDA=ON"* ]]
-    # Criterion (scripts/11e-llm-model.sh v72): the compute architecture comes from
-    # the driver, with 86 as the stated fallback.  Catches: the old hard-coded
-    # sm_86 reaching an arm64 CUDA card that needs 121 or 87.
+    # Criterion (scripts/11e-llm-model.sh v83): the compute architecture comes from the
+    # driver, and a card the driver cannot answer for is answered by the host profile's
+    # LLAMA_CUDA_ARCH - never by a shared literal.  Catches: the old `local cuda_arch="86"`
+    # compiling Ampere kernels on an arm64 card that needs 121 (behaviour: suite 44).
     [[ "$src" == *"$want_arch"* ]]
     [[ "$src" == *"compute_cap"* ]]
-    [[ "$src" == *'local cuda_arch="86"'* ]]
+    [[ "$src" == *"LLAMA_CUDA_ARCH"* ]]
+    [[ "$src" != *'local cuda_arch="86"'* ]]
+    # Criterion (v83): the build lands in ${LLAMA_BUILD_DIR}, which the host profile points
+    # at the tree the launcher serves.  Catches: the fixed $LLAMA_ROOT/build on a box that
+    # serves build-cuda/ (behaviour: suite 44).
+    [[ "$src" == *'local build_dir="${LLAMA_BUILD_DIR:-$root/build}"'* ]]
     [[ "$src" == *"GGML_CUDA_FA=ON"* ]]
     [[ "$src" != *"GGML_CUDA_FA_ALL_QUANTS"* ]]
     [[ "$src" == *'GGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16"'* ]]
