@@ -461,6 +461,33 @@ def _check_regression(item: pytest.Item, duration_s: float) -> str | None:
     return None
 
 
+def _duration_key(item: pytest.Item) -> str:
+    """The key a duration is stored under — one place, so the writer and the pruner agree."""
+    return f"{item.nodeid.split('::')[0]}::{getattr(item, 'originalname', None) or item.name}"
+
+
+_SEEN: set[str] = set()
+
+
+def _is_full_run(config: pytest.Config) -> bool:
+    """True only when this session runs the WHOLE collection, so pruning cannot lose history.
+
+    A narrowed run (-k, -m, -x, --lf, --deselect, or explicit node ids) leaves tests unrun, and
+    their baselines must survive; only a session that visits every collected test may drop keys.
+    """
+    option = config.option
+    return not (
+        config.args
+        or getattr(option, "keyword", None)
+        or getattr(option, "markexpr", None)
+        or getattr(option, "exitfirst", False)
+        or getattr(option, "maxfail", 0)
+        or getattr(option, "lf", False)
+        or getattr(option, "ff", False)
+        or getattr(option, "deselect", None)
+    )
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
     """Wrap each test to capture its wall-clock duration."""
@@ -470,6 +497,7 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
     yield
     elapsed = _time.monotonic() - start
     if not _is_vscode_discovery():
+        _SEEN.add(_duration_key(item))
         _collect_duration(item, elapsed)
         warning = _check_regression(item, elapsed)
         if warning:
@@ -479,11 +507,28 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
-    """Persist accumulated durations at the end of a successful run."""
-    if not _is_vscode_discovery() and _DURATIONS:
-        baselines = _load_durations()
-        for key, times in _DURATIONS.items():
-            baselines.setdefault(key, []).extend(times)
-            # Keep only the last 20 runs to avoid unbounded growth
-            baselines[key] = baselines[key][-20:]
-        _save_durations(baselines)
+    """Persist accumulated durations at the end of a successful run.
+
+    A full run also PRUNES entries whose test no longer exists. Without this the cache only
+    ever grew: measured 2026-11-05 it held 1731 bridge keys against 1718 that still collect,
+    so ranking "the slowest test" by this file could name a retired case — the 41s e2e entry
+    it reported had not run for days. Pruning is gated on _is_full_run() so a filtered run
+    keeps every baseline it did not visit.
+    """
+    if _is_vscode_discovery() or not _DURATIONS:
+        return
+    baselines = _load_durations()
+    for key, times in _DURATIONS.items():
+        baselines.setdefault(key, []).extend(times)
+        # Keep only the last 20 runs to avoid unbounded growth
+        baselines[key] = baselines[key][-20:]
+    if _is_full_run(session.config) and _SEEN:
+        stale = [key for key in baselines if key not in _SEEN]
+        if stale:
+            for key in stale:
+                del baselines[key]
+            print(
+                f"\033[2mtac-durations: pruned {len(stale)} entr"
+                f"{'y' if len(stale) == 1 else 'ies'} whose test no longer collects\033[0m"
+            )
+    _save_durations(baselines)
