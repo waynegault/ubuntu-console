@@ -174,6 +174,11 @@ teardown_file() {
 setup() {
     # Reset mock state, mock log, the 2-strike counters, and the bench lock
     # before each test (all sandboxed under $TAC_TEST_TMPDIR).
+    # A busy or unreadable card makes gpu_reprobe_free() run every attempt, each preceded
+    # by `sleep $GPU_REPROBE_SLEEP_S` (default 5s, 2 attempts) — 10s of wall per case, for a
+    # verdict the case asserts and not a duration. Measured 2026-11-05: 11.3s wall against
+    # 0.6s of CPU. The ATTEMPT COUNT is untouched, so the re-probe path still runs twice.
+    export GPU_REPROBE_SLEEP_S=0
     : > "$SYSTEMCTL_MOCK_LOG" 2>/dev/null || true
     rm -f "$WATCHDOG_MOCK_STATE"/*
     rm -f "$LLAMA_WATCHDOG_LOCK_FILE" \
