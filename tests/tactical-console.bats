@@ -1592,13 +1592,20 @@ EOF
     [[ "$result" == "$C_Error" ]]
 }
 
-@test "ui: __require_openclaw handles openclaw presence" {
+@test "ui: __require_openclaw follows the installation flag" {
+    # The old case asked `command -v openclaw`, which answers YES for the shell
+    # FUNCTION this profile defines (scripts/04-aliases.sh:227) even when no binary
+    # exists — so it asserted the RUNNER's install state.  Measured 2026-11-05: the
+    # load-time probe cached 0, `command -v` still succeeded, and the nightly's case
+    # went red while the same case passed in isolation.  The contract is the flag.
+    __TAC_OPENCLAW_OK=1
     run __require_openclaw
-    if command -v openclaw >/dev/null 2>&1; then
-        [ "$status" -eq 0 ]
-    else
-        [ "$status" -eq 1 ]
-    fi
+    [ "$status" -eq 0 ]
+
+    __TAC_OPENCLAW_OK=0
+    run __require_openclaw
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NOT INSTALLED"* ]]
 }
 
 @test "ui: __usage outputs Usage: prefix" {
@@ -3117,6 +3124,11 @@ exit 3
 STUB
     chmod +x "$stub/openclaw"
 
+    # The profile defines `openclaw` as a FUNCTION (scripts/04-aliases.sh:227), which
+    # wins over PATH and returns 127 when its load-time probe is 0 — the stub was
+    # never executed.  Measured 2026-11-05: both this case and the success case read
+    # REFRESH FAILED in the nightly.  They test oc-sync-models, not the wrapper.
+    unset -f openclaw
     PATH="$stub:$PATH" run oc-sync-models
     [ "$status" -eq 1 ]
     [[ "$output" == *"catalog refresh refused"* ]]
@@ -3133,6 +3145,8 @@ exit 0
 STUB
     chmod +x "$stub/openclaw"
 
+    # Same wrapper-vs-stub reason as the case above.
+    unset -f openclaw
     PATH="$stub:$PATH" run oc-sync-models
     [ "$status" -eq 0 ]
     [[ "$output" == *"REFRESHED FROM OPENCLAW"* ]]
