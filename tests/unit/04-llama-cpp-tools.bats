@@ -265,6 +265,12 @@ CURL
     [[ "$src" == *"GGML_NATIVE=ON"* ]]
     [[ "$src" == *"--quick"* ]]
     [[ "$src" == *"--no-pull"* ]]
+    # Criterion (2026-11-05): llama-server is the only SERVING artefact, but the companions
+    # with a live consumer here (llama-tokenize, llama-cli, llama-bench) are built in the
+    # same pass because a fresh tree - the monthly Jarvis rebuild makes one - would drop
+    # them.  Catches: a refactor that reverts to a single target, or that grows the list
+    # without the consumer being checked.
+    [[ "$src" == *"for _tool in llama-tokenize llama-cli llama-bench"* ]]
 }
 
 # A runner's BATS temp dir can contain a `b<digits>` fragment — measured
