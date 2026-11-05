@@ -142,15 +142,18 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 ### Where a download lands
 
 Every lane launches with an explicit `-m "$LLAMA_MODEL_DIR/<file>.gguf"`, so the
-model tree is deliberately **flat** — no per-repo subdirectories. Three download
-paths behave differently, and only the first two respect that.
+model tree is deliberately **flat** — no per-repo subdirectories. The console wraps
+`hf` (`scripts/04-aliases.sh`) so the CLI lands flat too; only a whole-repo download
+still writes the nested hub layout.
 
 | Path | Lands in | Notes |
 |---|---|---|
 | `model download <repo>:<file>` | `$LLAMA_MODEL_DIR` (`~/models/active` on this host), flat | Calls `hf download --local-dir "$LLAMA_MODEL_DIR"`. The filename may **not** contain `/`, so this is for GGUF files at the repo root only, named exactly once per shard. |
 | `llm-pull <repo> <glob>` | `$LLAMA_MODEL_DIR`, flat | For per-quant subdirectories (`Q4_K_M/…`) and sharded sets. Stages under `$HOME/models/.pull-staging`, moves each match out, removes the staging copy, then prints the `-m` line (lowest shard for a split set). Refuses to overwrite an existing file without `--force`. |
 | `llama-server -hf <repo>` / `--spec-draft-hf` | `~/.cache/llama.cpp` | Always `models--<org>--<repo>/blobs/<oid>` plus **symlinked** `snapshots/<commit>/<file>`. `LLAMA_CACHE` relocates that root; it cannot flatten the layout. Copy out with `cp -L`, or delete the cache root and the runs that point at it break. |
-| bare `hf download <repo>` | `~/.cache/huggingface` (or `HF_HOME`) | The Python tooling's cache. Unrelated to llama.cpp. |
+| `hf download <repo> <file.gguf>…` | `$LLAMA_MODEL_DIR`, flat | The console's `hf` wrapper appends `--local-dir "$LLAMA_MODEL_DIR"` (and says so on stderr), so the CLI lands where `model download` does. Only `.gguf` names are rewritten. |
+| `hf download <repo> --include <glob>` | `$LLAMA_MODEL_DIR`, flat | With no extra flags or positional files, the wrapper routes the call through `llm-pull` (stage, then move flat). Otherwise it warns and lets `hf` nest. |
+| bare `hf download <repo>` | `$HF_HUB_CACHE` = the store itself here, **nested** | `models--<org>--<repo>/` with `blobs/` and symlinked snapshots. The wrapper warns and passes through; `model scan`'s non-recursive `*.gguf` glob will not see the file. Use `model download` or `llm-pull` for a servable model. |
 
 `llm-pull` is the gap-filler, not a replacement: use `model download` for a plain
 root-level file, and `llm-pull` when the quant sits in a subdirectory or the model

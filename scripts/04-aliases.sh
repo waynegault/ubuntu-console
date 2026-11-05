@@ -2,7 +2,10 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 35
+# Module Version: 36
+#   v36 (2026-11-05): `hf download` is wrapped so a GGUF lands flat in the model store.
+#   An --include glob is routed through llm-pull, and a bare repo download warns before
+#   hf writes the nested hub-cache layout.
 #   v34 (2026-11-01): the ocms ownership note no longer says it aliases oc-sync-models.
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
@@ -10,7 +13,7 @@
 # @modular-section: aliases
 # @depends: constants
 # @exports: code, oedit, llmconf, oclogs, le, lo, ocui, occhat, occonf, os, oa, ocstat,
-#   ocgs, ocv, status, cop, cop-ask, cop-init, m, h (plus standard shell aliases)
+#   ocgs, ocv, status, cop, cop-ask, cop-init, m, h, hf (plus standard shell aliases)
 #   Note: owk → 'oc wk', ologs → 'oc log-dir'
 #   m and h are the dashboard/help shorthands (tactical_dashboard, tactical_help).
 #   They were missing from this list until 2026-09-23, while
@@ -461,6 +464,151 @@ function cop-ask() {
 # wtf <topic>— ask the local LLM to explain a tool or concept (REPL mode)
 alias chat:='local_chat'
 alias wtf='wtf_repl'
+
+# __hf_warn — one-line notice on stderr, prefixed so hf's own output stays clean.
+function __hf_warn() {
+    printf 'hf: %s\n' "$*" >&2
+}
+
+# __hf_download_flat — route `<repo> --include <glob>` through llm-pull, FLAT.
+# Returns 0 when llm-pull took the download, 1 when it could not and said why, so
+# hf() falls back to the CLI instead of dropping the flag silently.
+function __hf_download_flat() {
+    local _repo="$1" _include="$2" _revision="${3:-}" _force="${4:-0}"
+    local _pull=""
+    # "not on PATH" IS the branch: it warns by name below and returns 1 so hf() falls
+    # back to the CLI rather than dropping --include silently.
+    # swallow-ok: absence is the handled branch — warned by name, never silently dropped
+    if ! _pull="$(command -v llm-pull 2>/dev/null)"
+    then
+        _pull=""
+    fi
+    if [[ -z "$_pull" ]]
+    then
+        __hf_warn "llm-pull is not on PATH, so this --include download cannot be flattened"
+        return 1
+    fi
+    local -a _pull_args=("$_repo" "$_include")
+    if [[ -n "$_revision" ]]
+    then
+        _pull_args+=(--revision "$_revision")
+    fi
+    if [[ "$_force" -eq 1 ]]
+    then
+        _pull_args+=(--force)
+    fi
+    __hf_warn "routing the --include download through llm-pull, flat into $LLAMA_MODEL_DIR"
+    LLM_MODELS_DIR="$LLAMA_MODEL_DIR" "$_pull" "${_pull_args[@]}"
+}
+
+# hf — the Hugging Face CLI, steered to the FLAT model store.
+#
+# `hf download` on its own writes the hub-cache layout under HF_HUB_CACHE: a
+# models--<org>--<repo>/ tree of blobs and symlinked snapshots.  The host profile sets
+# HF_HUB_CACHE to the model store itself (Wayne, 2026-11-02), so that download lands
+# NESTED inside ~/models/active and `model scan`'s non-recursive *.gguf glob never sees
+# it — the weights are on disk and no lane can be pointed at them.  `model download`
+# and `llm-pull` already place files flat; this wrapper makes the CLI do the same, so
+# the entry point stops deciding whether a model becomes visible.
+#
+#   hf download <repo> <file.gguf>...    adds --local-dir "$LLAMA_MODEL_DIR"
+#   hf download <repo> --include <glob>  routed through llm-pull (stage, then move flat)
+#   hf download <repo>                   passed through with a warning
+#
+# Other subcommands, and any call that already names --local-dir (llm-pull's own
+# staged download, or an explicit operator choice), are untouched.
+function hf() {
+    if [[ "${1:-}" != "download" ]]
+    then
+        command hf "$@"
+        return
+    fi
+
+    local -a _args=("${@:2}")
+    local _repo="" _include="" _revision="" _repo_type="model"
+    local _explicit_local_dir=0 _force=0 _i=0 _n_includes=0
+    local -a _files=() _other_flags=()
+
+    while (( _i < ${#_args[@]} ))
+    do
+        case "${_args[_i]}" in
+            --local-dir) _explicit_local_dir=1; _i=$((_i + 1)) ;;
+            --local-dir=*) _explicit_local_dir=1 ;;
+            --repo-type) _repo_type="${_args[_i+1]:-}"; _i=$((_i + 1)) ;;
+            --repo-type=*) _repo_type="${_args[_i]#*=}" ;;
+            --include)
+                _include="${_args[_i+1]:-}"; _n_includes=$((_n_includes + 1)); _i=$((_i + 1)) ;;
+            --include=*)
+                _include="${_args[_i]#*=}"; _n_includes=$((_n_includes + 1)) ;;
+            --revision|-r) _revision="${_args[_i+1]:-}"; _i=$((_i + 1)) ;;
+            --revision=*) _revision="${_args[_i]#*=}" ;;
+            --force-download) _force=1 ;;
+            --token|--exclude|--max-workers|--cache-dir)
+                _other_flags+=("${_args[_i]}"); _i=$((_i + 1)) ;;
+            -*) _other_flags+=("${_args[_i]}") ;;
+            *)
+                if [[ -z "$_repo" ]]
+                then
+                    _repo="${_args[_i]}"
+                else
+                    _files+=("${_args[_i]}")
+                fi
+                ;;
+        esac
+        _i=$((_i + 1))
+    done
+
+    # No repo (--help, a malformed call) or an explicit destination: hf's own contract.
+    if [[ -z "$_repo" || $_explicit_local_dir -eq 1 ]]
+    then
+        command hf download "${_args[@]}"
+        return
+    fi
+
+    if [[ "$_repo_type" != "model" ]]
+    then
+        __hf_warn "--repo-type $_repo_type is not an LLM download; leaving it to hf"
+        command hf download "${_args[@]}"
+        return
+    fi
+
+    if [[ -n "$_include" ]]
+    then
+        if [[ ${#_files[@]} -eq 0 && ${#_other_flags[@]} -eq 0 && $_n_includes -eq 1 ]]
+        then
+            if __hf_download_flat "$_repo" "$_include" "$_revision" "$_force"
+            then
+                return
+            fi
+        fi
+        __hf_warn "this --include download falls back to hf's nested layout"
+        command hf download "${_args[@]}"
+        return
+    fi
+
+    if [[ ${#_files[@]} -gt 0 ]]
+    then
+        local _file _all_gguf=1
+        for _file in "${_files[@]}"
+        do
+            if [[ "${_file,,}" != *.gguf ]]
+            then
+                _all_gguf=0
+            fi
+        done
+        if (( _all_gguf ))
+        then
+            __hf_warn "downloading flat into $LLAMA_MODEL_DIR (--local-dir)"
+            command hf download "${_args[@]}" --local-dir "$LLAMA_MODEL_DIR"
+            return
+        fi
+    fi
+
+    __hf_warn "this download lands NESTED under ${HF_HUB_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}}"
+    __hf_warn "and \"model scan\" will not see it. Use llm-pull <repo> <glob> (subdirs,"
+    __hf_warn "sharded sets) or model download <repo>:<file>.gguf (a file at the repo root)."
+    command hf download "${_args[@]}"
+}
 
 # ---- llama.cpp binaries (the box's single LLM stack — single-quoted on purpose) ----
 # SINGLE quotes so the path expands when the alias is USED, not when it is defined:
