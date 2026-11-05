@@ -20,6 +20,15 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     # Exit 0 with a summary, or 1 naming the exact README string that drifted.  The
     # drift lines ARE the gate's value, so print them on failure rather than letting
     # the assertion fail silently.
+    #
+    # A missing gate script must NOT read as a drifting README: `run` would report a
+    # 127 with a BW01 warning, which names neither the script nor the tree it looked
+    # in — the same red as a real drift, for a file that was never run.
+    if [ ! -x "$REPO_ROOT/tools/docs-sync-check.sh" ]; then
+        printf 'no executable at %s (REPO_ROOT=%s)\n' \
+            "$REPO_ROOT/tools/docs-sync-check.sh" "$REPO_ROOT" >&2
+        return 1
+    fi
     run "$REPO_ROOT/tools/docs-sync-check.sh"
     if [ "$status" -ne 0 ]; then
         printf '%s\n' "$output" >&2

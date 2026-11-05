@@ -590,6 +590,15 @@ The project uses two test frameworks: **BATS** (bash automated testing) for shel
 | `.venv/bin/python3 -m mypy` | Type checks (mypy; config in `pyproject.toml`) | ~30s |
 | `.venv/bin/pyright` | Type checks (pyright; config in `pyproject.toml`) | ~30s |
 | VS Code Testing panel (flask icon) | All tests unified in one tree — click ► on any test | Varies |
+| `tools/test-count.sh` | The accurate test count, with the BATS/Python split | ~1 s |
+
+**Counting tests: use `tools/test-count.sh`, not the Testing view's headline number.** The view sums
+every registered provider, and the `kherring.bats-test-runner` extension lists each `.bats` file and
+each `@test` a *second* time beside the pytest bridge — so its total is pytest's count plus a
+duplicated BATS half (measured 2026-11-05: the view read 4,3xx against a pytest collection of 2,577,
+and moved whenever either half changed). That extension finds `@test` with a regex, so it also invents
+cases from `@test` inside comments and `printf` strings. pytest counts each test once, because the
+bridge makes every BATS case a pytest item.
 
 **Per-box bootstrap — the venv is not tracked, so a NEW box has none.** Every command above
 named `.venv/bin/python3`, and nothing in this repo created that venv: measured 2026-10-30 on

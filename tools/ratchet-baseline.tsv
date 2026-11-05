@@ -1,7 +1,15 @@
 # docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh
 # id<TAB>count.  A count may FALL freely; raising one is a deliberate act.
 #
-# 2026-11-01 (latest): 8.1.8 286 -> 287 — bin/gpu-busy.sh gained ONE 200-char line in
+# 2026-11-05 (latest): 10.7 233 -> 241 — CORPUS GROWTH, not drift.  tools/test-count.sh
+# is a new 90-line shell tool and carries 8 hand-written `echo/printf … >&2` error
+# lines; the rise equals the patterns in that ONE newly added file, which is the case
+# this file's own guidance names as re-baseline-and-name-the-file.  No tracked file's
+# count moved (the corpus went 135 -> 136 files).  Re-baselined by hand rather than
+# with `count-ratchet.sh --update`, which rewrites the whole file and drops other
+# lanes' hand-added notes.
+#
+# 2026-11-01: 8.1.8 286 -> 287 — bin/gpu-busy.sh gained ONE 200-char line in
 # 43c8c55c ("a test runner holding no device memory is not a GPU tenant"): the
 # `_cmdline=$(tr …)` probe carries its `# swallow-ok: <reason>` marker INLINE, which is
 # what pushes it past 120.
@@ -234,5 +242,5 @@
 9.5	118
 9.7	79
 10.4	41
-10.7	233
+10.7	241
 10.8	0
