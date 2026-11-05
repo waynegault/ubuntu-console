@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-11-05): the two ensure-running waits are knobs (TAC_QUIESCE_SETTLE_S,
+#   TAC_QUIESCE_RETRY_S) with the measured defaults; production sets neither, so behaviour is
+#   unchanged. A test that asserts the VERDICT paid 8.5s of settle per case for no information.
 #   v3 (2026-10-18): same change, made §18.3-clean — a comment above each function (9.5), the
 #   usage line carries its exit-code comment (9.7), and no hand-rolled `>&2` (10.7): the usage
 #   text goes to stdout, which the `wsl.exe` hop's caller already merges into one log.
@@ -48,6 +51,14 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 UNIT="${TAC_QUIESCE_UNIT:-openclaw-gateway.service}"
 BOUND="${TAC_QUIESCE_BOUND_S:-120}"
+# The two waits are knobs for the same reason BOUND is: a caller (the restart wrapper, or a
+# test that asserts the VERDICT rather than the elapsed time) may need them shorter. Defaults
+# are the measured values and production does not set them — `sleep 5` is the settle window
+# that catches an accepted start which then exits 1 (measured 2026-10-18), and `sleep 3` paces
+# the retry. A test that zeroes them is still bounded by BOUND, and the loop exits on the
+# first verified start, so it does not spin.
+SETTLE_S="${TAC_QUIESCE_SETTLE_S:-5}"
+RETRY_WAIT_S="${TAC_QUIESCE_RETRY_S:-3}"
 
 # quiesce — the DOWN half: stop the unit and wait, bounded, for it to go inactive.
 quiesce() {
@@ -95,7 +106,7 @@ ensure_running() {
             # success and only systemd's Restart=always brought it back — 24 minutes later
             # (21:42:22 start, 22:06:02 ActiveEnterTimestamp).  Verify it is STILL active
             # after a settle window, and keep retrying within the bound.
-            sleep 5
+            sleep "$SETTLE_S"
             if systemctl --user is-active --quiet "$UNIT"; then
                 printf 'ensure: start verified after %ss (%s tries) — %s\n' \
                     "$(( SECONDS - _start ))" "$_tries" "$(systemctl --user is-active "$UNIT" 2>&1)"
@@ -104,7 +115,7 @@ ensure_running() {
             printf 'ensure: start attempt %s exited after acceptance — retrying (bound %ss)\n' \
                 "$_tries" "$BOUND"
         fi
-        sleep 3
+        sleep "$RETRY_WAIT_S"
     done
 
     printf 'ensure: WARN could not start %s within %ss (%s tries) — the wrapper proceeds\n' \

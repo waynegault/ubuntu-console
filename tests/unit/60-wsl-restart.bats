@@ -273,6 +273,12 @@ _line_of() {
     # of `start` (it would stack a second stop on a unit still cold-starting) and a single
     # attempt that gives up before the user manager answers.
     local stub="$BATS_TEST_TMPDIR/bin" helper="$REPO_ROOT/bin/gateway-quiesce.sh"
+    # The helper's settle window (5s) and retry pacing (3s) are knobs since v5. This case
+    # asserts the VERDICT — that `start` is issued and verified, and that a second call is a
+    # no-op — so the waits carry no information; measured 2026-11-05 at 9.0s wall against
+    # 0.5s of CPU. The loop is still bounded by TAC_QUIESCE_BOUND_S and exits on the first
+    # verified start, so zeroing these does not spin.
+    export TAC_QUIESCE_SETTLE_S=0 TAC_QUIESCE_RETRY_S=0
     mkdir -p "$stub"
     cat > "$stub/systemctl" <<'STUB'
 #!/usr/bin/env bash
