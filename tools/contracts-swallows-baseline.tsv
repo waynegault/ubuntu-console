@@ -18,7 +18,7 @@
 # went 49 -> 44 when five state-swallows were given a log); a NEW file, or a RISE, is a
 # deliberate act that has to be re-baselined on purpose.
 #
-unclassified	scripts/01-constants.sh	8
+unclassified	scripts/01-constants.sh	7
 unclassified	scripts/02-error-handling.sh	28
 unclassified	scripts/04-aliases.sh	8
 unclassified	scripts/05-ui-engine.sh	2
@@ -26,21 +26,20 @@ unclassified	scripts/06-hooks.sh	4
 unclassified	scripts/07-telemetry.sh	21
 unclassified	scripts/09a-oc-gateway.sh	37
 unclassified	scripts/09b-gog.sh	3
-unclassified	scripts/09c-oc-core.sh	9
-unclassified	scripts/09d-oc-agents.sh	84
-unclassified	scripts/09e-oc-health.sh	35
+unclassified	scripts/09c-oc-core.sh	8
+unclassified	scripts/09d-oc-agents.sh	83
+unclassified	scripts/09e-oc-health.sh	27
 unclassified	scripts/09f-oc-misc.sh	15
 unclassified	scripts/10-deployment.sh	2
 unclassified	scripts/11a-llm-registry.sh	8
 unclassified	scripts/11b-llm-autotune.sh	7
 unclassified	scripts/11c-llm-server.sh	12
-unclassified	scripts/11d-llm-gpu.sh	88
+unclassified	scripts/11d-llm-gpu.sh	86
 unclassified	scripts/11e-llm-model.sh	71
 unclassified	scripts/11f-llm-runtime.sh	20
 unclassified	scripts/12-dashboard-help.sh	13
 unclassified	scripts/13-init.sh	8
 unclassified	scripts/14-wsl-extras.sh	9
-unclassified	scripts/15-model-recommender.sh	1
 unclassified	scripts/_startup-env.sh	3
 unclassified	scripts/autotune-model.sh	161
 unclassified	scripts/load-vault-env.sh	9
@@ -48,21 +47,20 @@ unclassified	scripts/retune-band-chunk.sh	9
 unclassified	scripts/run-autotune-batch.sh	10
 unclassified	scripts/spec-decode-bench.sh	6
 unclassified	scripts/spec_dec_crossover.sh	11
-unclassified	bin/bench-timeout-runner.sh	11
+unclassified	bin/bench-timeout-runner.sh	9
 unclassified	bin/gpu-busy.sh	17
 unclassified	bin/gpu-watch-selfcheck.sh	1
 unclassified	bin/interview-benchmark.sh	1
-unclassified	bin/llama-gpu-clear.sh	10
-unclassified	bin/llama-watchdog.sh	41
+unclassified	bin/llama-gpu-clear.sh	8
+unclassified	bin/llama-watchdog.sh	37
 unclassified	bin/tac_hostmetrics.sh	9
 unclassified	tools/check-module-versions.sh	8
 unclassified	tools/check-repo-boundaries.sh	1
 unclassified	tools/clean-orphans.sh	40
 unclassified	tools/import-windows-env.sh	1
 unclassified	tools/install-shellcheck.sh	1
-unclassified	tools/lint.sh	12
+unclassified	tools/lint.sh	11
 unclassified	tools/mirror-vault.sh	2
 unclassified	tools/run-tests.sh	9
 unclassified	tools/hooks/post-commit	1
 unclassified	tools/hooks/post-merge	1
-unclassified	tools/hooks/pre-commit	2
