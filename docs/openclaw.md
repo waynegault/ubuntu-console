@@ -59,9 +59,12 @@ to prevent command injection.
 
 **How it works:**
 
-1. On shell start, `__bridge_windows_api_keys()` calls `pwsh.exe` (with 20s
-   timeout — a cold PowerShell start plus the User-env enumeration measures
-   3-10s, and the earlier 5s cap silently truncated the variable set).
+1. On shell start, `__bridge_windows_api_keys --async` sources the cached values
+   and forks the refresh, so the shell never waits on `pwsh.exe`. The blocking
+   form (used by the once-per-boot unit and `oc-refresh-keys`) calls `pwsh.exe`
+   with a 20s timeout and up to 3 attempts — a cold PowerShell start plus the
+   User-env enumeration measures 3-10s, and the earlier 5s cap silently truncated
+   the variable set.
 2. It filters for variables whose NAME is credential-shaped: `TOKEN`,
    `API_KEY`/`API-KEY`, `PASSWORD`, a `*_KEY`/`*_SECRET` suffix, `*_CLIENT_ID`,
    or a bare `*_API` (case-insensitive).

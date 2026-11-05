@@ -1311,3 +1311,58 @@ ENVD
     run grep -c 'cannot write' "$ErrorLogPath"
     [ "$output" -ge 1 ]
 }
+
+@test "shell start: --async returns before pwsh.exe answers, and the refresh lands behind it (v68)" {
+    # Criterion (09d v68): a SHELL START must not wait for pwsh.exe. What this catches: the
+    # blocking call returned only after 3 x `timeout 20` plus 2 x 2 s sleeps — 64.2 s measured —
+    # and because /dev/shm is tmpfs that cost lands on the FIRST shell after a boot. Two shells
+    # died in exactly that state on 2026-11-05 (22:49:17 and 22:53:43 GMT, both leaving
+    # `[EXIT 141] command clear`), which is what "slow on first opening only" looked like.
+    #
+    # The mock waits for a RELEASE file this test creates later, so "the call returned while
+    # pwsh had not answered" is a fact rather than a race. The wait is bounded, so a failure
+    # leaves no process behind.
+    __mock_command_local pwsh.exe "for _i in \$(seq 1 50); do [ -f '$TAC_TEST_TMPDIR/release' ] && break; sleep 0.1; done; printf '%s\\n' 'ASYNC_KEY=fresh'"
+
+    # A STALE cache: outside the TTL, so the refresh is due.
+    printf 'export ASYNC_KEY=stale\n' > "$TAC_CACHE_DIR/tac_win_api_keys"
+    chmod 600 "$TAC_CACHE_DIR/tac_win_api_keys"
+    touch -d '2 hours ago' "$TAC_CACHE_DIR/tac_win_api_keys"
+    unset ASYNC_KEY
+
+    local rc=0
+    __bridge_windows_api_keys --async || rc=$?
+    [ "$rc" -eq 0 ]
+    # The shell that triggered the refresh keeps the values it already had — not an empty env.
+    [ "${ASYNC_KEY:-}" = "stale" ]
+    # And pwsh has not answered yet: the gate is still closed, so the cache is untouched.
+    grep -q 'ASYNC_KEY=stale' "$TAC_CACHE_DIR/tac_win_api_keys"
+
+    # Release the child; the refresh must land behind the shell.
+    : > "$TAC_TEST_TMPDIR/release"
+    local _i=0
+    while (( _i < 50 )) && ! grep -q 'ASYNC_KEY=fresh' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null
+    do
+        sleep 0.1
+        _i=$(( _i + 1 ))
+    done
+    grep -q 'ASYNC_KEY=fresh' "$TAC_CACHE_DIR/tac_win_api_keys"
+}
+
+@test "shell start: --async leaves a FRESH cache alone and starts no pwsh (v68)" {
+    # The control for the case above: the fork is for a DUE refresh, not for every shell.
+    # What this catches: an --async branch placed before the freshness test, which would
+    # launch pwsh.exe on every shell start — the 1-2 s-per-shell cost v7/v8 of the vault
+    # loader removed, and a stampede of interop starts on a box opening several tabs.
+    local _log="$TAC_TEST_TMPDIR/pwsh_calls.log"
+    __mock_command_local pwsh.exe "echo called >> '$_log'; printf '%s\\n' 'ASYNC_KEY=fresh'"
+    printf 'export ASYNC_KEY=fresh\n' > "$TAC_CACHE_DIR/tac_win_api_keys"
+    chmod 600 "$TAC_CACHE_DIR/tac_win_api_keys"
+    unset ASYNC_KEY
+
+    local rc=0
+    __bridge_windows_api_keys --async || rc=$?
+    [ "$rc" -eq 0 ]
+    [ "${ASYNC_KEY:-}" = "fresh" ]
+    [ ! -e "$_log" ]
+}

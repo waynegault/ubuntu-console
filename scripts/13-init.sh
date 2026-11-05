@@ -2,7 +2,13 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 23
+# Module Version: 24
+#   v24 (2026-11-05): the Windows credential bridge is called with `--async` (09d v68), so the
+#   shell start sources the cached values and forks the refresh instead of waiting for pwsh.exe.
+#   The blocking call is what made the FIRST shell after a boot slow — the /dev/shm cache is
+#   tmpfs, so that shell always refreshed — and it cost up to 64 s when interop stopped
+#   answering (measured; two shells aborted mid-start at 22:49 and 22:53 GMT with nothing in
+#   the log but the bridge's own give-up line). The once-per-boot unit keeps the blocking path.
 #   v22 (2026-11-04): the CUDA llama.cpp toolchain (CUDA_HOME, PATH,
 #   LD_LIBRARY_PATH, llama-cli/llama-server aliases) moves here from ~/.bashrc.
 #   It had been appended below the loader's interactive guard, which made
@@ -284,10 +290,13 @@ fi
 
 # Bridge Windows User API keys into WSL so OpenClaw fallback providers work.
 # Cached in /dev/shm for 1 hour; run 'oc-refresh-keys' to force refresh.
+# --async (09d v68): the shell start sources the cached values and forks the refresh, so it
+# never waits on pwsh.exe. Blocking here cost up to 64 s on the FIRST shell after a boot
+# (the cache is tmpfs, so that shell always refreshes) whenever interop did not answer.
 # Call the bridge function only if it's defined to avoid noisy errors during
 # partial or failed module loads (e.g., during reload).
 if type __bridge_windows_api_keys >/dev/null 2>&1; then
-    __bridge_windows_api_keys
+    __bridge_windows_api_keys --async
 fi
 
 # Fallback: source the gateway's systemd environment file (on-disk, survives

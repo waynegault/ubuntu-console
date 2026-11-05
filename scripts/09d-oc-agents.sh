@@ -121,7 +121,17 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 67
+# Module Version: 68
+#   v68 (2026-11-05): `__bridge_windows_api_keys --async` — the shell-start call site no longer
+#   waits for pwsh.exe. Measured the same evening: three attempts at `timeout 20` plus two 2 s
+#   sleeps is 64.2 s, and /dev/shm is tmpfs, so that cost lands on the FIRST shell after a boot
+#   (every later shell inside the 1 h TTL is free) — which is why Wayne reported the console
+#   "slow on first opening only". Two shells aborted mid-start while pwsh answered nothing
+#   22:49:17 and 22:53:43 GMT, both leaving `[EXIT 141] command clear` in the error log. With the
+#   flag the shell sources the cache it already has and the refresh is FORKED, so a rotated value
+#   becomes visible to the NEXT shell — the rotation semantics load-vault-env.sh v9 already
+#   adopted for the same credentials. The once-per-boot unit and oc-refresh-keys call without the
+#   flag and keep v67's full bounded retry.
 #   v67 (2026-11-01): the bridge retries a pwsh.exe that is PRESENT but not answering yet. The
 #   once-per-boot unit runs one second after boot (measured start 06:20:00, its message at
 #   06:20:01), and a single 20 s attempt that returns nothing ends the bridge for that whole
@@ -993,6 +1003,9 @@ function __oc_pwsh_exe() {
 # Uses a /dev/shm cache (TTL 3600s = 1h) to avoid a slow pwsh call on
 # every shell start. Run 'oc-refresh-keys' to force a re-import.
 # Security: cache is chmod 600 and lives in tmpfs (RAM only, no disk).
+# `--async` (v68) is the shell-start mode: it returns at once and forks the refresh,
+# so a shell start never waits on pwsh.exe. Without the flag the call is blocking and
+# keeps the bounded retry (the once-per-boot unit, oc-refresh-keys).
 # ---------------------------------------------------------------------------
 function __bridge_windows_api_keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
@@ -1000,6 +1013,10 @@ function __bridge_windows_api_keys() {
     # Honor TAC_CACHE_DIR so a sandboxed shell (tests) never touches the real
     # /dev/shm flag; production TAC_CACHE_DIR is /dev/shm, so behaviour is the same.
     local _warn_once_file="${TAC_CACHE_DIR:-/dev/shm}/tac_pwsh_bridge_warned"
+    # The caller's mode, read ONCE: the forked child re-enters this function with no
+    # arguments, so it takes the blocking path by construction (see the --async branch).
+    local _async=0
+    [[ "${1:-}" == "--async" ]] && _async=1
 
     # Session-level guard: if pwsh.exe was previously unavailable or timed
     # out, skip retrying for the rest of this session. The warning file is
@@ -1035,6 +1052,41 @@ function __bridge_windows_api_keys() {
         # shellcheck source=/dev/null
         source "$cache" 2>/dev/null
         return
+    fi
+
+    # --async: a SHELL START must not wait for pwsh.exe.  Measured 2026-11-05: three
+    # attempts at `timeout 20` plus two 2 s sleeps is 64.2 s, and /dev/shm is tmpfs, so
+    # that cost lands on the FIRST shell after a boot while every later shell inside the
+    # TTL is free.  Two shells aborted mid-start in that state (22:49:17 and 22:53:43 GMT,
+    # each leaving `[EXIT 141] command clear`), so this path forks the refresh instead:
+    # the shell keeps the values it already has, and the NEXT shell — typically seconds
+    # later — sources the refreshed cache.  Rotation is therefore one shell behind, the
+    # same semantics load-vault-env.sh v9 already runs for these credentials, and the
+    # staleness is bounded by the TTL above.  The once-per-boot unit and oc-refresh-keys
+    # call WITHOUT the flag, so the boot race v67 fixed keeps its full retry and its
+    # attempt count in the log.
+    if (( _async ))
+    then
+        if [[ -f "$cache" ]]
+        then
+            # No stderr redirect: the existence test above handles the normal absent
+            # case, so anything `source` still has to say is a MALFORMED cache — and
+            # that must be seen, not silently dropped (the blocking path below writes
+            # this file, so a bad one is a defect worth the line of noise).
+            # shellcheck source=/dev/null
+            source "$cache"
+        fi
+        # The child re-enters this function with no arguments, so it takes the blocking
+        # path.  Tracked through __tac_track_bg_job when the profile defines it (library
+        # mode does not), exactly as load-vault-env.sh spawns its refresh — the helper
+        # disowns the job so no "[n] Done" notice lands over the dashboard, and its EXIT
+        # trap kills the child if this shell exits inside the refresh window.
+        { ( __bridge_windows_api_keys ) & } >/dev/null 2>&1
+        if declare -f __tac_track_bg_job >/dev/null 2>&1
+        then
+            __tac_track_bg_job "$!"
+        fi
+        return 0
     fi
 
     # Fetch matching vars from Windows User environment via PowerShell.
