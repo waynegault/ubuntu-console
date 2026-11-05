@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 94
+#   v94 (2026-11-05): the row's size is read with `stat -L`.  v93's walk follows a snapshot
+#   symlink, but `stat` does NOT follow by default, so a nested 2 GB model measured as its
+#   ~50-byte link and was then dropped by the 300 MB floor — the walk found it and silently
+#   discarded it, which is the exact failure this change-set exists to end.  Measured with a
+#   probe store: before, "No models found"; after, `qwen2.5-3b-instruct | deep/…/nested.gguf |
+#   2.0G | arch qwen2`.  Shard sizes use -L for the same reason.
 # Module Version: 93
 #   v93 (2026-11-05): the registry's file column is a path RELATIVE to the store, and the scan
 #   WALKS it instead of globbing the top level — Wayne: "i want to be able to use all llms in
@@ -321,8 +328,11 @@ function __model_scan_row_bytes() {
     local _dir="$1" _rel="$2" _sub="" _fname _fbytes _shard _shard_bytes _total=0
     [[ "$_rel" == */* ]] && _sub="${_rel%/*}"
     _fname="${_rel##*/}"
+    # -L: a HuggingFace snapshot entry is a SYMLINK to blobs/<sha>, and `stat` does NOT follow
+    # by default — measured 2026-11-05, a nested 2 GB model measured as its 50-byte link and was
+    # dropped by the size floor, so the walk found it and then silently discarded it.
     # swallow-ok: the numeric test on the next line is the guard: no usable size means this returns no value at all
-    _fbytes=$(stat --format=%s "$_dir/$_rel" 2>/dev/null || stat -f%z "$_dir/$_rel" 2>/dev/null)
+    _fbytes=$(stat -L --format=%s "$_dir/$_rel" 2>/dev/null || stat -L -f%z "$_dir/$_rel" 2>/dev/null)
     [[ "$_fbytes" =~ ^[0-9]+$ ]] || return 0
     if [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]]
     then
@@ -331,7 +341,7 @@ function __model_scan_row_bytes() {
         do
             [[ -f "$_shard" ]] || continue
             # swallow-ok: the numeric test on the next line decides whether the shard is counted, so an unread size is simply not added
-            _shard_bytes=$(stat --format=%s "$_shard" 2>/dev/null || stat -f%z "$_shard" 2>/dev/null)
+            _shard_bytes=$(stat -L --format=%s "$_shard" 2>/dev/null || stat -L -f%z "$_shard" 2>/dev/null)
             [[ "$_shard_bytes" =~ ^[0-9]+$ ]] && _total=$(( _total + _shard_bytes ))
         done
         (( _total > 0 )) && _fbytes=$_total
