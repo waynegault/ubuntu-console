@@ -732,3 +732,22 @@ run_tick() {
     grep -q 'STILL-NEEDS-ATTENTION' "$LOGS/selfheal.log"
     grep -q 'WITNESS-STORE-EDIT' "$LOGS/selfheal.log"
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The tick is ARMED, not merely present
+# ─────────────────────────────────────────────────────────────────────────────
+# Measured 2026-11-05: the tick existed (v14) and install.sh linked it, but NOTHING
+# ran it — the crontab it was designed around is absent on this box, and the installer
+# armed no timers.  A companion update reverted the daemon guard and it stayed
+# reverted until a human ran the patcher by hand.  These assertions are STATIC by
+# design: a case that actually scheduled a unit would arm it on the test box.
+@test "self-heal is armed: a shipped timer exists, and install.sh enables it" {
+    local svc="$REPO_ROOT/systemd/qwen-guard-selfheal.service"
+    local tmr="$REPO_ROOT/systemd/qwen-guard-selfheal.timer"
+    [ -f "$svc" ]
+    [ -f "$tmr" ]
+    grep -qx 'ExecStart=%h/.local/bin/qwen-guard-selfheal.sh' "$svc"
+    grep -qF 'OnCalendar=*:17,47' "$tmr"
+    grep -qx 'Unit=qwen-guard-selfheal.service' "$tmr"
+    grep -q 'enable --now qwen-guard-selfheal.timer' "$REPO_ROOT/install.sh"
+}

@@ -3,6 +3,13 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.18 (2026-11-05, arm the patch self-heal): linking a unit starts nothing, and the
+#   patch self-heal was the one timer whose absence is SILENT.  The tick (v14) existed
+#   and install.sh linked it, but nothing scheduled it — the crontab it was designed
+#   around was absent on this box — so a companion update reverted the daemon guard and
+#   it stayed reverted until a human ran the patcher by hand.  The installer now enables
+#   and starts qwen-guard-selfheal.timer explicitly (only that timer; installing a unit
+#   must not arm every timer on the box).
 # v1.17 (2026-10-31, physical-path links): REPO is now resolved with `pwd -P` so every
 #   link the installer writes points at the repo's PHYSICAL path, not at a convenience
 #   symlink the user may later delete.  Measured before this: run through the
@@ -589,6 +596,23 @@ then
     # "unit not found" rather than naming the cause.
     systemctl --user daemon-reload >/dev/null 2>&1 \
         || warn "  WARNING: systemctl --user daemon-reload failed — user units may not be active until reloaded"
+
+    # ARM the patch self-heal (v1.18).  Linking a unit starts nothing, and this is the
+    # one timer whose absence is SILENT: a companion update reverts the daemon, CLI and
+    # extension patches, this tick repairs them, and nothing else notices.  The crontab
+    # the tick was designed around was ABSENT on this box (measured 2026-11-05), so the
+    # installer arms it explicitly.  ONLY this timer — installing a unit must not start
+    # every timer on the box.
+    if [[ -e "$HOME/.config/systemd/user/qwen-guard-selfheal.timer" ]]
+    then
+        if systemctl --user enable --now qwen-guard-selfheal.timer >/dev/null 2>&1
+        then
+            echo "  qwen-guard-selfheal.timer - enabled (twice-hourly patch self-heal)"
+        else
+            warn "  WARNING: could not enable qwen-guard-selfheal.timer" \
+                 "           the patch self-heal will not run until it is armed"
+        fi
+    fi
 fi
 
 # ── System units (/etc/systemd/system) ───────────────────────────────────────

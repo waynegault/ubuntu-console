@@ -1,0 +1,22 @@
+[Unit]
+# Shared infrastructure, not a lane: no `# install-profile:` marker, so install.sh
+# links it on every box.
+#
+# WHY THIS TIMER EXISTS (2026-11-05).  Every patcher the tick drives patches a FOREIGN
+# bundle, so a companion, CLI, extension or plugin update reverts it — and a reverted
+# patch fails SILENTLY.  The tick itself existed (v14) but NOTHING ran it: the crontab
+# it was designed around (`17,47 * * * *`) is absent on this box, and install.sh linked
+# units without arming any.  Measured 2026-11-05: the daemon guard had been reverted by
+# a companion update and sat reverted until a human ran qwen-guard-patch.sh by hand.
+Description=Qwen patch self-heal (re-apply patches a companion update reverted)
+Documentation=file:%h/github-wsl/ubuntu-console/docs/qwen-shell-guard-audit.md
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/qwen-guard-selfheal.sh
+# The tick runs tools whose shebangs are `#!/usr/bin/env python3`; this box's python3
+# is the /Python/bin 3.14 install, which systemd's default PATH does not carry.  An
+# unresolvable interpreter reads as "patch reverted" and would be retried forever.
+Environment=PATH=%h/.local/bin:/Python/bin:%h/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+# Bound the tick: seven probes must not hold the unit past the next tick.
+TimeoutStartSec=300

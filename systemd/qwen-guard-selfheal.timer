@@ -1,0 +1,13 @@
+[Unit]
+# Ships with qwen-guard-selfheal.service — read its header for WHY.
+# The cadence matches the cron entry the tick was designed around (17,47 * * * *),
+# so the detection bound stays 30 minutes without a second schedule to keep in step.
+Description=Run the Qwen patch self-heal twice an hour (an update reverts the patches)
+
+[Timer]
+OnCalendar=*:17,47
+Persistent=true
+Unit=qwen-guard-selfheal.service
+
+[Install]
+WantedBy=timers.target
