@@ -67,6 +67,16 @@ joins the audit even when it is not named here.
 - `scripts/kgraph/source_import.py` — the MemorySource protocol and markdown adapter: a source becomes a files/chunks store the existing scored-edge ingest reads; `source_meta` keeps layer provenance (KG-SOURCE-001)
 - `scripts/kgraph/templates/kgraph.html` — Cytoscape.js viewer template
 - `config/concept-aliases.json` — kgraph concept classification data
+- `tools/hooks/pre-push` — whole-tree gates judged against HEAD. Every gate now
+  announces its start ("gate 1/2", name, clock time, cap), prints a still-running
+  line every `PRE_PUSH_GATE_TICK_SECS` (default 20 s) while it works, and reports its
+  own duration; a gate past `PRE_PUSH_GATE_TIMEOUT_SECS` (default 1800 s) is a
+  **TIMEOUT refusal** — never a pass and never a gate failure — and the remaining
+  gates are named as skipped. Why: a whole-tree `tools/lint.sh` can legitimately take
+  minutes on a busy box, and silence for that long is indistinguishable from a wedged
+  hook, so pushes were being killed mid-gate (2026-11-06, pushing 285bbaa4). Model
+  cap for a hang, not a budget: the worst honest measurement is ~350 s contended.
+  Suite: `tests/unit/76-pre-push-gate-visibility.bats`
 - `tools/hooks/pre-commit` — pre-commit hook: runs `tools/lint.sh --staged`
   (bash -n + shellcheck on staged `.sh`) then
   `tools/check-module-versions.sh --staged`. Bypass: `git commit --no-verify`

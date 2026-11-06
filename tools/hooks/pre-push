@@ -45,6 +45,24 @@
 #   `<parent>/.pre-push-owner` BEFORE the worktree exists, and the sweep skips any worktree whose owner
 #   is still alive. A dead PID, or no marker at all (a killed v1 hook's leftovers), is still removed.
 #
+# PROGRESS AND A CAP (added 2026-11-06, card PREPUSH-GATE-DURATION-001)
+#   Measured in this repo while pushing 285bbaa4: the hook printed its banner, "tree matches HEAD", and then
+#   nothing for over 15 minutes because tools/lint.sh over the whole tree is genuinely that slow when the box
+#   is busy. From outside the process the two possible states — a gate still working, and a hook wedged — were
+#   THE SAME OBSERVATION, so the push was killed twice believing it was hung, and each kill threw away minutes
+#   of finished gate work. A gate whose runtime cannot be told from a hang gets killed under pressure, which is
+#   how a red gate ships: the exact outcome this hook exists to prevent.
+#
+#   So each gate now announces its start (name, index, clock time, cap), prints a still-running line every
+#   GATE_TICK_SECS while it works, and reports its own duration when it finishes. Progress is visibility only:
+#   no gate is skipped, no gate's output is filtered, and the verdict logic is unchanged.
+#
+#   The cap is a REFUSAL and it is its own verdict: exit 124 (or 137 after --kill-after) from `timeout` is
+#   reported as TIMEOUT, never as a gate failure and never as a pass — the cap says nothing at all about
+#   whether the content is good, so it must not be able to read as either. Default 1800 s is a bound on a HANG,
+#   not a budget for a green run (the worst honest measurement here is ~350 s contended, ~+70 s nominal).
+#   Override with PRE_PUSH_GATE_TIMEOUT_SECS; a gate killed by the cap must not be answered with --no-verify.
+#
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks.  Install with
 # `git config core.hooksPath <repo>/tools/hooks`; install.sh does that, and
 # docs/inspection.md documents the convention.
@@ -67,6 +85,20 @@ WT_ROOT=""
 WT=""
 GATE_ROOT="$REPO_ROOT"
 rc=0
+# GATE_TOTAL must equal the number of run_gate call sites below; tests/unit/76 asserts they agree, because a
+# gate that is never called is not covered by any progress line and this counter would silently say "1/2".
+GATE_TOTAL=2
+GATE_INDEX=0
+GATE_TIMEOUT_SECS="${PRE_PUSH_GATE_TIMEOUT_SECS:-1800}"
+GATE_TICK_SECS="${PRE_PUSH_GATE_TICK_SECS:-20}"
+GATE_PID=""
+# Set when a gate hits the cap. A capped gate has NO verdict, so the remaining gates are skipped and said to be
+# skipped: continuing would spend another cap-sized window on a push that is already refused.
+GATE_TIMED_OUT=0
+# The cap is enforced by `timeout` when it exists; without it the hook still runs the gates, and SAYS SO rather
+# than pretending a cap it cannot apply.
+TIMEOUT_BIN=""
+if TIMEOUT_BIN="$(command -v timeout)"; then :; else TIMEOUT_BIN=""; fi
 
 # cleanup — remove the temporary worktree and its parent on EVERY exit path, including gate failures and
 # signals, and report loudly if it cannot: a leaked worktree per push would be worse than the bug this
@@ -75,6 +107,13 @@ cleanup() {
     local _rc=$?
     local _out=""
     trap - EXIT INT TERM HUP
+    # A gate still running when this hook is interrupted would outlive it and keep writing: /proc is a silent
+    # liveness test (the same one the sweep uses), and the two kills are best-effort by design on the way out.
+    if [[ -n "$GATE_PID" && -d "/proc/$GATE_PID" ]]; then
+        echo "pre-push: stopping the gate still running (pid $GATE_PID) before exit" >&2
+        kill -TERM "$GATE_PID" || true   # swallow-ok: the hook is already exiting; nothing left to report to
+        pkill -TERM -P "$GATE_PID" || true   # swallow-ok: the gate's own children, best effort on the way out
+    fi
     if [[ -n "$WT" ]]; then
         if ! _out="$(git -C "$REPO_ROOT" worktree remove --force "$WT" 2>&1)"; then
             echo "pre-push: WARNING: could not remove the temporary worktree $WT" >&2
@@ -151,20 +190,94 @@ tree_matches_head() {
     [[ -z "$_untracked" ]]
 }
 
-# run_gate — run one gate and record its verdict; the gate's own words are shown on failure, tailed.
+# now_s / stamp — a gate's own timing. A duration printed afterwards cannot be reconstructed from a log
+# that only records that a gate started, which is the whole defect being fixed here.
+now_s() { date +%s; }
+stamp() { date -u '+%H:%M:%SZ'; }
+
+# run_gate — run one gate, say WHEN it started, prove it is still alive while it works, and report what it
+# cost. See PROGRESS AND A CAP in the header for why, and for what a TIMEOUT is allowed to mean.
 run_gate() {
     local _name="$1"; shift
-    local _out
-    if _out="$("$@" 2>&1)"; then
-        echo "pre-push: ok   $_name"
+    local _start _elapsed _now _rc _dir _out _rcf _next_tick _pid
+    GATE_INDEX=$(( GATE_INDEX + 1 ))
+    if (( GATE_TIMED_OUT )); then
+        echo "pre-push: skip   $_name — an earlier gate hit the cap, so this one was NOT run and has no verdict." >&2
+        return
+    fi
+    _start="$(now_s)"
+    _next_tick="$GATE_TICK_SECS"
+    echo "pre-push: >>> gate $GATE_INDEX/$GATE_TOTAL $_name — start $(stamp), cap ${GATE_TIMEOUT_SECS}s"
+    _dir="$(mktemp -d "${TMPDIR:-/tmp}/pre-push-gate.XXXXXX")"
+    _out="$_dir/out"
+    _rcf="$_dir/rc"
+    # The gate WRITES ITS VERDICT TO A FILE when it finishes and the loop watches the FILE, not the process:
+    # `kill -0` on a background job can stay true for a zombie, and a completion test that can lie in one
+    # direction is how one gate's output gets attributed to the next.
+    # `set +e` INSIDE the wrapper is load-bearing: this hook runs under `set -euo pipefail`, and a red gate
+    # would abort the wrapper at the gate itself, so the rc file would never be written and the wait below would
+    # spin for ever on a gate that had already finished with a verdict. Measured 2026-11-06 on a stub gate that
+    # exits 7: "still running" printed every tick without end.
+    if [[ -n "$TIMEOUT_BIN" ]]; then
+        ( set +e
+          "$TIMEOUT_BIN" --signal=TERM --kill-after=10 "$GATE_TIMEOUT_SECS" "$@" >"$_out" 2>&1
+          printf '%s\n' "$?" >"$_rcf" ) &
     else
-        echo "pre-push: FAIL $_name — push refused" >&2
-        printf '%s\n' "$_out" | tail -20 >&2
+        ( set +e
+          "$@" >"$_out" 2>&1; printf '%s\n' "$?" >"$_rcf" ) &
+    fi
+    _pid=$!
+    GATE_PID="$_pid"
+    # A SECOND deadline covers the cap itself failing: if the wrapper never writes a verdict the loop below
+    # would otherwise be unbounded, and an unbounded wait in the gate runner is the original bug wearing a hat.
+    _hard_deadline=$(( _start + GATE_TIMEOUT_SECS + 60 ))
+    _rc=""
+    while [[ ! -s "$_rcf" ]]; do
+        sleep 1
+        _now="$(now_s)"
+        _elapsed=$(( _now - _start ))
+        if (( _now >= _hard_deadline )); then
+            echo "pre-push: TIMEOUT $_name — no verdict within ${GATE_TIMEOUT_SECS}s + 60s; killing it." >&2
+            kill -TERM "$_pid" || true   # swallow-ok: the wrapper is unresponsive by definition here
+            wait "$_pid" || true   # swallow-ok: its status is unknown; the TIMEOUT above is the verdict
+            _rc=124
+            break
+        fi
+        if (( _elapsed >= _next_tick )); then
+            echo "pre-push: ...  still running: $_name (${_elapsed}s of ${GATE_TIMEOUT_SECS}s) $(stamp)"
+            _next_tick=$(( _elapsed + GATE_TICK_SECS ))
+        fi
+    done
+    if [[ -z "$_rc" ]]; then _rc="$(< "$_rcf")"; fi
+    # Only reaps the wrapper; the gate's verdict is already in _rc, so a wait error must not become the hook's
+    # exit status.
+    wait "$_pid" || true   # swallow-ok: the verdict is in _rc; this line is about reaping the wrapper
+    GATE_PID=""
+    _elapsed=$(( $(now_s) - _start ))
+    if [[ -n "$TIMEOUT_BIN" ]] && (( _rc == 124 || _rc == 137 )); then
+        echo "pre-push: TIMEOUT $_name — gate timed out after ${GATE_TIMEOUT_SECS}s and was killed." >&2
+        echo "pre-push:   REFUSAL, not a gate failure and not a pass: the gate never returned a verdict." >&2
+        echo "pre-push:   if a green run legitimately needs longer, raise PRE_PUSH_GATE_TIMEOUT_SECS." >&2
+        if [[ -s "$_out" ]]; then tail -5 "$_out" >&2; fi
+        GATE_TIMED_OUT=1
+        rc=1
+    elif (( _rc == 0 )); then
+        echo "pre-push: ok   $_name (${_elapsed}s)"
+    else
+        echo "pre-push: FAIL $_name — push refused (exit $_rc after ${_elapsed}s)" >&2
+        if [[ -s "$_out" ]]; then
+            tail -20 "$_out" >&2
+        else
+            echo "pre-push:   (the gate printed nothing before failing)" >&2
+        fi
         rc=1
     fi
+    rm -rf "$_dir"
 }
 
-echo "=== pre-push: whole-tree gates, judged against HEAD (about 1-2 min; that is the point) ==="
+echo "=== pre-push: whole-tree gates, judged against HEAD (minutes, not seconds; that is the point) ==="
+echo "pre-push: each gate names its start, prints a still-running line every ${GATE_TICK_SECS}s, and is"
+echo "pre-push: capped at ${GATE_TIMEOUT_SECS}s (a cap hit REFUSES the push; it never reads as a pass)."
 
 # Always first, whatever the tree looks like: a worktree left by a hook killed with SIGKILL must not
 # outlive the next push, and the sweep costs one `git worktree list` (~5 ms).
