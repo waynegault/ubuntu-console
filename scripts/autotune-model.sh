@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 114
+# Module Version: 115
 #   v112 (2026-11-06): the unlisted-holder block heading named the CENSUS where it meant
 #   the offenders ("Outside the declared census <allowed tenant>:"), so a refusal caused by
 #   a foreign agent's llama-server read as if the embedding lane were at fault.  It now
@@ -828,9 +828,18 @@ if (( _vram_rc != 0 )); then
         "VRAM baseline not cleared — ${BASELINE_GAP} MiB still held by another process (${_BASELINE_REASON})"
 fi
 if [[ "$_BASELINE_MODE" == "census" ]]; then
-    warn "baseline: CENSUS — declared tenants resident: ${_BASELINE_TENANTS}"
+    # A CENSUS does not mean CONTENDED.  Measured 2026-11-06 14:22: the clean-room had just
+    # stopped the embedding lane and measured a 1,703 MiB driver floor, and this line still
+    # told the operator the TPS were "not clean-room" - a caveat asserted from the MODE
+    # rather than from the measurement it qualifies.  Say what was measured: a census with
+    # no resident tenant is a single-tenant run.
+    if [[ "${_BASELINE_TENANT_COUNT:-0}" == "0" ]]; then
+        warn "baseline: CENSUS — no declared tenant resident (${_BASELINE_TENANTS}); readings are single-tenant"
+    else
+        warn "baseline: CENSUS — declared tenants resident: ${_BASELINE_TENANTS}"
+        warn "baseline: TPS from this run are CONTENDED, not clean-room."
+    fi
     warn "baseline: ${_BASELINE_HELD} MiB held of ${_BASELINE_CAP} allowed (${_BASELINE_AS_OF})"
-    warn "baseline: TPS from this run are CONTENDED, not clean-room."
 fi
 
 # Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
