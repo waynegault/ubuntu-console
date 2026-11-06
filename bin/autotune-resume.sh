@@ -60,7 +60,11 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-11-06, Wayne): the arm cap is UNLIMITED by default.  The count was never
+#   a stop (it reset itself and continued), but it read as one and printed a bogus
+#   denominator.  The guard that matters is progress: a boot that does not shrink
+#   the remainder stops the loop.  TAC_RESUME_ARM_MAX>0 re-imposes a ceiling.
 #   v30 (2026-11-04): the tombstone's two stderr writes and two uncommented helpers reworked for the
 #   count-ratchet at source: all_rows is split out, plan_rows is a silent filter, and plan_retired
 #   prints the hold-out report on stdout (10.7 and 9.5), rather than re-baselining the counters.
@@ -273,7 +277,11 @@ RETIRED="${TAC_RESUME_RETIRED:-$STATE_DIR/autotune-retired.rows}"
 RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
 
 # The loop's knobs, all overridable so a test drives them without touching Windows.
-ARM_MAX="${TAC_RESUME_ARM_MAX:-8}"             # consecutive automatic restarts allowed
+# 0 = UNLIMITED (Wayne, 2026-11-06: "do as many as required to autotune all llms in
+# active").  The real guard is PROGRESS, not a count: continue_after() stops the loop
+# when a boot does not SHRINK the remainder, and that check is what prevents a spin.
+# A positive value re-imposes a hard ceiling for an operator who wants one.
+ARM_MAX="${TAC_RESUME_ARM_MAX:-0}"             # consecutive automatic restarts allowed; 0 = unlimited
 ARM_DELAY_MIN="${TAC_RESUME_ARM_DELAY:-3}"     # minutes after the halt to restart
 # The retry rule is BOUNDED, not a treadmill: a row measured this many times while still
 # indicative is recorded as `unacceptable` and leaves the plan (see apply_indicative_cap).
@@ -804,7 +812,7 @@ clear_fired_marker() {
 arm_restart() {
     local _n _rc=0
     _n=$(restart_count)
-    if (( _n >= ARM_MAX )); then
+    if (( ARM_MAX > 0 && _n >= ARM_MAX )); then
         # Wayne's ruling 2026-10-18 (option b): the cap bounds restarts WITHIN a campaign; it
         # does not park one that still owes rows.  Measured the same night — the loop stopped at
         # 06:16:29 with 2 rows owed and 8/8 used, and the GPU sat idle for 4 h 41 m because that
@@ -838,7 +846,13 @@ arm_restart() {
     mkdir -p "$STATE_DIR"
     printf '%s\n' "$(( _n + 1 ))" > "$RESTARTS_FILE"
     record_arm
-    printf 'armed restart %s/%s: the next boot resumes the remainder at %s\n' \
+    if (( ARM_MAX > 0 )); then
+        printf 'armed restart %s/%s: the next boot resumes the remainder at %s\n' \
+            "$(( _n + 1 ))" "$ARM_MAX" "$(date -Iseconds)"
+    else
+        printf 'armed restart %s (unlimited, progress-guarded): the next boot resumes the remainder at %s\n' \
+            "$(( _n + 1 ))" "$(date -Iseconds)"
+    fi
         "$(( _n + 1 ))" "$ARM_MAX" "$(date -Iseconds)"
     return 0
 }
@@ -1144,7 +1158,11 @@ show_status() {
             printf '  its chunk was cut off before its exit code was read - the next boot re-derives and resumes\n'
         fi
     fi
-    printf 'automatic restarts armed since --plan: %s (cap %s)\n' "$(restart_count)" "$ARM_MAX"
+    if (( ARM_MAX > 0 )); then
+        printf 'automatic restarts armed since --plan: %s (cap %s)\n' "$(restart_count)" "$ARM_MAX"
+    else
+        printf 'automatic restarts armed since --plan: %s (cap unlimited; progress-guarded)\n' "$(restart_count)"
+    fi
     if [[ -f "$ARMED_FILE" ]]; then
         local _f _b _r
         read -r _f _b _r < "$ARMED_FILE" || _f=""

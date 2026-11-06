@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-11-06, Wayne): CLEAN-ROOM. The declared census tenants (the embed
+#   lane) are stopped for the sweep and restored on EXIT, so the baseline is a
+#   clean card and the TPS are not contended by construction.
+#   AUTOTUNE_CLEAN_ROOM=0 opts out and says so in the log.
 #   v13 (2026-11-05): the pre-flight asks the SHARED baseline verdict, not a byte
 #   threshold.  The 3500 MiB wait was unsatisfiable on this box: the kept embedding
 #   lane's 4094 MiB gap exceeds it, so every batch aborted before row one (measured
@@ -199,12 +203,70 @@ fi
 # Release only when THIS run owns the hold (card 7d3e7b95): the old trap removed a
 # hold it may not have set, releasing another run's hold mid-sweep.
 trap '_tac_suspend_release "$SUSPEND"' EXIT
+
+# ── Clean-room tenants (Wayne, 2026-11-06) ───────────────────────────────────
+# The census PERMITS the embedding lane to stay resident, which keeps memory search
+# alive during a sweep - but it also makes every reading contended BY CONSTRUCTION:
+# the run prints "TPS from this run are CONTENDED, not clean-room".  Wayne's ruling
+# 2026-11-06: autotune runs CLEAN.  Every declared tenant is stopped for the sweep
+# and restored when it ends, however it ends.  AUTOTUNE_CLEAN_ROOM=0 opts out (and
+# says so in the log, because a contended run must never look like a clean one).
+AUTOTUNE_CLEAN_ROOM="${AUTOTUNE_CLEAN_ROOM:-1}"
+_TENANTS_STOPPED=()
+cleanroom_restore() {
+    local _t
+    for _t in "${_TENANTS_STOPPED[@]:-}"; do
+        [[ -n "$_t" ]] || continue
+# swallow-ok: a failed restore is reported by the else branch on the next line, never hidden
+        if systemctl --user start "$_t" >/dev/null 2>&1; then
+            echo "clean-room: restored tenant $_t"
+        else
+            echo "clean-room: FAILED to restore $_t - start it by hand" >&2
+        fi
+    done
+    _TENANTS_STOPPED=()
+}
+trap '_tac_suspend_release "$SUSPEND"; cleanroom_restore' EXIT
 # ...and when the WRAPPER is the thing signalled, the case block below never runs at all
 # (measured 2026-11-03: `pkill -TERM` on this script left the log ending on a probe result,
 # with no verdict).  Say it, then exit through the EXIT trap so the hold is still released.
 trap '{ echo "=== WRAPPER KILLED by a signal — the rows were NOT measured to a verdict" \
             | tee -a "$LOG"
         exit 130; }' TERM INT
+if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
+    echo "=== clean-room: declared tenants will be stopped for the sweep" | tee -a "$LOG"
+    for _t in $LLM_AUTOTUNE_CENSUS; do
+        if systemctl --user is-active --quiet "$_t"; then
+# swallow-ok: a failed stop is reported by the else branch that follows it
+            if systemctl --user stop "$_t" >/dev/null 2>&1; then
+                _TENANTS_STOPPED+=("$_t")
+                echo "clean-room: stopped tenant $_t" | tee -a "$LOG"
+            else
+                echo "clean-room: could NOT stop $_t - the readings will be CONTENDED" | tee -a "$LOG"
+            fi
+        fi
+    done
+    # A stop is asynchronous: wait (bounded) for its memory to leave the card, so the
+    # baseline below describes a clean card rather than a race with a dying process.
+    _cr_bound="${AUTOTUNE_CLEAN_ROOM_MAX_MIB:-${LLM_AUTOTUNE_CLEAN_ROOM_MAX_MIB:-800}}"
+    _cr_waited=0
+    _cr_used=""
+    while (( _cr_waited < 30 )); do
+        _cr_used="$(_tac_gpu_used_mib)"
+        if [[ "$_cr_used" =~ ^[0-9]+$ ]] && (( _cr_used < _cr_bound )); then
+            break
+        fi
+        sleep 2
+        _cr_waited=$(( _cr_waited + 2 ))
+    done
+    if [[ "$_cr_used" =~ ^[0-9]+$ ]] && (( _cr_used < _cr_bound )); then
+        echo "clean-room: card clear - ${_cr_used} MiB held after ${_cr_waited}s" | tee -a "$LOG"
+    else
+        echo "clean-room: WARNING ${_cr_used:-unreadable} MiB still held after ${_cr_waited}s (clean bound ${_cr_bound}) - readings may be contended" | tee -a "$LOG"
+    fi
+else
+    echo "=== clean-room: DISABLED (AUTOTUNE_CLEAN_ROOM=${AUTOTUNE_CLEAN_ROOM}) - readings are CONTENDED by declaration" | tee -a "$LOG"
+fi
 # swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
 systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 112
+# Module Version: 113
 #   v112 (2026-11-06): the unlisted-holder block heading named the CENSUS where it meant
 #   the offenders ("Outside the declared census <allowed tenant>:"), so a refusal caused by
 #   a foreign agent's llama-server read as if the embedding lane were at fault.  It now
@@ -3505,6 +3505,21 @@ _autotune_failure_report() {
     else
         _FINAL_REGISTRY_STATE="unchanged"
         echo "  registry: row left unchanged — this failure is not a verdict on the model; fix it and re-run"
+    fi
+    # 2026-11-06 (Wayne): record every classified failure durably, and archive the ones
+    # that are CLEAR.  The archiver owns the rule (two strikes for unsupported_arch, an
+    # arithmetic capacity verdict for everything else); this call is only the observation.
+    _arch="$(dirname "$(readlink -f "$0")")/../bin/llm-archive-unusable.sh"
+    if [[ -x "$_arch" ]]; then
+        # swallow-ok: the recorder must never change this row verdict; its own output is the record
+        "$_arch" --record-failure "$MODEL_FILE" --class "$_cls" || true
+        # swallow-ok: a failed assess prints nothing, so the too-big test simply does not fire
+        if "$_arch" --assess "$MODEL_FILE" 2>/dev/null | grep -qx verdict=too-big; then
+            # swallow-ok: archival failure is reported by the tool; the row verdict stands
+            "$_arch" --archive "$MODEL_FILE" --reason "capacity: the weight set exceeds this box guest-RAM ceiling" || true
+        fi
+    else
+        echo "  archive: recorder not found at $_arch - failure not recorded" >&2
     fi
     if [[ -n "${LLM_AUTOTUNE_RESULT_FILE:-}" ]]; then
         echo "  result:  ${LLM_AUTOTUNE_RESULT_FILE}"
