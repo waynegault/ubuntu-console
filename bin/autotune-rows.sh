@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 #   v14 (2026-11-06, Wayne): CLEAN-ROOM. The declared census tenants (the embed
 #   lane) are stopped for the sweep and restored on EXIT, so the baseline is a
 #   clean card and the TPS are not contended by construction.
@@ -213,8 +213,21 @@ trap '_tac_suspend_release "$SUSPEND"' EXIT
 # says so in the log, because a contended run must never look like a clean one).
 AUTOTUNE_CLEAN_ROOM="${AUTOTUNE_CLEAN_ROOM:-1}"
 _TENANTS_STOPPED=()
+_WATCHDOGS_STOPPED=()
 cleanroom_restore() {
-    local _t
+    local _t _w
+    # Timers back FIRST: a tenant restored while the watchdog is still held stays up, and
+    # the watchdog's next tick then finds it healthy instead of restarting it.
+    for _w in "${_WATCHDOGS_STOPPED[@]:-}"; do
+        [[ -n "$_w" ]] || continue
+# swallow-ok: a failed release is reported by the else branch below, never hidden
+        if systemctl --user start "$_w" >/dev/null 2>&1; then
+            echo "clean-room: released watchdog $_w"
+        else
+            echo "clean-room: FAILED to release $_w - start it by hand" >&2
+        fi
+    done
+    _WATCHDOGS_STOPPED=()
     for _t in "${_TENANTS_STOPPED[@]:-}"; do
         [[ -n "$_t" ]] || continue
 # swallow-ok: a failed restore is reported by the else branch on the next line, never hidden
@@ -235,6 +248,22 @@ trap '{ echo "=== WRAPPER KILLED by a signal — the rows were NOT measured to a
         exit 130; }' TERM INT
 if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
     echo "=== clean-room: declared tenants will be stopped for the sweep" | tee -a "$LOG"
+    # THE WATCHDOG DEFEATED THE CLEAN-ROOM (measured 2026-11-06).  A tenant stopped ON PURPOSE
+    # looks dead to llama-watchdog, so at 14:31:20 - strike 2/2 - it restarted the embedding lane
+    # nine minutes into a sweep and logged "Recovery successful".  Every reading after that was
+    # contended, and the only trace was a baseline warning.  The CUDA suspend marker stops the
+    # watchdog STARTING the serving lane; it does not stop it REVIVING a tenant it judges
+    # unhealthy, so the timers are held for the duration and released on exit.
+    for _w in llama-watchdog.timer llama-watchdog-guard.timer llama-watchdog.service; do
+        systemctl --user is-active --quiet "$_w" || continue
+# swallow-ok: a failed hold is reported by the else branch below, never hidden
+        if systemctl --user stop "$_w" >/dev/null 2>&1; then
+            _WATCHDOGS_STOPPED+=("$_w")
+            echo "clean-room: held $_w (it would otherwise revive a stopped tenant)" | tee -a "$LOG"
+        else
+            echo "clean-room: could NOT hold $_w - a tenant may come back mid-sweep" | tee -a "$LOG"
+        fi
+    done
     for _t in $LLM_AUTOTUNE_CENSUS; do
         if systemctl --user is-active --quiet "$_t"; then
 # swallow-ok: a failed stop is reported by the else branch that follows it
