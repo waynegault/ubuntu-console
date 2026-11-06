@@ -2,7 +2,7 @@
 # qwen-memory-index-patch.sh — re-apply the local fixes to the Qwen CLI's memory-index
 # builder, after a CLI/companion update replaces the bundled chunk.
 #
-# FIVE HUNKS (each reported separately by --check; each re-applied after an update):
+# SIX HUNKS (each reported separately by --check; each re-applied after an update):
 #
 #   1. truncator (LOCAL PATCH 2026-10-01 (qwen-memory-index-patch))
 #      The indexer builds every MEMORY.md line as
@@ -71,6 +71,23 @@
 #      bounds a pathological store, so this trades a per-turn cost of at most ~60 KB for the
 #      reachability of 45+ authored notes.
 #
+#   6. scancap (LOCAL PATCH 2026-11-06 (qwen-memory-index-scancap))
+#      MAX_SCANNED_MEMORY_FILES = 200 is a cap on the NOTES SCANNED, applied in a different
+#      chunk from the index builder (0.26.5: chunk-FUBDS3AV.js) and before any rendering, so
+#      hunks 3 and 5 cannot reach it.  Measured 2026-11-06: the ubuntu-console project store
+#      held 356 notes, 200 were rendered and 156 were dropped with the new scan-cap warning,
+#      leaving 44% of the store absent from both MEMORY.md and the injected catalog.  Raising
+#      the line and byte caps does not help — the file COUNT is the binding limit.
+#      FIX: RAISE it to 400, matching the line cap hunk 5 sets, so a store that fits the line
+#      cap is never cut before rendering.  THE COST, NAMED: at the measured 141.6 chars per
+#      entry, a 360-note store's index is ~51 KB (~12.7k tokens) in every session of that
+#      project; that is why this is a raise to the line cap, not a removal.  A store past 400
+#      still sheds, and still says so — 0.26.5's own omitted-list warning names the loss.
+#      SELECTION IS ARBITRARY AT THE CAP: the scan sorts by mtime, and a store whose notes all
+#      share one bulk-copy mtime (measured: 188 notes inside a 11 ms window) is then cut by
+#      FILENAME, so the notes lost are alphabetically late, not the least useful.  That is the
+#      reason to keep stores under the cap rather than trust the ordering.
+#
 # WHICH COPY MATTERS
 #   Every shipped copy is patched (this script globs the CLI, the WSL and Windows IDE
 #   companions, and the npm update-cache), because which copy enforces a session depends on
@@ -121,6 +138,24 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 12
+#   v12 (2026-11-06): SIXTH HUNK (scancap), added on Wayne's order after the console store shed
+#   156 of 356 notes.  Three things are new, and each was measured here rather than assumed:
+#     * the cap lives in a DIFFERENT chunk from the builder (0.26.5/0.26.8: MAX_SCANNED_MEMORY_
+#       FILES in chunk-FUBDS3AV.js, MAX_INDEX_LINE_CHARS in chunk-QAEZSJL6.js), so the old
+#       selection by the builder's constant never saw it and no existing hunk could raise it.
+#       The scan pass therefore selects by its own constant and is judged per chunk.
+#     * hunk 3's promise to point the two INDEX rebuilds at the uncapped scanners is now VACUOUS
+#       on 0.26.5+: the rebuild calls scanAutoMemoryIndexDocumentsFromRoot, and the post-
+#       condition `scanAllAutoMemoryTopicDocuments(projectRoot) in src` is satisfied by the
+#       RECALL path, not by the rebuild.  It reads green while the rebuild is still capped.
+#       Left as-is (upstream now emits its own omitted-list warning, which is how the loss was
+#       seen at all) and named here so the green is not mistaken for the guarantee.
+#     * EVICTION AT THE CAP IS ARBITRARY: the scan sorts by mtime desc then FILENAME, and 188 of
+#       the console store's notes share one bulk-copy mtime inside an 11 ms window, so the 160
+#       dropped notes were chosen by name (v…, w…), not by value.  Verified by reproducing the
+#       ordering in node against the on-disk index: 200/200 agreement, and the cut falls on a
+#       0.000 ms tie.
 # Module Version: 11
 #   v11 (2026-11-05): 0.26.7 RENAMED THE BUILDER and, once that was accepted, all five components
 #   reported applied on the live chunk for the first time.
@@ -220,6 +255,14 @@ MARKER_TRUNC="LOCAL PATCH 2026-10-01 (qwen-memory-index-patch)"
 MARKER_BYTES="LOCAL PATCH 2026-10-01 (qwen-memory-index-bytecap)"
 MARKER_TITLE="LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap)"
 MARKER_LINES="LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap)"
+MARKER_SCAN="LOCAL PATCH 2026-11-06 (qwen-memory-index-scancap)"
+
+# Hunk 6 lives in a DIFFERENT chunk from the builder (0.26.5/0.26.8: the scanner is
+# chunk-FUBDS3AV.js, the builder is chunk-QAEZSJL6.js), so it is selected and checked in its
+# own pass.  The value, not the marker, decides `applied` -- the same lesson hunk 3 learned on
+# 2026-10-25 when three marker-only copies reported green over stock constants.
+SCAN_STOCK_CAP=200
+SCAN_TARGET_CAP=400
 
 # Stock anchors used only for state detection in --check.
 PATHCAP_STOCK_SPACED='const chars = [...value].slice(0, MAX_INDEX_FIELD_CHARS);'
@@ -279,7 +322,24 @@ for d in "${chunk_dirs[@]}"; do
     done
 done
 
-if (( ${#files[@]} == 0 )); then
+# Hunk 6's chunk carries the notes-scanned cap and NOT the builder's constants, so it needs
+# its own selection; discovered here so the "nothing to do" exit below accounts for both.
+scan_files=()
+for d in "${chunk_dirs[@]}"; do
+    [[ -d "$d" ]] || continue
+    for f in "$d"/*.js; do
+        # Match the DECLARATION, not the bare name: a 0.25.1-shaped chunk MENTIONS the constant
+        # in a comment explaining that upstream dropped it, and selecting on the name alone put
+        # that chunk into the scan pass with no numeric declaration to raise -- measured here,
+        # the whole 0.25.1 apply then exited 1 with `scancap: UNKNOWN` after the other five
+        # hunks had already applied. The pass must not inherit a chunk it cannot patch.
+        if grep -qE "MAX_SCANNED_MEMORY_FILES *=" "$f"; then
+            scan_files+=("$f")
+        fi
+    done
+done
+
+if (( ${#files[@]} == 0 && ${#scan_files[@]} == 0 )); then
     echo "qwen-memory-index-patch: no Qwen memory-index chunk found — nothing to do"
     exit 0
 fi
@@ -965,6 +1025,111 @@ PY
 
     if node --check "$f"; then
         echo "  patched  $name (syntax verified)"
+    else
+        echo "  BROKEN   $name — rolling back from ${backup/#$HOME/~}" >&2
+        cp -p "$backup" "$f"
+        rc=1
+    fi
+done
+
+# ------------------------------------------------------------------------------
+# Hunk 6 (scancap): the notes-scanned cap, in the SCANNER chunk rather than the builder's.
+# Selected by the constant because a copy carrying the builder does not carry the cap (0.26.8:
+# chunk-QAEZSJL6.js vs chunk-FUBDS3AV.js), so the loop above would never see it.  Split out
+# rather than folded in because the two chunks must be judged independently: a bundle can have
+# the builder patched and the scanner stock, which is exactly the state measured 2026-11-06
+# (truncator/pathcap/bytecap/titlecap/linecap all `applied`, 156 of 356 notes dropped).
+# `scan_files` is selected above, beside the builder's set.
+# ------------------------------------------------------------------------------
+for f in "${scan_files[@]}"; do
+    name="${f/#$HOME/~}"
+
+    # `grep | head` inside `if`: an empty result is a legitimate state (no numeric declaration),
+    # and putting it in a condition keeps `set -o pipefail` from aborting the scan.
+    scan_num=""
+    if decl=$(grep -oE "MAX_SCANNED_MEMORY_FILES *= *[0-9]+" "$f" | head -1); then
+        scan_num="${decl#*=}"
+        scan_num="${scan_num// /}"
+    fi
+
+    st_scan="UNKNOWN"
+    if [[ -n "$scan_num" ]]; then
+        if (( scan_num >= SCAN_TARGET_CAP )); then
+            st_scan="applied"
+        elif grep -qF "$MARKER_SCAN" "$f"; then
+            st_scan="counterfeit"
+        else
+            st_scan="stock"
+        fi
+    elif grep -qF "$MARKER_SCAN" "$f"; then
+        st_scan="counterfeit"   # a receipt for a cap whose declaration is not a number
+    fi
+
+    if [[ "$st_scan" == "UNKNOWN" ]]; then
+        echo "  NEEDS    $name (scancap: UNKNOWN — the declaration is not a number; refusing to patch)" >&2
+        rc=1
+        continue
+    fi
+    if [[ "$st_scan" == "applied" ]]; then
+        echo "  ok       $name (scancap: applied)"
+        continue
+    fi
+    if (( check_only )); then
+        echo "  NEEDS    $name (scancap: $st_scan)" >&2
+        rc=1
+        continue
+    fi
+
+    backup="$f.orig"
+    if [[ ! -f "$backup" ]]; then
+        cp -p "$f" "$backup"
+        echo "  backup   ${backup/#$HOME/~}"
+    fi
+
+    # The anchor is the STOCK VALUE, exactly once.  A copy already at 400 is `applied` above and
+    # never reaches here, so a second apply changes nothing (the suite asserts idempotence).
+    if ! PATCH_FILE="$f" PATCH_MARKER_SCAN="$MARKER_SCAN" PATCH_SCAN_STOCK="$SCAN_STOCK_CAP" \
+         PATCH_SCAN_TARGET="$SCAN_TARGET_CAP" "$PYTHON_BIN" - <<'PY'
+import os, pathlib, re
+
+p = pathlib.Path(os.environ["PATCH_FILE"])
+marker = os.environ["PATCH_MARKER_SCAN"]
+stock = os.environ["PATCH_SCAN_STOCK"]
+target = os.environ["PATCH_SCAN_TARGET"]
+src = p.read_text(encoding="utf-8")
+
+anchor = f"MAX_SCANNED_MEMORY_FILES={stock};"
+new, n = re.subn(
+    r"MAX_SCANNED_MEMORY_FILES\s*=\s*" + re.escape(stock) + r"\s*;",
+    f"MAX_SCANNED_MEMORY_FILES={target};/*{marker}*/",
+    src,
+)
+if n != 1:
+    raise SystemExit(
+        f"refusing to patch: the MAX_SCANNED_MEMORY_FILES={stock} anchor occurred {n} times (expected 1)"
+    )
+
+# Post-conditions: the value is raised, there is exactly one declaration, and the marker is on it.
+decls = re.findall(r"MAX_SCANNED_MEMORY_FILES\s*=\s*([0-9]+)\s*;", new)
+if len(decls) != 1:
+    raise SystemExit(f"refusing to patch: {len(decls)} scan-cap declarations in the result (expected 1)")
+if int(decls[0]) < int(target):
+    raise SystemExit(f"refusing to patch: the scan cap reads {decls[0]} in the result, expected {target}")
+if marker not in new:
+    raise SystemExit("refusing to patch: the scan-cap marker is absent from the result")
+if anchor in new:
+    raise SystemExit("refusing to patch: the stock scan cap is still present in the result")
+
+p.write_text(new, encoding="utf-8")
+PY
+    then
+        echo "  MISMATCH $name — the scan-cap anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
+        rc=1
+        continue
+    fi
+
+    if node --check "$f"; then
+        echo "  patched  scancap ($name; syntax verified)"
     else
         echo "  BROKEN   $name — rolling back from ${backup/#$HOME/~}" >&2
         cp -p "$backup" "$f"

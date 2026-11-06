@@ -244,4 +244,104 @@ setup() {
     [[ "$output" != *"bytecap: applied"* ]]
 }
 
+# ------------------------------------------------------------------------------
+# Hunk 6 (scancap, 2026-11-06): the notes-scanned cap lives in the SCANNER chunk, not the
+# builder's, so it is selected by its OWN constant and judged per chunk.  The criterion is the
+# patch's stated contract -- a store that fits the line cap (hunk 5: 400) must not be cut before
+# rendering -- so the expected value is 400, and the assertion is the OBSERVABLE (how many
+# entries survive a scan), not only the literal declaration.
+# ------------------------------------------------------------------------------
+
+@test "index patch: hunk 6 reads NEEDS when the scanner chunk is stock" {
+    local dir="$WORK/chunks-scan"
+    mkdir -p "$dir"
+    cp "$REPO_ROOT/tests/fixtures/memory-index-scancap-chunk.js" "$dir/chunk-scan.js"
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER" --check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"scancap: stock"* ]]
+    # The builder hunks must not be invented for a chunk that does not carry them.
+    [[ "$output" != *"truncator:"* ]]
+    [[ "$output" != *"no Qwen memory-index chunk found"* ]]
+}
+
+@test "index patch: hunk 6 raises the scan cap to the line cap and a 500-entry scan keeps 400" {
+    command -v node >/dev/null || skip "node is required by the patcher's own syntax check"
+    local dir="$WORK/chunks-scan"
+    mkdir -p "$dir"
+    cp "$REPO_ROOT/tests/fixtures/memory-index-scancap-chunk.js" "$dir/chunk-scan.js"
+    local patched="$dir/chunk-scan.js"
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"patched  scancap"* ]]
+    # The backup is the PRISTINE stock bytes.
+    [ -f "$patched.orig" ]
+    cmp -s "$patched.orig" "$REPO_ROOT/tests/fixtures/memory-index-scancap-chunk.js"
+    # The stock value is gone, the target and the receipt are present.
+    run grep -qF 'MAX_SCANNED_MEMORY_FILES=200' "$patched"
+    [ "$status" -ne 0 ]
+    grep -qF 'MAX_SCANNED_MEMORY_FILES=400' "$patched"
+    grep -qF 'LOCAL PATCH 2026-11-06 (qwen-memory-index-scancap)' "$patched"
+
+    # The OBSERVABLE: the capped scan now keeps 400 of 500 entries.
+    run node -e '
+const m = require(process.argv[1]);
+const r = m.scanEntries(Array.from({ length: 500 }, (_v, i) => i));
+console.log("kept=" + r.docs.length + " omitted=" + r.omitted.length);
+' "$patched"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kept=400 omitted=100"* ]]
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER" --check
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"scancap: applied"* ]]
+}
+
+@test "index patch: a second hunk 6 apply is idempotent" {
+    command -v node >/dev/null || skip "node is required by the patcher's own syntax check"
+    local dir="$WORK/chunks-scan"
+    mkdir -p "$dir"
+    cp "$REPO_ROOT/tests/fixtures/memory-index-scancap-chunk.js" "$dir/chunk-scan.js"
+    local patched="$dir/chunk-scan.js"
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    local before after
+    before="$(sha256sum "$patched" | awk '{print $1}')"
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    after="$(sha256sum "$patched" | awk '{print $1}')"
+    [ "$before" = "$after" ]
+}
+
+@test "index patch: a scancap MARKER over a stock 200 reads counterfeit, never applied" {
+    # Same family as the 2026-10-25 finding for hunks 3-5: a receipt without the property must
+    # read as a failure.  Only the marker comment is added; the value stays 200.
+    local dir="$WORK/chunks-forged"
+    mkdir -p "$dir"
+    printf '%s\n' '/* LOCAL PATCH 2026-11-06 (qwen-memory-index-scancap) */' > "$dir/chunk-forged.js"
+    cat "$REPO_ROOT/tests/fixtures/memory-index-scancap-chunk.js" >> "$dir/chunk-forged.js"
+    grep -q 'MAX_SCANNED_MEMORY_FILES=200' "$dir/chunk-forged.js"
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER" --check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"scancap: counterfeit"* ]]
+    [[ "$output" != *"scancap: applied"* ]]
+}
+
+@test "index patch: an unparseable scan cap is refused, and the chunk is left unchanged" {
+    local dir="$WORK/chunks-unknown"
+    mkdir -p "$dir"
+    sed 's/MAX_SCANNED_MEMORY_FILES=200/MAX_SCANNED_MEMORY_FILES=uncapped/' \
+        "$REPO_ROOT/tests/fixtures/memory-index-scancap-chunk.js" > "$dir/chunk-unknown.js"
+    local before
+    before="$(sha256sum "$dir/chunk-unknown.js" | awk '{print $1}')"
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"scancap: UNKNOWN"* ]]
+    [ "$(sha256sum "$dir/chunk-unknown.js" | awk '{print $1}')" = "$before" ]
+}
+
 # end of file
