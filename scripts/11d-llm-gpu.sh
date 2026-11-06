@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 39
+#   v39 (2026-11-06): the stale-CUDA python sweep is scoped before it kills.  It used to
+#   TERM any python process in the compute-apps list that was not llama-server, with no
+#   ownership or age test — and at 00:55 on 2026-11-06 it killed one while another agent's
+#   pipeline ran inside the transient unit vexed-uphold-full.service.  __gpu_stale_context_verdict
+#   now refuses a process inside ANY named .service and one younger than
+#   LLM_GPU_STALE_MIN_AGE_S (600 s), so only an unowned leftover can be reaped.
 # Module Version: 38
 #   v38 (2026-11-06): wake reads persistence mode before it touches sudo.  It used to
 #   call `sudo -n nvidia-smi -pm 1` unconditionally, so `model bench` on a box without
@@ -293,11 +300,39 @@ function __tac_cleanup_stale_locks() {
 # @returns 0 always.
 
 # ---------------------------------------------------------------------------
+# __gpu_stale_context_verdict <comm> <leaf_unit> <age_s> — may this pid be killed?
+#
+# A python process holding a CUDA context is "stale" only when nothing owns it:
+#   * not a llama-server — the lanes and servers are reaped by their own helpers,
+#     never by this name sweep;
+#   * in NO named .service.  A unit owns its processes: a lane, a CI job, an
+#     agent's transient run, a foreign pipeline.  Measured 2026-11-06: another
+#     agent's work lived in the transient unit vexed-uphold-full.service, and an
+#     ownership-blind kill took one of its python CUDA processes mid-run;
+#   * older than LLM_GPU_STALE_MIN_AGE_S (default 600).  A live run's helper is
+#     young, so the age bound keeps the cleanup for what it names: leftovers.
+#
+# Pure by design — the caller reads comm/unit/age, so every arm is exercised
+# without a card, a kill or a systemd unit.
+# @returns 0 when the pid may be reaped, 1 when it must be left alone.
+# ---------------------------------------------------------------------------
+function __gpu_stale_context_verdict() {
+    local _comm="${1:-}" _unit="${2:-}" _age="${3:-}"
+    local _min_age="${LLM_GPU_STALE_MIN_AGE_S:-600}"
+    [[ "$_comm" == *llama* ]] && return 1
+    [[ "$_comm" == python* ]] || return 1
+    [[ -z "$_unit" ]] || return 1
+    [[ "$_age" =~ ^[0-9]+$ ]] || return 1
+    (( _age >= _min_age )) || return 1
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __gpu_clear_stale_processes — Kill stale Python/CUDA processes holding VRAM.
 # Bench/autotune call __model_stop which only kills llama-server. Python
 # processes holding CUDA contexts are not cleared, silently consuming VRAM.
-# This function finds python3.12 processes that hold GPU file descriptors
-# and kills any that are not the current bench/autotune session.
+# Each candidate is filtered by __gpu_stale_context_verdict before it is killed,
+# so a process inside a unit — or one a live run just started — is never a target.
 # REF: G-5 audit — VRAM clearing gap
 # ---------------------------------------------------------------------------
 function __gpu_clear_stale_processes() {
@@ -315,17 +350,20 @@ function __gpu_clear_stale_processes() {
         return 0
     fi
     local _gpu_pid _keep_pid _keep_pids _stale_wait count=0
+    local _gpu_comm _gpu_unit _gpu_age
     _keep_pid="$$"
     _keep_pids=" $PPID $_keep_pid "
     while IFS= read -r _gpu_pid; do
         [[ "$_gpu_pid" =~ ^[0-9]+$ ]] || continue
         [[ "$_keep_pids" == *" $_gpu_pid "* ]] && continue
-        local _gpu_etime _gpu_cmd
-        _gpu_etime=$(ps -o etime= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
-        _gpu_cmd=$(ps -o comm= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
-        [[ -z "$_gpu_cmd" ]] && continue
-        [[ "$_gpu_cmd" == *llama* ]] && continue
-        if [[ "$_gpu_cmd" == python* ]]; then
+        _gpu_comm=$(ps -o comm= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
+        [[ -z "$_gpu_comm" ]] && continue
+        # swallow-ok: a process that exited since the compute-apps read has no cgroup; the empty unit reads as unowned
+        _gpu_unit=$(ps -o cgroup= -p "$_gpu_pid" 2>/dev/null | grep -o '[^/]*\.service' | tail -n 1 || true)
+        # swallow-ok: the same exit leaves no age; a non-numeric age is refused by the verdict
+        _gpu_age=$(ps -o etimes= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
+        if __gpu_stale_context_verdict "$_gpu_comm" "$_gpu_unit" "$_gpu_age"
+        then
             kill -TERM "$_gpu_pid" 2>/dev/null || true
             # Graceful wait (WSL2 dxgkrnl): SIGKILL orphans the process's CUDA
             # handles; poll up to 15s for a clean exit before escalating.
