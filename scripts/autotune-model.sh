@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 115
+# Module Version: 116
+#   v116 (2026-11-06): the KV-quant gate admits the unquantised reference dtypes (f16/f32/bf16)
+#   without a retrieval probe, and f16/f16 joins the default candidate ladder.  The probe asks
+#   what QUANTISATION costs recall, so it cannot certify the baseline — while the cache type
+#   also moves SPEED, measurably more so with depth.  The sweep can now measure f16 where it
+#   fits rather than assuming q8_0.  _bench_spawn also passes its V cache type to
+#   __autotune_fa_retry, and a `fa_required` verdict stops the row instead of reloading with
+#   flash attention off, which llama.cpp refuses for a quantised V cache.
 #   v112 (2026-11-06): the unlisted-holder block heading named the CENSUS where it meant
 #   the offenders ("Outside the declared census <allowed tenant>:"), so a refusal caused by
 #   a foreign agent's llama-server read as if the embedding lane were at fault.  It now
@@ -705,7 +712,7 @@ sync 2>/dev/null || true
 if [[ -w /proc/sys/vm/drop_caches ]]; then
     echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 fi
-nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
 pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
 sleep 1
 # BOUNDED RETRY (2026-10-24): the run above forces kills and a cache drop, and a
@@ -716,8 +723,8 @@ sleep 1
 # second later. Three attempts, one second apart, keep the fail-closed contract -
 # an unreadable card still refuses - without turning a lost race into a refusal.
 for _vram_attempt in 1 2 3; do
-    VRAM_TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-    FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    VRAM_TOTAL=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    FREE_VRAM=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
     [[ "$VRAM_TOTAL" =~ ^[0-9]+$ && "$FREE_VRAM" =~ ^[0-9]+$ ]] && break
     if (( _vram_attempt < 3 )); then sleep 1; fi
 done
@@ -1198,7 +1205,7 @@ cleanup_gpu() {
         if [[ -w /proc/sys/vm/drop_caches ]]; then
             echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
         fi
-        nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+        timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
         pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
         sleep 1
 
@@ -1551,7 +1558,7 @@ _bench_spawn() {
         _fa_cause=$(_startup_fail_type quiet)
         if declare -f __autotune_fa_retry >/dev/null 2>&1
         then
-            _fa_act=$(__autotune_fa_retry "$_fa_cause" "$flash_attn")
+            _fa_act=$(__autotune_fa_retry "$_fa_cause" "$flash_attn" "$kv_v")
         else
             # Standalone run with no 11b on disk — this script already refuses to run
             # without it, so reaching here means a partial tree; keep the old retry.
@@ -1569,6 +1576,17 @@ _bench_spawn() {
             descend)
                 warn "  OOM at this ctx — NOT retrying with --flash-attn off (that needs more memory); descending"
                 _bench_stop "$_BENCH_PID"
+                ;;
+            fa_required)
+                # llama.cpp refuses a quantised V cache with flash attention off, so the
+                # retry this branch replaces could only reload and fail again — and the row
+                # would then read as an unsupported model.  Recorded as load_fail so the
+                # callers stop rather than descend: a smaller ctx cannot fix a flag pair.
+                warn "  ${_fa_cause} with --cache-type-v ${kv_v} — flash attention cannot be turned off here (llama.cpp refuses a quantised V cache without it); not retrying"
+                _bench_stop "$_BENCH_PID"
+                _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
+                echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"
+                return 1
                 ;;
             stop)
                 _bench_stop_unknown
@@ -1657,7 +1675,7 @@ _bench_spawn() {
     # Laptop GPUs idle at 1035 MHz (~19 TPS) but can reach 1600+ MHz (60+ TPS).
     # 8 tokens isn't enough compute — use 64 when cold, 8 when already warm.
     local warmup_tokens=8
-    local _pstate; _pstate=$(nvidia-smi --query-gpu=pstate --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    local _pstate; _pstate=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=pstate --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
     if [[ -n "$_pstate" ]] && [[ "$_pstate" != "P0" ]]; then
         warmup_tokens=64
     fi
@@ -1940,7 +1958,7 @@ bench_once() {
     cleanup_gpu >&2 || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
 
     if [[ ! -f $tag ]]; then
-        local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        local g; g=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
         touch "$tag"
     fi
@@ -1980,7 +1998,7 @@ bench_once_multi() {
     cleanup_gpu >&2 || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
 
     if [[ ! -f $tag ]]; then
-        local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        local g; g=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
         touch "$tag"
     fi
@@ -2303,7 +2321,9 @@ last_fail_type() {
 # retrieval probe — a measurement of what the quantisation does to RETRIEVAL
 # quality at long ctx, not of what it does to speed.  That probe does not exist
 # yet (investigator card KVCACHE-QUANT-VALIDATE-001), so q8_0/q8_0 is the only
-# certified type and q4_0 is refused here.
+# certified type and q4_0 is refused here.  The unquantised reference dtypes are
+# the exception (see KV_REFERENCE_TYPES below): they are the baseline the probe
+# compares against, so there is no quantisation for a probe to validate.
 #
 # Refused, NOT removed from the candidate list: LLM_AUTOTUNE_KV_QUANTS still
 # offers q4_0/q4_0 (env.sh), and the sweep prints a line naming the reason for
@@ -2348,9 +2368,21 @@ last_fail_type() {
 #   3. add the pair below, naming the recorded recall and the model it was measured on.
 KV_CERTIFIED_PAIRS="q8_0/q8_0"
 
+# The REFERENCE dtypes are eligible without a retrieval probe, and that is not a
+# loophole: the probe asks what QUANTISATION costs recall, and f16/f32/bf16 are the
+# unquantised side of every such comparison.  What the recall probe does not measure is
+# SPEED, and the cache type moves it: vramcalculator's controlled run (two RTX 3090s,
+# same build and weights, 256K context, only the cache type changed) decoded 22.3 tok/s
+# on f16, 15.2 on q8_0 and 14.0 on q4_0 — 32% for q8_0 there, 7% at zero depth and 21%
+# at 131K on a Radeon R9700.  So f16 is the fastest cache whenever the window still
+# fits, and the sweep must be able to MEASURE it rather than assume q8_0.
+# REF: https://vramcalculator.com/llama-cpp-performance-flags/ step 6 (2026-09).
+KV_REFERENCE_TYPES="f16 f32 bf16"
+
 # kv_pair_status <type_k> <type_v> — print "certified" when this pair may be
 # probed, else the reason it may not.  The caller prints the reason, so the
-# narrowing is always visible in the sweep's output.
+# narrowing is always visible in the sweep's output.  The token stays exactly
+# "certified" because both the sweep and its unit test compare it literally.
 kv_pair_status() {
     local _pair="$1/$2" _c
     for _c in $KV_CERTIFIED_PAIRS; do
@@ -2359,6 +2391,10 @@ kv_pair_status() {
             return 0
         fi
     done
+    if [[ "$1" == "$2" ]] && [[ " $KV_REFERENCE_TYPES " == *" $1 "* ]]; then
+        printf '%s\n' "certified"
+        return 0
+    fi
     printf '%s\n' "not eligible: no long-context retrieval validation (KVCACHE-QUANT-VALIDATE-001)"
 }
 
@@ -3063,7 +3099,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # Record GPU thermal/clock state alongside the certified number — heat
     # soak on a laptop biases later benches; the temp explains outliers.
     if command -v nvidia-smi >/dev/null 2>&1; then
-        _gpu_thermal=$(nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        _gpu_thermal=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  thermal at certification: GPU ${_gpu_thermal:-n/a} (temp °C, SM MHz)"
     fi
 
@@ -3719,7 +3755,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # that saved 6.76/6.89 tps with tight drift.  Demote it exactly as contention is.
         # Skipped under AUTOTUNE_SELFTEST, whose outcomes must not depend on this box's GPU.
         if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]]; then
-            _throttle=$(nvidia-smi --query-gpu=clocks_throttle_reasons.active \
+            _throttle=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=clocks_throttle_reasons.active \
                 --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
             if [[ "$_throttle" =~ ^0x[0-9a-fA-F]+$ ]] && (( _throttle & 0x20 )); then
                 echo "  SW Thermal Slowdown is ACTIVE at certification — stamping this row INDICATIVE"

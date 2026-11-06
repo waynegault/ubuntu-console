@@ -16,7 +16,7 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 #   v11 (2026-11-05): the VRAM BASELINE lives here, because the row script and BOTH batch
 #   wrappers need it and only this file is sourced by all three (11d is a profile module
 #   the wrappers do not load).  Identity comes from the PROCESS TABLE, not nvidia-smi:
@@ -100,7 +100,7 @@ log() {
 # _free_mib — free VRAM on the CUDA card in MiB (empty when the probe fails).
 _free_mib() {
     # swallow-ok: a failing nvidia-smi leaves _free empty, and the numeric guard in the wait loop is what decides — the probe's own error adds nothing
-    nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits 2>/dev/null \
+    timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits 2>/dev/null \
         | awk -F', *' '{print $1 - $2; exit}'
 }
 
@@ -465,7 +465,7 @@ _tac_suspend_release() {
 # "not free" and fails closed.
 _tac_gpu_used_mib() {
     # swallow-ok: the READING is the output, not the status — an nvidia-smi that fails leaves it EMPTY, and every caller treats empty as "not free" and fails closed, so its stderr adds nothing.
-    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null \
+    timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null \
         | tr -d ' ' \
         | awk 'BEGIN{m=-1} /^[0-9]+$/{if ($1+0>m) m=$1+0} END{if (m<0) print ""; else print m}'
 }
@@ -711,9 +711,9 @@ _tac_gpu_wait_baseline() {
     local _timeout="${1:-90}" _poll="${2:-2}" _waited=0 _free _total _verdict _rc
     while :; do
         # swallow-ok: an unreadable card yields empty, and the verdict refuses on a non-numeric reading
-        _free="$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+        _free="$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
         # swallow-ok: same reading, other field; the verdict fails closed on either being unreadable
-        _total="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+        _total="$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
         _verdict="$(_tac_vram_baseline_verdict "$_free" "$_total")"
         _rc=$?
         case "$_rc" in
