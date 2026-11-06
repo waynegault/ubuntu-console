@@ -200,7 +200,7 @@ selected_with() {
                  "$LLM_AUTOTUNE_CENSUS_MAX_MIB" "$(__llm_thread_cap 16)"' \
         _ "$LIB" "$REPO_ROOT/scripts/11d-llm-gpu.sh"
     [ "$status" -eq 0 ]
-    [ "$output" = "0|llama-cuda-qwen3embedding-embed.service|3072|16" ]
+    [ "$output" = "0|llama-cuda-qwen3embedding-embed.service|6144|16" ]
 }
 
 @test "an unmatched host keeps generic defaults and says so once" {
