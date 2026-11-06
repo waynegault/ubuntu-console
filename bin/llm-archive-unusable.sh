@@ -25,7 +25,7 @@
 #
 # Exit: 0 done/not-eligible, 1 refused, 2 usage.
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 #   v1 (2026-11-06, Wayne): first cut - assess / record-failure / archive.
 set -uo pipefail
 
@@ -139,34 +139,41 @@ archive() {
 }
 
 record_failure() {
-    local f="$1" cls="$2" base count=0 line
+    local f="$1" cls="$2" base count total=0 attributable=yes _b _c _n _t
     base=$(basename "$f")
     mkdir -p "$LOG_DIR"
+    # Tally per class, but COUNT PER MODEL: two different refusals of the same 67 GiB
+    # file are two facts about that model, not two classes each holding one vote.
+    count=0
     if [[ -r "$FAIL_FILE" ]]; then
-        line=$(awk -F'\t' -v b="$base" -v c="$cls" '$1==b && $2==c {print $3; exit}' "$FAIL_FILE")
-        [[ "$line" =~ ^[0-9]+$ ]] && count=$line
+        count=$(awk -F'	' -v b="$base" -v c="$cls" '$1==b && $2==c {print $3; exit}' "$FAIL_FILE")
+        [[ "$count" =~ ^[0-9]+$ ]] || count=0
+        awk -F'	' -v b="$base" -v c="$cls" '!( $1==b && $2==c )' "$FAIL_FILE" > "$FAIL_FILE.tmp"             && mv "$FAIL_FILE.tmp" "$FAIL_FILE"
     fi
     count=$(( count + 1 ))
-    # Replace that class's row for this model, leave every other row alone.
-    if [[ -r "$FAIL_FILE" ]]; then
-        awk -F'\t' -v b="$base" -v c="$cls" '!( $1==b && $2==c )' "$FAIL_FILE" > "$FAIL_FILE.tmp" \
-            && mv "$FAIL_FILE.tmp" "$FAIL_FILE"
+    printf '%s	%s	%s	%s
+' "$base" "$cls" "$count" "$(date -Iseconds)" >> "$FAIL_FILE"
+    # A class that says nothing about the MODEL vetoes the archive however often it
+    # repeats: an OOM is this run's sizing, and unclassified is this run's mystery.
+    while IFS=$'	' read -r _b _c _n _t; do
+        [[ "$_b" == "$base" ]] || continue
+        case "$_c" in
+            unsupported_arch|launch_error) ;;
+            *) attributable=no ;;
+        esac
+        [[ "$_n" =~ ^[0-9]+$ ]] && total=$(( total + _n ))
+    done < "$FAIL_FILE"
+    say "failure recorded: $base class=$cls count=$count; model total=$total (strikes: $STRIKES)"
+    if [[ "$attributable" != "yes" ]]; then
+        say "archive-eligible=no (a recorded class is not a model verdict)"
+        return 0
     fi
-    printf '%s\t%s\t%s\t%s\n' "$base" "$cls" "$count" "$(date -Iseconds)" >> "$FAIL_FILE"
-    say "failure recorded: $base class=$cls count=$count (archive strikes: $STRIKES)"
-    case "$cls" in
-        unsupported_arch)
-            if (( count >= STRIKES )); then
-                say "archive-eligible=yes (repeated unsupported_arch)"
-                archive "$f" "unsupported_arch x$count: the loader refused it at every ctx on $count separate runs" || return 1
-            else
-                say "archive-eligible=no (one refusal is a run, not a fact)"
-            fi
-            ;;
-        *)
-            say "archive-eligible=no (class $cls is not a model verdict)"
-            ;;
-    esac
+    if (( total >= STRIKES )); then
+        say "archive-eligible=yes ($total model-attributable failures)"
+        archive "$f" "$total model-attributable failures; latest $cls x$count (see autotune-failures.tsv)" || return 1
+    else
+        say "archive-eligible=no ($total of $STRIKES strikes; one refusal is a run, not a fact)"
+    fi
 }
 
 MODE="" FILE="" REASON="" CLASS="" ASSUME="no"

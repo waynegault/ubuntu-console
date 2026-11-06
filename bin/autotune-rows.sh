@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 #   v14 (2026-11-06, Wayne): CLEAN-ROOM. The declared census tenants (the embed
 #   lane) are stopped for the sweep and restored on EXIT, so the baseline is a
 #   clean card and the TPS are not contended by construction.
@@ -248,21 +248,33 @@ if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
     done
     # A stop is asynchronous: wait (bounded) for its memory to leave the card, so the
     # baseline below describes a clean card rather than a race with a dying process.
-    _cr_bound="${AUTOTUNE_CLEAN_ROOM_MAX_MIB:-${LLM_AUTOTUNE_CLEAN_ROOM_MAX_MIB:-800}}"
+    # The bound is DERIVED, not declared: at a 24 GiB pool the WDDM driver alone
+    # holds ~2.4 GiB, so a fixed 800 MiB "clean" figure can never be met (measured
+    # 2026-11-06: 2,477 MiB held with the tenant stopped, and every run warned).  The
+    # card is drained when the reading stops FALLING - two equal polls - and that
+    # floor is printed, so the number a reader sees is the one this boot measured.
+    _cr_prev=""
+    _cr_stable=0
     _cr_waited=0
     _cr_used=""
     while (( _cr_waited < 30 )); do
         _cr_used="$(_tac_gpu_used_mib)"
-        if [[ "$_cr_used" =~ ^[0-9]+$ ]] && (( _cr_used < _cr_bound )); then
-            break
+        if [[ "$_cr_used" =~ ^[0-9]+$ ]]; then
+            if [[ "$_cr_used" == "$_cr_prev" ]]; then
+                _cr_stable=$(( _cr_stable + 1 ))
+            else
+                _cr_stable=0
+            fi
+            (( _cr_stable >= 2 )) && break
         fi
+        _cr_prev="$_cr_used"
         sleep 2
         _cr_waited=$(( _cr_waited + 2 ))
     done
-    if [[ "$_cr_used" =~ ^[0-9]+$ ]] && (( _cr_used < _cr_bound )); then
-        echo "clean-room: card clear - ${_cr_used} MiB held after ${_cr_waited}s" | tee -a "$LOG"
+    if (( _cr_stable >= 2 )); then
+        echo "clean-room: card drained - ${_cr_used} MiB is this boot driver floor after ${_cr_waited}s" | tee -a "$LOG"
     else
-        echo "clean-room: WARNING ${_cr_used:-unreadable} MiB still held after ${_cr_waited}s (clean bound ${_cr_bound}) - readings may be contended" | tee -a "$LOG"
+        echo "clean-room: WARNING still moving (${_cr_used:-unreadable} MiB) after ${_cr_waited}s - readings may be contended" | tee -a "$LOG"
     fi
 else
     echo "=== clean-room: DISABLED (AUTOTUNE_CLEAN_ROOM=${AUTOTUNE_CLEAN_ROOM}) - readings are CONTENDED by declaration" | tee -a "$LOG"

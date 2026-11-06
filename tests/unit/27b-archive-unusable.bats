@@ -79,3 +79,20 @@ teardown() { rm -rf "$TMP"; }
     [ "$status" -ne 0 ]
     [ -f "$TMP/active/Keep.gguf" ]
 }
+@test "two DIFFERENT model-attributable classes still reach the strike count" {
+    head -c 1000 /dev/zero > "$TMP/active/Mixed.gguf"
+    run "$TOOL" --record-failure "$TMP/active/Mixed.gguf" --class unsupported_arch
+    [[ "$output" == *"archive-eligible=no"* ]]
+    run "$TOOL" --record-failure "$TMP/active/Mixed.gguf" --class launch_error
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"archive-eligible=yes"* ]]
+    [ ! -f "$TMP/active/Mixed.gguf" ]
+}
+
+@test "a model with one ambiguous class is never archived, even after a clear one" {
+    head -c 1000 /dev/zero > "$TMP/active/Poisoned.gguf"
+    run "$TOOL" --record-failure "$TMP/active/Poisoned.gguf" --class unsupported_arch
+    run "$TOOL" --record-failure "$TMP/active/Poisoned.gguf" --class resource_exhausted
+    [[ "$output" == *"archive-eligible=no"* ]]
+    [ -f "$TMP/active/Poisoned.gguf" ]
+}
