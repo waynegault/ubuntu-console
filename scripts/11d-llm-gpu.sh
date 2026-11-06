@@ -1,6 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 38
+#   v38 (2026-11-06): wake reads persistence mode before it touches sudo.  It used to
+#   call `sudo -n nvidia-smi -pm 1` unconditionally, so `model bench` on a box without
+#   passwordless sudo printed "GPU Persistence [FAILED - passwordless sudo required for
+#   nvidia-smi]" for a card whose mode already read Enabled — a sudo requirement invented
+#   by the probe.  Only a Disabled reading is escalated now, and that failure names the
+#   `sudo nvidia-smi -pm 1` command; an unreadable/N/A mode is reported as not exposed.
+#   Same run: __llm_vram_holder_report printed an EMPTY "Held by:" block under a refusal
+#   whose census named its holder, because it read compute-apps — empty on this host.  Its
+#   holder list now comes from __llm_cuda_server_pids (compute-apps, else /proc/PID/exe).
 # Module Version: 37
 #   v37 (2026-11-05): __llm_cuda_server_pids gives the CUDA reap an attribution that
 #   works on WSL2.  nvidia-smi's compute-app list is EMPTY here even at 73 GiB used, so
@@ -638,31 +648,50 @@ function __llm_kill_cuda_llama_servers() {
 # The autotune's refusal said only "28099 MiB still held".  An operator reading that has
 # to go and run nvidia-smi to learn which unit — and the answer, on this box, is a unit
 # the sweep deliberately spared, so the refusal's own cause is invisible from the message.
-# Prints to stdout for the caller to embed; empty when nvidia-smi cannot attribute.
+#
+# The LIST comes from __llm_cuda_server_pids (compute-apps when it answers, the process
+# table by /proc/PID/exe when it does not), NOT from compute-apps alone.  Measured
+# 2026-11-06: a refusal that named its unlisted holder through the census printed an
+# empty "Held by:" block, because this function read the one source this host leaves
+# empty — the same blindness v37 fixed in the reaper and the census already worked
+# around.  nvidia-smi still supplies the per-process MiB when it can attribute one.
+# Prints to stdout for the caller to embed; empty when nothing holds the card.
 # ---------------------------------------------------------------------------
 function __llm_vram_holder_report() {
-    local _smi _pid _mib _unit _exe
-    # swallow-ok: a missing nvidia-smi is the documented no-attribution answer; the caller fails closed
+    local _smi _pid _mib _unit _exe _pairs=" "
+    # swallow-ok: a missing nvidia-smi only removes the per-process MiB figures; the holder list comes from the process scan below
     _smi=$(command -v nvidia-smi 2>/dev/null || true)
-    [[ -n "$_smi" ]] || return 0
-    while IFS=',' read -r _pid _mib
+    if [[ -n "$_smi" ]]
+    then
+        while IFS=',' read -r _pid _mib
+        do
+            _pid=$(printf '%s' "${_pid:-}" | tr -d ' ')
+            _mib=$(printf '%s' "${_mib:-}" | tr -d ' ')
+            [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+            # This host reports [N/A] for per-process memory (WSL2 dxgkrnl); carry the
+            # figure only when it is a number, so a line never shows a placeholder.
+            case "$_mib" in ''|*[!0-9]*) continue ;; esac
+            _pairs+="$_pid:$_mib "
+        # swallow-ok: an unreadable compute-apps list only costs the MiB figure; the scan below still names every holder
+        done < <("$_smi" --query-compute-apps=pid,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null || true)
+    fi
+    while IFS= read -r _pid
     do
-        _pid=$(printf '%s' "${_pid:-}" | tr -d ' ')
-        _mib=$(printf '%s' "${_mib:-}" | tr -d ' ')
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
-        # This host reports [N/A] for per-process memory (WSL2 dxgkrnl); print the figure
-        # only when it is a number, so the line reads as fact rather than as a placeholder.
-        case "$_mib" in ''|*[!0-9]*) _mib="" ;; esac
+        _mib=""
+        case "$_pairs" in
+            *" $_pid:"*) _mib="${_pairs##* "$_pid:"}"; _mib="${_mib%% *}" ;;
+            *) ;;
+        esac
         # The LEAF .service: the first match is the user manager
         # (user@1000.service), measured 2026-11-05 in a real refusal.
-        # swallow-ok: a process that exited since the nvidia-smi read has no cgroup to name
+        # swallow-ok: a process that exited since the scan has no cgroup to name
         _unit=$(ps -o cgroup= -p "$_pid" 2>/dev/null | grep -o '[^/]*\.service' | tail -n 1 || true)
-        # swallow-ok: a process that exited since the nvidia-smi read has no exe to name
+        # swallow-ok: the same exit leaves no exe to name
         _exe=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || true)
         printf '  pid %s  %s%s  %s\n' \
             "$_pid" "${_mib:+${_mib} MiB  }" "${_unit:-no-unit}" "${_exe:-unknown-exe}"
-    # swallow-ok: an unreadable compute-apps list yields no candidate; the baseline gate fails closed
-    done < <("$_smi" --query-compute-apps=pid,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null || true)
+    done < <(__llm_cuda_server_pids)
 }
 
 # ---------------------------------------------------------------------------
@@ -754,6 +783,24 @@ function __llm_stand_down_cuda_lanes() {
 }
 
 # ---------------------------------------------------------------------------
+# wake — lock GPU persistence mode where that is possible, then show the card.
+#
+# Reading the mode needs no privilege, so it is read FIRST: in the steady state
+# it already reads Enabled and the mode never has to be changed.  This used to
+# call `sudo -n nvidia-smi -pm 1` unconditionally, so a box without passwordless
+# sudo reported `GPU Persistence [FAILED - passwordless sudo required for
+# nvidia-smi]` on `model bench` (2026-11-06, this box) for a setting that was
+# already on — a sudo requirement invented by the probe, not by the driver.
+#
+# Only a Disabled reading is escalated, and only that failure is worth a warning:
+# it names the one command that fixes it.  An unreadable/N/A mode means the
+# driver exposes no persistence switch (a PV guest), so there is nothing to lock
+# and the return is 0 — the GPU serves either way.
+#
+# @returns 0 when persistence is Enabled or not exposed by the driver; 1 when it
+#          is Off and could not be turned on.  Every caller treats this as
+#          best-effort.
+# ---------------------------------------------------------------------------
 function wake() {
     local smi_cmd
     smi_cmd=$(__resolve_smi) || {
@@ -761,31 +808,49 @@ function wake() {
         return 1
     }
 
-    # Try to enable persistence mode; capture output for NVML error detection
-    local _pm_output
-    _pm_output=$(sudo -n "$smi_cmd" -pm 1 2>&1)
-    local _pm_status=$?
+    local _pm_mode
+    # swallow-ok: an unreadable mode leaves _pm_mode empty, which the case below reports as not-exposed
+    _pm_mode=$("$smi_cmd" --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
 
-    # Check for any NVML initialization failure (common in WSL2 with various driver states)
-    if [[ "$_pm_output" == *"Failed to initialize NVML"* ]]
-    then
-        # NVML unavailable (WSL2/driver limitation) — GPU still works for inference
-        return 0
-    fi
+    case "$_pm_mode" in
+        Enabled)
+            __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
+            ;;
+        Disabled)
+            # Try to enable persistence mode; capture output for NVML error detection
+            local _pm_output
+            _pm_output=$(sudo -n "$smi_cmd" -pm 1 2>&1)
+            local _pm_status=$?
 
-    # Check for actual failure (sudo denied or other error)
-    if (( _pm_status != 0 ))
-    then
-        if [[ "$_pm_output" == *"password"* || "$_pm_output" == *"sudo"* || "$_pm_output" == *"authentication"* ]]
-        then
-            __tac_info "GPU Persistence" "[FAILED - passwordless sudo required for nvidia-smi]" "$C_Warning"
-        else
-            __tac_info "GPU Persistence" "[FAILED - nvidia-smi error: $_pm_output]" "$C_Warning"
-        fi
-        return 1
-    fi
+            # Check for any NVML initialization failure (common in WSL2 with various driver states)
+            if [[ "$_pm_output" == *"Failed to initialize NVML"* ]]
+            then
+                # NVML unavailable (WSL2/driver limitation) — GPU still works for inference
+                return 0
+            fi
 
-    __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
+            # Check for actual failure (sudo denied or other error)
+            if (( _pm_status != 0 ))
+            then
+                if [[ "$_pm_output" == *"password"* || "$_pm_output" == *"sudo"* || "$_pm_output" == *"authentication"* ]]
+                then
+                    # The setting is Off and only root can change it — name the command
+                    # rather than a sudo policy this shell cannot obtain.
+                    __tac_info "GPU Persistence" \
+                        "[OFF - needs root: sudo $smi_cmd -pm 1]" "$C_Warning"
+                else
+                    __tac_info "GPU Persistence" "[FAILED - nvidia-smi error: $_pm_output]" "$C_Warning"
+                fi
+                return 1
+            fi
+
+            __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
+            ;;
+        *)
+            __tac_info "GPU Persistence" \
+                "[${_pm_mode:-unreadable} - no persistence switch on this driver]" "$C_Dim"
+            ;;
+    esac
 
     local gpu_stat
     gpu_stat=$("$smi_cmd" \

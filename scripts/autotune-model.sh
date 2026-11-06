@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 112
+#   v112 (2026-11-06): the unlisted-holder block heading named the CENSUS where it meant
+#   the offenders ("Outside the declared census <allowed tenant>:"), so a refusal caused by
+#   a foreign agent's llama-server read as if the embedding lane were at fault.  It now
+#   reads "Unlisted holders (declared tenants: …)".  No gate change.
 # Module Version: 111
 #   v111 (2026-11-05): the tolerance comment named a value the profile does not declare
 #   (5000); it declares 3500, and the kept lane is now declared to the census instead.
@@ -806,7 +811,10 @@ if (( _vram_rc != 0 )); then
         _tac_vram_holder_identities >&2 || true
     fi
     if [[ "$_BASELINE_REASON" == "unlisted-holder" ]]; then
-        warn "Outside the declared census ${_BASELINE_TENANTS:-<unset>}:"
+        # "Outside the declared census <tenants>:" read as if the DECLARED tenant were the
+        # offender; what follows the colon is the offenders.  Measured 2026-11-06, a
+        # refusal whose only unlisted holder was a foreign agent's run.
+        warn "Unlisted holders (declared tenants: ${_BASELINE_TENANTS:-<unset>}):"
         sed -n 's/^unlisted=//p' <<< "$_VRAM_VERDICT" | head -1 | tr ' ' '\n' | sed 's/^/  /' >&2
     fi
     warn "Remedy: stop the holding lane (model stop, or systemctl --user stop <unit>) and re-run; " \
