@@ -144,7 +144,16 @@ teardown() {
     # Prove the stand-in is running from that path BEFORE the report is judged by it.
     [[ "$(readlink -f "/proc/$HOLDER_PID/exe")" == "$STUB/llama.cpp/build-cuda/bin/llama-server" ]]
 
-    run __llm_vram_holder_report
+    # Run the report in a CHILD with a PATH built from scratch.  In-process, sourcing
+    # 01-constants can prepend /usr/lib/wsl/lib (the REAL nvidia-smi) and the runner's
+    # environment may carry exported functions — and `__llm_cuda_server_pids` trusts a
+    # compute-apps list that answers, so the real card's lane won and this case failed in
+    # CI on 2026-11-06 while passing here.  env -i makes the stub the only nvidia-smi.
+    run env -i PATH="$STUB/bin:/usr/bin:/bin" bash -c '
+        source "$1"
+        [[ "$(command -v nvidia-smi)" == "$2" ]] || { echo "STUB NOT RESOLVED"; exit 3; }
+        __llm_vram_holder_report
+    ' _ "$REPO_ROOT/scripts/11d-llm-gpu.sh" "$STUB/bin/nvidia-smi"
     [ "$status" -eq 0 ]
     [[ "$output" == *"pid $HOLDER_PID"* ]]
     [[ "$output" == *"$STUB/llama.cpp/build-cuda/bin/llama-server"* ]]
