@@ -352,7 +352,10 @@ EOS
     [ "$status" -eq 0 ]
     # v7 wording: the loop reports what is still OWED rather than the shrink it used to require.
     [[ "$output" == *"still owed: 1 row(s)"* ]]
-    [[ "$output" == *"armed restart 1/8"* ]]
+    # The cap is UNLIMITED by default since v31 (Wayne, 2026-11-06: a cap must not park a
+    # campaign that still owes rows), so the denominator moved.  What this case is about is that
+    # the ARM happens; the cap itself is pinned by the case below, which sets it explicitly.
+    [[ "$output" == *"armed restart 1"* ]]
 
     # Armed through the TRACKED tool, which owns the Windows side and the chunk gate.
     grep -q '^--restart$' "$RESTART_ARGV"
@@ -378,7 +381,10 @@ EOS
         _row 2 flagged.gguf     1.00 yes 5.00
     } > "$TAC_RESUME_REGISTRY"
     printf '4\n' > "$ENTRY_RC_FILE"
-    # The counter is already AT the cap before the arm is attempted.
+    # The counter is already AT the cap before the arm is attempted.  The cap is set EXPLICITLY:
+    # since v31 the shipped default is unlimited (0), so a case that wants the cap-to-reset path
+    # has to ask for a cap or it silently tests the unlimited path instead.
+    export TAC_RESUME_ARM_MAX=8
     printf '8\n' > "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts"
 
     run "$SCRIPT" 2>&1

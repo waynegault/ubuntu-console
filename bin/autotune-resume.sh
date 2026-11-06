@@ -60,7 +60,14 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
+#   v33 (2026-11-06): PROGRESS IS A VERDICT, NOT A SHRINK.  The v32 guard compared the OWED
+#   count before and after, which a CAP can shrink: measured at 13:45, the plan went 8 -> 7 when
+#   apply_indicative_cap capped GLM-5.3 out, "progress" was declared, a restart was armed for
+#   13:48 - and the box rebooted to re-run rows whose loader could not read the GGUF anyway.
+#   The guard now compares certified_count() (registry field 44), the only exit that means a row
+#   was MEASURED.  Also removes an orphaned line the v31 edit left in arm_restart, which the
+#   journal caught at 13:45:34 as "line 856: 1: command not found".
 #   v32 (2026-11-06, Wayne): a boot that measured NOTHING and did not halt on the budget
 #   no longer arms a restart.  Measured that day: a pre-flight ABORT (rc=1, the census cap
 #   was below the real tenant hold) armed a restart for 13:27 that would have re-run the
@@ -451,6 +458,18 @@ scope_rows() {
         done[$0] { next }
         { print $0 }
     ' "$REGISTRY" "$SCOPE" | awk '!seen[$0]++'
+}
+
+# certified_count — how many registry rows carry meas_state 'certified' (field 44).
+# This is the only progress that means anything to continue_after: a row that left the
+# plan because it was CERTIFIED is progress, and a row that left because it was CAPPED
+# is a park.  Counting OWED rows conflated the two, and on 2026-11-06 that conflation
+# armed a restart for a boot that had certified nothing: the plan went 8 -> 7 when
+# apply_indicative_cap capped GLM-5.3 out, the guard read the shrink as progress, and
+# the armed 13:48 restart rebooted the box to re-run rows it could not load anyway.
+certified_count() {
+    [[ -r "$REGISTRY" ]] || { printf '0'; return 0; }
+    awk -F'|' '$44 == "certified" { n++ } END { print n + 0 }' "$REGISTRY"
 }
 
 # retired_reason <model file> — the tombstone's own reason for a row, or exit 1 when it is not
@@ -862,7 +881,6 @@ arm_restart() {
         printf 'armed restart %s (unlimited, progress-guarded): the next boot resumes the remainder at %s\n' \
             "$(( _n + 1 ))" "$(date -Iseconds)"
     fi
-        "$(( _n + 1 ))" "$ARM_MAX" "$(date -Iseconds)"
     return 0
 }
 
@@ -997,7 +1015,7 @@ apply_indicative_cap() {
 # ONLY the budget halt is resumable, and only when this boot SHRANK the remainder -
 # a restart that would re-run the same rows buys nothing but a reboot.
 continue_after() {
-    local _rc="$1" _before="$2" _after=0
+    local _rc="$1" _before="$2" _cert_before="${3:-0}" _after=0 _cert_after=0
     if (( _rc == EXIT_ADAPTER )); then
         printf 'not continuing: the chunk stopped for the ADAPTER with the budget UNSPENT\n'
         printf '  the ledger is not the explanation, so a restart would not help - a person looks\n'
@@ -1025,9 +1043,14 @@ continue_after() {
     # low) armed a restart for 13:27 that would have re-run the identical abort.  v7
     # keeps retrying rows that were MEASURED and stayed indicative (rc=4, budget spent);
     # that path is untouched.  No progress + no budget halt = a person.
-    if (( _after == _before )) && (( _rc != CHUNK_BUDGET )); then
-        printf 'NOT arming: %s row(s) owed before and after, and the chunk exited %s, not a budget halt\n' "$_after" "$_rc"
-        printf '  a restart would repeat this boot. Plan written back; fix the cause and re-run.\n'
+    _cert_after=$(certified_count)
+    # Only a FAILED boot is held: exit 0 is the chunk saying it finished its own work, and the
+    # batch's exit codes are the contract (1 = it could not, 4 = budget spent).  Holding a clean
+    # exit would pause a campaign every time a stub or a skip-all run returned success.
+    if (( _cert_after <= _cert_before )) && (( _rc != CHUNK_BUDGET )) && (( _rc != 0 )); then
+        printf 'NOT arming: %s -> %s row(s) certified, and the chunk exited %s, not a budget halt\n' \
+            "$_cert_before" "$_cert_after" "$_rc"
+        printf '  %s row(s) still owed. A restart would repeat this boot; fix the cause and re-run.\n' "$_after"
         write_plan || return "$EXIT_PAUSED"
         return "$EXIT_PAUSED"
     fi
@@ -1135,6 +1158,7 @@ run_plan() {
     cp "$PLAN" "$LOGDIR/autotune-resume-$_stamp.rows"
     mv "$PLAN" "$PLAN.claimed-$_stamp"
     _claim="$PLAN.claimed-$_stamp"
+    _cert_before=$(certified_count)
     printf 'resuming %s row(s) through %s (claimed as %s.claimed-%s)\n' \
         "${#_kept[@]}" "$ENTRY" "$PLAN" "$_stamp"
     # A CHILD, not `exec`: the exit code is the loop's input, and `exec` threw it
@@ -1147,7 +1171,7 @@ run_plan() {
     # interrupted one however continue_after resolves it.  A stall that stops for a person
     # must not look like a cut-off chunk on the next boot.
     retire_claim "$_claim"
-    continue_after "$_rc" "${#_kept[@]}"
+    continue_after "$_rc" "${#_kept[@]}" "${_cert_before:-0}"
 }
 
 # One line per fact: the plan, the boot ledger, whether a chunk is live, and the

@@ -96,3 +96,30 @@ teardown() { rm -rf "$TMP"; }
     [[ "$output" == *"archive-eligible=no"* ]]
     [ -f "$TMP/active/Poisoned.gguf" ]
 }
+
+@test "a bare basename resolves against the model dir (the failure path passes a NAME)" {
+    # Measured 2026-11-06: the autotune failure path called --record-failure with
+    # "GLM-5.3-...gguf" while the file sat in active/, and v2 answered
+    # "refusing: no such model" - a refusal for the wrong reason, which would have
+    # hidden the strike count from the operator while looking like a safety feature.
+    head -c 1000 /dev/zero > "$TMP/active/Named.gguf"
+    run "$TOOL" --assess "Named.gguf"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"verdict=fits"* ]]
+}
+
+@test "loader_vintage never archives, however many strikes it collects" {
+    # The arm that matters: build-148 vs glm5-next, three boots, one 67 GiB model.
+    # A build gap is a fact about the BINARY.  If this ever archives, a rebuild was
+    # the fix and the weights were deleted instead.
+    head -c 1000 /dev/zero > "$TMP/active/Vintage.gguf"
+    run "$TOOL" --record-failure "Vintage.gguf" --class loader_vintage
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"archive-eligible=no"* ]]
+    [[ "$output" == *"rebuild llama.cpp"* ]]
+    run "$TOOL" --record-failure "Vintage.gguf" --class loader_vintage
+    [[ "$output" == *"archive-eligible=no"* ]]
+    run "$TOOL" --record-failure "Vintage.gguf" --class loader_vintage
+    [[ "$output" == *"archive-eligible=no"* ]]
+    [ -f "$TMP/active/Vintage.gguf" ]
+}

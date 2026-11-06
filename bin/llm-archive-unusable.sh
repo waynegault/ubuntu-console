@@ -16,7 +16,9 @@
 #   2. REPEATED LOAD FAILURE of class unsupported_arch - the loader refused it at every
 #                  ctx on N separate runs (default 2).  One refusal is a run, not a fact:
 #                  a broken binary or a bad flag fails the same way.
-# A single failure, an OOM (resource_exhausted) or a launch_error NEVER archives.
+# A single failure, an OOM (resource_exhausted), a loader_vintage gap (the build cannot read the
+# model's GGUF metadata) or an unclassified failure NEVER archives.  Only two tokens are
+# model-attributable: unsupported_arch and launch_error.
 #
 # WHAT IT WRITES.  Before the move, and durably:
 #   $LLM_STATE_DIR/autotune-archive.log   <ts> TAB <file> TAB <bytes> TAB <class> TAB <reason>
@@ -25,8 +27,15 @@
 #
 # Exit: 0 done/not-eligible, 1 refused, 2 usage.
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 #   v1 (2026-11-06, Wayne): first cut - assess / record-failure / archive.
+#   v3 (2026-11-06): (a) a bare basename resolves against MODEL_DIR - the autotune failure path
+#       calls this with the registry's NAME, and v2 refused it with "no such model:
+#       GLM-5.3-...gguf" while the file sat in active/, which is a refusal for the wrong reason;
+#       (b) class loader_vintage is named in its refusal, because "a recorded class is not a
+#       model verdict" understated a build gap: measured 2026-11-06, build 148 could not read
+#       glm5-next.attention.indexer.kpool, that reached this tool as launch_error (attributable),
+#       and three such boots would have archived a 67 GiB model that only needed a rebuild.
 set -uo pipefail
 
 MODEL_DIR="${LLAMA_MODEL_DIR:-$HOME/models/active}"
@@ -96,8 +105,16 @@ total_mib_of_set() {
     printf '%d' "$t"
 }
 
+resolve_model() {
+    local f="$1"
+    if [[ -f "$f" ]]; then printf '%s' "$f"; return 0; fi
+    if [[ -f "$MODEL_DIR/$f" ]]; then printf '%s' "$MODEL_DIR/$f"; return 0; fi
+    printf '%s' "$f"
+}
+
 assess() {
-    local f="$1" total_mib mem_mib ceiling verdict
+    local f total_mib mem_mib ceiling verdict
+    f=$(resolve_model "$1")
     [[ -f "$f" ]] || { echo "verdict=missing"; return 1; }
     total_mib=$(total_mib_of_set "$f")
     mem_mib=$(mem_total_mib)
@@ -109,9 +126,13 @@ assess() {
     [[ "$verdict" == "too-big" ]] && return 3 || return 0
 }
 
+# resolve_model <path-or-name> - the autotune failure path hands us the registry's NAME
+# (basename), not a path, and a bare -f test on that name refused a file that exists.
+# Echoes the path it settled on; callers still test -f so a real miss is still a miss.
 archive() {
     local f="$1" reason="$2" assume="${3:-no}" set size shard moved=0
-    [[ -f "$f" ]] || { echo "refusing: no such model: $f" >&2; return 1; }
+    f=$(resolve_model "$f")
+    [[ -f "$f" ]] || { echo "refusing: no such model: $1 (tried as given and as $MODEL_DIR/$1)" >&2; return 1; }
     set=$(shards_of "$f")
     [[ -n "$set" ]] || { echo "refusing: no shards resolved for $f" >&2; return 1; }
     size=$(total_mib_of_set "$f")
@@ -165,7 +186,14 @@ record_failure() {
     done < "$FAIL_FILE"
     say "failure recorded: $base class=$cls count=$count; model total=$total (strikes: $STRIKES)"
     if [[ "$attributable" != "yes" ]]; then
-        say "archive-eligible=no (a recorded class is not a model verdict)"
+        # A missing or unreadable ledger means no vintage row - the same answer as grep
+        # finding none, and the alternative is a spurious error on a fresh box.
+        # swallow-ok: absent ledger == no vintage row; grep's own stderr is not wanted here
+        if grep -q $'^'"$base"$'\tloader_vintage\t' "$FAIL_FILE" 2>/dev/null; then
+            say "archive-eligible=no (loader_vintage - the model's GGUF metadata does not match what this loader requires; a rebuild does NOT fix it, the file needs re-converting. Do not archive.)"
+        else
+            say "archive-eligible=no (a recorded class is not a model verdict)"
+        fi
         return 0
     fi
     if (( total >= STRIKES )); then

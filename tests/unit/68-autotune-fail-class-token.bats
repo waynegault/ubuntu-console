@@ -218,3 +218,39 @@ report_with() {
     [[ "$output" == *"rejected its launch"* ]]
     [[ "$output" != *"cannot be loaded at any ctx"* ]]
 }
+
+# ------------------------------------------------------------------------------
+# 2026-11-06 - the build-vintage gap.  Measured twice in one boot: build 148 could not
+# read GLM-5.3's glm5-next.attention.indexer.kpool (missing key) or Qwen3.8-Flash-Next's
+# qwen4exp.expert_count (wrong type).  Both texts contained "failed to load model", so the
+# old classifier called them launch_error - MODEL-attributable - and three such boots would
+# have archived a 67 GiB model that HEAD already supports.  These arms pin the token and the
+# veto; the archive arm pins that the veto survives the strike count.
+# ------------------------------------------------------------------------------
+
+@test "a missing GGUF metadata key is loader_vintage, not launch_error" {
+    printf '%s\n' \
+        "0.00.304.129 I srv    load_model: loading model '/m/GLM.gguf'" \
+        "0.00.350.553 E llama_model_load: error loading model: error loading model hyperparameters: key not found in model: glm5-next.attention.indexer.kpool" \
+        "0.00.350.603 E srv    load_model: failed to load model, '/m/GLM.gguf'" > "$LOG"
+    run classify_with ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "loader_vintage" ]
+}
+
+@test "a GGUF metadata TYPE mismatch is loader_vintage too" {
+    printf '%s\n' \
+        "0.00.421.071 E llama_model_load: error loading model: error loading model hyperparameters: key qwen4exp.expert_count has wrong type arr but expected type u32" \
+        "0.00.421.112 E srv    load_model: failed to load model, '/m/Coder.gguf'" > "$LOG"
+    run classify_with ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "loader_vintage" ]
+}
+
+@test "an OOM log is still resource_exhausted, not swallowed by the vintage rule" {
+    # The null arm for the new pattern: it must not read memory text as a build gap.
+    printf '%s\n' "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 4096 MiB: cuda error: out of memory" > "$LOG"
+    run classify_with ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "resource_exhausted" ]
+}

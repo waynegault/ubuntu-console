@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 113
+# Module Version: 114
 #   v112 (2026-11-06): the unlisted-holder block heading named the CENSUS where it meant
 #   the offenders ("Outside the declared census <allowed tenant>:"), so a refusal caused by
 #   a foreign agent's llama-server read as if the embedding lane were at fault.  It now
@@ -463,6 +463,9 @@ __autotune_failure_label() {
         unsupported_arch)   printf 'unsupported architecture / no matching backend' ;;
         launch_error)       printf "launch or flag error, or a model the server could not load \
 (the server rejected its invocation)" ;;
+        loader_vintage)     printf "this loader cannot read the model's GGUF metadata \
+(a required key is absent, or a value has the wrong type: the FILE and the LOADER disagree — \
+rebuilding does not help, re-convert or obtain a matching GGUF)" ;;
         insufficient_host_staging) printf "the largest shard cannot be staged in host memory \
 (split GGUFs stage one shard; guest RAM is the wall, not VRAM)" ;;
         loader_crash_unknown) printf "the launch died with no OOM witness and no load signature \
@@ -1338,11 +1341,28 @@ __autotune_classify_failure() {
     # meas_state=unacceptable at :3227, and a corrupt, truncated or absent file is not an architecture
     # verdict.  Whether an unloadable file should retire the row is a separate judgement, and this
     # change deliberately does not make it - it only stops the ledger from claiming it did not know.
+    # The FILE and the LOADER disagree about metadata.  Measured 2026-11-06, both rows:
+    #   GLM-5.3             key not found in model: glm5-next.attention.indexer.kpool
+    #   Qwen3.8-Flash-Next  key qwen4exp.expert_count has wrong type arr but expected type u32
+    # The FIRST diagnosis was a stale binary, and it was WRONG: build 148 was rebuilt to 166 at
+    # HEAD 3ed7284f2 and BOTH still fail identically.  glm5-next.cpp:43 reads kpool with no
+    # optional flag, so the loader REQUIRES a key the file does not carry; the coder's
+    # expert_count is an array where llama-model.cpp:1490 reads a u32.  A rebuild cannot fix
+    # either - only a different GGUF can.  What matters for the ledger is that this is NOT
+    # MODEL-attributable in the "cannot run on this box" sense, and NOT capacity: under the old
+    # patterns the text matched _re_load -> launch_error and three failed boots would have
+    # ARCHIVED a 67 GiB model whose only fault is its converter.  It vetoes, as resource_exhausted
+    # does.
+    local _re_vintage='key not found in model:|has wrong type .* but expected type|'
+    _re_vintage+='error loading model hyperparameters|gguf version .* (not supported|unsupported)|'
+    _re_vintage+='unsupported gguf version|unknown gguf (key|value type)'
     local _re_load='failed to load model|error loading model|failed to open|cannot open model file|'
     _re_load+='no such file|check_tensor_dims|wrong shape'
     local _re_launch='invalid argument|unknown argument|unrecognized (option|argument)|unexpected argument|'
     _re_launch+='error while handling argument|invalid value for|failed to parse|usage: |address already in use|cannot open model'
-    if grep -qiE "$_re_resource" <<< "$_text"; then
+    if grep -qiE "$_re_vintage" <<< "$_text"; then
+        printf 'loader_vintage'
+    elif grep -qiE "$_re_resource" <<< "$_text"; then
         printf 'resource_exhausted'
     elif grep -qiE "$_re_unsupported" <<< "$_text"; then
         printf 'unsupported_arch'
@@ -3465,6 +3485,8 @@ _autotune_failure_report() {
             echo "  failed: every configuration ran out of memory on this card — not certified on this run" ;;
         launch_error)
             echo "  failed: the server rejected its launch before it could be measured — not certified on this run" ;;
+        loader_vintage)
+            echo "  failed: this build could not read the model's metadata — NOT CERTIFIED (rebuild the server; the model is not at fault)" ;;
         *)
             echo "  failed: no configuration could be measured — not certified on this run" ;;
     esac
