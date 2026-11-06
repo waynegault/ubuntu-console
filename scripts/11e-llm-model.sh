@@ -1,12 +1,19 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 96
+# Module Version: 97
+#   v97 (2026-11-06): v96's changelog now records the body that shipped with it — the notice
+#   rides __tac_info like this file's other warnings (18.3 10.7), and the remedy names
+#   GGML_CUDA_FA_QUANTS, the toggle this repo pins, not the deprecated ALL_QUANTS, which warns
+#   on every configure.  No executable line changes.
 #   v96 (2026-11-06): the KV dtype is resolved once and warned about before launch.  Two pairs
 #   fail silently rather than loudly: a quantised V cache with --flash-attn off cannot load
 #   (llama.cpp refuses it), and q4_1/q5_0/q5_1 have no CUDA flash-attention kernel by default,
 #   so attention falls back to the CPU.  Both now print the reason and the remedy before the
-#   lane starts instead of surfacing as a dead lane or a mysteriously slow one.
+#   lane starts instead of surfacing as a dead lane or a mysteriously slow one.  The message
+#   rides __tac_info like this file's other notices (18.3 10.7), and the remedy names
+#   GGML_CUDA_FA_QUANTS — the toggle the repo pins — not the deprecated ALL_QUANTS, which
+#   warns on every configure.
 #   v95 (2026-11-05): a split family is REUNITED before it is paired.  v93/v94 made a nested
 #   model usable, but pairing still looks in the file's own directory (llama.cpp resolves
 #   -00002 beside the -m path), so a download that left one shard nested — part 1 at the store
