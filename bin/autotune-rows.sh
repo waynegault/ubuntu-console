@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-11-06, Jarvis): THE LOG NAME IS A NAME, NOT A PATH. The line below built it from
+#   ${ROWS[0]} .. ${ROWS[-1]}, and an HF-cache row path carries two or three slashes
+#   (`models--org--name/snapshots/<sha>/file.gguf`). Those slashes are DIRECTORY SEPARATORS, so
+#   the redirect targeted subdirectories nobody had created: "No such file or directory (os error 2)"
+#   (journal 2026-11-06T22:50:35Z, reproduced 23:22Z). The batch died on row one, certified stayed
+#   8 -> 8, and autotune-resume CORRECTLY refused to arm on exit 1 - the campaign paused for a
+#   filename, not for a model. Sanitising alone is not enough: that name was 313 chars, and
+#   sanitised alone the basename was 245, i.e. ENAMETOOLONG at 255. So sanitise AND cap, 100 each.
+#   Measured after the fix: 190-byte basename, no slash, opens.
 #   v14 (2026-11-06, Wayne): CLEAN-ROOM. The declared census tenants (the embed
 #   lane) are stopped for the sweep and restored on EXIT, so the baseline is a
 #   clean card and the TPS are not contended by construction.
@@ -183,7 +192,13 @@ else
     echo "WARN: quiet-fleet gate not found at $GATE — proceeding UNGATED" >&2
 fi
 
-LOG="$LOGDIR/autotune-$(date +%Y%m%d-%H%M%S)-rows-${ROWS[0]}${ROWS[*]:+_to_${ROWS[-1]}}.log"
+# v17: a log NAME, never a path. `/` in a row would become a separator (ENOENT) and the
+# uncapped name is 313 chars (ENAMETOOLONG), so sanitise first and cap each side at 100.
+_log_name_part() {
+    local s="${1//\//_}"
+    printf '%s' "${s:0:100}"
+}
+LOG="$LOGDIR/autotune-$(date +%Y%m%d-%H%M%S)-rows-$(_log_name_part "${ROWS[0]}")${ROWS[*]:+_to_$(_log_name_part "${ROWS[-1]}")}.log"
 cd "$REPO" || exit 1
 
 {
