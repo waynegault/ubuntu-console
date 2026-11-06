@@ -670,6 +670,11 @@ EOS
     awk '/^_self_chain\(\)/,/^}/'            "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
     awk '/^_is_interpreter\(\)/,/^}/'        "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
     awk '/^_process_executes\(\)/,/^}/'      "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    # _any_executing_process calls _attr_argv (1.11.0) to record the pid/argv of the
+    # match, so the helper comes with it: without this the extraction raised
+    # "command not found" into the probe's stderr and the verdict line was not the
+    # only line compared — the same failure 1.10.0 hit with _under_test_harness.
+    awk '/^_attr_argv\(\)/,/^}/'            "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
     awk '/^_any_executing_process\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
     # _any_executing_process consults the harness predicate (1.10.0), so it must come
     # with it: without this the extraction raised "command not found" into the probe's

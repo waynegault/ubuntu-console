@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.11.0 (2026-11-06: the busy line now CARRIES the match, not just its class.
+#          `declared:<class>` stays the first token, so every existing consumer and test
+#          keeps working; it continues `pid=… rule=exe|argv-after:<interp> argv=<one line>`.
+#          Recorded because the 2026-11-04 12:35:56 stop [probe: declared:autotune] was
+#          CORRECT and still unattributable afterwards: the class alone cannot separate a real
+#          autotune from a test or lint invocation that merely NAMES the script, and the
+#          process had exited before anyone looked.  Instrumentation only — WHICH processes
+#          answer busy is unchanged (1.10.0's harness suppression still decides that); this
+#          records the pid, the rule that matched and the argv it matched on, sanitised and
+#          cut to 160 chars + '...' so it stays one journal line.  See _attr_argv.
 # Version: 1.10.0 (2026-11-04: a benchmark a TEST HARNESS started is no longer a declared
 #          workload. tests/unit/08-autotune-workload.bats executes the repo's own
 #          scripts/autotune-model.sh at its real path, so the probe answered correctly and the
@@ -91,7 +101,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 18
+# Module Version: 19
 # Version: 1.7.1 (2026-11-02: comment-only. The `# swallow-ok:` reason for the ldconfig
 #          probe moved from the END of the code line to the line directly above it: the
 #          marker is 180 characters of rationale riding on a non-comment line, so §18.3
@@ -488,7 +498,11 @@ declared_workload_busy() {
         _why="clear_vram"
     fi
     if [[ -n "$_why" ]]; then
-        REASONS+=("declared:$_why")
+        # Attribution AT THE MATCH: the class, then which process and which rule.
+        # Until 1.11.0 this line carried the class alone, so a stop could not be
+        # attributed after the fact — the 2026-11-04 12:35:56 [probe: declared:autotune]
+        # was correct and unreadable at the same time.
+        REASONS+=("declared:$_why pid=${_MATCH_PID:-unknown} rule=${_MATCH_RULE:-unknown} argv=${_MATCH_ARGV:-unreadable}")
         return 0
     fi
     return 1
@@ -520,6 +534,50 @@ _is_interpreter() {
     return 1
 }
 
+# _attr_argv <pid> — the argv a match was made on, as ONE bounded journal-safe line.
+#
+# Why this exists (2026-11-06): the 2026-11-04 12:35:56 stop read
+#   [probe: declared:autotune]
+# and the class alone could not be attributed afterwards. It cannot separate a real
+# autotune from a test or lint invocation that NAMES the script, and the process had
+# exited before anyone looked, so absence at 12:39 said nothing about 12:35:56.
+# Instrumentation only: this runs AFTER a match is made and changes nothing about
+# which processes match.
+#
+# The string is embedded in reasons (a quoted JSON array) and in the watchdog's
+# [probe: ...] bracket, so the sanitisation is part of the contract: " becomes ',
+# \ becomes /, ] becomes ), and control/non-printable bytes become ?. A quote would
+# break the reasons JSON, a ']' would end the bracket early, and a newline would
+# forge a second journal line. Each is REPLACED rather than dropped, so a reader can
+# see that a character was altered instead of a silently cleaned-up argv.
+# The joined argv is cut at 160 characters with a trailing '...'.
+_attr_argv() {
+    local _pid="$1" _s=""
+    local -a _a=()
+    # swallow-ok: an unreadable cmdline IS the fact being reported; the empty array falls through
+    mapfile -d '' -t _a < "/proc/$_pid/cmdline" 2>/dev/null || true
+    if (( ${#_a[@]} > 0 )); then
+        _s="${_a[*]}"
+    else
+        # An exited or other-user process has no readable cmdline, and the kernel's comm
+        # is the fallback identity; empty must read as unreadable, not as "no match".
+        # swallow-ok: absent comm is the identity fallback, not an error; empty prints unreadable
+        _s=$(cat "/proc/$_pid/comm" 2>/dev/null || true)
+        [[ -n "$_s" ]] && _s="comm=$_s"
+    fi
+    _s="${_s//$'\n'/ }"
+    _s="${_s//$'\r'/ }"
+    _s="${_s//$'\t'/ }"
+    _s="${_s//\"/\'}"
+    _s="${_s//\\//}"
+    _s="${_s//\]/)}"
+    _s=$(printf '%s' "$_s" | LC_ALL=C tr -c '[:print:]' '?')
+    if (( ${#_s} > 160 )); then
+        _s="${_s:0:160}..."
+    fi
+    printf '%s' "${_s:-unreadable}"
+}
+
 # 0 when process <pid> is really EXECUTING one of the named artefacts, 1 when it
 # merely names one.  Two gates, and neither is a command-line substring:
 #
@@ -541,13 +599,19 @@ _process_executes() {
     local _pid="$1"; shift
     local _name _exe_base _elem _i
     local -a _argv=()
+    # Which gate matched, for the busy line's attribution (_attr_argv carries the
+    # pid and argv). Reset per call so a previous candidate's rule cannot be read.
+    _MATCH_RULE=""
     _exe_base=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || true)
     _exe_base="${_exe_base##*/}"
     if [[ -z "$_exe_base" ]]; then
         IFS= read -r _exe_base < "/proc/$_pid/comm" 2>/dev/null || true
     fi
     for _name in "$@"; do
-        [[ -n "$_exe_base" && "$_exe_base" == "$_name" ]] && return 0
+        if [[ -n "$_exe_base" && "$_exe_base" == "$_name" ]]; then
+            _MATCH_RULE="exe"
+            return 0
+        fi
     done
     _is_interpreter "$_exe_base" || return 1
     mapfile -d '' -t _argv < "/proc/$_pid/cmdline" 2>/dev/null || true
@@ -563,7 +627,10 @@ _process_executes() {
         [[ "$_elem" == *[[:space:]]* ]] && continue
         _is_interpreter "${_argv[_i-1]##*/}" || continue
         for _name in "$@"; do
-            [[ "${_elem##*/}" == "$_name" ]] && return 0
+            if [[ "${_elem##*/}" == "$_name" ]]; then
+                _MATCH_RULE="argv-after:${_argv[_i-1]##*/}"
+                return 0
+            fi
         done
     done
     return 1
@@ -611,6 +678,10 @@ _any_executing_process() {
     local _pat="$1"; shift
     local _pid _s _is_self
     local -a _self=()
+    # Attribution for the caller's busy line: the pid and the argv of the match.
+    # _process_executes supplies the rule. Reset here, because a stale pid from an
+    # earlier probe would read as evidence about this one.
+    _MATCH_PID=""; _MATCH_ARGV=""
     mapfile -t _self < <(_self_chain)
     while read -r _pid; do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
@@ -620,10 +691,12 @@ _any_executing_process() {
         done
         (( _is_self )) && continue
         _process_executes "$_pid" "$@" || continue
+        _MATCH_PID="$_pid"
+        _MATCH_ARGV=$(_attr_argv "$_pid")
         if _under_test_harness "$_pid"; then
             # Visible, never silent: a suppression a reader cannot see is indistinguishable from a
             # probe that found nothing, which is the defect class this repo keeps paying for.
-            REASONS+=("suppressed:test-harness pid=$_pid")
+            REASONS+=("suppressed:test-harness pid=$_pid rule=$_MATCH_RULE argv=$_MATCH_ARGV")
             continue
         fi
         return 0
