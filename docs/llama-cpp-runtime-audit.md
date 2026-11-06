@@ -351,7 +351,13 @@ unreliable — the same binary on the same prompt spanned **45–67 tps** across
   exception, and it is current, not historical: as of 2026-09-14 the CUDA lane runs
   `--threads 4` and the Xe lane `--threads 8` (the 8081 unit runs `--threads 6`).
 - `--reasoning off` — current flag (`arg.cpp:3677`, `[on|off|auto]`, default `auto`).
-- `--cache-type-k/v q8_0` — current and appropriate.
+- `--cache-type-k/v q8_0` — current, and appropriate for a memory-bound lane, not for every
+  lane: the only controlled comparison found put f16 at 22.3 tok/s against q8_0's 15.2 at
+  256K on two RTX 3090s, with the gap growing by depth, so f16 is the faster choice wherever
+  the window still fits. It is now an autotune candidate (`LLM_AUTOTUNE_KV_QUANTS`), and the
+  launcher warns when q4_1/q5_0/q5_1 is asked for, since a default CUDA build has no
+  flash-attention kernel for those and falls back to CPU attention (llama.cpp #28455).
+  See [llm.md](llm.md#tuning-order--and-what-each-step-costs).
 - Removed spec-decode flags are already documented and not used.
 - **`--use_mmap false` (`11e-llm-model.sh:864`) is correct — do NOT "migrate" it to
   `--load-mode`.** It is passed only on the **python** backend, which builds

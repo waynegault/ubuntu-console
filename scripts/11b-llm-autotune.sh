@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 38
+# Module Version: 39
+#   v39 (2026-11-06): __autotune_fa_retry takes the V cache type and refuses the FA-off retry
+#   when it is quantised.  llama.cpp will not run a quantised V cache without flash attention,
+#   so that retry was a guaranteed second failure — and the row then read as an unsupported
+#   model.  Every autotune spawn passes --cache-type-v q8_0 by default, so the old path could
+#   not have succeeded for the default configuration.  f16/f32/bf16 keep the retry; OOM still
+#   descends and an unexplained death still stops.  Pinned in tests/unit/13.
 #   v38 (2026-11-04): __autotune_oom_evidence moves here from a nested scope inside _bench_spawn,
 #   where no test could reach it — so the rule the change exists for ("OOM needs evidence") had no
 #   case that could disagree.  It now takes (log, pid) and is pinned in tests/unit/13 in three
@@ -261,9 +267,9 @@ function __autotune_descent_candidates() {
 
 # ---------------------------------------------------------------------------
 # __autotune_fa_retry — should a failed launch be retried with --flash-attn off?
-#   args: fail_type (load_fail|oom|other)  fa_state (on|off)
-#   stdout: retry | descend | noop
-# A PURE decision, so the one case that must never retry is testable without a GPU.
+#   args: fail_type (load_fail|oom|other)  fa_state (on|off)  kv_v (cache-type-v)
+#   stdout: retry | descend | noop | stop | fa_required
+# A PURE decision, so the cases that must never retry are testable without a GPU.
 #
 # An OOM is a FIT verdict: the launch asked for more memory than the card/guest had.
 # Retrying with flash attention OFF allocates the full attention buffer, i.e. asks for
@@ -277,9 +283,16 @@ function __autotune_descent_candidates() {
 # cannot run FA fails to load with an explicit error, and FA off is the only way to
 # serve it.  "other"/unknown keeps today's behaviour (retry) — an unclassified
 # failure must not silently lose the one recovery we have.
+#
+# A QUANTISED V CACHE CLOSES THAT DOOR: llama.cpp refuses a quantised V cache with
+# flash attention off, so the retry is a second guaranteed failure rather than a
+# recovery, and the row is then recorded as the model's fault.  REF: vramcalculator,
+# "llama.cpp / llama-server Performance Flags" (2026-09), step 6 —
+# https://vramcalculator.com/llama-cpp-performance-flags/ .  The reference dtypes
+# f16/f32/bf16 are unquantised and keep the retry.
 # ---------------------------------------------------------------------------
 function __autotune_fa_retry() {
-    local fail="${1:-other}" fa="${2:-on}"
+    local fail="${1:-other}" fa="${2:-on}" kv_v="${3:-f16}"
     [[ "$fa" == "on" ]] || { printf 'noop\n'; return 0; }
     if [[ "$fail" == "oom" ]]; then
         printf 'descend\n'
@@ -293,6 +306,15 @@ function __autotune_fa_retry() {
         printf 'stop\n'
         return 0
     fi
+    # The reference dtypes run with or without flash attention; a quantised V cache
+    # runs only with it, so "retry with FA off" cannot be a recovery for one.
+    case "${kv_v,,}" in
+        ""|f16|bf16|f32) ;;
+        *)
+            printf 'fa_required\n'
+            return 0
+            ;;
+    esac
     printf 'retry\n'
 }
 

@@ -592,6 +592,15 @@ EOS
     # A MIXED pair is not certified either: certification is per pair, not per type.
     run bash "$SANDBOX/gate-run.sh" "$SANDBOX/kvgate.sh" q4_0 q8_0
     [[ "$output" != "certified" ]]
+
+    # The unquantised reference dtype is eligible WITHOUT a retrieval probe: it is the
+    # baseline every quantised pair is compared against, and the fastest cache where the
+    # window fits (measured 22.3 tok/s against q8_0's 15.2 at 256K).  Fails if: the gate
+    # refuses f16 for lacking a validation it cannot need, leaving the sweep unable to
+    # measure it.
+    run bash "$SANDBOX/gate-run.sh" "$SANDBOX/kvgate.sh" f16 f16
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "certified" ]]
 }
 
 @test "kv-quant: the sweep prints a refusal for a refused pair instead of dropping it" {
@@ -611,7 +620,9 @@ EOS
 @test "kv-quant: q4_0 stays a configured candidate, so the refusal path stays reachable" {
     # If q4_0 were removed from the candidate list the gate would never fire and the
     # "why" line would never print; the list is intent, the gate is the evidence.
-    grep -q 'LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0' "$ENV_SH"
+    # f16 is the reference dtype the gate now admits, so it is listed too — the sweep
+    # can only prefer it where it fits at the certified ctx (largest cache, listed last).
+    grep -q 'LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0 f16/f16' "$ENV_SH"
 }
 
 # ── the watchdog's driver-level classification ───────────────────────────────

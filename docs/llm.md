@@ -81,18 +81,108 @@ opt-in rather than a CI gate because an all-missing profile exits 2 by design.
 |---|---|---|
 | `n_gpu_layers` | 24 | Baseline GPU offload tuned for 4GB VRAM systems. Keep this under total 4GB usage to avoid desktop/framebuffer pressure. |
 | `n_threads` | 6 | Pins heavy compute to Alder Lake P-cores (i9-12900HK) for better throughput and thermal behavior. |
-| `n_ctx` | 4096 | Default context target for local serving. |
-| `cache_type_k` | `q8_0` | KV cache key quantization to reduce VRAM pressure while preserving quality. |
-| `flash_attn` | `true` | Explicitly enabled for Ampere GPUs to reduce attention memory overhead. |
+| `n_ctx` | 4096 | Default context target for local serving. `-c 0` (llama.cpp's default) means the model's OWN window — a 262K model allocates KV for 262K whether or not it is used. Serve passes `--fit on --fit-target`, so llama.cpp may lower the window to fit memory (down to `--fit-ctx`, default 4096); the served window is read back from `/props` after boot and a mismatch is reported. |
+| `cache_type_k` | `q8_0` | KV cache quantization: a MEMORY choice, not a free one — the only controlled comparison found decoded 22.3 tok/s on f16 vs 15.2 on q8_0 at 256K, and its gap grows with depth. `f16` is faster wherever the window still fits; `q8_0` is the default for the 4 GB card, where it is what fits. |
+| `flash_attn` | `true` | Explicitly enabled for Ampere GPUs. Not free on its own (2.2% of decode on the test CPU's native backend, 17.4% on the generic one), but a quantised V cache cannot run without it at all, so it is part of the cost of quantizing. |
 | `offload_kqv` | `true` | Explicitly enabled to improve CUDA-side attention path efficiency. |
 | `--batch-size` | per row, from the registry (fallback 1024) | Registry field 10; overridable with `LLAMA_BATCH_SIZE`. There is NO fixed GPU/CPU pair — measured across the 27 live rows on 2026-09-16: **1024 ×14, 512 ×7, 2048 ×6**. The old "4096 (GPU)" figure here was a stale copy of the autotune bench's candidate ladder (1024:256 → 2048:512 → 4096:1024, chosen by model size); `4096:1024` is a BENCH CANDIDATE and no row on this 4 GB card has ever certified it. |
 | `--ubatch-size` | per row, from the registry (fallback 256) | Registry field 11, clamped to `≤ batch-size`; overridable with `LLAMA_UBATCH_SIZE`. Measured spread: **256 ×15, 128 ×9, 512 ×3**. This is the prompt-processing micro-batch, not a "continuous batching" setting: `--cont-batching` is never passed, and `--parallel` is pinned to 1 (see the `model use` row). |
 | `--jinja` | always | Enables Jinja2 chat template processing from GGUF metadata (Qwen3, Phi-4, Gemma3). |
 | `--kv-offload` | always (default) | Offloads the KV cache to the GPU; `--no-kv-offload` when `LLAMA_OFFLOAD_KQV=false`. |
-| `--cache-type-k` / `--cache-type-v` | `q8_0` | KV-cache quantization to reduce VRAM pressure (per-model overrides via the registry row). |
+| `--cache-type-k` / `--cache-type-v` | `q8_0` / `q8_0` | KV-cache quantization to reduce VRAM pressure (per-model overrides via the registry row, `LLAMA_CACHE_TYPE_K/V` at launch). Order of preference: **f16 if the window fits, else q8_0, else q4_0** — and never q4_1/q5_0/q5_1 on a default CUDA build, which have no flash-attention kernel and fall back to CPU attention. The launcher warns before starting a lane on either unsupported pair. |
 | `--load-mode none` | auto (`LLAMA_NO_MMAP_MODE`) | Applied for MoE models, tight VRAM, WSL, or ≥3 GB models. Build 10955 **removed** `--no-mmap`, `--mmap` and `--mlock` — passing any of them is now a fatal `error: invalid argument`. The launcher passes `--load-mode none` on the native backend and `--use_mmap false` on the python backend (see [llama-cpp-runtime-audit.md](llama-cpp-runtime-audit.md) §1). |
 | Bind address | `127.0.0.1` | Prevents LAN exposure — loopback only. |
 | Health poll | adaptive 45–180s | Shared readiness logic is used by both `model use` and `model bench`, with longer timeouts for CPU-only and larger models. |
+
+## Tuning order — and what each step costs
+
+The flags interact, so the order matters: each step changes what the next one can do.
+This is the order argued by the vramcalculator review of llama.cpp/llama-server
+performance flags (2026-09),
+<https://vramcalculator.com/llama-cpp-performance-flags/>, and the right-hand column says
+what this repo already does about it. Its figures are that page's measurements, not ours;
+where a number would change a default here, it is a candidate for the autotune to
+measure, not a value to adopt.
+
+| Step | Lever | What it decides | In this repo |
+|---|---|---|---|
+| 1 | model, quant, ctx | whether it fits the GPU at the depth you serve | `model scan` + `config/quant-guide.conf` rate the quant; `check-ctx-profile.sh` compares the registry ctx (col 8) with the measured prompt profile (col 37) |
+| 2 | build, baseline depth | a rebuild can move speed as much as a flag | **not recorded** — see "Known gaps" below. The autotune certifies at a FILLED cache, so its number is taken at a realistic depth |
+| 3 | `-ngl` | whether the model runs on the GPU at all | registry ngl, `999` = full offload; the partial-offload ladder is deliberately skipped on shared-memory hosts (measured: it drove the guest into the OOM killer) |
+| 4 | `--n-cpu-moe` / `--cpu-moe` (MoE), `--n-cpu-ffn` / `--override-tensor` (dense) | keeps attention and KV on the GPU while weights spill | **not wired** — see "Known gaps" |
+| 5 | `-c` with `--fit` | the KV cache you actually allocate | `--fit on --fit-target` on serve; autotune certifies with `--fit off`; `/props` is read back and a mismatch is reported |
+| 6 | `-ctk` / `-ctv` | cache bytes against decode speed | `q8_0/q8_0` default; `f16/f16` is a sweep candidate (the fastest type wherever the window fits); `q4_0/q4_0` is a candidate but is refused by the retrieval gate |
+| 7 | `--flash-attn` | the attention kernel | `on`; `auto` is llama.cpp's default, and a quantised V cache forces it on |
+| 8 | `--spec-type` | decode against prefill | ngram sweep wired (`ngram-mod`); `draft-mtp` / `draft-dflash` exist in the installed build but are not in the sweep |
+| 9 | `-sm` / `-ts` | multi-GPU split | both hosts here are single-GPU; not applicable |
+| 10 | re-run the same baseline | decode and prefill separately | both are recorded (`BEST_TPS`, `BEST_PREFILL`), and the prefill floor is optional and explicit |
+
+### KV cache type: f16 first, q8_0 second, q4_0 only when forced
+
+A quantised cache saves memory and **costs decode**, and the cost grows with depth. The
+only controlled comparison the review found held build, weights and 256K context fixed on
+two RTX 3090s and changed nothing but the cache type: **f16 22.3 tok/s, q8_0 15.2, q4_0
+14.0** (prefill stayed flat at 831–870). A second card measured q8_0's deficit widening
+from 7% at zero depth to 21% at 131K.
+
+Consequences that are easy to get wrong:
+
+- **The recall probe measures quality, not speed.** `q8_0/q8_0` being certified says
+  nothing about what it costs in tok/s, so f16 is now a candidate the sweep can measure —
+  it wins where the window still fits and loses (on ctx) where it does not.
+- **A quantised V cache forces flash attention on.** llama.cpp refuses `-ctv q4_0` with
+  `--flash-attn off`, so an A/B of f16-with-FA-off against q4_0 does not charge the
+  quantisation alone and must not be reported as one. The autotune's FA-off retry now
+  refuses to fire in that situation instead of burning a second load.
+- **`q4_1`, `q5_0` and `q5_1` have no flash-attention kernel in a default CUDA build**
+  (llama.cpp #28455) and fall back to CPU attention unless the build compiles that pair —
+  `GGML_CUDA_FA_QUANTS`, not the deprecated `GGML_CUDA_FA_ALL_QUANTS=ON`, which warns on
+  every configure. The launcher warns before starting such a lane.
+- **The backend can matter more than the cache type** on CPU: the review measured 60.60
+  tok/s on the selected CPU backend against 16.81 on generic x64 with the same f16 cache
+  — and the `q4_0`-faster-than-f16 result only appears on a CPU without F16C (pre-2012
+  Intel, or a build forced onto the fallback), so it is not a reason to quantise on a
+  modern host.
+
+### Context: what you ask for is not always what is served
+
+`-c` defaults to `0`, which means the model's own window — a 262K model allocates KV for
+262K tokens whether or not they are used. With `--fit` on, llama.cpp may instead lower the
+window to fit memory, down to `--fit-ctx` (4096 by default), so the served context can be
+smaller than the one requested. This repo reads `/props` after boot, reports the mismatch,
+and the watchdog re-checks the unit's advertised `--ctx-size` against `/props` on every
+cycle.
+
+### Speculative decoding: decode is only half the answer
+
+MTP (`--spec-type draft-mtp --spec-draft-n-max 3`, a head built into some models) roughly
+doubled decode in the review's runs; DFlash needs a separate drafter; `ngram-*` wins only
+when output repeats the context (code edits, JSON, agent loops). Four caveats the repo
+already respects or should:
+
+- **One slot.** MTP is single-slot; `--parallel 1` is already pinned.
+- **The head costs memory**, so a row that only just fits will not necessarily fit with it.
+- **Acceptance rate is not speed** — compare tok/s.
+- **Speculation also slows prefill** (one DGX Spark run fell from 73.38 to 37.62 tok/s),
+  so a long prompt can get slower overall even when decode improves. Certify decode and
+  prefill separately, which the filled-cache phase already does.
+
+### Known gaps (recorded, not silently assumed)
+
+- **The certified TPS does not name the llama.cpp build it came from.** A rebuild can move
+  speed as much as a flag, so a number from before a rebuild is not comparable with one
+  after it. Fixing this means a registry/bench column for the build identity (and the
+  consumers that read the row), not a line in a log.
+- **No MoE/dense spill lever is wired.** This build supports `--n-cpu-moe`,
+  `--cpu-moe`, `--n-cpu-ffn` and `--moe-cache-mib`, but the launcher passes none of them,
+  and `__calc_gpu_layers` is 999-or-0 — so a model that does not fit whole drops to
+  CPU-only. The review's step 4 says that is the wrong fallback for a MoE (keep attention
+  and KV on the card, experts in RAM) and for a dense model (`--n-cpu-ffn` / FFN tensors
+  via `--override-tensor`, rather than lowering `-ngl`).
+- **Nothing detects a repetition loop in a bench result.** A looping generation posts an
+  inflated tok/s, which is why the review says to watch for it. The registry seeds an
+  anti-repetition sampler per row, which makes a loop less likely, but a loop is not
+  detected or flagged in the measurement.
 
 ## Quantization Guide
 

@@ -27,7 +27,12 @@
 #
 # Exit: 0 done/not-eligible, 1 refused, 2 usage.
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-06): the loader_vintage refusal said "a rebuild does NOT fix it, the file needs
+#       re-converting", contradicting v3's own measurement (build 148 could not read
+#       glm5-next.attention.indexer.kpool, and a rebuild was the fix).  tests/unit/27b pins the
+#       v3 criterion and failed against the message; the message now says rebuild llama.cpp and
+#       keep the weights.  No verdict changes — loader_vintage still never archives.
 #   v1 (2026-11-06, Wayne): first cut - assess / record-failure / archive.
 #   v3 (2026-11-06): (a) a bare basename resolves against MODEL_DIR - the autotune failure path
 #       calls this with the registry's NAME, and v2 refused it with "no such model:
@@ -190,7 +195,7 @@ record_failure() {
         # finding none, and the alternative is a spurious error on a fresh box.
         # swallow-ok: absent ledger == no vintage row; grep's own stderr is not wanted here
         if grep -q $'^'"$base"$'\tloader_vintage\t' "$FAIL_FILE" 2>/dev/null; then
-            say "archive-eligible=no (loader_vintage - the model's GGUF metadata does not match what this loader requires; a rebuild does NOT fix it, the file needs re-converting. Do not archive.)"
+            say "archive-eligible=no (loader_vintage - this build cannot read the model's GGUF metadata; rebuild llama.cpp first, the weights are not the problem. Do not archive.)"
         else
             say "archive-eligible=no (a recorded class is not a model verdict)"
         fi

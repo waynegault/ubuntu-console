@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091  # the module loop sources _module-list.sh entries by name
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-11-06): LLM_AUTOTUNE_KV_QUANTS gains f16/f16 as a candidate.  The sweep previously
+#   offered only quantised pairs, so the cache type could never be measured against the
+#   unquantised baseline — while f16 is the fastest cache wherever the window still fits.
+#   Listing it does not widen the gate: KV_REFERENCE_TYPES in scripts/autotune-model.sh makes
+#   the reference dtypes eligible, and a pair it does not admit is still printed as refused.
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -88,11 +93,19 @@ export LLM_AUTOTUNE_NGL_BAND_FRAC="${LLM_AUTOTUNE_NGL_BAND_FRAC:-0.55}"
 # CANDIDATES, not the sweep's effective list: autotune-model.sh probes a KV pair
 # only when it is CERTIFIED, i.e. it passed the long-context retrieval probe
 # (KVCACHE-CONSOLE-PROMPT-CACHE-001).  That probe does not exist yet, so
-# q8_0/q8_0 is the only certified pair and q4_0/q4_0 is refused — with a line in
-# the sweep's output naming that reason, never a silent drop.  Listing a pair
-# here does not make it eligible: see KV_CERTIFIED_PAIRS in
-# scripts/autotune-model.sh.
-export LLM_AUTOTUNE_KV_QUANTS="${LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0}"
+# q8_0/q8_0 is the only certified QUANTISED pair and q4_0/q4_0 is refused — with a
+# line in the sweep's output naming that reason, never a silent drop.  Listing a
+# pair here does not make it eligible: see KV_CERTIFIED_PAIRS and
+# KV_REFERENCE_TYPES in scripts/autotune-model.sh.
+#
+# f16/f16 is new (2026-11-06) and is eligible without a probe: it is the unquantised
+# reference every quantised pair is measured against, and it is the FASTEST cache
+# when the window still fits — q8_0 cost 32% of decode at 256K and 7% at zero depth
+# in the only controlled test found (REF: llama.cpp performance-flags review, step 6).
+# It is listed LAST because it is the largest cache: where it does not fit at the
+# certified ctx the probe fails and the q8_0 winner stands, so the extra spawn can
+# only add a measurement, never change what fits.
+export LLM_AUTOTUNE_KV_QUANTS="${LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0 f16/f16}"
 
 # Cap on a single scoring bench's wall time (filled-cache prefill is slow on
 # CPU-only models).

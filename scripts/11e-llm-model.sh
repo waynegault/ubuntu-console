@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 95
+# Module Version: 96
+#   v96 (2026-11-06): the KV dtype is resolved once and warned about before launch.  Two pairs
+#   fail silently rather than loudly: a quantised V cache with --flash-attn off cannot load
+#   (llama.cpp refuses it), and q4_1/q5_0/q5_1 have no CUDA flash-attention kernel by default,
+#   so attention falls back to the CPU.  Both now print the reason and the remedy before the
+#   lane starts instead of surfacing as a dead lane or a mysteriously slow one.
 #   v95 (2026-11-05): a split family is REUNITED before it is paired.  v93/v94 made a nested
 #   model usable, but pairing still looks in the file's own directory (llama.cpp resolves
 #   -00002 beside the -m path), so a download that left one shard nested — part 1 at the store
@@ -1586,6 +1591,50 @@ function __model_use_build_command() {
             *) ;;
         esac
 
+        # The KV dtype is resolved ONCE, so the argv and the warnings below cannot
+        # disagree about what this lane is actually running.
+        local kv_k="${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}"
+        local kv_v="${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}"
+        # Two combinations a default CUDA build cannot serve as written. Both are
+        # SILENT rather than fatal at the flag level, so they are said out loud before
+        # the launch instead of surfacing as a slow lane or a dead one:
+        #  1. a quantised V cache cannot run with flash attention off — llama.cpp
+        #     refuses to create the context;
+        #  2. q4_1/q5_0/q5_1 have no flash-attention kernel in a default CUDA build and
+        #     attention falls back to the CPU unless the build compiles that pair
+        #     (GGML_CUDA_FA_QUANTS; llama.cpp #28455).
+        # The remedy names GGML_CUDA_FA_QUANTS, not the deprecated ALL_QUANTS toggle,
+        # which warns on every configure (ggml/cmake/common.cmake:59).
+        # REF: https://vramcalculator.com/llama-cpp-performance-flags/ steps 6-7.
+        if [[ "$gpu_layers" != "0" ]]
+        then
+            local _kv_warn=""
+            case "$kv_v" in
+                f16|bf16|f32) ;;
+                *)
+                    if [[ "$flash_attn_mode" == "off" ]]
+                    then
+                        _kv_warn="--cache-type-v ${kv_v} cannot load with --flash-attn off:"
+                        _kv_warn+=" llama.cpp refuses a quantised V cache without flash"
+                        _kv_warn+=" attention; use f16 for V or leave flash attention on"
+                    fi
+                    ;;
+            esac
+            case "$kv_v" in
+                q4_1|q5_0|q5_1)
+                    if [[ "$flash_attn_mode" != "off" ]]
+                    then
+                        _kv_warn="--cache-type-v ${kv_v} has no flash-attention kernel in a"
+                        _kv_warn+=" default CUDA build — attention falls back to the CPU"
+                        _kv_warn+=" (llama.cpp #28455); use f16/q8_0/q4_0, or compile the"
+                        _kv_warn+=" pair via GGML_CUDA_FA_QUANTS"
+                    fi
+                    ;;
+                *) ;;
+            esac
+            [[ -z "$_kv_warn" ]] || __tac_info "Warning" "[${_kv_warn}]"
+        fi
+
         cmd=("$LLAMA_SERVER_BIN")
         cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
         cmd+=("--ctx-size" "$ctx")
@@ -1613,8 +1662,8 @@ function __model_use_build_command() {
         cmd+=("--flash-attn" "$flash_attn_mode")
         cmd+=("--jinja")
         cmd+=("$kv_offload_flag")
-        cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}")
-        cmd+=("--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}")
+        cmd+=("--cache-type-k" "$kv_k")
+        cmd+=("--cache-type-v" "$kv_v")
         cmd+=("--parallel" "$parallel_slots")
         # Prompt-cache budget (KVCACHE-CONSOLE-PROMPT-CACHE-001).  The SERVE path must
         # pass --cache-ram EXPLICITLY, because llama.cpp's default is 8192 MiB of

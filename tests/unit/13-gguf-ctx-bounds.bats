@@ -346,6 +346,40 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     [ "$(__autotune_fa_retry load_fail off)" = "noop" ]
 }
 
+@test "fa-retry: a quantised V cache is NOT retried with flash attention off" {
+    # Criterion (2026-11-06): llama.cpp refuses a quantised V cache with flash attention
+    # off, so the FA-off retry is a guaranteed second failure and the row would end up
+    # recorded as an unsupported model.  The serve path already reflects this: every
+    # autotune spawn passes --cache-type-v q8_0 by default, so the old retry could never
+    # have worked for it.  REF: vramcalculator, llama.cpp performance flags, step 6.
+    # Fails if: the retry fires with a quantised V (q8_0/q4_0) and burns a second load.
+    [ "$(__autotune_fa_retry load_fail on q8_0)" = "fa_required" ]
+    [ "$(__autotune_fa_retry other on q4_0)" = "fa_required" ]
+}
+
+@test "fa-retry: an unquantised V cache keeps the one recovery" {
+    # f16/f32/bf16 run with or without flash attention, so an FA-incompatible arch
+    # still gets its retry — the new rule must not become blanket.
+    # Fails if: the fa_required arm swallows the reference dtypes.
+    [ "$(__autotune_fa_retry load_fail on f16)" = "retry" ]
+    [ "$(__autotune_fa_retry other on bf16)" = "retry" ]
+    [ "$(__autotune_fa_retry load_fail on)" = "retry" ]
+}
+
+@test "fa-retry: an OOM with a quantised cache still descends, never retries" {
+    # The OOM arm is decided before the cache type: FA off asks for MORE memory, and the
+    # quantised-V rule must not turn that descent into a retry.
+    [ "$(__autotune_fa_retry oom on q8_0)" = "descend" ]
+}
+
+@test "fa-retry: the bench spawn supplies its KV type to the decision" {
+    # The decision cannot see the cache type unless the caller passes it; without this
+    # wiring the fa_required arm is unreachable in production and the cases above would
+    # pass vacuously.
+    grep -q '__autotune_fa_retry "$_fa_cause" "$flash_attn" "$kv_v"' \
+        "$REPO_ROOT/scripts/autotune-model.sh"
+}
+
 # --- __kv_mb_per_1k (KV geometry, card bf92711c) ------------------------------
 # Criterion (2026-11-03): the KV estimate comes from the model's GEOMETRY when the header
 # carries it, and falls back to the old shape-agnostic constant — saying so — when it does

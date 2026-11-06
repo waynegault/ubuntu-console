@@ -250,6 +250,7 @@ jobs:
                tests/unit/25-claimed-success-witness.bats \
                tests/unit/26-docker-prune.bats \
                tests/unit/27-gh-token-wrapper.bats \
+               tests/unit/27b-archive-unusable.bats \
                tests/unit/28-gh-keyring-watch.bats \
                tests/unit/29-errexit-arithmetic.bats \
                tests/unit/30-plugin-update.bats \
@@ -305,11 +306,13 @@ jobs:
                tests/unit/74-host-profiles.bats \
                tests/unit/75-pre-push-worktree-sweep.bats \
                tests/unit/76-vscode-bats-timeout-patch.bats \
+               tests/unit/76-pre-push-gate-visibility.bats \
                tests/unit/77-standby-awake.bats \
                tests/unit/78-staged-shell-select.bats \
                tests/unit/79-hf-download-wrapper.bats \
                tests/unit/80-wake-and-holder-report.bats \
-               tests/unit/81-gpu-stale-context-scope.bats
+               tests/unit/81-gpu-stale-context-scope.bats \
+               tests/unit/82-gpu-busy-attribution.bats
 
       - name: Run integration tests
         run: |
