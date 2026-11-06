@@ -60,7 +60,12 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
+#   v32 (2026-11-06, Wayne): a boot that measured NOTHING and did not halt on the budget
+#   no longer arms a restart.  Measured that day: a pre-flight ABORT (rc=1, the census cap
+#   was below the real tenant hold) armed a restart for 13:27 that would have re-run the
+#   identical abort.  v7 retrying rows that were MEASURED and stayed indicative (rc=4) is
+#   untouched: that path spent its budget, this one never started.
 #   v31 (2026-11-06, Wayne): the arm cap is UNLIMITED by default.  The count was never
 #   a stop (it reset itself and continued), but it read as one and printed a bogus
 #   denominator.  The guard that matters is progress: a boot that does not shrink
@@ -247,6 +252,10 @@ EXIT_ADAPTER=3 # the chunk stalled with the cycle budget UNSPENT: a person looks
 # so (SC2034).  The VALUE still matters: it is what the chunk returns, and the Module Version note
 # above records it.  EXIT_PAUSED keeps that value for the paths that genuinely stop.
 EXIT_PAUSED=4  # the campaign PAUSED: the cap, a CI job that will not drain, or an unwritable plan
+# The CHUNK exit 4 is the cycle-budget halt (autotune-rows.sh owns that code): the one
+# non-zero exit that means "this boot spent its measuring budget" rather than "this boot
+# could not start".  See the no-progress guard in continue_after.
+CHUNK_BUDGET=4
 
 REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
 # Resolve the host profile so the registry, store and lane are THIS box's (01-constants
@@ -1010,6 +1019,17 @@ continue_after() {
     if (( _after == 0 )); then
         printf 'the remainder is EMPTY - the campaign is complete; no restart armed\n'
         return 0
+    fi
+    # A boot that measured NOTHING, and did not stop on the budget, is a configuration
+    # fault, not a retry: measured 2026-11-06, a pre-flight ABORT (rc=1, census cap too
+    # low) armed a restart for 13:27 that would have re-run the identical abort.  v7
+    # keeps retrying rows that were MEASURED and stayed indicative (rc=4, budget spent);
+    # that path is untouched.  No progress + no budget halt = a person.
+    if (( _after == _before )) && (( _rc != CHUNK_BUDGET )); then
+        printf 'NOT arming: %s row(s) owed before and after, and the chunk exited %s, not a budget halt\n' "$_after" "$_rc"
+        printf '  a restart would repeat this boot. Plan written back; fix the cause and re-run.\n'
+        write_plan || return "$EXIT_PAUSED"
+        return "$EXIT_PAUSED"
     fi
     printf 'still owed: %s row(s) (this boot was handed %s and exited %s): re-planning and arming\n' \
         "$_after" "$_before" "$_rc"
