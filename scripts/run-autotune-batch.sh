@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
+#   v28 (2026-11-06): the nvidia-smi timeout wrappers are split (18.3 8.1.8).
+#     Behaviour unchanged.
 #   v26 (2026-11-05): the no-argument default applies the two rules the wrapper and the
 #   resume loop already apply — "slow" is terminal, and the autotune TOMBSTONE retires a
 #   row by name.  Measured 2026-11-05: this default re-selected the archived 70B (weights
@@ -224,7 +226,8 @@ echo ""
 #------------------------------------------------------------------------------
 drain_vram() {
     local before="" after=""
-    before=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
+    before=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+        nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
     if ! [[ "$before" =~ ^[0-9]+$ ]]; then
         # Empty operands compare equal in bash, which would look like a
         # completed drain after a single sleep — wait the full window instead.
@@ -241,7 +244,8 @@ drain_vram() {
     while [[ $waited -lt 15 ]]; do
         sleep 1
         waited=$((waited + 1))
-        after=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
+        after=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+            nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
         # Break only on a strict drop; "unchanged" means the server is not
         # actually gone; an unreadable value means keep waiting.
         if [[ "$after" =~ ^[0-9]+$ ]] && [[ -n "$before" ]] && (( after < before )); then

@@ -101,7 +101,11 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-11-06): the declared reason is assembled in a variable instead of one
+#     123-character array element (18.3 8.1.8).  NOT done by splitting the element across two
+#     lines: inside arr=( ... ) a newline SEPARATES words, so that split produced two elements and
+#     the reason read "rule=argv-after:bash  argv=" - caught by tests/unit/82 case 1.
 # Version: 1.7.1 (2026-11-02: comment-only. The `# swallow-ok:` reason for the ldconfig
 #          probe moved from the END of the code line to the line directly above it: the
 #          marker is 180 characters of rationale riding on a non-comment line, so §18.3
@@ -502,7 +506,9 @@ declared_workload_busy() {
         # Until 1.11.0 this line carried the class alone, so a stop could not be
         # attributed after the fact — the 2026-11-04 12:35:56 [probe: declared:autotune]
         # was correct and unreadable at the same time.
-        REASONS+=("declared:$_why pid=${_MATCH_PID:-unknown} rule=${_MATCH_RULE:-unknown} argv=${_MATCH_ARGV:-unreadable}")
+        local _reason="declared:$_why pid=${_MATCH_PID:-unknown} rule=${_MATCH_RULE:-unknown}"
+        _reason+=" argv=${_MATCH_ARGV:-unreadable}"
+        REASONS+=("$_reason")
         return 0
     fi
     return 1

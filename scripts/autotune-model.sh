@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 116
+# Module Version: 117
+#   v117 (2026-11-06): _launch_server's failure handling is _launch_or_record_failure,
+#     called as "|| return 1" so every exit path lands where it did.  The 18.3 10.4 counter
+#     bounds a definition by the NEXT one, so the def nested here measured _startup_fail_type as
+#     106 lines (it is 9) by swallowing the tail of _bench_spawn.  The nvidia-smi timeout
+#     wrappers are split for 8.1.8, and the fa_required warning is shortened, not reworded.
 #   v116 (2026-11-06): the KV-quant gate admits the unquantised reference dtypes (f16/f32/bf16)
 #   without a retrieval probe, and f16/f16 joins the default candidate ladder.  The probe asks
 #   what QUANTISATION costs recall, so it cannot certify the baseline — while the cache type
@@ -712,7 +717,8 @@ sync 2>/dev/null || true
 if [[ -w /proc/sys/vm/drop_caches ]]; then
     echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 fi
-timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
 pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
 sleep 1
 # BOUNDED RETRY (2026-10-24): the run above forces kills and a cache drop, and a
@@ -723,8 +729,10 @@ sleep 1
 # second later. Three attempts, one second apart, keep the fail-closed contract -
 # an unreadable card still refuses - without turning a lost race into a refusal.
 for _vram_attempt in 1 2 3; do
-    VRAM_TOTAL=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-    FREE_VRAM=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    VRAM_TOTAL=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+        nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    FREE_VRAM=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+        nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
     [[ "$VRAM_TOTAL" =~ ^[0-9]+$ && "$FREE_VRAM" =~ ^[0-9]+$ ]] && break
     if (( _vram_attempt < 3 )); then sleep 1; fi
 done
@@ -1205,7 +1213,8 @@ cleanup_gpu() {
         if [[ -w /proc/sys/vm/drop_caches ]]; then
             echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
         fi
-        timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+        timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+            nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
         pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
         sleep 1
 
@@ -1545,6 +1554,9 @@ _bench_spawn() {
             printf 'loader_crash_unknown'
         fi
     }
+    # Every path that used to `return` out of _bench_spawn lives here instead, so the 100-line
+    # counter measures this helper and not the tail of its parent.  Nested: it reads the caller's locals.
+    _launch_or_record_failure() {
     _launch_server || {
         # The REASON must be READ, never assumed: labelling every launch failure
         # "flash-attn" is how an unloadable GGUF read as an FA fault for hours
@@ -1582,16 +1594,13 @@ _bench_spawn() {
                 # retry this branch replaces could only reload and fail again — and the row
                 # would then read as an unsupported model.  Recorded as load_fail so the
                 # callers stop rather than descend: a smaller ctx cannot fix a flag pair.
-                warn "  ${_fa_cause} with --cache-type-v ${kv_v} — flash attention cannot be turned off here (llama.cpp refuses a quantised V cache without it); not retrying"
+                warn "  ${_fa_cause} with cache-type-v ${kv_v}: a quantised V needs flash-attn; not retrying"
                 _bench_stop "$_BENCH_PID"
                 _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
                 echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"
                 return 1
                 ;;
-            stop)
-                _bench_stop_unknown
-                return 1
-                ;;
+            stop) _bench_stop_unknown; return 1 ;;
             *)
                 # Unreachable through __autotune_fa_retry, but a silent fall-through
                 # would leave flash_attn "on" with the failure unclassified.
@@ -1599,7 +1608,12 @@ _bench_spawn() {
                 _bench_stop "$_BENCH_PID"
                 ;;
         esac
+        }
     }
+    # The helper returns 1 on exactly the paths that used to `return` straight out of
+    # _bench_spawn; the || keeps that exit where it was.  Nested so it still sees this
+    # function's locals (bash scoping is dynamic).
+    _launch_or_record_failure || return 1
     if [[ $hw -ge "$AT_WINDOW_S" ]]; then
         # Tell a *stall* apart from a real load failure: the process is still
         # alive and the log has no architecture/GGUF error, so the server simply
@@ -1675,7 +1689,8 @@ _bench_spawn() {
     # Laptop GPUs idle at 1035 MHz (~19 TPS) but can reach 1600+ MHz (60+ TPS).
     # 8 tokens isn't enough compute — use 64 when cold, 8 when already warm.
     local warmup_tokens=8
-    local _pstate; _pstate=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=pstate --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    local _pstate; _pstate=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+        nvidia-smi --query-gpu=pstate --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
     if [[ -n "$_pstate" ]] && [[ "$_pstate" != "P0" ]]; then
         warmup_tokens=64
     fi
@@ -1958,7 +1973,8 @@ bench_once() {
     cleanup_gpu >&2 || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
 
     if [[ ! -f $tag ]]; then
-        local g; g=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        local g; g=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+            nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
         touch "$tag"
     fi
@@ -1998,7 +2014,8 @@ bench_once_multi() {
     cleanup_gpu >&2 || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
 
     if [[ ! -f $tag ]]; then
-        local g; g=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        local g; g=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+            nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
         touch "$tag"
     fi
@@ -3099,7 +3116,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # Record GPU thermal/clock state alongside the certified number — heat
     # soak on a laptop biases later benches; the temp explains outliers.
     if command -v nvidia-smi >/dev/null 2>&1; then
-        _gpu_thermal=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        _gpu_thermal=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+            nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  thermal at certification: GPU ${_gpu_thermal:-n/a} (temp °C, SM MHz)"
     fi
 
