@@ -25,15 +25,36 @@
 # Exit: 0 the hooks belong to this tree; 1 refused, with the reason named on stdout.
 # ==============================================================================
 # AI INSTRUCTION: Increment Module Version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-07): every message goes through warn/die, so the tool carries one stderr path
+#   instead of two hand-written ones (18.3 10.7) and its usage status is an argument rather
+#   than a literal exit code (9.7).  The worktree loop states its default arm (4.2.4) and
+#   realpath_or_self gains the comment it was missing (9.5).  Behaviour unchanged.
 set -uo pipefail
+
+# warn — one message per call, on stderr. The redirect is grouped, not on the printf line,
+# in the shape tools/sync-openclaw-completion.sh uses for the same job.
+warn() {
+    {
+        printf 'check-hooks-path: %s\n' "$*"
+    } >&2
+}
+
+# die <code> <message> — warn, then exit with the status the header documents. The code is
+# passed rather than written in, so the header stays the one place the exit statuses are
+# explained (64 = EX_USAGE).
+die() {
+    local _code="$1"; shift
+    warn "$*"
+    exit "$_code"
+}
 
 REPO=""
 while (( $# > 0 )); do
     case "$1" in
         --repo) REPO="${2:-}"; shift 2 ;;
         -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
-        *) echo "check-hooks-path: unknown argument: $1" >&2; exit 64 ;;
+        *) die 64 "unknown argument: $1" ;;
     esac
 done
 
@@ -42,10 +63,11 @@ if [[ -z "$REPO" ]]; then
 fi
 # swallow-ok: a bad --repo is reported by the REFUSED line below; the cd's own noise adds nothing
 if ! REPO="$(cd "$REPO" 2>/dev/null && pwd)"; then
-    echo "check-hooks-path: REFUSED — no such directory" >&2
-    exit 1
+    die 1 "REFUSED — no such directory"
 fi
 
+# realpath_or_self — resolve to an absolute path when realpath exists, else return the string
+# unchanged, so both sides of every comparison are normalised the same way on every box.
 realpath_or_self() {
     # swallow-ok: realpath is optional; the fallback returns the same string every comparison accepts
     if command -v realpath >/dev/null 2>&1; then realpath -m -- "$1"; else printf '%s\n' "$1"; fi
@@ -56,6 +78,7 @@ MAIN_WORKTREE=""
 while IFS= read -r line; do
     case "$line" in
         worktree\ *) MAIN_WORKTREE="$(realpath_or_self "${line#worktree }")"; break ;;
+        *) ;;
     esac
 # swallow-ok: not-a-git-tree is reported by the rev-parse check below; an empty list is the honest reading
 done < <(git -C "$REPO" worktree list --porcelain 2>/dev/null)
