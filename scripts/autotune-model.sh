@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 118
+# Module Version: 119
+#   v119 (2026-11-07): the measurement-verdict call is split at an argument boundary so the
+#     line is under 120 characters (18.3 8.1.8).  Behaviour unchanged: the continuation is
+#     whitespace inside a command substitution.
 #   v117 (2026-11-06): _launch_server's failure handling is _launch_or_record_failure,
 #     called as "|| return 1" so every exit path lands where it did.  The 18.3 10.4 counter
 #     bounds a definition by the NEXT one, so the def nested here measured _startup_fail_type as
@@ -3731,7 +3734,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # 3c: the verdict decides whether this row may be written at all — "refuse"
         # (contended, or an unreadable load, without --allow-contended) exits BEFORE
         # the save; otherwise it is the meas_state the row carries.
-        _meas_state=$(__autotune_measurement_verdict "$_row_load" "$_row_cores" "${ALLOW_CONTENDED:-0}" "${TAC_CONTENDED:-0}")
+        _meas_state=$(__autotune_measurement_verdict "$_row_load" "$_row_cores" \
+            "${ALLOW_CONTENDED:-0}" "${TAC_CONTENDED:-0}")
         if [[ "$_meas_state" == "refuse" ]]; then
             echo "  REFUSING to write: measured at load ${_row_load} on ${_row_cores} cores — the box"
             echo "  was CONTENDED, so this row's tps is indicative, not certified — nothing was written."
