@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-11-07): §18.3 10.7 — one `warn` helper replaces all ten hand-written `>&2`
+#       sites, so every refusal and warning has the same shape.  And the clean-room's
+#       `systemctl --user stop "$LANE" ... || true` no longer swallows a FAILED stop: a
+#       stop returns 0 for an inactive unit, so a non-zero status means the lane may still
+#       hold the card, and it now says so instead of reading as success.
 #   v19 (2026-11-07): §18.3 — the log-name assignment v17 added was 132 chars, so it is
 #       split into the base and the `_to_<last>` suffix.  The value is byte-identical
 #       (the suffix is appended, not rebuilt), and the name still cannot escape LOGDIR.
@@ -80,6 +85,10 @@ set -uo pipefail
 # shellcheck source=_tac-bin-lib.sh
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
+# warn - the script's ONE stderr path, so every refusal and warning has the same shape
+# and a caller can grep it (10.7).  Nothing below writes to stderr by hand.
+warn() { printf '%s\n' "$*" >&2; }
+
 # ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
 # At most ONE heavy job runs on this box at a time: two of them oversubscribe all
 # 16 cores and starve every interactive turn (bin/heavy-job records the
@@ -146,7 +155,7 @@ case "${1:-}" in
         ' "$REGISTRY" | sort)
         DERIVED=1
         ;;
-    '')             echo "usage: $(basename "$0") <row|file>... | --all-but-done | --all" >&2; exit 2 ;;
+    '')             warn "usage: $(basename "$0") <row|file>... | --all-but-done | --all"; exit 2 ;;
     *)              ROWS=("$@") ;;
 esac
 # The TOMBSTONE (shared with the resume loop): a retired row is NOT owed, and a
@@ -164,7 +173,7 @@ then
     ROWS=("${_kept[@]}")
 fi
 if (( ${#ROWS[@]} == 0 )); then
-    echo "autotune-rows: no rows selected — nothing to do" >&2
+    warn "autotune-rows: no rows selected — nothing to do"
     exit 0
 fi
 
@@ -175,12 +184,12 @@ fi
 # above all - now asks it here. Fail closed: a gate that cannot answer (exit 2) refuses too.
 GATE="${AUTOTUNE_QUIET_GATE:-$REPO/bin/autotune-resume-quiet-gate.py}"
 if (( FORCE_LIVE_FLEET )); then
-    echo "quiet-fleet gate: BYPASSED by --force-live-fleet — the fleet may be live, so the reading may be contended" >&2
+    warn "quiet-fleet gate: BYPASSED by --force-live-fleet — the fleet may be live, so the reading may be contended"
 elif [[ -n "${AUTOTUNE_QUIET_GATE_PASSED:-}" ]]; then
-    echo "quiet-fleet gate: already passed by the resume loop (AUTOTUNE_QUIET_GATE_PASSED=1)" >&2
+    warn "quiet-fleet gate: already passed by the resume loop (AUTOTUNE_QUIET_GATE_PASSED=1)"
 elif [[ -f "$GATE" ]]; then
     if "$GATE" --check; then
-        echo "quiet-fleet gate: fleet is quiet" >&2
+        warn "quiet-fleet gate: fleet is quiet"
     else
         _gate_rc=$?
         {
@@ -192,7 +201,7 @@ elif [[ -f "$GATE" ]]; then
         exit 1
     fi
 else
-    echo "WARN: quiet-fleet gate not found at $GATE — proceeding UNGATED" >&2
+    warn "WARN: quiet-fleet gate not found at $GATE — proceeding UNGATED"
 fi
 
 # v17: a log NAME, never a path. `/` in a row would become a separator (ENOENT) and the
@@ -216,7 +225,7 @@ cd "$REPO" || exit 1
 
 if ! _tac_suspend_acquire "$SUSPEND"; then
     _owner_pid="$(_tac_suspend_pid "$SUSPEND")"
-    echo "autotune-rows: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown})" >&2
+    warn "autotune-rows: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown})"
     exit 1
 fi
 # THE FLEET MUST NOT TRY A LANE THIS RUN IS ABOUT TO DENY (Wayne, 2026-11-07).  The
@@ -251,7 +260,7 @@ cleanroom_restore() {
         if systemctl --user start "$_w" >/dev/null 2>&1; then
             echo "clean-room: released watchdog $_w"
         else
-            echo "clean-room: FAILED to release $_w - start it by hand" >&2
+            warn "clean-room: FAILED to release $_w - start it by hand"
         fi
     done
     _WATCHDOGS_STOPPED=()
@@ -261,14 +270,14 @@ cleanroom_restore() {
         if systemctl --user start "$_t" >/dev/null 2>&1; then
             echo "clean-room: restored tenant $_t"
         else
-            echo "clean-room: FAILED to restore $_t - start it by hand" >&2
+            warn "clean-room: FAILED to restore $_t - start it by hand"
         fi
     done
     _TENANTS_STOPPED=()
     # ...and the fleet goes back to the lane it was on, LAST: switching before the tenant
     # is serving would hand every agent a lane that cannot answer yet.
     if ! bash "$REPO/bin/fleet-model.sh" restore; then
-        echo "clean-room: FAILED to restore the fleet model - run bin/fleet-model.sh restore" >&2
+        warn "clean-room: FAILED to restore the fleet model - run bin/fleet-model.sh restore"
     fi
 }
 trap '_tac_suspend_release "$SUSPEND"; cleanroom_restore' EXIT
@@ -340,8 +349,13 @@ if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
 else
     echo "=== clean-room: DISABLED (AUTOTUNE_CLEAN_ROOM=${AUTOTUNE_CLEAN_ROOM}) - readings are CONTENDED by declaration" | tee -a "$LOG"
 fi
-# swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
-systemctl --user stop "$LANE" >/dev/null 2>&1 || true
+# A stop that FAILS is not the same as a lane that was already down: `systemctl stop`
+# returns 0 for an inactive unit, so a non-zero status means the lane may still hold the
+# card.  Say so — the VRAM baseline below then refuses rather than measuring a contended
+# card.  (The old `|| true` swallowed both cases alike, so a failed stop read as success.)
+if ! systemctl --user stop "$LANE" >/dev/null 2>&1; then
+    warn "clean-room: could not stop $LANE — the card may still be held; the baseline below decides"
+fi
 
 # Require a TRUSTWORTHY baseline before launching the batch — through the SHARED
 # verdict (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM threshold.  The byte
