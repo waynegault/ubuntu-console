@@ -19,4 +19,11 @@ ExecStart=%h/.local/bin/qwen-guard-selfheal.sh
 # unresolvable interpreter reads as "patch reverted" and would be retried forever.
 Environment=PATH=%h/.local/bin:/Python/bin:%h/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 # Bound the tick: seven probes must not hold the unit past the next tick.
-TimeoutStartSec=300
+#
+# Measured 2026-11-07 on this box: a rested run takes 96 s, but the run the boot
+# timer started was still working at 300 s and was killed by this cap (12:22:08,
+# "start operation timed out", 1m44s CPU over 5m00s wall — cold caches and the
+# boot's own I/O). A killed tick is worse than a slow one: the unit goes red and
+# the patch it was applying is left unverified. 900 s still sits inside the
+# 30-minute cadence (17,47), so a slow tick cannot overlap the next one.
+TimeoutStartSec=900
