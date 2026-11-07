@@ -27,7 +27,12 @@
 #
 # Exit: 0 done/not-eligible, 1 refused, 2 usage.
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-11-06): hygiene — the ledger's tab separators were LITERAL tab bytes in the
+#       source (`-F'<TAB>'`, `IFS=$'<TAB>'`, and a printf format split by a real newline),
+#       which the repo's "no tabs in core scripts" rule forbids, and the file carried no
+#       `# end of file` marker.  Now `$'\t'` / `\t` escapes; the bytes written to the ledger
+#       are identical and tests/unit/27b passes unchanged.
 #   v4 (2026-11-06): the loader_vintage refusal said "a rebuild does NOT fix it, the file needs
 #       re-converting", contradicting v3's own measurement (build 148 could not read
 #       glm5-next.attention.indexer.kpool, and a rebuild was the fix).  tests/unit/27b pins the
@@ -172,16 +177,15 @@ record_failure() {
     # file are two facts about that model, not two classes each holding one vote.
     count=0
     if [[ -r "$FAIL_FILE" ]]; then
-        count=$(awk -F'	' -v b="$base" -v c="$cls" '$1==b && $2==c {print $3; exit}' "$FAIL_FILE")
+        count=$(awk -F$'\t' -v b="$base" -v c="$cls" '$1==b && $2==c {print $3; exit}' "$FAIL_FILE")
         [[ "$count" =~ ^[0-9]+$ ]] || count=0
-        awk -F'	' -v b="$base" -v c="$cls" '!( $1==b && $2==c )' "$FAIL_FILE" > "$FAIL_FILE.tmp"             && mv "$FAIL_FILE.tmp" "$FAIL_FILE"
+        awk -F$'\t' -v b="$base" -v c="$cls" '!( $1==b && $2==c )' "$FAIL_FILE" > "$FAIL_FILE.tmp"             && mv "$FAIL_FILE.tmp" "$FAIL_FILE"
     fi
     count=$(( count + 1 ))
-    printf '%s	%s	%s	%s
-' "$base" "$cls" "$count" "$(date -Iseconds)" >> "$FAIL_FILE"
+    printf '%s\t%s\t%s\t%s\n' "$base" "$cls" "$count" "$(date -Iseconds)" >> "$FAIL_FILE"
     # A class that says nothing about the MODEL vetoes the archive however often it
     # repeats: an OOM is this run's sizing, and unclassified is this run's mystery.
-    while IFS=$'	' read -r _b _c _n _t; do
+    while IFS=$'\t' read -r _b _c _n _t; do
         [[ "$_b" == "$base" ]] || continue
         case "$_c" in
             unsupported_arch|launch_error) ;;
@@ -233,3 +237,4 @@ case "$MODE" in
     archive) [[ -n "$REASON" ]] || die "--archive needs --reason"
              archive "$FILE" "$REASON" "$ASSUME" ;;
 esac
+# end of file

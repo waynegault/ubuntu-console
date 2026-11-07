@@ -16,7 +16,12 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-11-06): _tac_gpu_used_mib honours TAC_SMI_BIN.  `timeout` execs a binary, so
+#     a shell-FUNCTION nvidia-smi double is invisible to it — tests/unit/57's six
+#     "vram gate" cases read the real card, the open-gate controls failed and the
+#     fail-closed cases passed vacuously.  The seam makes the double reachable and lets a
+#     caller name the binary explicitly; unset is unchanged PATH resolution.
 #   v13 (2026-11-06): the nvidia-smi timeout wrappers are split at the wrapper so no
 #     call sits on a line over 120 characters (18.3 counter 8.1.8).  Behaviour unchanged: the
 #     continuation is whitespace inside a command substitution, so the arguments are identical.
@@ -467,9 +472,17 @@ _tac_suspend_release() {
 # numeric test on the multi-line value never matches) and deliberately NOT silenced:
 # an unreadable card is not evidence of a free one, so every caller reads empty as
 # "not free" and fails closed.
+#
+# TAC_SMI_BIN is the seam.  `timeout` execs a BINARY, so a caller's shell FUNCTION
+# named nvidia-smi is invisible to it — measured 2026-11-06: tests/unit/57's
+# `nvidia-smi() { printf '100\n'; }` doubles were bypassed by the timeout wrapper
+# (added with the wedged-card fix), every "gate opens" control read the real card and
+# failed, and the fail-closed cases passed vacuously.  A path in TAC_SMI_BIN is exec'd
+# exactly as the resolved name was; unset keeps normal PATH resolution.
 _tac_gpu_used_mib() {
+    local _smi="${TAC_SMI_BIN:-nvidia-smi}"
     # swallow-ok: the READING is the output, not the status — an nvidia-smi that fails leaves it EMPTY, and every caller treats empty as "not free" and fails closed, so its stderr adds nothing.
-    timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null \
+    timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" "$_smi" --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null \
         | tr -d ' ' \
         | awk 'BEGIN{m=-1} /^[0-9]+$/{if ($1+0>m) m=$1+0} END{if (m<0) print ""; else print m}'
 }

@@ -211,6 +211,30 @@ teardown() {
 # gate 4's doing and not a stubbed input's — and each states the wrong outcome it
 # catches, so it can disagree with the code rather than confirm it.
 
+# smi_stub <output> — an EXECUTABLE nvidia-smi double, selected with TAC_SMI_BIN.
+# A shell FUNCTION named nvidia-smi is invisible to the shipped reader, because it
+# wraps the call in `timeout`, which execs a binary (measured 2026-11-06: these cases
+# read the real card, every "gate opens" control failed, and the fail-closed cases
+# passed vacuously).  The env seam is what the reader now honours.
+smi_stub() {
+    SMI_STUB="$SANDBOX/nvidia-smi-stub"
+    cat > "$SMI_STUB" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$SMI_OUT"
+EOS
+    chmod +x "$SMI_STUB"
+    export SMI_OUT="$1"
+    export TAC_SMI_BIN="$SMI_STUB"
+}
+
+# smi_stub_fail — an nvidia-smi that exits non-zero with no output.
+smi_stub_fail() {
+    SMI_STUB="$SANDBOX/nvidia-smi-fail"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$SMI_STUB"
+    chmod +x "$SMI_STUB"
+    export TAC_SMI_BIN="$SMI_STUB"
+}
+
 # gate_stubs — isolate gate_ok's remaining inputs.  The cut and cat stubs
 # intercept ONLY the /proc/loadavg read and the cycle-ledger glob, and delegate
 # everything else to the real command, so no other case in this file is affected.
@@ -242,7 +266,7 @@ gate_stubs() {
     # direction that must never happen for a GPU probe, and the shape that
     # launched into a full card before gate 4 existed.
     gate_stubs
-    nvidia-smi() { return 1; }
+    smi_stub_fail
     run gate_ok
     [[ "$status" -ne 0 ]]
     [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
@@ -253,7 +277,7 @@ gate_stubs() {
     # Catches: the same hole when the CLI succeeds but prints nothing — an exit
     # status is not a reading.
     gate_stubs
-    nvidia-smi() { :; }
+    smi_stub ''
     run gate_ok
     [[ "$status" -ne 0 ]]
     [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
@@ -265,7 +289,7 @@ gate_stubs() {
     # numeric test on that multi-line value never matched, so the gate could NEVER
     # open on a multi-GPU box.  Both cards are free, so the gate must OPEN.
     gate_stubs
-    nvidia-smi() { printf '100\n50\n'; }
+    smi_stub $'100\n50'
     run gate_ok
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
@@ -277,7 +301,7 @@ gate_stubs() {
     # would open on the free card while the second is nearly full, which is the
     # launch-into-a-full-card failure again, one card over.
     gate_stubs
-    nvidia-smi() { printf '50\n9999\n'; }
+    smi_stub $'50\n9999'
     run gate_ok
     [[ "$status" -ne 0 ]]
     [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
@@ -288,7 +312,7 @@ gate_stubs() {
     # Catches: an off-by-one that admits a card sitting exactly on the bound,
     # which the gate's own comment defines as occupied.
     gate_stubs
-    nvidia-smi() { printf '%s\n' "$VRAM_MAX"; }
+    smi_stub "$VRAM_MAX"
     run gate_ok
     [[ "$status" -ne 0 ]]
     [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
@@ -300,7 +324,7 @@ gate_stubs() {
     # every fail-closed case above, and the two fail-closed cases would prove
     # nothing about the reading.
     gate_stubs
-    nvidia-smi() { printf '100\n'; }
+    smi_stub '100'
     run gate_ok
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
@@ -414,7 +438,7 @@ watch_run() {
     # — hj_ok must stay 0, the box must be treated as NOT free, and the reason must
     # be emitted: a silent version of this is how a run starts beside another job.
     gate_stubs
-    nvidia-smi() { printf '100\n'; }
+    smi_stub '100'
     export HEAVY="$SANDBOX/bin/heavy-bad"
     run gate_ok
     [[ "$status" -ne 0 ]]
@@ -429,7 +453,7 @@ watch_run() {
     # test — the prefix match must not fire, so hj_ok stays 0 with no warn (the warn
     # is for an unreadable exit, not a readable-but-wrong line).
     gate_stubs
-    nvidia-smi() { printf '100\n'; }
+    smi_stub '100'
     export HEAVY="$SANDBOX/bin/heavy-garbage"
     run gate_ok
     [[ "$status" -ne 0 ]]
