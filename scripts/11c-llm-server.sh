@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-11-07): __llm_wait_for_health takes the launched server's pid and returns 2
+#   when it dies while waiting.  Measured the same day: a cudaMalloc failure killed the
+#   server 25 s in, and the loop polled for the full window — four minutes of dots — before
+#   any verdict.  Callers that pass no pid keep the old behaviour.
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -680,14 +684,20 @@ function __llm_bench_perf_prep() {
 
 # ---------------------------------------------------------------------------
 # __llm_wait_for_health — Poll llama-server until it becomes healthy.
-# Usage: __llm_wait_for_health <timeout> <elapsed_var> [dots|silent] [label]
-# @returns 0 on success, 1 on timeout.
+# Usage: __llm_wait_for_health <timeout> <elapsed_var> [dots|silent] [label] [pid]
+# @returns 0 on success, 1 on timeout, 2 when <pid> died while waiting.
+#
+# <pid> is OPTIONAL and is the launched server's process: without it this loop
+# cannot tell "still loading" from "already dead", and measured 2026-11-07 a server
+# that exited after 25 s (cudaMalloc failed) was polled for the whole window — four
+# minutes of dots, then "FAILED OR TIMEOUT", which names neither cause.
 # ---------------------------------------------------------------------------
 function __llm_wait_for_health() {
     local timeout="${1:-45}"
     local -n _elapsed_ref="${2:-_llm_wait_elapsed_sink}"
     local progress_mode="${3:-silent}"
     local label="${4:-Loading LLM (health check)}"
+    local pid="${5:-}"
 
     _elapsed_ref=0
     if [[ "$progress_mode" == "dots" ]]
@@ -701,6 +711,12 @@ function __llm_wait_for_health() {
         then
             [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
             return 0
+        fi
+        # swallow-ok: the exit status IS the answer (gone = the load died), and kill's own "no such process" line would be noise on every poll.
+        if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null
+        then
+            [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
+            return 2   # the server process is gone: a failed load, not a timeout
         fi
         [[ "$progress_mode" == "dots" ]] && printf '.'
         sleep 1

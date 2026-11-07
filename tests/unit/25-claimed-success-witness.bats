@@ -338,6 +338,35 @@ _a_backend_alive() {
     [[ "$output" == *"ONLINE [Port $LLM_PORT]"* ]]
 }
 
+@test "model use: a server that EXITS while loading is named, not called a timeout" {
+    # Measured 2026-11-07: a cudaMalloc failure killed the server at 25 s, and the
+    # console polled for four minutes and then said "FAILED OR TIMEOUT" — a message
+    # that names neither the cause nor the four minutes that were wasted.
+    _load_console
+    _stub_killers
+    __llm_wait_for_health() { return 2; }
+    local size="1.0G" gpu_layers=99 name="Fixture-1B" num=1 ctx=2048 file="fixture.gguf"
+    run __model_use_wait_healthy
+
+    [[ "$status" -ne 0 ]]
+    [[ "$output" == *"exited while loading"* ]]
+    [[ "$output" != *"FAILED OR TIMEOUT"* ]]
+    [[ ! -f "$ACTIVE_LLM_FILE" ]]
+}
+
+@test "health wait: a dead server pid ends the wait at once, with its own verdict" {
+    # Fails if: the loop treats "the process is gone" as "still loading" and polls for
+    # the whole window.  999999 is not a live pid, so the branch fires on the first
+    # iteration; the real health probe is stubbed to never answer.
+    _load_console
+    __llm_is_healthy() { return 1; }
+    local el=0 rc=0 t0=$SECONDS
+    # `|| rc=$?` keeps bats alive: a non-zero bare command would abort the case.
+    __llm_wait_for_health 30 el silent "test" 999999 || rc=$?
+    [[ "$rc" -eq 2 ]]
+    (( SECONDS - t0 < 5 ))
+}
+
 @test "model use: a server that never answers is FAILURE (the killed-server case)" {
     _load_console
     _stub_killers

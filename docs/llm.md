@@ -182,6 +182,20 @@ already respects or should:
 
 A model too large for **both** is refused with the figures, and no lane is displaced.
 
+**On a shared-memory host the budget is host RAM, not the pool total** (`TAC_HOST_PROFILE_SHARED_MEMORY=1`).
+The GPU pool and the guest's RAM are one physical pool, and a CUDA allocation has to be
+backed by it. Measured 2026-11-07 with the carve at 98,304 MiB: `cudaMalloc` of 72,114 MiB
+**failed** while `nvidia-smi` reported 92,393 MiB free, because the guest held 30,512 MiB
+with ~13 GiB available. The same shape is already recorded in
+`bin/llm-archive-unusable.sh` — "a 60 GiB allocation succeeded at 94 GiB guest and failed
+below ~30 GiB". So the verdict compares the GPU-resident weights against `MemAvailable`
+there, and the refusal says which side is short.
+
+**A server that exits is named as one.** The health wait is given the launched pid and
+returns its own verdict when the process is gone, so a failed `cudaMalloc` at 25 s reads
+"the server exited while loading — the reason is in the log" instead of four minutes of
+dots and "FAILED OR TIMEOUT".
+
 Why this exists (measured 2026-11-06): `model use 2` asked a 73.3 GB MoE for a 24 GiB
 card. `__calc_gpu_layers` returns the full layer count for any MoE arch, and its comment
 claimed the experts "stay on CPU anyway" — untrue of llama.cpp, where `-ngl` moves whole

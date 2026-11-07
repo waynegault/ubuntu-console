@@ -1,7 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 98
+# Module Version: 99
+#   v99 (2026-11-07): two corrections read from the same failed launch.  (a) On a
+#   SHARED-MEMORY host the GPU budget is host MemAvailable, not the pool total: with the
+#   carve at 98,304 MiB a cudaMalloc of 72,114 MiB failed while nvidia-smi reported 92,393
+#   MiB free, because the guest held 30,512 MiB with ~13 GiB available — the allocation is
+#   backed by the same physical pool.  The verdict now refuses that row instead of launching
+#   it.  (b) The health wait is told the server pid, so an exited process is reported as
+#   "exited while loading" in a second rather than as "FAILED OR TIMEOUT" after four
+#   minutes of dots.
 #   v98 (2026-11-06): placement is decided BEFORE the card is taken.  __model_use_fit_verdict
 #   is a pure arithmetic on (model_mb, layers, ngl, arch, card total, host MemAvailable):
 #   fits -> ok; a MoE too big for the card but resident in host RAM -> --cpu-moe (experts
@@ -1576,9 +1584,17 @@ function __model_use_confirm_kept_lanes() {
 
 # ---------------------------------------------------------------------------
 # __model_use_fit_verdict — may this model be placed on this card at all?
-#   args: model_mb n_layers gpu_layers arch vram_total_mb mem_available_mb
+#   args: model_mb n_layers gpu_layers arch vram_total_mb mem_available_mb [shared]
 #   stdout: ok | cpu-moe | refuse:<one-line reason with the numbers>
 # A PURE decision, so the arithmetic is testable without a GPU.
+#
+# SHARED MEMORY (arg 7 = 1): the GPU pool and host RAM are ONE physical pool, and a
+# CUDA allocation has to be BACKED by it.  Measured 2026-11-07: with the carve at
+# 98,304 MiB, `cudaMalloc` of 72,114 MiB FAILED while nvidia-smi reported 92,393 MiB
+# free — because the guest held 30,512 MiB and only ~13 GiB was available.  The repo
+# already recorded the shape ("a 60 GiB allocation succeeded at 94 GiB guest and failed
+# below ~30 GiB", bin/llm-archive-unusable.sh:13).  So on a shared host the GPU budget
+# is host MemAvailable, NOT the pool total the card reports.
 #
 # WHY IT EXISTS (measured 2026-11-06): `model use 2` asked for a 73.3 GB MoE on a
 # 24 GiB card because __calc_gpu_layers returns the model's FULL layer count for any
@@ -1601,7 +1617,7 @@ function __model_use_confirm_kept_lanes() {
 # ---------------------------------------------------------------------------
 function __model_use_fit_verdict() {
     local model_mb="${1:-0}" n_layers="${2:-0}" gpu="${3:-0}" arch="${4:-}"
-    local vram="${5:-0}" avail="${6:-0}" gpu_mb host_mb margin=1024
+    local vram="${5:-0}" avail="${6:-0}" shared="${7:-0}" gpu_mb host_mb budget margin=1024
 
     # An unreadable size or card is NOT a verdict: the launch's own fit/health path
     # still applies, and refusing on a missing number would block a CPU-only host.
@@ -1624,7 +1640,16 @@ function __model_use_fit_verdict() {
         gpu_mb=$model_mb
     fi
 
-    if (( gpu_mb + margin <= vram ))
+    # The budget the GPU side may actually draw on.  On a shared-memory host that is
+    # the HOST's available memory: the pool total is a reservation the driver cannot
+    # allocate past when the guest cannot back it.
+    budget=$vram
+    if [[ "$shared" == "1" ]] && [[ "$avail" =~ ^[0-9]+$ ]] && (( avail > 0 ))
+    then
+        budget=$avail
+    fi
+
+    if (( gpu_mb + margin <= budget ))
     then
         printf 'ok\n'
         return 0
@@ -1638,10 +1663,12 @@ function __model_use_fit_verdict() {
         if [[ "$avail" =~ ^[0-9]+$ ]] && (( avail > 0 )) && (( model_mb > avail ))
         then
             host_mb=$model_mb
+            local _where="${vram} MiB card"
+            [[ "$shared" == "1" ]] && _where="${budget} MiB of host RAM the guest can back"
             local _refusal="refuse:MoE needs ${host_mb} MiB of expert weights in host RAM and"
             _refusal+=" ${avail} MiB is available, while ${gpu_mb} MiB of weights does not"
-            _refusal+=" fit the ${vram} MiB card — use a smaller quant, or raise the GPU"
-            _refusal+=" carve and reboot"
+            _refusal+=" fit the ${_where} — use a smaller quant, or give the guest more RAM"
+            _refusal+=" (a smaller GPU carve) and reboot"
             printf '%s\n' "$_refusal"
             return 0
         fi
@@ -1652,12 +1679,13 @@ function __model_use_fit_verdict() {
     # A DENSE row must fit the card: `-ngl` is an exact count and nothing here
     # rewrites the row, so "the rest could live in host RAM" is not an answer a
     # dense launch can act on.  The actionable refusal names the row's own request.
-    if (( gpu_mb > vram ))
+    if (( gpu_mb > budget ))
     then
+        local _where="${vram} MiB card"
+        [[ "$shared" == "1" ]] && _where="${budget} MiB of host RAM the guest can back"
         local _refusal="refuse:the row asks for ${gpu_mb} MiB of dense weights"
-        _refusal+=" (n_gpu_layers=${gpu}) on a ${vram} MiB card, with ${avail} MiB of host"
-        _refusal+=" RAM available — lower --n-gpu-layers, use a smaller quant, or raise"
-        _refusal+=" the GPU carve"
+        _refusal+=" (n_gpu_layers=${gpu}) and only the ${_where} is available — lower"
+        _refusal+=" --n-gpu-layers, use a smaller quant, or give the guest more RAM"
         printf '%s\n' "$_refusal"
         return 0
     fi
@@ -1688,7 +1716,7 @@ function __model_use_fit_preflight() {
         _n_layers=$(__gguf_metadata "$model_path" 2>/dev/null | cut -d'|' -f3)
     fi
     _verdict=$(__model_use_fit_verdict "$_model_mb" "$_n_layers" "$gpu_layers" \
-        "$arch" "$_vram_mb" "$_avail_mb")
+        "$arch" "$_vram_mb" "$_avail_mb" "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}")
     case "$_verdict" in
         ok)
             return 0
@@ -2198,7 +2226,11 @@ function __model_use_wait_healthy() {
     local _health_elapsed=0
     local _health_progress="silent"
     [[ -n "${__BENCH_MODE:-}" ]] || _health_progress="dots"
-    if __llm_wait_for_health "$health_timeout" _health_elapsed "$_health_progress" "Loading LLM (health check)"
+    local _wait_rc
+    __llm_wait_for_health "$health_timeout" _health_elapsed "$_health_progress" \
+        "Loading LLM (health check)" "${model_shell_pid:-}"
+    _wait_rc=$?
+    if (( _wait_rc == 0 ))
     then
         # The notice reports what the LAUNCH cost, so the caller's pre-launch
         # clock is added to the health loop's own count.  Measured 2026-10-22: a
@@ -2294,7 +2326,17 @@ function __model_use_wait_healthy() {
     rm -f "$ACTIVE_LLM_FILE"
     # swallow-ok: best-effort registry sync: the health wait reports its own result
     __llm_registry_sync_state >/dev/null 2>&1 || true
-    [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
+    # A server that EXITED is not a timeout, and saying so is the difference between
+    # "the box is slow" and "the load failed" (measured 2026-11-07: a cudaMalloc
+    # failure at 25 s was reported as FAILED OR TIMEOUT after four minutes of dots).
+    if (( _wait_rc == 2 ))
+    then
+        local _dead_msg="[FAILED: the server exited while loading, before /health"
+        _dead_msg+=" answered — the reason is in $LLM_LOG_FILE]"
+        [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Status" "$_dead_msg" "$C_Error"
+    else
+        [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
+    fi
     return 1
 }
 

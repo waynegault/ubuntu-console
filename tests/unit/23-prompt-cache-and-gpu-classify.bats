@@ -679,6 +679,21 @@ EOS
     [[ "$output" == "ok" ]]
 }
 
+@test "placement: on a shared-memory host the GPU budget is host RAM, not the pool" {
+    # Measured 2026-11-07: pool 98,304 MiB, nvidia-smi reported 92,393 free, and
+    # cudaMalloc of 72,114 MiB FAILED because the guest held 30,512 MiB with ~13 GiB
+    # available.  Fails if: the pool total is treated as allocatable on a shared host.
+    run _verdict 75047 89 89 "nemotron_h_moe" 98304 13062 1
+    [[ "$output" == refuse:* ]]
+    [[ "$output" == *"13062"* ]]
+}
+
+@test "placement: a shared-memory host accepts a row the guest can back (control)" {
+    # The 94 GiB-guest case: the same verdict must not refuse a model host RAM covers.
+    run _verdict 20000 89 89 "qwen3_moe" 98304 60000 1
+    [[ "$output" == "ok" ]]
+}
+
 @test "placement: the builder emits --cpu-moe when the pre-flight set it" {
     run _build_argv "" "" 18083 "--cpu-moe"
     [[ "$output" == *"--cpu-moe"* ]]
