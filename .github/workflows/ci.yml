@@ -312,7 +312,8 @@ jobs:
                tests/unit/79-hf-download-wrapper.bats \
                tests/unit/80-wake-and-holder-report.bats \
                tests/unit/81-gpu-stale-context-scope.bats \
-               tests/unit/82-gpu-busy-attribution.bats
+               tests/unit/82-gpu-busy-attribution.bats \
+               tests/unit/83-fleet-model.bats
 
       - name: Run integration tests
         run: |
