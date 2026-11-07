@@ -27,7 +27,12 @@
 #
 # Exit: 0 done/not-eligible, 1 refused, 2 usage.
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-11-07): §18.3 debt this file carried from its first cut — a purpose comment
+#       above every function (9.5), one `warn` helper instead of five hand-written `>&2`
+#       (10.7), the two over-long lines wrapped (8.1.8), the three non-0/1 exit codes
+#       annotated (9.7), and a `*)` arm on the mode dispatch (4.2.4).  No behaviour change:
+#       the same bytes reach stdout and stderr, and tests/unit/27b passes unchanged.
 #   v5 (2026-11-06): hygiene — the ledger's tab separators were LITERAL tab bytes in the
 #       source (`-F'<TAB>'`, `IFS=$'<TAB>'`, and a printf format split by a real newline),
 #       which the repo's "no tabs in core scripts" rule forbids, and the file carried no
@@ -60,9 +65,15 @@ STRIKES="${AUTOTUNE_ARCHIVE_STRIKES:-2}"
 RESERVE_MIB="${AUTOTUNE_ARCHIVE_RESERVE_MIB:-8192}"
 AUTO="${AUTOTUNE_ARCHIVE_AUTO:-1}"
 
-die() { echo "llm-archive-unusable: $*" >&2; exit 2; }
+# warn - the tool's ONE stderr path, so every refusal and error has the same shape and a
+# caller can grep it (10.7).  Nothing here writes to stderr by hand.
+warn() { printf '%s\n' "$*" >&2; }
+# die - a usage or refusal error: the message through warn, then exit 2 (2 = usage/refusal).
+die() { warn "llm-archive-unusable: $*"; exit 2; }
+# say - the tool's stdout line: verdicts and records, never diagnostics.
 say() { printf '%s\n' "$*"; }
 
+# usage - the three modes and the env knobs, printed on -h and when no mode is given.
 usage() {
     cat <<'EOF'
 Usage:
@@ -79,11 +90,14 @@ Env: AUTOTUNE_ARCHIVE_AUTO=0 requires --yes; AUTOTUNE_ARCHIVE_STRIKES=2;
 EOF
 }
 
+# mem_total_mib - this box's guest RAM in MiB: the pool a CUDA allocation is drawn from.
 mem_total_mib() {
 # swallow-ok: an unreadable /proc/meminfo yields empty and assess refuses with unknown-memory
     awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null
 }
 
+# size_mib <file> - the file's size in MiB, rounded UP so a file just over a ceiling
+# never reads as under it.
 size_mib() {
     local f="$1" b
 # swallow-ok: an unreadable file yields 0 MiB and the caller refuses on it
@@ -109,12 +123,16 @@ shards_of() {
     fi
 }
 
+# total_mib_of_set <file> - the whole shard set's size: llama.cpp loads every part, so
+# one shard's size is not the model's.
 total_mib_of_set() {
     local t=0 f
     while IFS= read -r f; do t=$(( t + $(size_mib "$f") )); done < <(shards_of "$1")
     printf '%d' "$t"
 }
 
+# resolve_model <path-or-name> - a bare basename resolves against MODEL_DIR, because the
+# autotune failure path hands us the registry's NAME; a real miss still reads as a miss.
 resolve_model() {
     local f="$1"
     if [[ -f "$f" ]]; then printf '%s' "$f"; return 0; fi
@@ -122,6 +140,7 @@ resolve_model() {
     printf '%s' "$f"
 }
 
+# assess <file> - the capacity verdict against THIS box's guest RAM, with no side effects.
 assess() {
     local f total_mib mem_mib ceiling verdict
     f=$(resolve_model "$1")
@@ -133,6 +152,7 @@ assess() {
     if (( total_mib > ceiling )); then verdict=too-big; else verdict=fits; fi
     printf 'file=%s\nset_mib=%s\nguest_mib=%s\nreserve_mib=%s\nceiling_mib=%s\nverdict=%s\n' \
         "$(basename "$f")" "$total_mib" "$mem_mib" "$RESERVE_MIB" "$ceiling" "$verdict"
+    # 3 = too big for this box (a verdict, not an error); 0 = it fits.
     [[ "$verdict" == "too-big" ]] && return 3 || return 0
 }
 
@@ -142,12 +162,12 @@ assess() {
 archive() {
     local f="$1" reason="$2" assume="${3:-no}" set size shard moved=0
     f=$(resolve_model "$f")
-    [[ -f "$f" ]] || { echo "refusing: no such model: $1 (tried as given and as $MODEL_DIR/$1)" >&2; return 1; }
+    [[ -f "$f" ]] || { warn "refusing: no such model: $1 (tried as given and as $MODEL_DIR/$1)"; return 1; }
     set=$(shards_of "$f")
-    [[ -n "$set" ]] || { echo "refusing: no shards resolved for $f" >&2; return 1; }
+    [[ -n "$set" ]] || { warn "refusing: no shards resolved for $f"; return 1; }
     size=$(total_mib_of_set "$f")
     if [[ "$AUTO" != "1" && "$assume" != "yes" ]]; then
-        echo "refusing: AUTOTUNE_ARCHIVE_AUTO=$AUTO and no --yes (would move ${size} MiB)" >&2
+        warn "refusing: AUTOTUNE_ARCHIVE_AUTO=$AUTO and no --yes (would move ${size} MiB)"
         return 1
     fi
     # Record FIRST: a record that depends on the move succeeding is not a record.
@@ -161,7 +181,7 @@ archive() {
     while IFS= read -r shard; do
         [[ -f "$shard" ]] || continue
         if mv -n "$shard" "$ARCHIVE_DIR/"; then moved=$(( moved + 1 )); else
-            echo "ERROR: could not move $shard — it is still in the active store" >&2; return 1
+            warn "ERROR: could not move $shard — it is still in the active store"; return 1
         fi
     done <<< "$set"
     say "archived ${moved} file(s), ${size} MiB -> $ARCHIVE_DIR"
@@ -169,6 +189,8 @@ archive() {
     say "recorded: $ARCHIVE_LOG and $RETIRED"
 }
 
+# record_failure <file> <class> - tally one classified failure and archive when the rule
+# is met: two model-attributable strikes, and never on a class that is not about the model.
 record_failure() {
     local f="$1" cls="$2" base count total=0 attributable=yes _b _c _n _t
     base=$(basename "$f")
@@ -179,7 +201,8 @@ record_failure() {
     if [[ -r "$FAIL_FILE" ]]; then
         count=$(awk -F$'\t' -v b="$base" -v c="$cls" '$1==b && $2==c {print $3; exit}' "$FAIL_FILE")
         [[ "$count" =~ ^[0-9]+$ ]] || count=0
-        awk -F$'\t' -v b="$base" -v c="$cls" '!( $1==b && $2==c )' "$FAIL_FILE" > "$FAIL_FILE.tmp"             && mv "$FAIL_FILE.tmp" "$FAIL_FILE"
+        awk -F$'\t' -v b="$base" -v c="$cls" '!( $1==b && $2==c )' "$FAIL_FILE" \
+            > "$FAIL_FILE.tmp" && mv "$FAIL_FILE.tmp" "$FAIL_FILE"
     fi
     count=$(( count + 1 ))
     printf '%s\t%s\t%s\t%s\n' "$base" "$cls" "$count" "$(date -Iseconds)" >> "$FAIL_FILE"
@@ -199,7 +222,9 @@ record_failure() {
         # finding none, and the alternative is a spurious error on a fresh box.
         # swallow-ok: absent ledger == no vintage row; grep's own stderr is not wanted here
         if grep -q $'^'"$base"$'\tloader_vintage\t' "$FAIL_FILE" 2>/dev/null; then
-            say "archive-eligible=no (loader_vintage - this build cannot read the model's GGUF metadata; rebuild llama.cpp first, the weights are not the problem. Do not archive.)"
+            say "archive-eligible=no (loader_vintage - this build cannot read the model's" \
+                "GGUF metadata; rebuild llama.cpp first, the weights are not the problem." \
+                "Do not archive.)"
         else
             say "archive-eligible=no (a recorded class is not a model verdict)"
         fi
@@ -227,6 +252,7 @@ while (( $# )); do
         *) FILE="$1"; shift ;;
     esac
 done
+# 2 = usage: no mode was given, so there is nothing to do.
 [[ -n "$MODE" ]] || { usage; exit 2; }
 [[ -n "$FILE" ]] || die "a model file is required"
 
@@ -236,5 +262,6 @@ case "$MODE" in
             record_failure "$FILE" "$CLASS" ;;
     archive) [[ -n "$REASON" ]] || die "--archive needs --reason"
              archive "$FILE" "$REASON" "$ASSUME" ;;
+    *) die "unhandled mode: $MODE" ;;
 esac
 # end of file

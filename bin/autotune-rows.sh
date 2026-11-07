@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-11-07): §18.3 — the log-name assignment v17 added was 132 chars, so it is
+#       split into the base and the `_to_<last>` suffix.  The value is byte-identical
+#       (the suffix is appended, not rebuilt), and the name still cannot escape LOGDIR.
 #   v17 (2026-11-06, Jarvis): THE LOG NAME IS A NAME, NOT A PATH. The line below built it from
 #   ${ROWS[0]} .. ${ROWS[-1]}, and an HF-cache row path carries two or three slashes
 #   (`models--org--name/snapshots/<sha>/file.gguf`). Those slashes are DIRECTORY SEPARATORS, so
@@ -198,7 +201,8 @@ _log_name_part() {
     local s="${1//\//_}"
     printf '%s' "${s:0:100}"
 }
-LOG="$LOGDIR/autotune-$(date +%Y%m%d-%H%M%S)-rows-$(_log_name_part "${ROWS[0]}")${ROWS[*]:+_to_$(_log_name_part "${ROWS[-1]}")}.log"
+LOG="$LOGDIR/autotune-$(date +%Y%m%d-%H%M%S)-rows-$(_log_name_part "${ROWS[0]}")"
+LOG+="${ROWS[*]:+_to_$(_log_name_part "${ROWS[-1]}")}.log"
 cd "$REPO" || exit 1
 
 {
