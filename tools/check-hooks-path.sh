@@ -25,7 +25,13 @@
 # Exit: 0 the hooks belong to this tree; 1 refused, with the reason named on stdout.
 # ==============================================================================
 # AI INSTRUCTION: Increment Module Version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-11-07): the pre-push hook's materialised checkout is skipped by design. That copy
+#   is made to be READ, no commit starts in it, and its core.hooksPath correctly names the real
+#   tree — so "the hooks that judge this tree must be this tree's own" does not apply there.
+#   The hook sets TAC_GATES_SCRATCH_WORKTREE=1; without it this guard read the case as a PEER
+#   WORKTREE and refused every push made while another lane had edits. The skip is keyed on
+#   that variable alone, so an ordinary tree is judged exactly as before.
 #   v2 (2026-11-07): every message goes through warn/die, so the tool carries one stderr path
 #   instead of two hand-written ones (18.3 10.7) and its usage status is an argument rather
 #   than a literal exit code (9.7).  The worktree loop states its default arm (4.2.4) and
@@ -105,6 +111,16 @@ fix_hint() {
 # environment cannot fix.
 if [[ -n "${CI:-}${GITHUB_ACTIONS:-}" ]]; then
     echo "check-hooks-path: skipped — CI runs the gates directly, so core.hooksPath is not in scope here"
+    exit 0
+fi
+
+# The pre-push hook materialises HEAD into a throwaway worktree when the tree and the commit
+# disagree, and runs the gates there. That copy is READ, never committed in, so its
+# core.hooksPath naming the real tree is correct — and the peer-worktree refusal below would
+# otherwise fire on every push from a tree with any lane's edits in it. The hook says so
+# explicitly; a tree without the marker is judged exactly as before.
+if [[ "${TAC_GATES_SCRATCH_WORKTREE:-0}" == "1" ]]; then
+    echo "check-hooks-path: skipped — this is the pre-push hook's scratch checkout, which never commits"
     exit 0
 fi
 

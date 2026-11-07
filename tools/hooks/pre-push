@@ -303,6 +303,13 @@ else
     fi
     echo "pre-push: HEAD materialised at $WT — judging exactly the content being pushed"
     GATE_ROOT="$WT"
+    # THE SCRATCH CHECKOUT'S HOOKS ARE NOT ITS OWN, BY DESIGN. This copy exists only to be READ — no
+    # commit or push ever starts in it — so core.hooksPath correctly points at the real tree, while a
+    # gate that asks "are the hooks that judge this tree its own?" answers no and refuses. Say which
+    # context this is in the ENVIRONMENT rather than leave tools/check-hooks-path.sh guessing from a
+    # temp path name: measured 2026-11-07, it read this case as "hooks belong to a PEER WORKTREE" and
+    # refused every push made while another lane had edits in the working tree — i.e. most of them.
+    export TAC_GATES_SCRATCH_WORKTREE=1
 fi
 
 run_gate "tools/lint.sh (whole tree)" "$GATE_ROOT/tools/lint.sh"

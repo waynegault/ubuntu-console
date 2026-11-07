@@ -101,3 +101,33 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"not a git working tree"* ]]
 }
+
+# Criterion (2026-11-07): the pre-push hook materialises HEAD into a throwaway worktree and runs
+# the gates there when the tree and the commit disagree. That copy is read, never committed in,
+# and its core.hooksPath correctly names the real tree — so the peer-worktree refusal must not
+# fire on it. Measured: it did, on the first push made from a tree another lane was editing, so
+# every such push was refused. Fails if: the guard refuses a scratch checkout the hook declared,
+# OR (case above) stops refusing a real peer when nothing declared it.
+@test "the pre-push scratch checkout is skipped, not refused as a peer worktree" {
+    git -C "$REPO" worktree add -q -b scratch "$TMP/scratch"
+    git -C "$REPO" config core.hooksPath "$REPO/tools/hooks"
+
+    # WITHOUT the marker this is the peer-worktree case: the hook path belongs to another tree.
+    run bash "$GUARD" --repo "$TMP/scratch"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PEER WORKTREE"* ]]
+
+    # WITH the marker — the only thing the hook sets — the same layout is a judgement-only copy.
+    run env TAC_GATES_SCRATCH_WORKTREE=1 bash "$GUARD" --repo "$TMP/scratch"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"scratch checkout, which never commits"* ]]
+
+    # The MARKER is what skips, not the layout: remove it and the unset config is refused again.
+    git -C "$REPO" config --unset core.hooksPath
+    run bash "$GUARD" --repo "$TMP/scratch"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"core.hooksPath is unset"* ]]
+    run env TAC_GATES_SCRATCH_WORKTREE=1 bash "$GUARD" --repo "$TMP/scratch"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"scratch checkout, which never commits"* ]]
+}
