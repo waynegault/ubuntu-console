@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 117
+# Module Version: 118
 #   v117 (2026-11-06): _launch_server's failure handling is _launch_or_record_failure,
 #     called as "|| return 1" so every exit path lands where it did.  The 18.3 10.4 counter
 #     bounds a definition by the NEXT one, so the def nested here measured _startup_fail_type as
@@ -1011,7 +1011,15 @@ fmts() { local _c _out=""; for _c in "$@"; do _out+="$(printf "%'d:%'d " "${_c%%
 #   refuse      contended, not allowed - and also an UNREADABLE load, because
 #               "unknown" is not proven quiet (fail closed, like the GPU gate).
 __autotune_measurement_verdict() {
-    local load="${1:-}" cores="${2:-}" allow="${3:-0}"
+    local load="${1:-}" cores="${2:-}" allow="${3:-0}" force="${4:-0}"
+    # A FORCED run cannot certify at all.  `--allow-contended` on its own only widens the
+    # contended branch: when the live load happens to sit at or under the core count, the
+    # verdict is `certified` and a bypassed run leaves a number that reads as quiet-box.
+    # Measured 2026-11-07: TAC_RESUME_CI_BYPASS=1 wrote rows 13/14 as meas_state=certified
+    # while 8 CI workers were live and llama-server held the rest of the load, so load>cores
+    # was false at the moment of the read.  force=1 means "this run was let through a gate",
+    # which is a fact the caller knows and the load figure does not.
+    if [[ "$force" == "1" && "$allow" == "1" ]]; then echo indicative; return 0; fi
     if [[ "$load" =~ ^[0-9]+([.][0-9]+)?$ && "$cores" =~ ^[0-9]+$ ]]; then
         if awk -v l="$load" -v c="$cores" 'BEGIN{exit !(l > c)}'; then
             if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
@@ -3723,7 +3731,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # 3c: the verdict decides whether this row may be written at all — "refuse"
         # (contended, or an unreadable load, without --allow-contended) exits BEFORE
         # the save; otherwise it is the meas_state the row carries.
-        _meas_state=$(__autotune_measurement_verdict "$_row_load" "$_row_cores" "${ALLOW_CONTENDED:-0}")
+        _meas_state=$(__autotune_measurement_verdict "$_row_load" "$_row_cores" "${ALLOW_CONTENDED:-0}" "${TAC_CONTENDED:-0}")
         if [[ "$_meas_state" == "refuse" ]]; then
             echo "  REFUSING to write: measured at load ${_row_load} on ${_row_cores} cores — the box"
             echo "  was CONTENDED, so this row's tps is indicative, not certified — nothing was written."
