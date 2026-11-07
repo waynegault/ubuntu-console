@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # fleet-model.sh — keep the FLEET off a lane that a measurement run is about to deny.
 #
 # WHY. A clean-room sweep stops llama-cuda-qwen3coder-30b-chat.service to free ~20 GB, and that
@@ -90,3 +90,4 @@ case "${1:-status}" in
         exit 64
         ;;
 esac
+# end of file
