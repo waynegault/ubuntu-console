@@ -34,7 +34,7 @@ unclassified	scripts/10-deployment.sh	2
 unclassified	scripts/11a-llm-registry.sh	8
 unclassified	scripts/11b-llm-autotune.sh	7
 unclassified	scripts/11c-llm-server.sh	12
-unclassified	scripts/11d-llm-gpu.sh	86
+unclassified	scripts/11d-llm-gpu.sh	85
 unclassified	scripts/11e-llm-model.sh	71
 unclassified	scripts/11f-llm-runtime.sh	20
 unclassified	scripts/12-dashboard-help.sh	13
