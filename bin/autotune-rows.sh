@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 #   v17 (2026-11-06, Jarvis): THE LOG NAME IS A NAME, NOT A PATH. The line below built it from
 #   ${ROWS[0]} .. ${ROWS[-1]}, and an HF-cache row path carries two or three slashes
 #   (`models--org--name/snapshots/<sha>/file.gguf`). Those slashes are DIRECTORY SEPARATORS, so
@@ -215,6 +215,14 @@ if ! _tac_suspend_acquire "$SUSPEND"; then
     echo "autotune-rows: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown})" >&2
     exit 1
 fi
+# THE FLEET MUST NOT TRY A LANE THIS RUN IS ABOUT TO DENY (Wayne, 2026-11-07).  The
+# clean-room stops the coder lane a few lines below, and that lane is the fleet PRIMARY
+# model, so without this every agent request pays an ECONNREFUSED before failover
+# (measured 2026-11-06 23:41-23:42).  Switched HERE, the moment this run OWNS the card,
+# not at clean-room time: a run that refuses for want of the card changes nothing.
+if ! bash "$REPO/bin/fleet-model.sh" sweep >> "$LOG" 2>&1; then
+    echo "=== WARNING: fleet model NOT switched - agents will be denied $(basename "$LANE") during this sweep" | tee -a "$LOG"
+fi
 # Release only when THIS run owns the hold (card 7d3e7b95): the old trap removed a
 # hold it may not have set, releasing another run's hold mid-sweep.
 trap '_tac_suspend_release "$SUSPEND"' EXIT
@@ -253,6 +261,11 @@ cleanroom_restore() {
         fi
     done
     _TENANTS_STOPPED=()
+    # ...and the fleet goes back to the lane it was on, LAST: switching before the tenant
+    # is serving would hand every agent a lane that cannot answer yet.
+    if ! bash "$REPO/bin/fleet-model.sh" restore; then
+        echo "clean-room: FAILED to restore the fleet model - run bin/fleet-model.sh restore" >&2
+    fi
 }
 trap '_tac_suspend_release "$SUSPEND"; cleanroom_restore' EXIT
 # ...and when the WRAPPER is the thing signalled, the case block below never runs at all
