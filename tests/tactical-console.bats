@@ -2345,9 +2345,19 @@ EOF
     # "xe-llama-embed" - all three contain "llama", so any comm match would
     # evict the fleet this helper exists to leave alone.  Verified live: a CUDA
     # bench server classifies KILL, an OpenCL lane server classifies SKIP.
-    local _src
+    #
+    # Narrowed 2026-11-07: the blanket "no `_comm` anywhere in the file" tripped on
+    # __gpu_stale_context_verdict, which reads comm to EXCLUDE a llama server and to
+    # require python — the opposite of the hazard, and covered behaviourally by
+    # tests/unit/81-gpu-stale-context-scope.bats.  This case now pins what the rule
+    # actually forbids: a name-based sweep in executable code, and the loss of the
+    # executable-scoping marker.  Catches: reintroducing `pkill -f llama-server` or
+    # `killall`, which collateral-kills every lane on the box.
+    local _src _code
     _src=$(< "$REPO_ROOT/scripts/11d-llm-gpu.sh")
-    [[ "$_src" != *'_comm'* ]]
+    _code=$(grep -vE '^[[:space:]]*#' "$REPO_ROOT/scripts/11d-llm-gpu.sh")
+    [[ "$_code" != *'pkill'* ]]
+    [[ "$_code" != *'killall'* ]]
     [[ "$_src" == *'build-opencl*/bin/llama-server'* ]]
 }
 
@@ -3491,10 +3501,18 @@ STUB
 }
 
 @test "autotune: model use launch reads KV types from quant_cache (field 5)" {
+    # Catches: a launch that hardcodes the KV types instead of taking the row's measured
+    # pair, or one that drops the env override.  The line moved into a cmd+= array (the
+    # serve path builds its argv that way now), so the case pins BOTH halves: the
+    # derivation's precedence — env, then row_kv_k/v from quant_cache field 5, then q8_0 —
+    # and the launch passing those variables rather than a literal.  Pinning only the
+    # launch line would pass for `cmd+=("--cache-type-k" "q8_0")`.
     local src
     src=$(< "$REPO_ROOT/scripts/11e-llm-model.sh")
-    [[ "$src" == *'--cache-type-k" "${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}"'* ]]
-    [[ "$src" == *'--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}"'* ]]
+    [[ "$src" == *'local kv_k="${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}"'* ]]
+    [[ "$src" == *'local kv_v="${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}"'* ]]
+    [[ "$src" == *'cmd+=("--cache-type-k" "$kv_k")'* ]]
+    [[ "$src" == *'cmd+=("--cache-type-v" "$kv_v")'* ]]
 }
 
 @test "autotune: the registry header has ONE definition the writers emit" {
