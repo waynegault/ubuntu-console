@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
 #   v28 (2026-11-06): the nvidia-smi timeout wrappers are split (18.3 8.1.8).
 #     Behaviour unchanged.
 #   v26 (2026-11-05): the no-argument default applies the two rules the wrapper and the
@@ -352,7 +352,16 @@ for ((i = 0; i < TOTAL; i++)); do
     printf '\n[%d/%d] model %s (row %s, cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" \
         "$(__llm_registry_row_for_file "$m" 2>/dev/null || echo '?')" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
     _row_rc=0
-    bash "$_SELF_DIR/autotune-model.sh" "$m" 2>&1 || _row_rc=$?
+    # TAC_CONTENDED=1 means the CI gate was BYPASSED for this run (bin/autotune-resume.sh
+    # exports it).  Without this the row would be written as if the box had been quiet:
+    # --allow-contended is what stamps meas_state=indicative, so the caveat travels with
+    # the number instead of living in a log nobody re-reads.
+    _contended=()
+    if [[ "${TAC_CONTENDED:-0}" == "1" ]]; then
+        _contended=(--allow-contended)
+        printf "CONTENDED RUN: measuring %s while CI is live - the row is stamped indicative\n" "$m"
+    fi
+    bash "$_SELF_DIR/autotune-model.sh" "$m" "${_contended[@]}" 2>&1 || _row_rc=$?
     if (( _row_rc == 0 )); then
         printf 'done\n'
         TUNED_COUNT=$((TUNED_COUNT + 1))

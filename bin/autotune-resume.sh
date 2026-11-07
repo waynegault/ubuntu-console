@@ -60,7 +60,7 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
 #   v33 (2026-11-06): PROGRESS IS A VERDICT, NOT A SHRINK.  The v32 guard compared the OWED
 #   count before and after, which a CAP can shrink: measured at 13:45, the plan went 8 -> 7 when
 #   apply_indicative_cap capped GLM-5.3 out, "progress" was declared, a restart was armed for
@@ -759,6 +759,19 @@ ci_workers() {
 # failure path is the action it guards is the shape that has bitten this repo).
 wait_for_ci_clear() {
     local _bound="${1:-$CI_WAIT_S}" _n _deadline _clear=0 _why
+    # BREAK-GLASS (Wayne, 2026-11-07: "break the rule, just to test the tooling").  A test
+    # run must be able to measure while CI is live, and must NEVER read afterwards as a
+    # quiet-box certification.  So the bypass refuses to be silent: it names the workers it
+    # is ignoring and exports TAC_CONTENDED=1, so every row is written meas_state=indicative
+    # (run-autotune-batch.sh).  A bypass that leaves no mark is the same defect as a green
+    # that was out of scope.
+    if [[ "${TAC_RESUME_CI_BYPASS:-0}" == "1" ]]; then
+        printf "CI GATE BYPASSED (TAC_RESUME_CI_BYPASS=1) - ignoring %s worker(s)\n" "$(ci_workers)"
+        printf "  THIS RUN IS CONTENDED: every row it writes is stamped meas_state=indicative,\n"
+        printf "  never certified.  Re-run on a quiet box before trusting a number.\n"
+        export TAC_CONTENDED=1
+        return 0
+    fi
     # Say it HERE, once, where stdout is not captured.  A warning printed inside $(ci_workers)
     # becomes part of the count and the gate never sees a numeric zero — measured 2026-10-18:
     # the unit's PATH has no `gh`, so every poll returned "WARN…\n0" and the loop slept for 55
