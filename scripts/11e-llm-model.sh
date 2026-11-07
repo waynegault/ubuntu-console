@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 99
+# Module Version: 100
+#   v100 (2026-11-07): the shared-memory budget now counts the VRAM the switch frees and
+#   keeps a 12 GiB reserve.  Both parts are measured at the 32 GiB carve: with 80,269 MiB
+#   of guest RAM and 66,875 MiB available, judging `avail` alone refused a model the switch
+#   could host (the chat lanes' ~31 GiB returns), while a 2 GiB reserve let a 72 GiB
+#   allocation through and the WHOLE distro went down mid-load (the previous boot's journal
+#   ends with WSL relay errors, no guest OOM line).  The sum is clamped to MemTotal, and
+#   LLAMA_FIT_KEEP_RESERVE_MB overrides the reserve.  The 120B row now refuses at this split.
 #   v99 (2026-11-07): two corrections read from the same failed launch.  (a) On a
 #   SHARED-MEMORY host the GPU budget is host MemAvailable, not the pool total: with the
 #   carve at 98,304 MiB a cudaMalloc of 72,114 MiB failed while nvidia-smi reported 92,393
@@ -1707,6 +1714,53 @@ function __model_use_fit_preflight() {
     _vram_mb=$(( $(__tac_vram_total_bytes) / 1048576 ))
     _avail_mb=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo)
     [[ "$_avail_mb" =~ ^[0-9]+$ ]] || _avail_mb=0
+    # THE SWITCH FREES THE CARD BEFORE IT LOADS, and on a shared pool that VRAM IS host
+    # memory coming back.  Judging against `avail` as it stands would refuse a model the
+    # switch could in fact host — measured 2026-11-07 at a 32 GiB carve: 66,875 MiB
+    # available while ~31 GiB was held by the very lanes about to be stopped.  So add
+    # back what the card holds, keeping a reserve for the always-on embedding lane.
+    # LIMIT, stated rather than hidden: nvidia-smi gives no per-process VRAM here
+    # (`used_memory` reads N/A), so a FOREIGN holder's memory is counted as reclaimable
+    # too.  That is the lenient direction on a box whose foreign holders are declared.
+    if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
+    then
+        local _smi _card_used_mb=0
+        # 12 GiB, not 2: MEASURED 2026-11-07 — with a 32 GiB carve the guest held 80,269
+        # MiB and a 72 GiB allocation passed a 2 GiB reserve; the load streamed weights
+        # for ~3.5 minutes and then the WHOLE distro went down mid-load (the previous
+        # boot's journal ends at 17:31:57 with WSL relay errors and there is no guest OOM
+        # line, so the host reclaimed the VM rather than one process dying).  A single
+        # allocation of ~90% of guest RAM is not survivable here whatever the arithmetic
+        # says, so the reserve is the headroom that keeps the OS alive.
+        local _reserve_mb="${LLAMA_FIT_KEEP_RESERVE_MB:-12288}"
+        # swallow-ok: an unresolvable smi command leaves the card reading absent, and the budget then stays at plain MemAvailable (the stricter answer).
+        _smi=$(__resolve_smi 2>/dev/null || true)
+        if [[ -n "$_smi" ]]
+        then
+            _card_used_mb=$(
+                # swallow-ok: an unreadable card leaves the reading empty, which makes the budget stricter, not looser.
+                "$_smi" --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null
+            )
+            _card_used_mb=$(printf '%s\n' "$_card_used_mb" | head -1 | tr -d ' ')
+        fi
+        [[ "$_card_used_mb" =~ ^[0-9]+$ ]] || _card_used_mb=0
+        [[ "$_reserve_mb" =~ ^[0-9]+$ ]] || _reserve_mb=2048
+        if (( _card_used_mb > _reserve_mb ))
+        then
+            _avail_mb=$(( _avail_mb + _card_used_mb - _reserve_mb ))
+        fi
+        # A CUDA allocation cannot exceed what the GUEST can address, so the derived
+        # budget is clamped to MemTotal minus the same reserve.  Without this the sum
+        # can read above MemTotal and promise memory the guest does not have (measured
+        # 2026-11-07: 66,875 available + ~30 GiB held by the card > 80,269 total).
+        local _mem_total_mb
+        _mem_total_mb=$(awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo)
+        if [[ "$_mem_total_mb" =~ ^[0-9]+$ ]] && (( _mem_total_mb > _reserve_mb )) \
+           && (( _avail_mb > _mem_total_mb - _reserve_mb ))
+        then
+            _avail_mb=$(( _mem_total_mb - _reserve_mb ))
+        fi
+    fi
     # The GGUF's own block count, so a partial offload is measured against the model's
     # real layer count rather than guessed.  An unreadable header leaves it empty and
     # the verdict falls back to the whole-file bound.

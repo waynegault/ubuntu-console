@@ -188,8 +188,16 @@ backed by it. Measured 2026-11-07 with the carve at 98,304 MiB: `cudaMalloc` of 
 **failed** while `nvidia-smi` reported 92,393 MiB free, because the guest held 30,512 MiB
 with ~13 GiB available. The same shape is already recorded in
 `bin/llm-archive-unusable.sh` — "a 60 GiB allocation succeeded at 94 GiB guest and failed
-below ~30 GiB". So the verdict compares the GPU-resident weights against `MemAvailable`
-there, and the refusal says which side is short.
+below ~30 GiB".
+
+So the budget there is `MemAvailable` **plus the VRAM the switch is about to free** (the
+chat lanes stop before the load, and on one pool their memory returns), clamped to
+`MemTotal`, minus a **12 GiB reserve**. All three parts are measured: at a 32 GiB carve
+with 80,269 MiB of guest RAM, a 72 GiB allocation passed a 2 GiB reserve, streamed weights
+for ~3.5 minutes, and then **the whole distro went down mid-load** — the previous boot's
+journal ends with WSL relay errors and no guest OOM line, so the host reclaimed the VM.
+An allocation of ~90% of guest RAM is not survivable here. The reserve is the headroom
+that keeps the OS alive; `LLAMA_FIT_KEEP_RESERVE_MB` overrides it.
 
 **A server that exits is named as one.** The health wait is given the launched pid and
 returns its own verdict when the process is gone, so a failed `cudaMalloc` at 25 s reads
