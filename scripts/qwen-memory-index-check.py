@@ -36,9 +36,27 @@ line builder budgets the description AROUND the link but never the TITLE, so a l
 beside a long relative path produced a line of up to ~189 characters while the writer's own
 `MAX_INDEX_LINE_CHARS = 150` went unenforced.  Such a line is NOT "broken" — its link still
 resolves — so it is counted separately as `over=` and reported; it is checked here because a
-resolving link is not the only way an index line can be wrong.  Fixed at the mechanism by
-`bin/qwen-memory-index-patch.sh` hunk 4 and reported upstream as QwenLM/qwen-code#13910.  The
-`MAX_INDEX_LINE_CHARS` below MIRRORS the writer's constant, and this file's own suite pins the
+resolving link is not the only way an index line can be wrong.  Hunk 4 of
+`bin/qwen-memory-index-patch.sh` budgets the TITLE inside `docIndexLine`, and upstream carries it
+as QwenLM/qwen-code#13910.
+
+THAT FIX COVERS ONE PROVIDER, NOT THE LINE (measured 2026-11-07T00:52Z).  `assembleIndex(lines)`
+accepts ALREADY-FORMATTED strings and writes them verbatim, so every line provider that is not
+`docIndexLine` has no budget at all.  The 218-char line found that night appears in no note
+frontmatter — only in MEMORY.md and a chat transcript — so it was model-authored and never passed a
+cap.  Two consequences, both about remedies rather than about the line: editing the store clears the
+symptom and the next generated long line fires this check again, and "it recurs only if the patched
+writer re-emits one" names a writer that was never involved.  Until the cap is enforced inside
+`assembleIndex`, `over=` means "some provider emitted a long line", not "hunk 4 regressed".
+
+IT IS RECURRING, NOT HYPOTHETICAL (re-measured 2026-11-07T23:16Z, ~22 hours after the last trim).
+`rc=3` with two lines over the cap, both first-line entries dated TODAY: 196 chars in the root store
+and 172 in the ubuntu-console project store, in the normal `- [title](path) — description` shape with
+a long title.  So a trim buys about a day, which is the argument for enforcing the budget where the
+lines are joined rather than at each provider.
+
+The `MAX_INDEX_LINE_CHARS`
+below MIRRORS the writer's constant, and this file's own suite pins the
 150 boundary, so a drift in either direction shows up as a failure.
 
 WHICH INDEXES (the store set is DISCOVERED, never listed)
@@ -102,9 +120,7 @@ def discover_indexes(qwen_dir):
     if os.path.isfile(root_index):
         found.append(os.path.abspath(root_index))
     project_pattern = os.path.join(qwen_dir, "projects", "*", "memory", "MEMORY.md")
-    found.extend(
-        sorted(os.path.abspath(path) for path in glob.glob(project_pattern) if os.path.isfile(path))
-    )
+    found.extend(sorted(os.path.abspath(path) for path in glob.glob(project_pattern) if os.path.isfile(path)))
     return found
 
 
@@ -146,9 +162,7 @@ def check_index(path):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "indexes",
         nargs="*",
