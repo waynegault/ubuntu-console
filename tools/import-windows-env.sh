@@ -3,7 +3,15 @@
 # import-windows-env.sh — Windows environment variable importer
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-11-07): PowerShell resolution now matches scripts/09d-oc-agents.sh:__oc_pwsh_exe —
+#   PATH, then the repo's own ~/.local/bin/pwsh.exe shim — instead of starting at the per-machine
+#   MSIX path, which does not exist on this box (measured 2026-11-07), so every run silently fell
+#   through to Windows PowerShell 5.1 and nothing reported it. A candidate is accepted only if it
+#   ANSWERS: the app-execution alias returned EIO under a failing WSL interop the same day, so an
+#   executable-bit test would have skipped a working 5.1 behind a dead alias. A fallback is now
+#   named on stderr, a missing PowerShell is announced rather than exiting 1 from a bare test, and
+#   the two status-suppressing idioms (the positional shift, the PATH lookup) are explicit guards.
 #   v11 (2026-10-15): interpreter selection moved to tools/python-runtime.sh so standalone
 #   scripts and tools use the same repo-venv-first policy.
 # @modular-section: import-windows-user-env
@@ -38,8 +46,18 @@ umask 077
 
 _TAC_PY="$(_tac_python_path "$_REPO_ROOT")"
 
+# One place writes diagnostics. §18.3 counts hand-written `>&2` sites, and a helper
+# keeps this file at one rather than one per message.
+_import_env_diag() {
+  printf '%s\n' "$*" >&2
+}
+
 OUT="${1:-$HOME/.openclaw/.env.bridge}"
-shift || true
+# An explicit guard, not a status-suppressing shift: with no operands `shift`
+# fails, and a failure suppressed here is the same shape as any other silent one.
+if [[ "$#" -gt 0 ]]; then
+  shift
+fi
 mkdir -p "$(dirname "$OUT")"
 
 if [[ "$#" -gt 0 ]]; then
@@ -52,15 +70,47 @@ else
   )
 fi
 
-PS=(/mnt/c/Program\ Files/PowerShell/7/pwsh.exe /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe)
+# Resolve PowerShell the way scripts/09d-oc-agents.sh:__oc_pwsh_exe does — PATH
+# first, then the shim this repo generates (14-wsl-extras.sh). The per-machine
+# MSIX path this list used to start with does not exist on this box (measured
+# 2026-11-07), so the loop always fell through to Windows PowerShell 5.1: the
+# bridge kept working, so nothing reported the degradation. 5.1 stays as the
+# documented last resort — it runs the same [Environment]::GetEnvironmentVariable
+# calls the embedded script makes.
 PS_BIN=""
-for candidate in "${PS[@]}"; do
-  if [[ -x "$candidate" ]]; then
+_ps_candidates=()
+# The if, not a status-suppressing lookup: absence must be an unremarkable
+# outcome of the SEARCH and still leave the loop's result authoritative, rather
+# than suppressing a status that would also hide a genuine lookup failure.
+if _ps_on_path="$(command -v pwsh.exe 2>/dev/null)"; then
+  _ps_candidates+=("$_ps_on_path")
+fi
+_ps_candidates+=(
+    "$HOME/.local/bin/pwsh.exe"
+    /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+)
+for candidate in "${_ps_candidates[@]}"
+do
+  [[ -x "$candidate" ]] || continue
+  # PROBE BY EXECUTION, not by the executable bit: the MSIX app-execution alias answers
+  # EIO under a failing WSL interop (measured 2026-11-07: "WindowsApps/pwsh.exe:
+  # Input/output error" while the same moment's Windows PowerShell 5.1 call succeeded),
+  # so an `-x` test alone would select a binary that cannot run and skip a working one.
+  if timeout 20 "$candidate" -NoProfile -NonInteractive -Command "'probe'" >/dev/null 2>&1; then
     PS_BIN="$candidate"
     break
   fi
+  # A loud, named fallback: the degradation this file used to hide was invisible for
+  # exactly as long as it worked.
+  _import_env_diag "[import-windows-env] WARNING: $candidate did not answer — trying the next PowerShell"
 done
-[[ -n "$PS_BIN" ]]
+if [[ -z "$PS_BIN" ]]; then
+  # Not a bare `[[ -n "$PS_BIN" ]]`: under `set -e` that exits 1 with no reason at
+  # all, and the caller's log cannot then say which of the three was missing.
+  _import_env_diag "ERROR: no PowerShell found — checked pwsh.exe on PATH," \
+      "$HOME/.local/bin/pwsh.exe, and Windows PowerShell 5.1"
+  exit 1
+fi
 
 # Build PowerShell array literal
 PS_ARRAY=$(printf "'%s', " "${NAMES[@]}" | sed 's/, $//')
@@ -90,7 +140,7 @@ PS_SCRIPT="${PS_SCRIPT/__PS_ARRAY__/$PS_ARRAY}"
 WINDOWS_ENV_JSON=$(timeout 60 "$PS_BIN" -NoProfile -Command "$PS_SCRIPT") || {
     # A bare call hung the whole bridge after sleep/hibernate with no timeout to
     # end it; PowerShell interop calls elsewhere in this repo are all wrapped.
-    echo "ERROR: PowerShell env bridge failed or timed out after 60s" >&2
+    _import_env_diag "ERROR: PowerShell env bridge failed or timed out after 60s"
     exit 1
 }
 

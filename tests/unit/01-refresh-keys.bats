@@ -1366,3 +1366,24 @@ ENVD
     [ "${ASYNC_KEY:-}" = "fresh" ]
     [ ! -e "$_log" ]
 }
+
+@test "import-windows-env resolves PowerShell through PATH, not a hardcoded per-machine path" {
+    # What this catches: tools/import-windows-env.sh searched /mnt/c/Program Files/PowerShell/7/
+    # pwsh.exe FIRST. Measured 2026-11-07 on this box: that path does not exist, so every run
+    # silently fell through to Windows PowerShell 5.1 and the pwsh.exe the repo actually maintains
+    # (the ~/.local/bin shim, reached through PATH) was never consulted. Before the fix this test
+    # is red twice over: the mock never runs, and on a box with no /mnt/c the run fails outright.
+    local _log="$TAC_TEST_TMPDIR/import_pwsh_calls.log"
+    __mock_command_local pwsh.exe "echo \"IMPORT_CALL: \$*\" >> \"$_log\"; printf '%s' '{\"WIN_API_KEY\":\"from-path\"}'"
+
+    local _out="$TAC_TEST_TMPDIR/imported.env"
+    run "$REPO_ROOT/tools/import-windows-env.sh" "$_out" WIN_API_KEY
+    [ "$status" -eq 0 ]
+
+    # The PATH mock answered at all — the hardcoded candidate list never touched PATH.
+    [ -s "$_log" ]
+    # Its JSON reached the output, so the interpreter that ran is the PATH one.
+    grep -qx 'WIN_API_KEY=from-path' "$_out"
+    # The output file holds credentials.
+    [ "$(stat -c '%a' "$_out")" = "600" ]
+}
