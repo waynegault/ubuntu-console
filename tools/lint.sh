@@ -14,7 +14,9 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-11-07): a Hook Path Guard stage. core.hooksPath into a linked worktree,
+#   or unset, meant the gates judged another tree or none — green about the wrong scope.
 #   v29 (2026-11-05): --staged selects the same corpus the whole-tree loops do, not
 #   `.sh` alone — `bin/*`, `tools/hooks/*` and `tactical-console.bashrc` are shell
 #   without the suffix, and the pre-commit hook's own `.sh` filter never saw them, so a
@@ -859,6 +861,19 @@ else
         echo "  FAIL  CI verdict gate"
         rc=1
     fi
+fi
+
+echo ""
+echo "=== Hook Path Guard ==="
+# GATE-HOOKSPATH-001.  The hooks that judge this tree must be THIS tree's hooks: a
+# core.hooksPath pointing into a linked worktree keeps the gates green about another
+# tree's content, and pointing nowhere makes git skip them with no error at all.
+# Skipped under CI by the script itself (a runner has no developer hook config).
+if "$REPO_ROOT/tools/check-hooks-path.sh"; then
+    echo "  PASS  hook path guard"
+else
+    echo "  FAIL  hook path guard"
+    rc=1
 fi
 
 echo ""
