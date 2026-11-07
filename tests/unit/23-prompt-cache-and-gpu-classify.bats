@@ -189,7 +189,7 @@ setup() {
 # ("bench") sets __BENCH_MODE=1, so the bench-mode argv can be compared with the
 # autotune's in the "bench-mode build omits --cache-ram" case below.
 _build_argv() {
-    local _cache_ram="${1:-}" _bench="${2:-}" _port="${3:-18083}"
+    local _cache_ram="${1:-}" _bench="${2:-}" _port="${3:-18083}" _moe="${4:-}"
     awk '/^function __model_use_build_command\(\)/,/^}/' "$LAUNCHER" > "$SANDBOX/builder.sh"
     grep -q -- '--cache-ram' "$SANDBOX/builder.sh" \
         || { echo "FAIL: builder not extracted"; return 1; }
@@ -203,6 +203,7 @@ source "$1"
 # The MEASURED per-lane table is read from its shipped home (the HOST PROFILE)
 # rather than restated here, so this harness exercises the real override path.
 [[ -n "${5:-}" ]] && source "$5"
+[[ -n "${6:-}" ]] && moe_offload_flag="${6}"
 llm_backend="native"
 LLAMA_SERVER_BIN="/stub/llama-server"
 model_path="/stub/model.gguf"
@@ -226,7 +227,7 @@ if [[ -n "${3:-}" ]]; then export __BENCH_MODE=1; else unset __BENCH_MODE; fi
 __model_use_build_command || { echo "FAIL: builder returned non-zero"; exit 1; }
 printf '%s\n' "${cmd[@]}"
 EOS
-    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench" "$_port" "$PROFILE"
+    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench" "$_port" "$PROFILE" "$_moe"
 }
 
 # ── the prompt-cache reader ──────────────────────────────────────────────────
@@ -623,6 +624,80 @@ EOS
     # f16 is the reference dtype the gate now admits, so it is listed too — the sweep
     # can only prefer it where it fits at the certified ctx (largest cache, listed last).
     grep -q 'LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0 f16/f16' "$ENV_SH"
+}
+
+# ── placement: the fit verdict and the --cpu-moe flag ────────────────────────
+# Criterion (2026-11-06): `model use 2` asked for a 73.3 GB MoE on a 24 GiB card,
+# copied weights for three minutes, died with CUDA OOM — after stopping the resident
+# lane — and reported "FAILED OR TIMEOUT".  The verdict is arithmetic and is decided
+# BEFORE the card is claimed; --cpu-moe is what keeps a MoE's experts out of VRAM.
+_verdict() {
+    awk '/^function __model_use_fit_verdict/,/^}/' "$LAUNCHER" > "$SANDBOX/verdict.sh"
+    grep -q 'fit_verdict' "$SANDBOX/verdict.sh" || { echo "FAIL: verdict not extracted"; return 1; }
+    cat > "$SANDBOX/verdict-run.sh" <<'EOS'
+set -uo pipefail
+source "$1"; shift
+__model_use_fit_verdict "$@"
+EOS
+    bash "$SANDBOX/verdict-run.sh" "$SANDBOX/verdict.sh" "$@"
+}
+
+@test "placement: a model too large for card AND host is refused, with both figures" {
+    # Fails if: the incident's row is accepted, or the refusal omits the numbers the
+    # operator needs to choose between a smaller quant and a bigger carve.
+    run _verdict 75059 89 89 "nemotron_h_moe" 24576 20000
+    [[ "$output" == refuse:* ]]
+    [[ "$output" == *"75059"* && "$output" == *"20000"* && "$output" == *"24576"* ]]
+}
+
+@test "placement: a MoE larger than the card but resident in host RAM gets --cpu-moe" {
+    # Fails if: a MoE that could run with experts in RAM is refused instead, or is
+    # launched asking the card for the whole file.
+    run _verdict 40000 89 89 "qwen3_moe" 24576 60000
+    [[ "$output" == "cpu-moe" ]]
+}
+
+@test "placement: a model that fits the card is left alone (control)" {
+    # The control for the two cases above: a gate that always refused would satisfy
+    # them and prove nothing.
+    run _verdict 20000 89 89 "qwen3_moe" 24576 60000
+    [[ "$output" == "ok" ]]
+}
+
+@test "placement: a dense row asking for more than the card is REFUSED, not spilled" {
+    # -ngl is an exact count and nothing rewrites the row, so the only honest answer
+    # is the actionable refusal.  Fails if: a dense over-request reads as ok.
+    run _verdict 40000 48 999 "llama" 24576 60000
+    [[ "$output" == refuse:* ]]
+    [[ "$output" == *"n_gpu_layers=999"* ]]
+}
+
+@test "placement: an unreadable card is not a refusal" {
+    # A missing GPU reading is not evidence of a model that cannot run; a CPU-only
+    # host must not be blocked by this arithmetic.
+    run _verdict 75059 89 89 "nemotron_h_moe" 0 20000
+    [[ "$output" == "ok" ]]
+}
+
+@test "placement: the builder emits --cpu-moe when the pre-flight set it" {
+    run _build_argv "" "" 18083 "--cpu-moe"
+    [[ "$output" == *"--cpu-moe"* ]]
+}
+
+@test "placement: the builder emits no offload flag when the pre-flight did not (control)" {
+    run _build_argv "" "" 18083 ""
+    [[ "$output" != *"--cpu-moe"* ]]
+}
+
+@test "placement: the pre-flight runs BEFORE the card is claimed" {
+    # An impossible placement must not stop the resident lane first.  Fails if: the
+    # call is moved below __model_use_claim_cuda_card.
+    awk '/^function __model_use\(\)/,/^}/' "$LAUNCHER" > "$SANDBOX/use.sh"
+    local pf claim
+    pf=$(grep -n '__model_use_fit_preflight' "$SANDBOX/use.sh" | head -1 | cut -d: -f1)
+    claim=$(grep -n '__model_use_claim_cuda_card' "$SANDBOX/use.sh" | head -1 | cut -d: -f1)
+    [[ -n "$pf" && -n "$claim" ]]
+    (( pf < claim ))
 }
 
 # ── the watchdog's driver-level classification ───────────────────────────────

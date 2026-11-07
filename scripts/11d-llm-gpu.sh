@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 39
+# Module Version: 40
+#   v40 (2026-11-06): __calc_gpu_layers' MoE branch no longer CLAIMS the experts are on
+#   the CPU.  `-ngl` moves whole layers, expert tensors included; they leave VRAM only
+#   with --cpu-moe.  The returned layer count is unchanged, and the launcher now decides
+#   placement in 11e (__model_use_fit_preflight) — the sentence this corrects is how a
+#   73.3 GB MoE came to be asked for a 24 GiB card and died with CUDA OOM at load.
 #   v39 (2026-11-06): the stale-CUDA python sweep is scoped before it kills.  It used to
 #   TERM any python process in the compute-apps list that was not llama-server, with no
 #   ownership or age test — and at 00:55 on 2026-11-06 it killed one while another agent's
@@ -1285,7 +1290,12 @@ function __tac_vram_total_bytes() {
 # Decision logic (binary, not partial offload):
 #   - If model fits entirely in VRAM: return 999 (offload all layers)
 #   - If model exceeds VRAM: return 0 (CPU-only mode is faster than partial)
-#   - For MoE models: return total_layers (expert weights stay on CPU anyway)
+#   - For MoE models: return total_layers — the count is right only because the
+#     LAUNCHER pairs it with --cpu-moe when the weights exceed the card
+#     (__model_use_fit_preflight, 11e).  `-ngl` moves whole layers, expert tensors
+#     included; experts stay in RAM only with --cpu-moe/--n-cpu-moe.  The old note
+#     here said they "stay on CPU anyway", which was untrue of llama.cpp and is how
+#     a 73.3 GB MoE was asked for a 24 GiB card (2026-11-06, CUDA OOM at load).
 #
 # Rationale: Partial offload (some layers on GPU, rest in system RAM) causes
 # PCIe bandwidth bottlenecks. Pure CPU inference with --mlock is faster than
@@ -1298,7 +1308,9 @@ function __calc_gpu_layers() {
     _vram_total="$(__tac_vram_total_bytes)"
     local usable_vram=$(( _vram_total * VRAM_USABLE_PCT / 100 ))
 
-    # MoE models keep experts on CPU; full offload heuristics are not useful.
+    # MoE: the layer count is returned WITHOUT a VRAM comparison (the caller decides
+    # placement — see __model_use_fit_preflight in 11e, which adds --cpu-moe when the
+    # weights do not fit the card).  It is not a claim that experts are on the CPU.
     if [[ "${_arch,,}" == *moe* ]]
     then
         echo "${_total_layers:-0}"

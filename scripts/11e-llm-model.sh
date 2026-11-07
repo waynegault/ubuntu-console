@@ -1,7 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 97
+# Module Version: 98
+#   v98 (2026-11-06): placement is decided BEFORE the card is taken.  __model_use_fit_verdict
+#   is a pure arithmetic on (model_mb, layers, ngl, arch, card total, host MemAvailable):
+#   fits -> ok; a MoE too big for the card but resident in host RAM -> --cpu-moe (experts
+#   to the CPU, attention + KV on the GPU); too big for BOTH -> a refusal carrying the two
+#   figures.  Measured: `model use 2` (73.3 GB MoE, 24 GiB card) ran 3 minutes, died with
+#   CUDA OOM after stopping the resident lane, and said "FAILED OR TIMEOUT" — and
+#   __calc_gpu_layers' MoE branch had returned all layers on a premise llama.cpp does not
+#   honour.  The pre-flight runs before __model_use_claim_cuda_card, so a refused model no
+#   longer evicts a serving lane.
 #   v97 (2026-11-06): v96's changelog now records the body that shipped with it — the notice
 #   rides __tac_info like this file's other warnings (18.3 10.7), and the remedy names
 #   GGML_CUDA_FA_QUANTS, the toggle this repo pins, not the deprecated ALL_QUANTS, which warns
@@ -1566,11 +1575,148 @@ function __model_use_confirm_kept_lanes() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_use_fit_verdict — may this model be placed on this card at all?
+#   args: model_mb n_layers gpu_layers arch vram_total_mb mem_available_mb
+#   stdout: ok | cpu-moe | refuse:<one-line reason with the numbers>
+# A PURE decision, so the arithmetic is testable without a GPU.
+#
+# WHY IT EXISTS (measured 2026-11-06): `model use 2` asked for a 73.3 GB MoE on a
+# 24 GiB card because __calc_gpu_layers returns the model's FULL layer count for any
+# MoE arch — on the premise that MoE experts stay on CPU.  They do not: `-ngl` moves
+# whole layers, expert tensors included, and experts only stay in RAM with
+# --cpu-moe/--n-cpu-moe.  The launch then spent 3 minutes copying weights and died
+# with `CUDA error: out of memory`, AFTER stopping the resident lane, and reported
+# "FAILED OR TIMEOUT".  So the placement is decided here, before anything is stopped.
+#
+# The two questions, in order:
+#   1. do the GPU-resident weights fit the card's TOTAL?  (not its free figure: the
+#      switch frees the card first, and an absolute impossibility is the verdict that
+#      must not depend on what happens to be resident)
+#   2. if not, can the remainder live in host RAM?  A MoE answers with --cpu-moe (all
+#      experts on the CPU); a dense model already answers by offloading fewer layers.
+#      A model too large for BOTH is refused with the two figures — the honest verdict
+#      at this carve, and the one that stops a doomed load before it evicts a lane.
+# REF for the placement order: https://vramcalculator.com/llama-cpp-performance-flags/
+# step 4 ("--cpu-moe keeps all MoE expert weights on the CPU").
+# ---------------------------------------------------------------------------
+function __model_use_fit_verdict() {
+    local model_mb="${1:-0}" n_layers="${2:-0}" gpu="${3:-0}" arch="${4:-}"
+    local vram="${5:-0}" avail="${6:-0}" gpu_mb host_mb margin=1024
+
+    # An unreadable size or card is NOT a verdict: the launch's own fit/health path
+    # still applies, and refusing on a missing number would block a CPU-only host.
+    [[ "$model_mb" =~ ^[0-9]+$ ]] && (( model_mb > 0 )) || { printf 'ok\n'; return 0; }
+    [[ "$vram" =~ ^[0-9]+$ ]] && (( vram > 0 )) || { printf 'ok\n'; return 0; }
+    # A row with no numeric offload count (blank, or 0 = CPU-only) asks nothing of the
+    # card; __model_use_configure_params resolves the blank case later, and judging it
+    # here as a full offload would refuse a row that would have run.
+    [[ "$gpu" =~ ^[0-9]+$ ]] && (( gpu > 0 )) || { printf 'ok\n'; return 0; }
+
+    if (( gpu >= 999 ))
+    then
+        gpu_mb=$model_mb
+    elif (( gpu > 0 )) && [[ "$n_layers" =~ ^[0-9]+$ ]] && (( n_layers > 0 ))
+    then
+        gpu_mb=$(( model_mb * gpu / n_layers ))
+        (( gpu_mb > model_mb )) && gpu_mb=$model_mb
+    else
+        # No usable layer geometry: the worst case is the whole file on the card.
+        gpu_mb=$model_mb
+    fi
+
+    if (( gpu_mb + margin <= vram ))
+    then
+        printf 'ok\n'
+        return 0
+    fi
+
+    if [[ "${arch,,}" == *moe* ]]
+    then
+        # Experts to the CPU leaves the non-expert tensors on the card; without
+        # per-tensor sizes the HOST side is bounded by the whole file, which is the
+        # conservative direction (the rows this protects load with mmap off).
+        if [[ "$avail" =~ ^[0-9]+$ ]] && (( avail > 0 )) && (( model_mb > avail ))
+        then
+            host_mb=$model_mb
+            local _refusal="refuse:MoE needs ${host_mb} MiB of expert weights in host RAM and"
+            _refusal+=" ${avail} MiB is available, while ${gpu_mb} MiB of weights does not"
+            _refusal+=" fit the ${vram} MiB card — use a smaller quant, or raise the GPU"
+            _refusal+=" carve and reboot"
+            printf '%s\n' "$_refusal"
+            return 0
+        fi
+        printf 'cpu-moe\n'
+        return 0
+    fi
+
+    # A DENSE row must fit the card: `-ngl` is an exact count and nothing here
+    # rewrites the row, so "the rest could live in host RAM" is not an answer a
+    # dense launch can act on.  The actionable refusal names the row's own request.
+    if (( gpu_mb > vram ))
+    then
+        local _refusal="refuse:the row asks for ${gpu_mb} MiB of dense weights"
+        _refusal+=" (n_gpu_layers=${gpu}) on a ${vram} MiB card, with ${avail} MiB of host"
+        _refusal+=" RAM available — lower --n-gpu-layers, use a smaller quant, or raise"
+        _refusal+=" the GPU carve"
+        printf '%s\n' "$_refusal"
+        return 0
+    fi
+    printf 'ok\n'
+}
+
+# ---------------------------------------------------------------------------
+# __model_use_fit_preflight
+# @description Decide placement BEFORE the card is taken, and refuse an impossible
+#   one while the resident lane is still serving.
+# @uses model_path, model_bytes, arch, gpu_layers
+# @sets moe_offload_flag ("--cpu-moe" when the experts must live in host RAM)
+# @returns 0 when the launch may proceed, 1 when the placement cannot work.
+# ---------------------------------------------------------------------------
+function __model_use_fit_preflight() {
+    local _vram_mb _avail_mb _n_layers="" _verdict _model_mb
+    moe_offload_flag=""
+    _model_mb=$(( model_bytes / 1048576 ))
+    _vram_mb=$(( $(__tac_vram_total_bytes) / 1048576 ))
+    _avail_mb=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo)
+    [[ "$_avail_mb" =~ ^[0-9]+$ ]] || _avail_mb=0
+    # The GGUF's own block count, so a partial offload is measured against the model's
+    # real layer count rather than guessed.  An unreadable header leaves it empty and
+    # the verdict falls back to the whole-file bound.
+    if declare -f __gguf_metadata &>/dev/null
+    then
+        # swallow-ok: an unreadable or non-GGUF header leaves _n_layers empty, and the verdict then uses the whole-file bound — the conservative direction.
+        _n_layers=$(__gguf_metadata "$model_path" 2>/dev/null | cut -d'|' -f3)
+    fi
+    _verdict=$(__model_use_fit_verdict "$_model_mb" "$_n_layers" "$gpu_layers" \
+        "$arch" "$_vram_mb" "$_avail_mb")
+    case "$_verdict" in
+        ok)
+            return 0
+            ;;
+        cpu-moe)
+            moe_offload_flag="--cpu-moe"
+            local _pmsg="[${_model_mb} MiB does not fit the ${_vram_mb} MiB card: MoE"
+            _pmsg+=" experts go to host RAM (--cpu-moe), attention and KV stay on the GPU]"
+            __tac_info "Placement" "$_pmsg" "$C_Dim"
+            return 0
+            ;;
+        refuse:*)
+            __tac_info "Error" "[${_verdict#refuse:}]" "$C_Error"
+            return 1
+            ;;
+        *)
+            __tac_info "Warning" "[unrecognised fit verdict '${_verdict}' — proceeding]" "$C_Warning"
+            return 0
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # __model_use_build_command
 # @description Build the server command array and configure mmap behavior.
 # @uses llm_backend, model_path, ctx, batch_size, ubatch_size, threads,
 #   gpu_layers, row_flash_attn, fit_target_mb, row_mmap_mode, arch,
-#   free_vram_mb, model_bytes, parallel_slots
+#   free_vram_mb, model_bytes, parallel_slots, moe_offload_flag
 # @sets cmd, fit_target_mb (finalised), use_no_mmap
 # @returns 0 always.
 # ---------------------------------------------------------------------------
@@ -1648,6 +1794,13 @@ function __model_use_build_command() {
         cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
         cmd+=("--threads" "$threads")
         cmd+=("--n-gpu-layers" "$gpu_layers")
+        # Placement decided by __model_use_fit_preflight BEFORE the card was taken:
+        # --cpu-moe is the only thing that keeps a MoE's expert weights out of VRAM,
+        # and without it `-ngl all` asks the card for the whole file.
+        if [[ -n "${moe_offload_flag:-}" ]]
+        then
+            cmd+=("$moe_offload_flag")
+        fi
         if [[ -n "${__BENCH_MODE:-}" ]]; then
             # Bench mode fits by default so an exploratory model still LOADS on the 4 GB
             # card.  That changes what is measured: --fit shrinks the served window
@@ -2160,7 +2313,7 @@ function __model_use() {
     local row_kv_k row_kv_v
     local model_path model_bytes quant_rating llm_backend python_bin
     local smi_cmd free_vram_mb type_k_val use_no_mmap
-    local cmd model_shell_pid
+    local cmd model_shell_pid moe_offload_flag=""
     # Captured BEFORE the launch stops anything.  The predicate is the MODEL-USE
     # port, not __llm_server_running: that helper scans every llama backend the
     # user owns, so the five resident lanes would make every `model use` claim a
@@ -2171,6 +2324,8 @@ function __model_use() {
     __model_use_resolve_model "$@" || return 1
     __model_use_ensure_downloaded || return 1
     __model_use_select_backend || return 1
+    # BEFORE the card is taken: an impossible placement must not stop a serving lane.
+    __model_use_fit_preflight || return 1
     __model_use_claim_cuda_card || return 1
     # configure_params refuses with rc 21 when the registry row has no autotuned
     # ctx and no --ctx-size was given (AUTOTUNE-002); that refusal must abort the

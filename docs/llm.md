@@ -109,7 +109,7 @@ measure, not a value to adopt.
 | 1 | model, quant, ctx | whether it fits the GPU at the depth you serve | `model scan` + `config/quant-guide.conf` rate the quant; `check-ctx-profile.sh` compares the registry ctx (col 8) with the measured prompt profile (col 37) |
 | 2 | build, baseline depth | a rebuild can move speed as much as a flag | **not recorded** — see "Known gaps" below. The autotune certifies at a FILLED cache, so its number is taken at a realistic depth |
 | 3 | `-ngl` | whether the model runs on the GPU at all | registry ngl, `999` = full offload; the partial-offload ladder is deliberately skipped on shared-memory hosts (measured: it drove the guest into the OOM killer) |
-| 4 | `--n-cpu-moe` / `--cpu-moe` (MoE), `--n-cpu-ffn` / `--override-tensor` (dense) | keeps attention and KV on the GPU while weights spill | **not wired** — see "Known gaps" |
+| 4 | `--n-cpu-moe` / `--cpu-moe` (MoE), `--n-cpu-ffn` / `--override-tensor` (dense) | keeps attention and KV on the GPU while weights spill | `--cpu-moe` is chosen automatically when a MoE's weights exceed the card (see "Placement, before the card is taken"); a per-layer `--n-cpu-moe N` and the dense `--n-cpu-ffn` lever are **not wired** — see "Known gaps" |
 | 5 | `-c` with `--fit` | the KV cache you actually allocate | `--fit on --fit-target` on serve; autotune certifies with `--fit off`; `/props` is read back and a mismatch is reported |
 | 6 | `-ctk` / `-ctv` | cache bytes against decode speed | `q8_0/q8_0` default; `f16/f16` is a sweep candidate (the fastest type wherever the window fits); `q4_0/q4_0` is a candidate but is refused by the retrieval gate |
 | 7 | `--flash-attn` | the attention kernel | `on`; `auto` is llama.cpp's default, and a quantised V cache forces it on |
@@ -167,18 +167,44 @@ already respects or should:
   so a long prompt can get slower overall even when decode improves. Certify decode and
   prefill separately, which the filled-cache phase already does.
 
+### Placement, before the card is taken
+
+`model use` decides whether a model can be placed **before** it stops the resident lane
+(`__model_use_fit_preflight`, `scripts/11e-llm-model.sh`). Two questions, in order:
+
+1. do the GPU-resident weights (the row's `n_gpu_layers` of the model's own block count)
+   fit the card's **total**? Not its free figure: the switch frees the card afterwards, and
+   an absolute impossibility must not depend on what happens to be resident.
+2. if not, can the remainder live in host RAM? A **MoE** answers with `--cpu-moe` (all
+   expert weights on the CPU, attention and KV on the GPU — the review's step 4); a
+   **dense** row is refused, because `-ngl` is an exact count and nothing here rewrites the
+   row, so "the rest could spill" is not an answer a dense launch can act on.
+
+A model too large for **both** is refused with the figures, and no lane is displaced.
+
+Why this exists (measured 2026-11-06): `model use 2` asked a 73.3 GB MoE for a 24 GiB
+card. `__calc_gpu_layers` returns the full layer count for any MoE arch, and its comment
+claimed the experts "stay on CPU anyway" — untrue of llama.cpp, where `-ngl` moves whole
+layers, expert tensors included, and experts leave VRAM only with `--cpu-moe`. The launch
+copied weights for three minutes, died with `CUDA error: out of memory`, **after** stopping
+the resident lane, and reported "FAILED OR TIMEOUT". On the same box the verdict now reads
+`refuse: MoE needs 75047 MiB of expert weights in host RAM and 59306 MiB is available,
+while 75047 MiB of weights does not fit the 24576 MiB card` — the carve, not a flag, is
+what changed that model's fate.
+
 ### Known gaps (recorded, not silently assumed)
 
 - **The certified TPS does not name the llama.cpp build it came from.** A rebuild can move
   speed as much as a flag, so a number from before a rebuild is not comparable with one
   after it. Fixing this means a registry/bench column for the build identity (and the
   consumers that read the row), not a line in a log.
-- **No MoE/dense spill lever is wired.** This build supports `--n-cpu-moe`,
-  `--cpu-moe`, `--n-cpu-ffn` and `--moe-cache-mib`, but the launcher passes none of them,
-  and `__calc_gpu_layers` is 999-or-0 — so a model that does not fit whole drops to
-  CPU-only. The review's step 4 says that is the wrong fallback for a MoE (keep attention
-  and KV on the card, experts in RAM) and for a dense model (`--n-cpu-ffn` / FFN tensors
-  via `--override-tensor`, rather than lowering `-ngl`).
+- **MoE placement is one lever, not a search.** `--cpu-moe` (all experts to host RAM) is
+  chosen automatically when a MoE's weights exceed the card; `--n-cpu-moe N` (keep only the
+  first N layers' experts on the CPU, which the review recommends tuning downward until
+  VRAM runs out) is not wired, and neither is the dense `--n-cpu-ffn` / `--override-tensor`
+  route. What the pre-flight also cannot do is bound the *non-expert* tensors without
+  per-tensor sizes, so it treats the whole file as the host-side cost — conservative, and
+  the direction that refuses rather than dies.
 - **Nothing detects a repetition loop in a bench result.** A looping generation posts an
   inflated tok/s, which is why the review says to watch for it. The registry seeds an
   anti-repetition sampler per row, which makes a loop less likely, but a loop is not
