@@ -214,7 +214,7 @@ ubatch_size=256
 threads=4
 gpu_layers=99
 fit_target_mb=1024
-parallel_slots=1
+parallel_slots="${TAC_TEST_PARALLEL:-1}"
 row_flash_attn=true
 row_kv_k=q8_0
 row_kv_v=q8_0
@@ -702,6 +702,20 @@ EOS
 @test "placement: the builder emits no offload flag when the pre-flight did not (control)" {
     run _build_argv "" "" 18083 ""
     [[ "$output" != *"--cpu-moe"* ]]
+}
+
+@test "slots: four slots keep the WHOLE window (--kv-unified), one slot does not add it" {
+    # llama.cpp's default is unified KV only when the slot count is AUTO; an explicit
+    # --parallel N divides ctx by N.  Four agent requests against --parallel 4 without
+    # -kvu would each get a quarter of the advertised window — the failure this pins.
+    export TAC_TEST_PARALLEL=4
+    run _build_argv "" "" 18083 ""
+    unset TAC_TEST_PARALLEL
+    [[ "$output" == *"--parallel"* ]]
+    [[ "$output" == *"--kv-unified"* ]]
+
+    run _build_argv "" "" 18083 ""
+    [[ "$output" != *"--kv-unified"* ]]
 }
 
 @test "placement: the pre-flight runs BEFORE the card is claimed" {

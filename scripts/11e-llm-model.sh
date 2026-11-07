@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 100
+# Module Version: 101
+#   v101 (2026-11-07): concurrent requests.  `--parallel N` is the slot count, and with
+#   N > 1 the builder now also passes `--kv-unified`: without it llama.cpp gives each slot
+#   ctx/N, so four "workers" would quarter the advertised window.  LLAMA_PARALLEL_SLOTS
+#   overrides the row's certified count for a serving lane (the row stays the record).
+#   Continuous batching is already on by default, so slots are what was missing.
 #   v100 (2026-11-07): the shared-memory budget now counts the VRAM the switch frees and
 #   keeps a 12 GiB reserve.  Both parts are measured at the 32 GiB carve: with 80,269 MiB
 #   of guest RAM and 66,875 MiB available, judging `avail` alone refused a model the switch
@@ -1331,6 +1336,13 @@ function __model_use_configure_params() {
     [[ "$batch_size" =~ ^[0-9]+$ ]] || batch_size=1024
     [[ "$ubatch_size" =~ ^[0-9]+$ ]] || ubatch_size=256
     [[ "$parallel_slots" =~ ^[0-9]+$ ]] || parallel_slots=1
+    # Concurrency for a SERVING lane.  The row's count is the certified value; this lets an
+    # operator raise it without rewriting the registry.  >1 also needs --kv-unified, which
+    # the builder emits — otherwise llama.cpp divides ctx by the slot count.
+    if [[ "${LLAMA_PARALLEL_SLOTS:-}" =~ ^[0-9]+$ ]] && (( LLAMA_PARALLEL_SLOTS > 0 ))
+    then
+        parallel_slots="$LLAMA_PARALLEL_SLOTS"
+    fi
     free_vram_mb=0
     if (( gpu_layers > 0 ))
     then
@@ -1907,6 +1919,14 @@ function __model_use_build_command() {
         cmd+=("--cache-type-k" "$kv_k")
         cmd+=("--cache-type-v" "$kv_v")
         cmd+=("--parallel" "$parallel_slots")
+        # ONE KV BUFFER FOR ALL SLOTS.  llama.cpp's default is unified only when the slot
+        # count is AUTO; an explicit --parallel N divides ctx by N, so four slots would
+        # serve a quarter of the advertised window each.  With -kvu the window stays whole
+        # and the slots share it — which is what concurrent agent requests want.
+        if (( parallel_slots > 1 ))
+        then
+            cmd+=("--kv-unified")
+        fi
         # Prompt-cache budget (KVCACHE-CONSOLE-PROMPT-CACHE-001).  The SERVE path must
         # pass --cache-ram EXPLICITLY, because llama.cpp's default is 8192 MiB of
         # host RAM per server and nothing here budgets it (see 01-constants.sh,
