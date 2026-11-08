@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 101
+# Module Version: 102
+#   v102 (2026-11-08): `model use` refuses when a live sweep/bench holds the card, and it asks
+#   BEFORE stopping the CUDA lanes.  __model_use_claim_cuda_card ran its lane-stop loop
+#   (step 2) first and only looked at the suspend marker in step 3, where a failed acquire
+#   printed a Warning and still returned 0 — so a `model use` arriving mid-sweep killed the
+#   lane the sweep was serving and then reported success.  Measured 2026-11-07 12:18:47
+#   (llama-cuda-qwen3coder-30b-chat stopped, status=9/KILL, 14.1G peak).  New step 1b uses
+#   _tac_suspend_held, so a dead owner still reads NOT HELD and cannot wedge the command.
 #   v101 (2026-11-07): concurrent requests.  `--parallel N` is the slot count, and with
 #   N > 1 the builder now also passes `--kv-unified`: without it llama.cpp gives each slot
 #   ctx/N, so four "workers" would quarter the advertised window.  LLAMA_PARALLEL_SLOTS
@@ -102,6 +109,7 @@
 #   v87 (2026-11-05): the case in `__model_is_embedding` carries an explanatory comment, because
 #   §18.3 item 4.2.4 counts a `case` with neither a `*)` arm nor one (20 -> 21 when the case was
 #   added).  No `*)` arm belongs there: every other arch must fall through to the pooling read.
+# Module Version: 87
 # Module Version: 86
 #   v86 (2026-11-05): `model scan` no longer gives an embedding export a registry row.  Wayne's
 #   ruling, after the EmbeddingGemma row was removed by hand the same day: "we really shouldnt
@@ -1447,6 +1455,32 @@ function __model_use_claim_cuda_card() {
     if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner
     then
         __tac_info "Error" "[CUDA card is owned by another run (pid $(__llm_gpu_lock_holder 2>/dev/null)) — not adding a second LLM to it]" "$C_Error"
+        return 1
+    fi
+
+    # 1b. A LIVE SUSPEND MARKER IS A SECOND OWNER, AND IT MUST BE CHECKED *BEFORE* THE
+    #     LANES ARE STOPPED (2026-11-08).  The marker is the box's "this run owns the
+    #     card" flag: autotune-rows.sh and bench-rows.sh acquire it for a whole chunk and
+    #     llama-watchdog.sh refuses to restart the CUDA lane while it is held.  Step 3
+    #     below used to be the first thing to look at it — but step 2 had already stopped
+    #     the lanes by then, so a `model use` that arrived mid-sweep killed the lane the
+    #     sweep was serving and only printed a Warning about the marker it had just walked
+    #     over.  Measured 2026-11-07 12:18:47: llama-cuda-qwen3coder-30b-chat was stopped
+    #     (status=9/KILL, 14.1G peak) while an autostart held the marker.
+    #
+    #     Refusing here is a POLICY CHOICE, not a limitation: the sweep is a measurement
+    #     whose numbers are only meaningful on a quiet box, so a competing load must lose,
+    #     and the operator gets a name and a pid instead of a silently broken sweep.  A
+    #     DEAD owner reads as NOT HELD (_tac_suspend_held checks the pid), so a killed
+    #     holder can never wedge `model use`.
+    if declare -f _tac_suspend_held &>/dev/null && _tac_suspend_held "$_cuda_suspend"
+    then
+        local _holder
+        # _tac_suspend_pid only prints the stamped pid; a read failure means the marker is
+        # already gone, which still triggers this refusal — the safe direction.
+        # swallow-ok: the pid is decorative in the message; the HELD verdict above is the decision
+        _holder=$(_tac_suspend_pid "$_cuda_suspend" 2>/dev/null)
+        __tac_info "Error" "[CUDA card is held by a live sweep/bench (owner pid ${_holder:-unknown}) — not stopping a lane an autotune or bench run owns; stop that run first, or wait for it to finish]" "$C_Error"
         return 1
     fi
 

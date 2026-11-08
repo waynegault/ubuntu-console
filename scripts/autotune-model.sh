@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 121
+# Module Version: 122
+#   v122 (2026-11-08): the two remaining memory-geometry reflexes are gone, not restated.
+#     The shared-memory ladder refusal and the "name both pools" comment both asserted
+#     "the GPU pool is the LARGE side, host RAM the small one (29.8 GiB)" as a property of
+#     the box.  This host has served GPU 81920/host 46.5 GiB, GPU 98304/host 30.5 GiB and
+#     GPU 24576/host 78.4 GiB under 78.4 GiB of RAM across three boots, so the relation is
+#     per-boot and load-relative.  The refusal stays keyed on the PROFILE's shared-memory
+#     fact (unchanged behaviour); the sizes now come only from the run's own pools line.
 #   v121 (2026-11-07): the run asks its own measuring binary for the build id once, and passes
 #     it to the profile save (card 8d144104) — the row records what measured it, not a
 #     hand-typed number.  Guarded on the helper, so a run without 11b loaded records no build
@@ -875,6 +882,9 @@ _cuda_guard_or_exit
 # The row names one file; llama.cpp loads the whole shard SET. Summing the set is what
 # makes MODEL_MB, BUDGET and START_CTX describe the model instead of its first shard —
 # an 88.0 GiB row printed 42788 MiB and probed ctx 262144 before this (2026-11-04).
+# Nothing here embeds a box size: MODEL_MB is a file fact, and the two pools it is
+# compared against are read on every run (FREE_VRAM from the card, _HOST_AVAIL_MB from
+# /proc/meminfo).  A hard-coded size here would fail silently the moment the carve moved.
 if declare -f __autotune_model_bytes &>/dev/null; then
     MODEL_BYTES=$(__autotune_model_bytes "$MODEL_PATH")
 else
@@ -900,7 +910,8 @@ BUDGET=$(( FREE_VRAM - MODEL_MB - 200 ))
 # NAME BOTH POOLS (2026-11-03).  This script sizes against FREE_VRAM, which is the GPU
 # pool — correct for offloaded weights and KV, but NOT the only pool a row draws on:
 # mmap, --cache-ram and the loader's own staging buffers come out of guest RAM, and on a
-# shared-memory host that is the SMALL side (measured: GPU pool 98304 MiB, host 29.8 GiB).
+# shared-memory host either pool can be the smaller one (measured across three boots of
+# this same box: GPU 81920/host 46.5 GiB, GPU 98304/host 30.5 GiB, GPU 24576/host 78.4 GiB).
 # A run that prints only the card's figure reads as though host memory were unlimited,
 # which is how a 60.9 GB row reached the kernel OOM killer with 8 kills and no line
 # saying memory was finite.  Printing both costs one read and makes the next refusal
@@ -2891,17 +2902,25 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
     [[ "$BENCH_NGL" != "999" ]] && NGL_CANDIDATES+=("999")
     # SHARED-MEMORY HOSTS GET NO LADDER (2026-11-03).  The ladder exists for a discrete
     # card, where fewer layers on the GPU means less VRAM pressure.  On a unified host
-    # the trade runs the other way: the GPU pool is the LARGE side (98304 MiB here) and
-    # host RAM the small one (29.8 GiB), so every step down moves weights OUT of the big
-    # pool and INTO the small one.  Measured on gpt-oss-120b (60.9 GB F16): the ladder
+    # the trade runs the other way: WHICHEVER POOL IS LARGER LOSES when layers step down,
+    # because a step down moves weights from the GPU pool into host RAM.  That is a
+    # RELATION between two pools read at run time, never a property of the box: the same
+    # arm64 host has served GPU 81920/host 46.5 GiB, GPU 98304/host 30.5 GiB and
+    # GPU 24576/host 78.4 GiB across three boots, so "the GPU pool is the LARGE side" is
+    # true of some boots and false of others (2026-11-08: 24,576 MiB of VRAM under
+    # 78.4 GiB of RAM inverts it).  The refusal below therefore stays keyed on the
+    # PROFILE's shared-memory fact, not on a measured pool size, and the size is printed
+    # rather than assumed — see the pools line above, which is read from the box.
+    # Measured on gpt-oss-120b (60.9 GB F16): the ladder
     # reached ngl=27, MemAvailable fell to 448 MiB and the kernel OOM killer fired 8
     # times in three minutes.  The same shape at ngl=999 held 64 GiB of the pool and
     # never touched host memory (and measured 39-40 tps).  So 999 is not merely the best
     # point here, it is the safe one — the ladder cannot help and can only hurt.
     if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
     then
-        echo "  n_gpu_layers sweep: SKIPPED — shared memory: the pool is the large side,"
-        echo "    so a lower ngl moves weights into host RAM instead of relieving it"
+        echo "  n_gpu_layers ladder: SKIPPED — shared memory: a step DOWN moves weights out of"
+        echo "    the GPU pool and into host RAM instead of relieving pressure. Pool sizes are in"
+        echo "    the pools line above (read on this run); which of the two is larger is not assumed."
     elif [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
         for _frac in 3 1; do
             _ngl_cand=$(( _n_layers * _frac / 4 ))
