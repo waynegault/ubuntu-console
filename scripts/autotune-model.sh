@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 120
+# Module Version: 121
+#   v121 (2026-11-07): the run asks its own measuring binary for the build id once, and passes
+#     it to the profile save (card 8d144104) — the row records what measured it, not a
+#     hand-typed number.  Guarded on the helper, so a run without 11b loaded records no build
+#     instead of aborting.
 #   v120 (2026-11-07): the three descent ladders (card b7602d50) no longer read
 #     `for x in $(__autotune_descent_candidates ...)`.  The emitter prints one candidate per
 #     LINE, so the unquoted split worked only while every candidate was a bare number; each
@@ -1084,6 +1088,15 @@ echo ""
 START_EPOCH=$(date +%s)
 
 LLAMA_BIN="${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build-cuda/bin/llama-server}"
+
+# BUILD IDENTITY (card 8d144104, Wayne 2026-11-04: "Bench rows should carry build identity").
+# Asked ONCE per run, of the binary this run will measure with, so the row records what measured
+# it rather than a number typed by hand.  Guarded: this script can run without 11b loaded, and a
+# missing helper must leave the column empty, not abort the run.
+LLAMA_BUILD_ID=""
+if declare -F __llm_llama_build_id >/dev/null 2>&1; then
+    LLAMA_BUILD_ID="$(__llm_llama_build_id "$LLAMA_BIN")"
+fi
 
 # ── Workload scoring payload (AUTOTUNE-001) ─────────────────────────────────
 # The scoring payload is built from the selected workload's SPEC-DEC-006
@@ -3852,6 +3865,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
             "$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
+            "$LLAMA_BUILD_ID" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the

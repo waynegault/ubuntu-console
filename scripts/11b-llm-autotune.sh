@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 40
+# Module Version: 41
+#   v41 (2026-11-07): build identity (card 8d144104).  __llm_llama_build_id asks the binary
+#     the caller MEASURED WITH for its own `--version` line, and profile_save takes that
+#     string as its 32nd argument: col 46 records it, and col 47 keeps the value it replaced
+#     when a re-bench ran under a DIFFERENT build.  A repeat run under the same build leaves
+#     47 alone, so the history is not erased.
 #   v40 (2026-11-07): hygiene pass (card b7602d50).  (a) The three descent loops no longer read
 #   `for x in $(__autotune_descent_candidates ...)`: the emitter prints one candidate per LINE,
 #   so the word-split worked only while every candidate was a bare number; they are now
@@ -85,6 +90,29 @@ __TAC_MOD_11B_LLM_AUTOTUNE_LOADED=1
 # grep it (style item 10.7).  Nothing in this module writes to stderr by hand.
 # ---------------------------------------------------------------------------
 warn() { printf '%s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# __llm_llama_build_id <binary> — the build the MEASURING binary reports, as it reports it.
+#
+# Card 8d144104 (Wayne, 2026-11-04: "Bench rows should carry build identity").  The value is
+# the binary's own first line minus the `version: ` prefix —
+# `version: 0.9.0-dev (build 166, commit 3ed7284f2)` -> `0.9.0-dev (build 166, commit 3ed7284f2)`
+# — never a hand-typed number: the recipe pin counts in one scheme (b11617) and a local build
+# in another (build 166), so only the reported string is comparable.
+#
+# The caller passes the binary it MEASURED WITH, so there is no second source of truth.
+# @stdout the build string; empty when the binary cannot report one (the row then records no
+#         build rather than a guess)
+# @returns 0 always
+# ---------------------------------------------------------------------------
+function __llm_llama_build_id() {
+    local bin="${1:-}" out=""
+    [[ -n "$bin" ]] || return 0
+    # swallow-ok: a binary that cannot report its version yields an empty id; recording no
+    # build is the honest answer, and a guess would be worse than an empty column
+    out="$("$bin" --version 2>/dev/null | sed -n '1s/^version: *//p')" || out=""
+    printf '%s\n' "$out"
+}
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_sanitize_token — Remove registry delimiters from profile values.
@@ -532,6 +560,7 @@ function __llm_autotune_profile_save() {
     local ttft_ms="${25:-}"
     local meas_load="${26:-}" meas_n="${27:-}" meas_spread_pct="${28:-}" meas_drift_pct="${29:-}" meas_state="${30:-}"
     local ctx_policy="${31:-}"
+    local llama_build="${32:-}"
     local profile_file="$LLM_REGISTRY"
 
     # $1 is a row NUMBER or a model FILE name; both are accepted so existing callers
@@ -661,6 +690,7 @@ function __llm_autotune_profile_save() {
         -v meas_drift_val="$meas_drift_pct" \
         -v meas_state_val="$meas_state" \
         -v ctx_policy_val="$ctx_policy" \
+        -v llama_build_val="$llama_build" \
         -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
@@ -715,6 +745,15 @@ function __llm_autotune_profile_save() {
                 # ctx_policy (45) is written only when a verdict was requested, so a
                 # caller that does not evaluate the observed profile leaves it alone.
                 if (ctx_policy_val != "") $45 = ctx_policy_val
+                # BUILD IDENTITY (46-47, card 8d144104).  Col 46 is the build the binary that
+                # MEASURED this row reported; col 47 keeps the build it replaced when a re-bench
+                # ran under a DIFFERENT one, so the older measurement stays distinguishable
+                # rather than being silently overwritten.  The same build re-saved leaves 47
+                # alone, so a repeat run does not erase the history.
+                if (llama_build_val != "") {
+                    if ($46 != "" && $46 != llama_build_val) $47 = $46
+                    $46 = llama_build_val
+                }
             }
             # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
             # P-core ceiling (6) on every registry write — a pre-cap row must

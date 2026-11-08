@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 52
+# Module Version: 53
+#   v53 (2026-11-07): the registry header gains llama_build (46) and llama_build_prev (47) —
+#     the BUILD IDENTITY card 8d144104 requires (Wayne, 2026-11-04: "Bench rows should carry
+#     build identity").  Col 46 is the string the MEASURING binary reports; col 47 keeps the
+#     build a re-bench under a different one replaced.  Width is derived from this header
+#     everywhere, so rows pad to it on their next write.
 #   v52 (2026-11-05): LLM_PORT, ACTIVE_LLM_FILE, LLM_LOG_FILE and LLM_TPS_CACHE become
 #   overridable (`${VAR:-default}`), like their neighbours.  Assigned unconditionally, they
 #   discarded every caller's value on source: tests/unit/25 exports a free LLM_PORT, then
@@ -343,7 +348,15 @@ fi
 # ctx_policy (45) records the MAX-CTX certification against the observed input profile
 # (bench_avg_prompt_tokens, col 37); profile-missing means col 37 was never measured — it is
 # a missing measurement, not a pass.
-export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy'
+#
+# llama_build (46) and llama_build_prev (47) are the BUILD IDENTITY (card 8d144104, Wayne
+# 2026-11-04 "Bench rows should carry build identity").  Col 46 is the string the MEASURING
+# binary reports (`version: 0.9.0-dev (build 166, commit 3ed7284f2)` -> `0.9.0-dev (build 166,
+# commit 3ed7284f2)`), never a hand-typed number: the recipe pin counts in one scheme and the
+# local build in another, so only the reported string is comparable.  Col 47 holds the build
+# the row was MEASURED under before a re-bench under a DIFFERENT build replaced col 46, so the
+# two measurements stay distinguishable instead of the older one vanishing.
+export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy|llama_build|llama_build_prev'
 # Overridable, like everything else in this file: a test, or a box whose models live
 # somewhere other than the home directory, has to be able to point at its own registry.
 # Measured 2026-10-30: the assignment ignored a pre-set LLM_REGISTRY, so a fixture

@@ -469,3 +469,38 @@ __row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
     run __model_is_embedding "$TMPDIR_BATS/chat.gguf" qwen3
     [ "$status" -eq 1 ]
 }
+
+@test "8d144104: a save records the MEASURING binary's build, and keeps the one it replaced" {
+    # Criterion — Wayne, 2026-11-04, verbatim: "Bench rows should carry build identity", given
+    # "for the avoidance of doubt".  So: every certified row records the build it was measured
+    # with AS THE BINARY REPORTS IT, and a re-bench under a DIFFERENT build is distinguishable
+    # from the previous measurement rather than silently overwriting it.
+    #
+    # Catches: a save that records no build at all; one that overwrites the previous identity;
+    # and one that churns col 47 on a repeat run under the SAME build (which would erase the
+    # history the column exists to keep).
+    local _args=( "beta.gguf" "native" "8192" "1024" "256" "1" "256" "12.5" "" "21.0" )
+    local i
+    # Args 11..31 are empty (11b takes 32 positionals; the 32nd is the build identity).
+    for (( i=10; i<=30; i++ )); do _args+=(""); done
+    _args[25]="load8"      # 26 meas_load
+    _args[26]="3"          # 27 meas_n
+    _args[29]="certified"  # 30 meas_state
+
+    __llm_autotune_profile_save "${_args[@]}" "0.9.0-dev (build 166, commit 3ed7284f2)"
+    local row
+    row=$(awk -F'|' '$3 == "beta.gguf" {print; exit}' "$LLM_REGISTRY")
+    [ "$(cut -d'|' -f46 <<< "$row")" = "0.9.0-dev (build 166, commit 3ed7284f2)" ]
+    [ -z "$(cut -d'|' -f47 <<< "$row")" ]
+
+    # A re-bench under a DIFFERENT build: col 46 moves, col 47 remembers what it replaced.
+    __llm_autotune_profile_save "${_args[@]}" "0.9.1-dev (build 170, commit aaaaaaa)"
+    row=$(awk -F'|' '$3 == "beta.gguf" {print; exit}' "$LLM_REGISTRY")
+    [ "$(cut -d'|' -f46 <<< "$row")" = "0.9.1-dev (build 170, commit aaaaaaa)" ]
+    [ "$(cut -d'|' -f47 <<< "$row")" = "0.9.0-dev (build 166, commit 3ed7284f2)" ]
+
+    # The same build again: col 47 must NOT be rewritten to the current value.
+    __llm_autotune_profile_save "${_args[@]}" "0.9.1-dev (build 170, commit aaaaaaa)"
+    row=$(awk -F'|' '$3 == "beta.gguf" {print; exit}' "$LLM_REGISTRY")
+    [ "$(cut -d'|' -f47 <<< "$row")" = "0.9.0-dev (build 166, commit 3ed7284f2)" ]
+}
