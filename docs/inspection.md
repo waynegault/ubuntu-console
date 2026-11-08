@@ -2391,18 +2391,32 @@ grep -n '\-\-flash-attn\|--fa' <file>
 
 12.2.3
 
-🔍 MoE rows are handled deliberately, without an expert-offload flag
+🔍 MoE expert offload is wired, and only the launcher emits it
 
-`grep -rnE 'cpu-moe|override-tensor|-ot |exps=' scripts/ bin/ tools/ config/` → expect ZERO
+`grep -rn -- '--cpu-moe' scripts/ bin/ tools/ config/ | grep -vE ':[0-9]+: *#'`
+→ exactly **two** lines, both in `scripts/11e-llm-model.sh`: the `moe_offload_flag`
+assignment and the Placement message that reports it
 
-For Mixture-of-Experts models the repo does NOT pass `--cpu-moe` or `-ot exps=CPU`.
-Measured 2026-09-16: zero occurrences of either anywhere. The deliberate treatment is by
-LAYER COUNT — `11d-llm-gpu.sh` returns the model's total layer count for MoE rows because
-"expert weights stay on CPU anyway", and `01-constants.sh` sets `MOE_DEFAULT_CTX`.
+`grep -rn -- '--cpu-moe' systemd/ | grep -vE ':[0-9]+: *#'` → expect ZERO (a unit must not
+pin a placement the launcher decides; comments that NAME the flag are excluded, as in the
+check above — `systemd/oom-score-gateway.conf` cites it in its own WHY note)
 
-That is a design choice, not an omission: naming the experts explicitly buys nothing when
-the placement heuristic already keeps them off the card. Change this item only if a
-measurement shows expert offload behaves differently.
+`grep -rnE -- 'override-tensor|--n-cpu-ffn|-ot ' scripts/ bin/ tools/ config/` → expect ZERO
+
+**This item used to assert the opposite, and the assertion was wrong.** It said the repo
+passes no `--cpu-moe` because "expert weights stay on CPU anyway". They do not: `-ngl` moves
+whole layers, expert tensors included, and experts leave VRAM only with
+`--cpu-moe`/`--n-cpu-moe`. Measured 2026-11-06: a 73.3 GB MoE was launched at a 24 GiB card
+with the full layer count, copied weights for three minutes, and died with
+`CUDA error: out of memory` — after stopping the resident lane.
+
+The current treatment is a verdict taken **before** the card is taken
+(`__model_use_fit_preflight` → `__model_use_fit_verdict`): GPU-resident weights versus the
+card's total, then whether a MoE's remainder can live in host RAM. Only `cpu-moe` sets
+`moe_offload_flag`, and only `__model_use_build_command` appends it — one emitter, so a
+lane unit cannot drift from the launcher. The per-layer `--n-cpu-moe N` search and the dense
+`--n-cpu-ffn`/`--override-tensor` spill stay unwired and are recorded as such in
+[llm.md](llm.md) → "Known gaps"; those are measured-search levers, not defaults to guess.
 
 12.2.4
 
