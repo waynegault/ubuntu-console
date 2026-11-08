@@ -940,10 +940,16 @@ STUB
     # Catches the helper-only blind spot: the verdict function existing while the CALL
     # SITE ignores it.  The gate must sit between the load/cores read and the profile
     # save, and the flag must be parsed — a green unit test on the helper proves neither.
-    local src
+    local src joined
     src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    # The call site is WRAPPED across lines and has since grown a fourth argument, so match a
+    # copy whose continuations are joined and whose whitespace is squeezed: that pins the RULE
+    # (which variables reach the verdict), not the line's shape.  It still fails if the call is
+    # removed, if the load/cores arguments change, or if the flag stops being passed.
+    joined=$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$REPO_ROOT/scripts/autotune-model.sh" \
+        | tr -s '[:space:]' ' ')
     [[ "$src" == *'--allow-contended) ALLOW_CONTENDED=1'* ]]
-    [[ "$src" == *'__autotune_measurement_verdict "$_row_load" "$_row_cores" "${ALLOW_CONTENDED:-0}"'* ]]
+    [[ "$joined" == *'__autotune_measurement_verdict "$_row_load" "$_row_cores" "${ALLOW_CONTENDED:-0}"'* ]]
 
     local refuse_line save_line
     refuse_line=$(grep -nF 'REFUSING to write' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
