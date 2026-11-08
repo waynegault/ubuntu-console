@@ -25,7 +25,9 @@
 # Exit: 0 the hooks belong to this tree; 1 refused, with the reason named on stdout.
 # ==============================================================================
 # AI INSTRUCTION: Increment Module Version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-08): the repo-wide `# end of file` sentinel, which every tools/*.sh must
+#     carry — the nightly's hygiene case 131 was red on this file alone.
 #   v3 (2026-11-07): the pre-push hook's materialised checkout is skipped by design. That copy
 #   is made to be READ, no commit starts in it, and its core.hooksPath correctly names the real
 #   tree — so "the hooks that judge this tree must be this tree's own" does not apply there.
@@ -196,3 +198,4 @@ echo "  core.hooksPath: $ACTUAL"
 echo "  expected:       $EXPECTED"
 fix_hint "$EXPECTED"
 exit 1
+# end of file

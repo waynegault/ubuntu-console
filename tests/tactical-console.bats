@@ -1935,8 +1935,15 @@ EOF
     # guard), so its Phase-4 descent cannot be reached without a GPU bench. The
     # descent ARITHMETIC is executed per push in tests/unit/13-gguf-ctx-bounds.bats;
     # this asserts the script still routes the descent through that helper,
-    # bounded by MIN_CTX, rather than an ad-hoc x3/4 ladder.
-    grep -qF '__autotune_descent_candidates "$_dc" "$MIN_CTX"' "$REPO_ROOT/scripts/autotune-model.sh"
+    # bounded by MIN_CTX, rather than an ad-hoc x3/4 ladder.  Matched on a
+    # continuation-joined copy: the ladder's source ctx is now captured first (`_dc_from` /
+    # `_cert_from`) so the loop cannot reassign the argument it was computed from, and the
+    # rule this pins is WHICH BOUNDS reach the helper, not the variable's name at the call.
+    local joined
+    joined=$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$REPO_ROOT/scripts/autotune-model.sh" \
+        | tr -s '[:space:]' ' ')
+    [[ "$joined" == *'__autotune_descent_candidates "$_dc_from" "$MIN_CTX"'* ]]
+    [[ "$joined" == *'__autotune_descent_candidates "$_cert_from" "$MIN_CTX"'* ]]
 }
 
 @test "llm-manager: model status supports json output" {
