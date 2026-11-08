@@ -139,6 +139,18 @@ then
     echo '{}'
     exit 0
 fi
+# /health answers 200 only when a case says the lane is SERVING.  Opt-in, because the
+# CUDA busy branch deliberately never consults health in the cases above.
+# health() reads the code from curl's -w '\n%{http_code}' tail, so the fixture must emit
+# BOTH lines: a bare exit 0 leaves the code empty and the probe reads as unreachable.
+if [[ "$*" == *"/health"* ]] && [[ -f "$MOCK_STATE/serving" ]]
+then
+    if [[ "$*" == *"%{http_code}"* ]]
+    then
+        printf '\n200\n'
+    fi
+    exit 0
+fi
 exit 22
 MOCK
     chmod +x "$MOCK_BIN/curl"
@@ -1178,3 +1190,54 @@ MOCK
 }
 
 # end of file
+
+# ── LLM-LANE-STOP-001 option (b): a PROBE ERROR must not park a serving lane ──
+@test "lane-stop: a probe that ERRORS leaves a serving lane alone, and a BUSY answer still stops it" {
+    # Criterion — card LLM-LANE-STOP-001, option (b) accepted 2026-11-01, acceptance lines:
+    #   "A one-off nvidia-smi failure no longer stops the lane (simulate with a PATH shim)."
+    #   "A genuine BUSY verdict still stops it."
+    #   "The lane survives two consecutive timer ticks after a start."
+    # Measured 2026-11-02: 16 watchdog stops of this lane in 24h, 9 ending 'timeout', each
+    # 1.5-2.5 min after a start, every one costing a hosted-fallback turn for 13 agents.
+    #
+    # The probe here is OUR TOOLING failing — exit 22 with no JSON — which is NOT the same
+    # answer as "the card is held" (exit 1 + busy:true).  The lane answers /health 200, so a
+    # stop would destroy a serving lane on no evidence about the card.
+    # No restore step: setup() rewrites this mock for every case.
+    cat > "$HOME/.local/bin/gpu-busy.sh" <<'BROKEN'
+#!/usr/bin/env bash
+exit 22
+BROKEN
+    chmod +x "$HOME/.local/bin/gpu-busy.sh"
+    # The lane is SERVING — that is the state the stop would destroy.
+    touch "$MOCK_STATE/serving"
+
+    # TWO consecutive ticks: the card's third acceptance line, and the one a one-off retry
+    # could pass by accident.
+    run "$WATCHDOG"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"probe ERRORED"* ]] \
+        || { echo "the probe error was not named: $output"; return 1; }
+    run "$WATCHDOG"
+    [[ "$status" -eq 0 ]]
+    if [[ -f "$MOCK_STATE/systemctl.log" ]] && grep -q 'stop llama-cuda' "$MOCK_STATE/systemctl.log"
+    then
+        echo "a serving lane was stopped on a failed probe"; return 1
+    fi
+
+    # CONTROL: the same lane, with the probe answering BUSY -> it still stops.
+    touch "$MOCK_STATE/busy" "$MOCK_STATE/gpu_reason"
+    printf '%s\n' "foreign-app pid=4242" > "$MOCK_STATE/gpu_reason"
+    rm -f "$MOCK_STATE/serving"
+    cat > "$HOME/.local/bin/gpu-busy.sh" <<MOCK
+#!/usr/bin/env bash
+printf '%s\n' '{"busy":true,"reasons":["foreign-app pid=4242"]}'
+exit 1
+MOCK
+    chmod +x "$HOME/.local/bin/gpu-busy.sh"
+    run "$WATCHDOG"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]] \
+        || { echo "a genuine BUSY answer no longer stops the lane: $output"; return 1; }
+    grep -q 'stop llama-cuda-llama32-3b-chat.service' "$MOCK_STATE/systemctl.log"
+}

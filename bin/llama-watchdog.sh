@@ -148,7 +148,13 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 26
+# Module Version: 27
+#   v27 (2026-11-08): LLM-LANE-STOP-001 option (b) — a gpu-busy probe that ERRORS (unexpected
+#     rc, or rc 0 with no JSON: OUR TOOLING failing, not an answer about the card) no longer
+#     parks a lane that is SERVING.  The verdict stays fail-closed for the START gate; only the
+#     stop on a running, healthy lane is refused, and the line says why.  Measured 2026-11-02:
+#     16 stops in 24h, 9 ending 'timeout', each 1.5-2.5 min after a start, 13 agents on hosted
+#     fallback every time.  A genuine BUSY answer still stops it (the case has the control).
 #   v26 (2026-11-08): recover() defers to a live heavy job (LLAMA-LANE-CONTENTION-001).  Measured
 #     2026-11-04: the watchdog restarted the chat lane twice in six minutes while autotune-rows.sh
 #     held the card, each start SIGKILLed a second later and the unit left failed.  A campaign owns
@@ -498,6 +504,9 @@ GPU_BUSY_PROBE_WARNED=0
 # Reasons from the last probe, for the busy log line.  Set by gpu_busy(), read only
 # where that line is emitted; empty when the probe reported none.
 GPU_BUSY_REASONS=""
+# 1 when the last gpu_busy() answer was OUR TOOLING failing (an unexpected rc, or rc 0
+# with no JSON) rather than gpu-busy.sh answering BUSY.  Read by the lane's stop decision.
+GPU_BUSY_PROBE_ERROR=0
 
 # Pull the "reasons":[...] entries out of the probe's JSON for the log line.
 # Deliberately no jq: the shape is fixed, this runs on every tick, and a parsing
@@ -518,6 +527,7 @@ gpu_busy_reasons() {
 gpu_busy() {
     local j rc
     GPU_BUSY_REASONS=""
+    GPU_BUSY_PROBE_ERROR=0
     j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null)
     rc=$?
     # gpu-busy.sh contract: exit 0 = FREE, exit 1 = BUSY, anything else = error.
@@ -535,6 +545,9 @@ gpu_busy() {
         return 0
     fi
     # Genuine probe failure (unexpected rc, or rc 0 with no JSON) -- FAIL CLOSED.
+    # Recorded so the lane's stop decision can tell OUR tooling failing from the card
+    # being held: the verdict stays fail-closed either way (LLM-LANE-STOP-001).
+    GPU_BUSY_PROBE_ERROR=1
     if (( GPU_BUSY_PROBE_WARNED == 0 )); then
         log "WARNING: gpu-busy.sh probe failed (rc=$rc, ${#j} bytes) — treating GPU as BUSY (CUDA lane will not start)"
         GPU_BUSY_PROBE_WARNED=1
@@ -924,6 +937,18 @@ supervise_cuda_lane() {
         elif gpu_driver_failclosed && [[ "$cuda_state" == "active" ]] && gpu_reprobe_free; then
             _msg="GPU reported busy driver-level [probe: $GPU_BUSY_REASONS]"
             log "$_msg but a re-probe found the card FREE — not stopping $CUDA_UNIT"
+            gpustop_clear
+            strike_reset "$STRIKE_CUDA"
+        elif (( GPU_BUSY_PROBE_ERROR )) && [[ "$cuda_state" == "active" ]] && gpu_serving_now; then
+            # LLM-LANE-STOP-001 option (b), accepted 2026-11-01: a probe that ERRORED is our
+            # tooling failing (an unexpected rc, or rc 0 with no JSON), not an answer about the
+            # card.  The verdict stays fail-closed for the START gate; here a lane already
+            # SERVING is left alone, because a failed probe is not evidence the card is held and
+            # this stop cannot be undone from here.  Measured 2026-11-02: 16 watchdog stops in
+            # 24h, 9 ending 'Failed with result timeout', each 1.5-2.5 min after a start, with
+            # 13 agents on hosted fallback every time.
+            log "gpu-busy probe ERRORED (no usable answer) — but $CUDA_UNIT answers /health 200" \
+                "on :${CUDA_PORT}, so the stop is refused (a failed probe is not a held card)"
             gpustop_clear
             strike_reset "$STRIKE_CUDA"
         else
