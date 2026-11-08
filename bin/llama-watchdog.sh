@@ -148,7 +148,12 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-11-08): recover() defers to a live heavy job (LLAMA-LANE-CONTENTION-001).  Measured
+#     2026-11-04: the watchdog restarted the chat lane twice in six minutes while autotune-rows.sh
+#     held the card, each start SIGKILLed a second later and the unit left failed.  A campaign owns
+#     the card while it runs and its clean-room restores the lane when it ends, so the restart is
+#     skipped, with a line saying so — the guard can only prevent a restart, never force one.
 #   v24 (2026-11-02): a DRIVER-level probe failure no longer stops a lane that is
 #   demonstrably SERVING.  Measured live: at 11:40:41 nvidia-smi answered rc=9 and
 #   gpu-busy reported nvidia-smi-unavailable while the same card was prefilling a
@@ -750,6 +755,15 @@ wait_healthy() {
 # recover <unit> <port> — issue restart (or start if inactive/failed), then wait
 recover() {
     local unit="$1" port="$2" state _out _out2
+    # LLAMA-LANE-CONTENTION-001 (measured 2026-11-04): this restarted the chat lane twice in six
+    # minutes while autotune-rows.sh held the card — a fight, not a recovery, and the unit was
+    # left failed.  A campaign OWNS the card while it runs and its own clean-room puts the lane
+    # back when it ends, so a restart now can only be preempted.  Deferring is the whole fix on
+    # this side: it can only PREVENT a restart, never force one.
+    if _tac_heavy_job_busy; then
+        log "recover DEFERRED for $unit — a heavy job holds the box; its clean-room restores the lane when it ends"
+        return 0
+    fi
     state=$(systemctl --user show "$unit.service" -p ActiveState --value 2>/dev/null || true)
     if [[ "$state" == "failed" ]]; then
         systemctl --user reset-failed "$unit.service" 2>/dev/null || true

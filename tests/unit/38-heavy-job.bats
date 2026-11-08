@@ -185,3 +185,58 @@ _hold_lock() {
     [ "$status" -eq 0 ]
     [[ "$output" == "heavy-job: free"* ]]
 }
+
+# ── LLAMA-LANE-CONTENTION-001: telling a DEFERRAL from a failure ─────────────
+
+@test "heavy-job: --status exits 0 while BUSY too, so the answer is the TEXT" {
+    # Measured 2026-11-08, and the reason the watchdog helper parses the line: a caller that
+    # tests only the exit status reads "free" ALWAYS.  Catches a later change that makes the
+    # two answers differ in status without telling any caller.
+    _hold_lock 3
+    run env -u HEAVY_JOB_HELD HEAVY_JOB_LOCK="$HLOCK" "$HJ" --status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"BUSY"* ]]
+}
+
+@test "heavy-job: _tac_heavy_job_busy_from reads the status text (pure, no lock)" {
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    run _tac_heavy_job_busy_from "heavy-job: BUSY — pid=1 started=2026-11-04T04:25:51Z cmd=autotune-rows.sh"
+    [ "$status" -eq 0 ]
+    run _tac_heavy_job_busy_from "heavy-job: free (last holder: pid=9)"
+    [ "$status" -eq 1 ]
+    # An unreadable answer is NOT busy: a broken helper must not strand a dead lane.
+    run _tac_heavy_job_busy_from ""
+    [ "$status" -eq 1 ]
+}
+
+@test "heavy-job: _tac_heavy_job_busy asks the real lock, and HEAVY_JOB_BIN is the seam" {
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    _hold_lock 3
+    run env -u HEAVY_JOB_HELD HEAVY_JOB_BIN="$HJ" HEAVY_JOB_LOCK="$HLOCK" \
+        bash -c 'source "$1"; _tac_heavy_job_busy' _ "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    [ "$status" -eq 0 ]
+
+    local stub="$BATS_TEST_TMPDIR/free-hj"
+    printf '#!/usr/bin/env bash\necho "heavy-job: free"\nexit 0\n' > "$stub"
+    chmod +x "$stub"
+    run env HEAVY_JOB_BIN="$stub" bash -c 'source "$1"; _tac_heavy_job_busy' _ "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    [ "$status" -eq 1 ]
+}
+
+@test "LLAMA-LANE-CONTENTION-001: recover() defers to a heavy job BEFORE it touches the unit" {
+    # The card's fix direction: "the restart policy must defer to a live campaign".  Measured
+    # 2026-11-04: two starts and two stops in six minutes under autotune-rows.sh, unit left
+    # failed.  This pins the WIRING — a pure predicate nothing calls proves nothing — and the
+    # ORDER: the guard must precede the first systemctl call, or it defers after the damage.
+    local body flat
+    body=$(sed -n '/^recover() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    flat=$(printf '%s' "$body" | tr '\n' ' ')
+    [[ "$body" == *"_tac_heavy_job_busy"* ]]
+    # The deferred branch is an explanation, not a failure: it returns 0 and says why.
+    [[ "$flat" == *"recover DEFERRED"*"return 0"* ]]
+    local guard_line restart_line
+    guard_line=$(printf '%s\n' "$body" | grep -n '_tac_heavy_job_busy' | head -1 | cut -d: -f1)
+    restart_line=$(printf '%s\n' "$body" | grep -n 'systemctl --user' | head -1 | cut -d: -f1)
+    [ -n "$guard_line" ] && [ -n "$restart_line" ]
+    [ "$guard_line" -lt "$restart_line" ]
+}

@@ -16,7 +16,12 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-11-08): _tac_heavy_job_busy_from / _tac_heavy_job_busy — is a heavy job holding
+#     the box?  LLAMA-LANE-CONTENTION-001 needs the watchdog to ask before it restarts a lane
+#     (measured 2026-11-04: two starts and two stops in six minutes under a live campaign, the
+#     lane left failed).  The TEXT is the signal, not the exit status: `heavy-job --status`
+#     exits 0 either way (measured 2026-11-08), so an exit-status test reads "free" always.
 #   v14 (2026-11-06): _tac_gpu_used_mib honours TAC_SMI_BIN.  `timeout` execs a binary, so
 #     a shell-FUNCTION nvidia-smi double is invisible to it — tests/unit/57's six
 #     "vram gate" cases read the real card, the open-gate controls failed and the
@@ -787,6 +792,29 @@ _tac_is_retired() {
         $1 == f { found = 1; exit }
         END { exit(found ? 0 : 1) }
     ' "$_list"
+}
+
+# _tac_heavy_job_busy_from <status text> — does this text say a heavy job holds the box?
+#
+# PURE, so a test drives every answer without taking the lock.  The TEXT is the signal:
+# `bin/heavy-job --status` exits 0 whether the lock is held or not (measured 2026-11-08), so a
+# caller that tests the EXIT STATUS reads "free" always — the shape that lets a restart policy
+# fight a live campaign (LLAMA-LANE-CONTENTION-001).
+_tac_heavy_job_busy_from() {
+    [[ "${1:-}" == *"BUSY"* ]]
+}
+
+# _tac_heavy_job_busy — ask the box's own lock, so the answer cannot drift from the batch that
+# takes it.  HEAVY_JOB_BIN is the test seam (the same idea as LLM_AUTOTUNE_VRAM_HOLDERS_FILE).
+#
+# An UNREADABLE answer is NOT busy: an absent or broken helper must never stop a caller acting,
+# because the deferral exists to be a courtesy to a KNOWN holder, not a second failure mode.
+_tac_heavy_job_busy() {
+    local hj="${HEAVY_JOB_BIN:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/heavy-job}" out=""
+    [[ -x "$hj" ]] || return 1
+    # swallow-ok: an unreadable status reads FREE; failing closed would strand a dead lane
+    out="$("$hj" --status 2>/dev/null)" || out=""  # swallow-ok: same site, the reason above
+    _tac_heavy_job_busy_from "$out"
 }
 
 # end of file
