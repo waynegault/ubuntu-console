@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 102
+# Module Version: 103
+#   v103 (2026-11-08): the sweep-ownership refusal dd714d23 added was 178 chars, so it is wrapped
+#     with a backslash-newline INSIDE the quoted string — bash removes it, so the emitted text is
+#     byte-identical and §18.3 8.1.8 (289 -> 288) is satisfied without changing the message.
 #   v102 (2026-11-08): `model use` refuses when a live sweep/bench holds the card, and it asks
 #   BEFORE stopping the CUDA lanes.  __model_use_claim_cuda_card ran its lane-stop loop
 #   (step 2) first and only looked at the suspend marker in step 3, where a failed acquire
@@ -1480,7 +1483,8 @@ function __model_use_claim_cuda_card() {
         # already gone, which still triggers this refusal — the safe direction.
         # swallow-ok: the pid is decorative in the message; the HELD verdict above is the decision
         _holder=$(_tac_suspend_pid "$_cuda_suspend" 2>/dev/null)
-        __tac_info "Error" "[CUDA card is held by a live sweep/bench (owner pid ${_holder:-unknown}) — not stopping a lane an autotune or bench run owns; stop that run first, or wait for it to finish]" "$C_Error"
+        __tac_info "Error" "[CUDA card is held by a live sweep/bench (owner pid ${_holder:-unknown}) — \
+not stopping a lane an autotune or bench run owns; stop that run first, or wait for it to finish]" "$C_Error"
         return 1
     fi
 
