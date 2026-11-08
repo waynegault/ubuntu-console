@@ -575,7 +575,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2669 total tests: 1849 BATS + 820 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2676 total tests: 1856 BATS + 820 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
 
 ### Running Tests
 
@@ -652,10 +652,10 @@ Counts are enforced by `tools/docs-sync-check.sh`; the suite list and its per-ca
 | Full behavioural | `tactical-console.bats` | 397 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 68 | 300s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 1218 | 300s | 900s |
+| Unit | `tests/unit/*.bats` | 1225 | 300s | 900s |
 | Integration | `tests/integration/*.bats` | 164 | 300s | 1200s |
 | Python | `tests/test_*.py` | 820 | 1000s (`pytest.ini`) | — |
-| **Total** | | **2669** | | |
+| **Total** | | **2676** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and every marker the BATS bridge applies dynamically (`bats`, `bats_unit`, `bats_fast`, `bats_full`, `bats_integration`, `slow`) is registered there. There is deliberately no `bats_default`: each suite's marker now comes by name from `tests/bats-suites.tsv`, so a name the table gets wrong fails collection instead of quietly filing the suite under a marker no `-m` selection asks for. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. A run that selects BATS suites also takes the box's `bin/heavy-job` lock at collection, so it **queues** behind an autotune or bench instead of competing with it: `bin/heavy-job --status` names the holder, and `TAC_HEAVY_JOB_WAIT_S` (default 3600) bounds the wait before the session exits 3 without running anything. Wait for the lock rather than killing the run — the earlier behaviour, starting beside a heavy job, made suites 8-15x slower and reported failures that pass in isolation (measured 2026-11-04 at load average 181). Note also that the full run is ~30 min because it bridges all 397 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -1325,7 +1325,7 @@ where it was last present.)
 │   ├── test_report.py                 # Tests for kgraph.report
 │   ├── test_update.py                 # Tests for kgraph.update
 │   ├── test_validate.py               # Tests for kgraph.validate
-│   ├── unit/                          # BATS unit tests (1218 tests: 46+43+14+7+5+6+54+4+12+10+7+49+49+24+6+1+9+10+2+3+3+20+14+50+41+9+33+6+8+11+8+3+4+6+13+36+29+16+9+17+13+6+4+4+6+3+13+4+5+4+13+2+10+17+1+8+5+10+28+34+11+5+7+2+11+36+28+2+11+8+8+10+6+4+5+17+4+10+5+4+3+3+13+28+1+4+14+9+7+10+6+6+4+10+9+4+6)
+│   ├── unit/                          # BATS unit tests (1225 tests: 46+43+14+7+5+6+54+4+12+10+7+49+49+24+6+1+9+10+2+3+3+20+14+50+41+9+33+6+8+11+8+3+4+6+13+36+29+16+9+17+13+6+4+4+6+3+13+4+5+4+13+2+10+17+1+8+5+10+28+34+11+5+7+2+11+36+28+2+11+8+8+10+6+4+5+17+4+10+5+4+3+3+13+28+1+4+14+9+7+10+6+6+4+10+9+4+6+7)
 │   └── integration/                   # BATS integration tests (164 tests: 14+50+10+58+3+29)
 ├── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)

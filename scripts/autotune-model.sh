@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 122
+# Module Version: 123
+#   v123 (2026-11-08): load<=cores is necessary, not sufficient.  Two runs certified at
+#     load under the core count while the box was not quiet (2026-11-07 22:14Z: 3.48 on 8
+#     cores beside two runner workers; 2026-11-08 12:52Z: 5.12 on 8 beside 2 CI workers and
+#     a live vitest), because a run-queue average cannot see load carried by few saturated
+#     threads.  The verdict now also refuses on an active CI runner worker and on start-of-run
+#     CPU pressure above LLM_AUTOTUNE_PSI_MAX_PCT; both terms only ever make it stricter, and
+#     the pressure read is sampled BEFORE the server launches so the bench's own threads are
+#     not mistaken for foreign load.  The refusal message names the term that refused.
 #   v122 (2026-11-08): the two remaining memory-geometry reflexes are gone, not restated.
 #     The shared-memory ladder refusal and the "name both pools" comment both asserted
 #     "the GPU pool is the LARGE side, host RAM the small one (29.8 GiB)" as a property of
@@ -1036,6 +1044,11 @@ fmts() { local _c _out=""; for _c in "$@"; do _out+="$(printf "%'d:%'d " "${_c%%
 #               "unknown" is not proven quiet (fail closed, like the GPU gate).
 __autotune_measurement_verdict() {
     local load="${1:-}" cores="${2:-}" allow="${3:-0}" force="${4:-0}"
+    local psi="${5:-}" ci="${6:-}"
+    # The reason travels with the verdict: a CI or pressure refusal happens on a box whose
+    # LOAD is legitimately under the core count, so a caller that says "the load was
+    # contended" would be printing a sentence its own reading contradicts.
+    __AUTOTUNE_VERDICT_REASON=""
     # A FORCED run cannot certify at all.  `--allow-contended` on its own only widens the
     # contended branch: when the live load happens to sit at or under the core count, the
     # verdict is `certified` and a bypassed run leaves a number that reads as quiet-box.
@@ -1044,16 +1057,62 @@ __autotune_measurement_verdict() {
     # was false at the moment of the read.  force=1 means "this run was let through a gate",
     # which is a fact the caller knows and the load figure does not.
     if [[ "$force" == "1" && "$allow" == "1" ]]; then echo indicative; return 0; fi
+    # THE LOAD TERM IS NECESSARY, NOT SUFFICIENT (2026-11-08).  load<=cores certified two
+    # runs that were NOT quiet, and the number still read as a property of the model:
+    #   2026-11-07 22:14Z  load 3.48 / 8 cores, llama-server at 111%, two runners 92/75%
+    #   2026-11-08 12:52Z  load 5.12 / 8 cores, 2 CI workers + 1 vitest live
+    # A run-queue average cannot see a box whose load is carried by FEW THREADS that are
+    # each saturated.  Two independent terms below cover what it misses; both only ever
+    # make the verdict STRICTER, and neither can rescue a load term that already refused.
+    local contended=""
+    # TERM 1 — CI, and only CI.  v85 of 11e-llm-model.sh already treats a runner worker as
+    # NOT quiet for the build gate (the workflow calls bats directly, so no heavy-job lock
+    # sees it); this reuses that rule rather than inventing a second one.  Bracketed so the
+    # probe cannot match its own command line.
+    if [[ "$ci" =~ ^[0-9]+$ ]] && (( ci > 0 )); then
+        contended="${ci} CI runner worker(s) active"
+    fi
+    # TERM 2 — CPU pressure at the START of the run.  Deliberately NOT the window average:
+    # during the bench this box's OWN llama-server runs at exactly CPU_COUNT threads, and a
+    # controlled 8-spinner load on 8 cores measured some avg10=17.31 (idle box: 1.45), i.e.
+    # a legitimate run looks like contention while it is measuring.  Sampled before the
+    # server launches, the same figure describes FOREIGN load only.  An absent
+    # /proc/pressure/cpu (some kernels/hosts) is no evidence, NOT a refusal - failing closed
+    # on a missing instrument would break autotune on a box that never had it.
+    if [[ "$psi" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+       && awk -v p="$psi" -v m="${LLM_AUTOTUNE_PSI_MAX_PCT:-10}" 'BEGIN{exit !(p > m)}'; then
+        contended="cpu pressure ${psi}% (some avg10, threshold ${LLM_AUTOTUNE_PSI_MAX_PCT:-10}%)"
+    fi
+    if [[ -n "$contended" ]]; then
+        __AUTOTUNE_VERDICT_REASON="$contended"
+        if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
+        return 0
+    fi
     if [[ "$load" =~ ^[0-9]+([.][0-9]+)?$ && "$cores" =~ ^[0-9]+$ ]]; then
         if awk -v l="$load" -v c="$cores" 'BEGIN{exit !(l > c)}'; then
+            __AUTOTUNE_VERDICT_REASON="load ${load} on ${cores} cores"
             if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
         else
             echo certified
         fi
         return 0
     fi
+    __AUTOTUNE_VERDICT_REASON="load unreadable (\"${load}\")"
     if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
     return 0
+}
+
+# __autotune_cpu_pressure_pct - `some avg10` from /proc/pressure/cpu, or EMPTY.
+# Empty means "no instrument here", which the verdict treats as no evidence.  Extracted so
+# the read has one definition and a test can feed it a fixture instead of a live box.
+__autotune_cpu_pressure_pct() {
+    local line=""
+    # swallow-ok: a kernel without CONFIG_PSI yields nothing, and the caller reads empty as no evidence
+    line=$(</proc/pressure/cpu 2>/dev/null) || return 0
+    # A line without some/avg10 yields EMPTY — "no instrument", the same reading as an
+    # absent file, which the verdict treats as no evidence.
+    [[ "$line" =~ some[[:space:]]+avg10=([0-9]+([.][0-9]+)?) ]] || return 0
+    printf '%s' "${BASH_REMATCH[1]}"
 }
 
 # __autotune_collapse_verdict <recorded> <measured> — the tps-collapse guard's predicate,
@@ -1097,6 +1156,18 @@ START_TS=$(date '+%H:%M:%S')
 echo "  start:  ${START_TS}"
 echo ""
 START_EPOCH=$(date +%s)
+# FOREIGN CPU pressure, read NOW — before any server this run launches exists.  The
+# verdict's load term could not see a box whose load rode on a few saturated threads
+# (2026-11-07 22:14Z: load 3.48/8 with two runners at 92/75% still certified), and the
+# V85-style CI count cannot see a vitest run.  Read here rather than after the bench
+# because during the bench this box's OWN llama-server runs at CPU_COUNT threads:
+# measured 2026-11-08, a controlled 8-spinner load on 8 cores gave some avg10=17.31
+# against 1.45 on the same box idle, so a window read would call every real run contended.
+# Empty is "no instrument", which the verdict does not treat as contention.
+START_PSI_PCT=$(__autotune_cpu_pressure_pct)
+if [[ "$START_PSI_PCT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "  psi:    cpu some avg10=${START_PSI_PCT}% before launch (foreign load only)"
+fi
 
 LLAMA_BIN="${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build-cuda/bin/llama-server}"
 
@@ -3778,10 +3849,20 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # 3c: the verdict decides whether this row may be written at all — "refuse"
         # (contended, or an unreadable load, without --allow-contended) exits BEFORE
         # the save; otherwise it is the meas_state the row carries.
+        # 2026-11-08: two more terms ride alongside the load figure — the CI worker count
+        # (the same rule v85 of 11e-llm-model.sh applies to the build gate) and the
+        # start-of-run CPU pressure sampled at START_PSI_PCT.  Both can only make the
+        # verdict stricter.
+        # A match count of zero is the quiet box this row wants, and pgrep exits 1 when
+        # nothing matches — the fallback states the count rather than treating "no match"
+        # as an error.  Every other unreadable term fails closed.
+        # swallow-ok: pgrep exit 1 means no runners, which is the quiet reading — not an error
+        _row_ci=$(pgrep -fc '[R]unner\.Worker' 2>/dev/null) || _row_ci=0
         _meas_state=$(__autotune_measurement_verdict "$_row_load" "$_row_cores" \
-            "${ALLOW_CONTENDED:-0}" "${TAC_CONTENDED:-0}")
+            "${ALLOW_CONTENDED:-0}" "${TAC_CONTENDED:-0}" \
+            "${START_PSI_PCT:-}" "$_row_ci")
         if [[ "$_meas_state" == "refuse" ]]; then
-            echo "  REFUSING to write: measured at load ${_row_load} on ${_row_cores} cores — the box"
+            echo "  REFUSING to write: ${__AUTOTUNE_VERDICT_REASON:-load ${_row_load} on ${_row_cores} cores} — the box"
             echo "  was CONTENDED, so this row's tps is indicative, not certified — nothing was written."
             echo "  Re-run on a quiet box, or pass --allow-contended to save it as meas_state=indicative."
             exit 1
@@ -3909,6 +3990,19 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         && awk -v l="$_row_load" -v c="$_row_cores" 'BEGIN{exit !(l > c)}'
     then
         echo "  WARNING: measured at load ${_row_load} on ${_row_cores} cores — the box was CONTENDED, so this row's tps is indicative, not certified. Re-run it on a quiet box before trusting it."
+    elif [[ "${_meas_state:-}" == "indicative" ]]; then
+        # DEFAULT THE PARAMETER.  `_meas_state` is assigned only inside the save branch, so
+        # on the SELFTEST path (which writes nothing) it is UNSET at script scope and this
+        # read aborted the run under `set -uo pipefail` — measured 2026-11-08: 08 cases 14
+        # and 52 went from green to "no output" the moment this branch was added, and back
+        # to green on stash.  A definite assignment is the older instance of the same trap
+        # (see the 2b comment above); this is a guard against repeating it.
+        # The load term is satisfied but another term refused, so this row is indicative
+        # WITHOUT load>cores being true — say which term, or the sentence reads as a
+        # claim about a load figure that is under the core count.
+        echo "  WARNING: ${__AUTOTUNE_VERDICT_REASON:-an unstated term} — this row's tps is" \
+             "INDICATIVE, not certified, even though load ${_row_load} was under" \
+             "${_row_cores} cores. Re-run on a quiet box before trusting it."
     else
         echo "  measured at load ${_row_load} on ${_row_cores} cores"
     fi
