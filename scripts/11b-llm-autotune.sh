@@ -1,7 +1,17 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 39
+# Module Version: 40
+#   v40 (2026-11-07): hygiene pass (card b7602d50).  (a) The three descent loops no longer read
+#   `for x in $(__autotune_descent_candidates ...)`: the emitter prints one candidate per LINE,
+#   so the word-split worked only while every candidate was a bare number; they are now
+#   `while IFS= read -r ... done < <(...)`, with the ladder's source ctx captured before the
+#   loop reassigns the variable.  (b) The two registry backups no longer swallow a failed copy
+#   with `|| true`: the write still proceeds (the row's read-back is what decides), but a
+#   missing rollback copy is now SAID, with cp's own message.  (c) Old-backup pruning uses
+#   `rm -f` — a backup a concurrent run already pruned is the state sought — and reports a
+#   real failure instead of hiding it.  (d) One `warn` helper replaces the module's
+#   hand-written `>&2` sites (style item 10.7).
 #   v39 (2026-11-06): __autotune_fa_retry takes the V cache type and refuses the FA-off retry
 #   when it is quantised.  llama.cpp will not run a quantised V cache without flash attention,
 #   so that retry was a guaranteed second failure — and the row then read as an unsupported
@@ -71,6 +81,12 @@ __TAC_MOD_11B_LLM_AUTOTUNE_LOADED=1
 # $LLM_REGISTRY.  The "profile store" is the registry row itself; the blob predated that.)
 
 # ---------------------------------------------------------------------------
+# warn — the module's ONE stderr path, so every warning has the same shape and a caller can
+# grep it (style item 10.7).  Nothing in this module writes to stderr by hand.
+# ---------------------------------------------------------------------------
+warn() { printf '%s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
 # __llm_autotune_sanitize_token — Remove registry delimiters from profile values.
 # @returns 0 always.
 # ---------------------------------------------------------------------------
@@ -113,7 +129,7 @@ function __autotune_ctx_bounds() {
     local max cap
 
     if ! [[ "$mult" =~ ^[0-9]+$ ]] || (( mult < 1 )); then
-        echo "WARN: vram cap multiplier '$mult' is not a positive integer — using 2" >&2
+        warn "WARN: vram cap multiplier '$mult' is not a positive integer — using 2"
         mult=2
     fi
 
@@ -168,11 +184,11 @@ function __autotune_window_policy() {
     local rec
 
     if ! [[ "$reserve" =~ ^[0-9]+$ ]]; then
-        echo "WARN: output reserve '$reserve' is not a non-negative integer — using 4096" >&2
+        warn "WARN: output reserve '$reserve' is not a non-negative integer — using 4096"
         reserve=4096
     fi
     if ! [[ "$ctx" =~ ^[0-9]+$ ]]; then
-        echo "WARN: ctx '$ctx' is not an integer — profile-missing" >&2
+        warn "WARN: ctx '$ctx' is not an integer — profile-missing"
         printf 'profile-missing\n'
         return 0
     fi
@@ -595,11 +611,19 @@ function __llm_autotune_profile_save() {
     local _backup_dir
     _backup_dir="$(dirname "$profile_file")/backups"
     mkdir -p "$_backup_dir"
-    cp "$profile_file" "$_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    # A failed backup must not refuse the write — the row's own read-back is what decides that —
+    # but it must not be SILENT either: this copy is the only rollback before the mutation below,
+    # and the old `|| true` reported success whether or not a backup existed.
+    _bk_dest="$_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S)"
+    if ! _bk_err=$(cp "$profile_file" "$_bk_dest" 2>&1); then
+        warn "autotune: backup FAILED ($_bk_err) — continuing with no rollback copy at $_bk_dest"
+    fi
     # Keep only the 50 most recent backups
     while IFS= read -r _old_backup
     do
-        rm -- "$_old_backup" 2>/dev/null || true
+        # -f: a backup a concurrent run already pruned is gone, which is the state sought.
+        # A real failure (permissions, read-only fs) is reported rather than swallowed.
+        rm -f -- "$_old_backup" 2>/dev/null || warn "autotune: could not prune old backup $_old_backup"
     done < <(
         find "$_backup_dir" -maxdepth 1 -type f -name 'models.conf.*' -printf '%T@|%p\n' 2>/dev/null \
             | sort -t'|' -k1,1nr \
@@ -781,8 +805,12 @@ function __llm_autotune_mark_state() {
     local _backup_dir
     _backup_dir="$(dirname "$LLM_REGISTRY")/backups"
     mkdir -p "$_backup_dir"
-    # swallow-ok: a missing backup is not a reason to refuse the write; the row's own verification below is what decides
-    cp "$LLM_REGISTRY" "$_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    # Same rule as the profile save: a failed backup must not refuse the write (the row's own
+    # verification below decides that), and must not be silent either.
+    _bk_dest="$_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S)"
+    if ! _bk_err=$(cp "$LLM_REGISTRY" "$_bk_dest" 2>&1); then
+        warn "autotune: backup FAILED ($_bk_err) — continuing with no rollback copy at $_bk_dest"
+    fi
 
     awk -F'|' -v f="$model_file" -v st="$state" -v header="$LLM_REGISTRY_HEADER" '
         BEGIN { OFS="|"; print header; ncols = split(header, _hdr, "|") }

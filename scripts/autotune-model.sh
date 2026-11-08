@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 119
+# Module Version: 120
+#   v120 (2026-11-07): the three descent ladders (card b7602d50) no longer read
+#     `for x in $(__autotune_descent_candidates ...)`.  The emitter prints one candidate per
+#     LINE, so the unquoted split worked only while every candidate was a bare number; each
+#     ladder is now `while IFS= read -r ...; done < <(...)`, and the ctx it is computed FROM
+#     is captured first, because the loop reassigns the variable the call takes as an
+#     argument.  Body, `break` and the assignments behave exactly as before.
 #   v119 (2026-11-07): the measurement-verdict call is split at an argument boundary so the
 #     line is under 120 characters (18.3 8.1.8).  Behaviour unchanged: the continuation is
 #     whitespace inside a command substitution.
@@ -2996,7 +3002,11 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             # autotuned=slow so no later sweep re-spends it.
             # (not `local`: this block is script scope, not a function — SC2168)
             _flat=0 _prev_tps=$_ft
-            for _dc in $(__autotune_descent_candidates "$_dc" "$MIN_CTX" "$PREV_CERT_CTX"); do
+            # The ladder is computed ONCE, from the ctx that failed, so capture it before the
+            # loop reassigns _dc.  `for x in $(...)` word-splits the emitter's output — benign
+            # only while every candidate is a bare number, and a trap the moment one is not.
+            _dc_from=$_dc
+            while IFS= read -r _dc; do
                 _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
                 if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
                     IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -3027,7 +3037,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                         fi
                     fi
                 fi
-            done
+            done < <(__autotune_descent_candidates "$_dc_from" "$MIN_CTX" "$PREV_CERT_CTX")
             if [[ $_dok == 0 || $_pok == 0 ]]; then
                 if (( _flat >= 2 )); then
                     echo "  ⚠ below floor and flat across ctx — too slow (walk stopped early)"
@@ -3045,7 +3055,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # The capacity ctx failed the FILLED load (memory pressure at fill) — fall back to a
         # quick descent for a working filled ctx.  Same candidate list, so it also cannot step
         # below a window this row already holds without testing it.
-        for _dc in $(__autotune_descent_candidates "$_dc" "$MIN_CTX" "$PREV_CERT_CTX"); do
+        _dc_from=$_dc
+        while IFS= read -r _dc; do
             _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
             if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
                 IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -3053,7 +3064,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 BEST_CTX=$_dc; BEST_TPS=$_ft; BEST_PREFILL="${_fp:-0}"
                 break
             fi
-        done
+        done < <(__autotune_descent_candidates "$_dc_from" "$MIN_CTX" "$PREV_CERT_CTX")
     fi
 
     # Final certification: multi-sample (median) at the winner for the
@@ -3103,7 +3114,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         && [[ $(echo "${BEST_TPS:-0} < $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "  certified ${BEST_TPS} tps is below the floor at ctx $(fmt "$BEST_CTX")" \
             "— descending at the certification's sample count"
-        for _cert_dc in $(__autotune_descent_candidates "$BEST_CTX" "$MIN_CTX" "$PREV_CERT_CTX"); do
+        _cert_from=$BEST_CTX
+        while IFS= read -r _cert_dc; do
             : > "/tmp/at-served-ctx-$$" 2>/dev/null || rm -f "/tmp/at-served-ctx-$$" 2>/dev/null || true
             _cert_t=$(bench_ctx "$_cert_dc" "$BEST_B" "$BEST_U" 5 \
                 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert_t=""
@@ -3122,7 +3134,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 echo "  ✓ floor met at ctx $(fmt "$_cert_dc") — certifying this as the usable ctx"
                 break
             fi
-        done
+        done < <(__autotune_descent_candidates "$_cert_from" "$MIN_CTX" "$PREV_CERT_CTX")
     fi
     # Record GPU thermal/clock state alongside the certified number — heat
     # soak on a laptop biases later benches; the temp explains outliers.
