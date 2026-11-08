@@ -138,7 +138,16 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-11-08): SEVENTH HUNK (linebudget). The per-line cap, enforced where the lines are
+#   JOINED rather than in each provider. Hunk 4 caps the TITLE inside docIndexLine, but
+#   assembleIndex takes already-formatted strings, so every other provider was unbudgeted --
+#   measured as two live lines, 196 and 172 chars, both dated 2026-11-07. The hole was an EARLY
+#   RETURN in trimIndexToBudget*: while the file fits MAX_INDEX_CHARS the lines were joined
+#   untouched, so an over-long line survived exactly when the store was small. TWO upstream shapes
+#   carry it (0.25.1 trimIndexToBudget -> string, 0.26.x trimIndexToBudgetDetailed -> object) and
+#   the first draft keyed on one name and silently skipped the other; the new bats test caught it
+#   and carries a control arm that fails on stock (220) and passes on patched (150).
 #   v12 (2026-11-06): SIXTH HUNK (scancap), added on Wayne's order after the console store shed
 #   156 of 356 notes.  Three things are new, and each was measured here rather than assumed:
 #     * the cap lives in a DIFFERENT chunk from the builder (0.26.5/0.26.8: MAX_SCANNED_MEMORY_
@@ -1132,6 +1141,134 @@ PY
         echo "  patched  scancap ($name; syntax verified)"
     else
         echo "  BROKEN   $name — rolling back from ${backup/#$HOME/~}" >&2
+        cp -p "$backup" "$f"
+        rc=1
+    fi
+done
+
+# ------------------------------------------------------------------------------
+# Hunk 7 (linebudget): the per-line cap, enforced where the lines are JOINED.
+#
+# WHY THIS EXISTS (measured 2026-11-08). Hunk 4 budgets the TITLE inside docIndexLine, and
+# docIndexLine cannot emit a line over MAX_INDEX_LINE_CHARS. Neither covers lines that do not come
+# from docIndexLine: assembleIndex accepts ALREADY-FORMATTED strings, so every other provider is
+# unbudgeted. Two live lines made the point the same night: 196 chars in the root store and 172 in
+# this project's store, both dated 2026-11-07, both in the ordinary `- [title](path) - description`
+# shape with a long title. Trimming the store buys about a day.
+#
+# The precise hole is in trimIndexToBudgetDetailed and it is an EARLY RETURN: when the whole index
+# already fits MAX_INDEX_CHARS the function returns entries.join("\n") untouched, so the per-line
+# cap is never consulted. An over-long line survives precisely when the file is small -- which is
+# the normal case for these stores.
+#
+# The fix caps each entry before joining. It does not change the file budget: the oversized-index
+# arm keeps 400 lines and drops 3600 on both the stock and the patched body (measured 2026-11-08).
+# ------------------------------------------------------------------------------
+for f in "${files[@]}"; do
+    name="${f/#$HOME/~}"
+
+    st_linebudget="UNKNOWN"
+    if grep -qF 'const capped=entries.map' "$f"; then
+        st_linebudget="applied"
+    elif grep -qE 'function trimIndexToBudget(Detailed)?\(' "$f"; then
+        st_linebudget="stock"
+    fi
+
+    # TWO upstream shapes carry this hole, and only one name was ever written down: 0.25.1's
+    # `trimIndexToBudget(lines)` returns the joined string, 0.26.x's `trimIndexToBudgetDetailed`
+    # returns {content,dropped}. Both open with the same early return. A detector keyed on the
+    # Detailed name alone skipped the other and reported nothing -- a green over an unlooked
+    # object, which is the shape this file exists to reject.
+    if [[ "$st_linebudget" == "UNKNOWN" ]]; then
+        if grep -qF 'raw.length<=MAX_INDEX_CHARS' "$f"; then
+            st_linebudget="stock"
+        else
+            echo "  skip     $name (linebudget: no trimIndexToBudget early return in this chunk)"
+            continue
+        fi
+    fi
+    if [[ "$st_linebudget" == "applied" ]]; then
+        echo "  ok       $name (linebudget: applied)"
+        continue
+    fi
+    if (( check_only )); then
+        echo "  NEEDS    $name (linebudget: $st_linebudget)" >&2
+        rc=1
+        continue
+    fi
+
+    backup="$f.orig"
+    if [[ ! -f "$backup" ]]; then
+        cp -p "$f" "$backup"
+        echo "  backup   ${backup/#$HOME/~}"
+    fi
+
+    if ! PATCH_FILE="$f" "$PYTHON_BIN" - <<'PATCHPY'
+import os, pathlib, re
+p = pathlib.Path(os.environ["PATCH_FILE"])
+src = p.read_text(encoding="utf-8")
+
+# The anchor is the stock EARLY RETURN, matched as a SHAPE not a literal: the minifier's variable
+# names and spacing are build-specific, the structure is not.
+# TWO shapes, one hole. Detailed (0.26.x) returns an object; plain (0.25.1) returns a string.
+pat_detailed = re.compile(
+    r"(function trimIndexToBudgetDetailed\([^)]*\)\{"
+    r"const entries=lines\.slice\(0,MAX_INDEX_LINES\);"
+    r"const overLineCap=lines\.slice\(MAX_INDEX_LINES\);)"
+    r"const raw=entries\.join\(\"\\n\"\);"
+    r"if\(raw\.length<=MAX_INDEX_CHARS\)\{return\{content:raw,dropped:overLineCap\}\}"
+)
+pat_plain = re.compile(
+    r"(function trimIndexToBudget\([^)]*\)\{"
+    r"const entries=lines\.slice\(0,MAX_INDEX_LINES\);)"
+    r"const raw=entries\.join\(\"\\n\"\);"
+    r"if\(raw\.length<=MAX_INDEX_CHARS\)\{return raw\}"
+)
+
+m = pat_detailed.search(src)
+if m:
+    capped = (
+        m.group(1)
+        + "const capped=entries.map(function(line2){"
+          "return line2.length>MAX_INDEX_LINE_CHARS?line2.slice(0,MAX_INDEX_LINE_CHARS):line2});"
+          "const raw=capped.join(\"\\n\");"
+          "if(raw.length<=MAX_INDEX_CHARS){return{content:raw,dropped:overLineCap}}"
+    )
+    fnname = "trimIndexToBudgetDetailed"
+else:
+    m = pat_plain.search(src)
+    if not m:
+        raise SystemExit("refusing to patch: no stock trimIndexToBudget early return (UNKNOWN shape)")
+    capped = (
+        m.group(1)
+        + "const capped=entries.map(function(line2){"
+          "return line2.length>MAX_INDEX_LINE_CHARS?line2.slice(0,MAX_INDEX_LINE_CHARS):line2});"
+          "const raw=capped.join(\"\\n\");"
+          "if(raw.length<=MAX_INDEX_CHARS){return raw}"
+    )
+    fnname = "trimIndexToBudget"
+out = src[:m.start()] + capped + src[m.end():]
+
+# Post-conditions: the cap is present exactly once, and the stock early return is GONE from the
+# function body. The second check scopes to that body so a same-shaped join elsewhere cannot
+# satisfy it.
+if out.count("const capped=entries.map") != 1:
+    raise SystemExit("refusing to patch: the per-line cap is not present exactly once in the result")
+body = out.split("function " + fnname, 1)[1].split("__name(" + fnname, 1)[0]
+if "const raw=entries.join(\"\\n\");" in body:
+    raise SystemExit("refusing to patch: the stock early return is still present in the result")
+p.write_text(out, encoding="utf-8")
+PATCHPY
+    then
+        echo "  MISMATCH $name - the linebudget anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
+        rc=1
+        continue
+    fi
+
+    if node --check "$f"; then
+        echo "  patched  linebudget ($name; syntax verified)"
+    else
+        echo "  BROKEN   $name - rolling back from ${backup/#$HOME/~}" >&2
         cp -p "$backup" "$f"
         rc=1
     fi

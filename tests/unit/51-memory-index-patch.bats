@@ -145,6 +145,64 @@ setup() {
 # assembleIndex split into trimIndexToBudget + upstream's own INDEX_TRUNCATION_NOTICE.
 # ------------------------------------------------------------------------------
 
+@test "index patch: hunk 7 caps a pre-formatted over-long line, and --check reads linebudget applied" {
+    command -v node >/dev/null || skip "node is required by the patcher's own syntax check"
+    # The 0.25.1 fixture carries the stock EARLY RETURN this hunk exists for, so it is the real
+    # subject rather than a stand-in. The state is asserted first as a VALUE (not a marker), then
+    # BEHAVIOUR -- because the defect parses cleanly: the stock early return returns the joined
+    # lines untouched whenever the file fits the byte budget, so an over-long line survives in a
+    # SMALL index, which is the normal case for these stores.
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS_0251" bash "$PATCHER" --check
+    [[ "$output" == *"linebudget: stock"* ]]
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS_0251" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"patched  linebudget"* ]]
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS_0251" bash "$PATCHER" --check
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"linebudget: applied"* ]]
+
+    # PATTERN MATCHING IS NOT A FRESH APPLY GUARANTEE: the second run must change no bytes.
+    before="$(cksum < "$PATCHED_0251")"
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS_0251" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    [ "$before" = "$(cksum < "$PATCHED_0251")" ]
+
+    # The writing arm AND its control, measured on the same probe: patched caps, stock does not.
+    # Without the control a probe that cannot fail reads exactly like a fix.
+    run node -e '
+const fs=require("fs");
+function load(f){
+  const S=fs.readFileSync(f,"utf8");
+  const cap=S.match(/MAX_INDEX_LINE_CHARS\s*=\s*(\d+)/)[1];
+  const ch=S.match(/MAX_INDEX_CHARS\s*=\s*([0-9e.]+)/)[1];
+  const ml=S.match(/MAX_INDEX_LINES\s*=\s*(\d+)/)[1];
+  // The FN NAME IS PART OF THE SUBJECT: 0.25.1 ships trimIndexToBudget, 0.26.x ships
+  // trimIndexToBudgetDetailed. Reading the fixture for its own name keeps the probe honest
+  // instead of asserting against a helper the file does not contain.
+  const fn = S.includes("function trimIndexToBudgetDetailed") ? "trimIndexToBudgetDetailed" : "trimIndexToBudget";
+  const i = S.indexOf("function " + fn + "(");
+  const e = S.indexOf("__name(" + fn);
+  const body = S.slice(i, e);
+  if (!body) throw new Error("could not slice " + fn);
+  const made = new Function("const MAX_INDEX_LINE_CHARS="+cap+",MAX_INDEX_CHARS="+ch+",MAX_INDEX_LINES="+ml+";"+body+";return "+fn+";")();
+  const out = made(["- ["+"T".repeat(200)+"](reference/x.md)"]);
+  const text = typeof out === "string" ? out : out.content;
+  return {first: text.split("\n")[0].length, cap: Number(cap), fn};
+}
+const p=load(process.argv[1]), s=load(process.argv[2]);
+console.log("patched="+p.first+" stock="+s.first+" fn="+p.fn+" cap="+p.cap);
+' "$PATCHED_0251" "$PATCHED_0251.orig"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"patched=150"* ]]
+    # Stock is 220 here, not 200: the fixture's line carries a longer prefix than the probe's
+    # payload, so the number is whatever the stock body emits. Asserted as "well over the cap and
+    # different from the patched value" rather than as a number I typed from the payload.
+    [[ "$output" == *"patched=150"* ]]
+    [[ "$output" != *"stock=150"* ]]
+}
+
 @test "index patch: the 0.25.1 fixture reads NEEDS on --check (cap renamed, bytecap stock)" {
     # Before this shape was recognised, --check read `bytecap: UNKNOWN` and the apply REFUSED the
     # whole copy ("no known MAX_INDEX_BYTES declaration").  On 0.25.1 the bytecap reads `stock`
