@@ -67,8 +67,13 @@ EOF
     [[ "$(echo "$row" | cut -d'|' -f33)" == "legal" ]]
     local header
     header=$(head -1 "$LLM_REGISTRY")
-    # The header is the schema: pin its TAIL BY NAME, not its field count.
-    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy" ]]
+    # The header is the schema: pin its provenance block BY NAME, in order, and the current
+    # TAIL.  The block is matched without requiring a trailing column — it was the tail once
+    # and 8d144104 appended to it — so a growing schema does not red this, while a reordered
+    # or missing provenance column still does.
+    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy"* ]]
+    # Build identity (card 8d144104) is the tail today: what measured the row, and what it replaced.
+    [[ "$header" == *"|llama_build|llama_build_prev" ]]
 }
 
 @test "ctxbudget-003: window policy classifies the observed profile (pure, no GPU)" {
