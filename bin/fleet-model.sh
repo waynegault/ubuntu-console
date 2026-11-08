@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-11-08): Wayne's ruling — the sweep model is cheaper-inference's
+#       deepseek-v4.1-flash-1017, not the direct deepseek/deepseek-flash lane.
+#       Only the default moved; TAC_SWEEP_PRIMARY still overrides.
 #   v4 (2026-11-07): §18.3 debt — a purpose comment above each function (9.5), one
 #       `warn`/`die` pair instead of five hand-written `>&2` (10.7), and the usage code
 #       annotated (9.7).  No behaviour change: the same text reaches stderr, and a refusal
@@ -11,8 +14,9 @@
 # service is the fleet's PRIMARY model (agents.defaults.model.primary).  Measured 2026-11-06
 # 23:41-23:42: the gateway then logged ECONNREFUSED for cuda-qwen3coder-30b on every subagent
 # run and failover fired each time - a denied lane tried, failed, and only then fell back to
-# deepseek/deepseek-flash.  Wayne's ruling 2026-11-07: during a sweep the fleet USES
-# deepseek-flash, because the GPU lane will be denied to them.
+# the hosted API.  Wayne's ruling 2026-11-07: during a sweep the fleet USES a hosted
+# deepseek lane, because the GPU lane will be denied to them.  Refined 2026-11-08: that
+# lane is cheaper-inference/deepseek-v4.1-flash-1017.
 #
 # The switch is a PLATFORM change, not a config poke: it goes through `openclaw models set`
 # (docs/cli/models.md), the documented writer for the global default.  The previous primary is
@@ -26,7 +30,7 @@ set -uo pipefail
 
 STATE_DIR="${TAC_STATE_DIR:-$HOME/.local/state/tactical-console}"
 STATE="$STATE_DIR/fleet-model.saved"
-SWEEP_PRIMARY="${TAC_SWEEP_PRIMARY:-deepseek/deepseek-flash}"
+SWEEP_PRIMARY="${TAC_SWEEP_PRIMARY:-cheaper-inference/deepseek-v4.1-flash-1017}"
 CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
 
 # warn - the tool's ONE stderr path, so every refusal has the same shape (10.7).
