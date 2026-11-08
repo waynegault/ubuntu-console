@@ -68,17 +68,43 @@ EOS
 exit 1
 EOS
     chmod +x "$TAC_TEST_TMPDIR/bin/pgrep"
-    # The lane-metrics probe is a live HTTP read of :18087 (sanctioned_lane_serving).
-    # Pin it: a real lane serving on the box while the suite runs would otherwise flip
-    # these cases, and the default answers "no metric" so fail-closed is what is tested.
+    # The lane set is LIVE state too: v1.12.0 derives each lane's port from its running
+    # unit, and this box has two (:18087 chat, :18080 embedding). A suite that read them
+    # would pass or fail on what is serving at that moment. Default: no units, which is
+    # also the fallback path (the configured port alone).
+    cat > "$TAC_TEST_TMPDIR/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+# Stub: STUB_LLAMA_UNITS is "<unit> <port>" per line — the CUDA lane set as TEST state.
+case "$*" in
+    *list-units*)
+        [ -n "${STUB_LLAMA_UNITS:-}" ] || exit 0
+        awk '{print $1}' <<<"$STUB_LLAMA_UNITS"
+        ;;
+    *show*--value*)
+        _u="${*: -1}"
+        _p=$(awk -v u="$_u" '$1 == u {print $2}' <<<"${STUB_LLAMA_UNITS:-}")
+        [ -n "$_p" ] || exit 1
+        printf '{ path=/usr/bin/llama-cuda-server ; argv[]=/usr/bin/llama-cuda-server --port %s ; }\n' "$_p"
+        ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/systemctl"
+    # The lane-metrics probe is a live HTTP read (sanctioned_lane_serving). Pin it: a real
+    # lane serving on the box while the suite runs would otherwise flip these cases, and
+    # the default answers "no metric" so fail-closed is what is tested. Per-port bodies,
+    # because v1.12.0 asks EVERY lane: a case makes one serve while another is idle.
     cat > "$TAC_TEST_TMPDIR/bin/curl" <<'EOS'
 #!/usr/bin/env bash
-[ -n "${STUB_METRICS:-}" ] || exit 7
-printf '%s\n' "$STUB_METRICS"
+_url="${*: -1}"; _port="${_url##*:}"; _port="${_port%%/*}"
+_var="STUB_METRICS_${_port}"
+_body="${!_var:-${STUB_METRICS:-}}"
+[ -n "$_body" ] || exit 7
+printf '%s\n' "$_body"
 EOS
     chmod +x "$TAC_TEST_TMPDIR/bin/curl"
     export LLAMA_CUDA_LANE_PORT=18087
-    unset STUB_METRICS
+    unset STUB_METRICS STUB_LLAMA_UNITS
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
     # Extract the real definitions, stopping before the script's own main block.
@@ -262,4 +288,94 @@ llamacpp:requests_processing 1'
     run run_probe
     [ "$status" -eq 0 ]
     [ "$output" = "free reasons=none" ]
+}
+
+# ---------------------------------------------------------------------------------
+# v1.12.0 (card 62fbc8cb) — the serving check covers EVERY CUDA lane on the card.
+#
+# 2026-11-08 03:23:27: the watchdog stopped llama-cuda-qwen3coder-30b-chat on
+# `[probe: util=91%>=15%]` while the chat lane had ZERO requests in flight and the
+# EMBEDDING lane on the same card (:18080) was working — 10 slot events in the half
+# minute before. Arm 2 asked :18087 only, so it answered "not serving" and utilisation
+# alone decided. The narrative call riding on the stopped lane died with it.
+#
+# The port set is DERIVED from each running `llama-cuda-*` unit's ExecStart, so these
+# cases state the property that matters: a lane the probe has never heard of is covered
+# without editing a list.
+# ---------------------------------------------------------------------------------
+
+@test "the card's embedding lane serving suppresses utilisation while the CHAT port is idle (03:23:27)" {
+    _units=$'llama-cuda-qwen3coder-30b-chat.service 18087\n'
+    _units+=$'llama-cuda-qwen3embedding-embed.service 18080'
+    export STUB_LLAMA_UNITS="$_units"
+    export STUB_METRICS_18087='llamacpp:requests_processing 0'
+    export STUB_METRICS_18080='llamacpp:requests_processing 1'
+    export STUB_UTIL=91
+    # No compute-app listing: the state the incident was in, where the residency arm
+    # cannot answer and utilisation is the last word.
+    export STUB_PIDS=""
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == free\ reasons=*"lane-serving:18080"* ]]
+    [[ "$output" == *"util-suppressed:91%"* ]]
+    [[ "$output" != *"busy reasons"* ]]
+}
+
+@test "a lane the probe has never heard of is covered, because the port comes from its unit" {
+    # The property, not the instance: a new lane at a new port needs no edit here or
+    # in the probe — only a running unit that names its own port.
+    export STUB_LLAMA_UNITS=$'llama-cuda-qwen3coder-30b-chat.service 18087\nllama-cuda-newlane-chat.service 18099'
+    export STUB_METRICS_18087='llamacpp:requests_processing 0'
+    export STUB_METRICS_18099='llamacpp:requests_processing 3'
+    export STUB_UTIL=91
+    export STUB_PIDS=""
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == free\ reasons=*"lane-serving:18099"* ]]
+}
+
+@test "a foreign resident still stops the lane even while a sanctioned lane reports a request" {
+    # The falsifier the card names. foreign_apps_busy() runs BEFORE the utilisation arm
+    # and is not suppressed by a serving lane, so widening the serving check can only
+    # ever remove a util-driven stop — never shield a stranger holding the card.
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
+    export STUB_PIDS="$RESIDENT_PID"
+    export STUB_UTIL=91
+    export STUB_LLAMA_UNITS='llama-cuda-qwen3embedding-embed.service 18080'
+    export STUB_METRICS_18080='llamacpp:requests_processing 1'
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"foreign-app pid=$RESIDENT_PID"* ]]
+    [[ "$output" != *"lane-serving"* ]]
+}
+
+@test "no unit listing degrades to the configured port alone (the 1.11.0 behaviour)" {
+    # Fail-closed direction: an unreadable unit set contributes nothing, and the
+    # configured port is still asked — so the worst case is the single-port probe
+    # this replaces, never a silent FREE.
+    export STUB_LLAMA_UNITS=""
+    export STUB_METRICS_18087='llamacpp:requests_processing 0'
+    export STUB_UTIL=91
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"busy reasons=util=91%"* ]]
+    [[ "$output" != *"lane-serving"* ]]
+}
+
+@test "a unit whose ExecStart names no port contributes nothing" {
+    # Ports are parsed, never assumed: a lane started without --port must not make the
+    # probe ask a guessed port, where an unrelated listener could answer for us.
+    export STUB_LLAMA_UNITS='llama-cuda-noport-chat.service noport'
+    export STUB_METRICS_18087='llamacpp:requests_processing 0'
+    export STUB_UTIL=91
+
+    run run_probe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"busy reasons=util=91%"* ]]
+    [[ "$output" != *"lane-serving"* ]]
 }

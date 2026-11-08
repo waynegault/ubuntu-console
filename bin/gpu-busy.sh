@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.12.0 (2026-11-08: the serving check asks EVERY CUDA lane on the card, not one
+#          port.  Measured 03:23:27 (card 62fbc8cb) — `util=91%>=15%` was the only reason
+#          recorded while the CHAT lane was idle and the EMBEDDING lane on the SAME card
+#          (:18080) was working, so both suppressions failed, utilisation alone decided, and
+#          the watchdog stopped the chat lane mid-call — the Memory Dreaming narrative riding
+#          on it died with it.  Arm 2 asked only SANCTIONED_LANE_PORT (:18087).  The ports now
+#          come from each RUNNING `llama-cuda-*` unit's own ExecStart, so a lane added or
+#          renumbered is covered without editing a list — the listed-scope defect this card
+#          names.  Fail-closed direction unchanged: an unreadable unit listing contributes
+#          nothing and the configured port is always asked, so the worst case is exactly
+#          1.11.0's single-port behaviour.
 # Version: 1.11.0 (2026-11-06: the busy line now CARRIES the match, not just its class.
 #          `declared:<class>` stays the first token, so every existing consumer and test
 #          keeps working; it continues `pid=… rule=exe|argv-after:<interp> argv=<one line>`.
@@ -101,7 +112,9 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-11-08): the serving check asks every CUDA lane on the card (card 62fbc8cb) —
+#     see the 1.12.0 entry at the top of this file.  No other behaviour changes.
 #   v20 (2026-11-06): the declared reason is assembled in a variable instead of one
 #     123-character array element (18.3 8.1.8).  NOT done by splitting the element across two
 #     lines: inside arr=( ... ) a newline SEPARATES words, so that split produced two elements and
@@ -226,12 +239,44 @@ libcuda_shadowed() {
 # read only by utilisation_arm() AFTER it has decided the card is free, so neither can
 # ever contribute to a stop.
 RESIDENCY_EMPTY=0   # nvidia-smi listed no compute app at all
-LANE_SERVING=0      # the sanctioned lane answered >=1 processing request
+LANE_SERVING=0      # some sanctioned lane on this card answered >=1 processing request
+LANE_SERVING_PORT=""  # WHICH lane answered — the audit line names it, not just "a lane"
 SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
 
-# sanctioned_lane_serving -- 0 when the sanctioned CUDA lane is processing a request
-# right now.  Asked only from the utilisation arm, where the residency read already
-# failed to name a resident: without this, a serving lane's own prefill is the
+# _sanctioned_lane_ports -- echo the port of every RUNNING CUDA lane on this card,
+# derived from the units rather than listed here.
+#
+# One port was not enough (2026-11-08 03:23:27, card 62fbc8cb).  The serving check
+# asked :18087 only, the CHAT lane; it was idle while the EMBEDDING lane on the same
+# card (:18080) was working, so the arm answered "not serving", utilisation alone
+# decided BUSY, and the watchdog stopped a lane that was not the one using the card —
+# taking the narrative call riding on it with it.  A hand-written port list would
+# repeat that defect the first time a lane is added or renumbered, so each unit's own
+# ExecStart is the source.  `llama-cuda-*` is scoped to THIS card: the CPU and Xe
+# tiers are different devices, and asking their ports could suppress a stop for a
+# foreign tenant of this one.
+#
+# Always prints the configured port first, so an unreadable unit listing (no systemd
+# user manager, a stub in a test, a lane not yet installed) degrades to exactly the
+# single-port behaviour this replaces — the fail-closed direction is unchanged.
+_sanctioned_lane_ports() {
+    local _u _p _units
+    printf '%s\n' "$SANCTIONED_LANE_PORT"
+    # swallow-ok: no user manager -> no derived ports, never an abort
+    _units=$(systemctl --user list-units --type=service --state=running 'llama-cuda-*' \
+                 --no-legend 2>/dev/null | awk '{print $1}')
+    while IFS= read -r _u; do
+        [[ -n "$_u" ]] || continue
+        # swallow-ok: an unreadable unit yields no port, and the configured port is still asked
+        _p=$(systemctl --user show -p ExecStart --value "$_u" 2>/dev/null \
+             | sed -n 's/.*--port[= ]\([0-9]\{1,5\}\).*/\1/p' | head -1)
+        [[ "$_p" =~ ^[0-9]+$ ]] && printf '%s\n' "$_p"
+    done <<< "$_units"
+}
+
+# sanctioned_lane_serving -- 0 when ANY sanctioned CUDA lane on this card is processing
+# a request right now.  Asked only from the utilisation arm, where the residency read
+# already failed to name a resident: without this, a serving lane's own prefill is the
 # evidence used to stop it (2026-11-02 00:13:53).
 #
 # The signal is read from the SERVER, not from the device: llama-server publishes
@@ -240,21 +285,31 @@ SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
 # mid-prefill reports >=1 for the whole request, which is exactly the window the
 # 00:13:53 stop landed in.
 #
+# Every lane is asked, not just the one this probe grew up around: the card is shared,
+# so "the chat lane is idle" says nothing about whether OUR work is what the card is
+# busy with.  The set comes from _sanctioned_lane_ports(), never from a list here.
+#
 # Fail-closed is preserved in the direction that matters: an unreachable or
-# unparseable metric answers "not serving", so utilisation still decides BUSY the
-# way it always did.  This function can only ever REMOVE a stop, never add one.
+# unparseable metric answers "not serving" for that lane, so utilisation still decides
+# BUSY the way it always did.  This function can only ever REMOVE a stop, never add one.
 sanctioned_lane_serving() {
-    local out n
+    local out n port
     LANE_SERVING=0
-    [[ "$SANCTIONED_LANE_PORT" =~ ^[0-9]+$ ]] || return 1
-    out=$(curl -s --max-time 2 "http://127.0.0.1:${SANCTIONED_LANE_PORT}/metrics" 2>/dev/null) || return 1
-    [[ -n "$out" ]] || return 1
-    n=$(awk '$1 == "llamacpp:requests_processing" {print $2; exit}' <<<"$out")
-    [[ "$n" =~ ^[0-9]+$ ]] || return 1
-    (( n > 0 )) || return 1
-    # Recorded for the free-path audit line only; the return value alone decides.
-    LANE_SERVING=1
-    return 0
+    LANE_SERVING_PORT=""
+    while IFS= read -r port; do
+        [[ "$port" =~ ^[0-9]+$ ]] || continue
+        # swallow-ok: an unreachable lane is "not serving", which leaves utilisation deciding
+        out=$(curl -s --max-time 2 "http://127.0.0.1:${port}/metrics" 2>/dev/null) || continue
+        [[ -n "$out" ]] || continue
+        n=$(awk '$1 == "llamacpp:requests_processing" {print $2; exit}' <<<"$out")
+        [[ "$n" =~ ^[0-9]+$ ]] || continue
+        (( n > 0 )) || continue
+        # Recorded for the free-path audit line only; the return value alone decides.
+        LANE_SERVING=1
+        LANE_SERVING_PORT="$port"
+        return 0
+    done < <(_sanctioned_lane_ports)
+    return 1
 }
 
 # util_peak — echo the highest utilisation reading, 1 when the probe failed.
@@ -296,7 +351,9 @@ util_busy() {
 # busy. Two suppressions, both of which MUST be recorded on the free path (v1.9.1):
 #   * every compute-app resident is a sanctioned server, so the utilisation is our own
 #     lane's work; or
-#   * the sanctioned lane reports a request in flight, so the utilisation is its prefill.
+#   * a sanctioned lane on this card reports a request in flight, so the utilisation is
+#     our own work — WHICH lane is named, since "some lane was serving" was not enough
+#     to read the 2026-11-08 03:23:27 stop afterwards (v1.12.0).
 # A quiet card records nothing: with utilisation below the threshold there is nothing
 # to attribute and an annotation would be noise on every idle poll.
 utilisation_arm() {
@@ -315,7 +372,7 @@ utilisation_arm() {
     [[ "$m" =~ ^[0-9]+$ ]] || return 1
     (( m >= UTIL_THRESHOLD )) || return 1
     (( RESIDENCY_EMPTY )) && REASONS+=("cannot-attribute:residency-empty")
-    (( LANE_SERVING )) && REASONS+=("lane-serving")
+    (( LANE_SERVING )) && REASONS+=("lane-serving:${LANE_SERVING_PORT}")
     REASONS+=("util-suppressed:${m}%>=${UTIL_THRESHOLD}%")
     return 1
 }
