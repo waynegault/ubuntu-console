@@ -575,7 +575,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2658 total tests: 1838 BATS + 820 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2659 total tests: 1839 BATS + 820 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
 
 ### Running Tests
 
@@ -1325,7 +1325,7 @@ where it was last present.)
 │   ├── test_report.py                 # Tests for kgraph.report
 │   ├── test_update.py                 # Tests for kgraph.update
 │   ├── test_validate.py               # Tests for kgraph.validate
-│   ├── unit/                          # BATS unit tests (1208 tests: 46+43+14+7+5+6+54+4+12+10+7+49+49+24+6+1+9+10+2+3+3+20+14+50+41+9+33+6+8+11+8+3+4+6+13+36+29+16+9+17+13+6+4+4+6+3+13+4+5+4+13+2+10+16+1+8+5+10+28+34+11+5+7+2+11+36+28+2+11+8+8+10+6+4+5+17+4+10+5+4+3+3+13+28+1+4+14+9+7+10+6+6+4+10+9)
+│   ├── unit/                          # BATS unit tests (1208 tests: 46+43+14+7+5+6+54+4+12+10+7+49+49+24+6+1+9+10+2+3+3+20+14+50+41+9+33+6+8+11+8+3+4+6+13+36+29+16+9+17+13+6+4+4+6+3+13+4+5+4+13+2+10+17+1+8+5+10+28+34+11+5+7+2+11+36+28+2+11+8+8+10+6+4+5+17+4+10+5+4+3+3+13+28+1+4+14+9+7+10+6+6+4+10+9)
 │   └── integration/                   # BATS integration tests (164 tests: 14+50+10+58+3+29)
 ├── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
