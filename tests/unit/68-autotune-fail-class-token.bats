@@ -145,14 +145,27 @@ classify_with() {
         "no such file or directory"
         "check_tensor_dims: tensor blk.0.attn_q.weight has wrong shape; expected 8192, got 4096"
     )
-    local s
+    local s want
     for s in "${shapes[@]}"; do
         printf '%s\n' "$s" > "$LOG"
         # Through the WRITER with no carried token: this is the load_fail arm's
         # claim tested as the claim it is, not as a mapping.
         run classify_with ""
         [ "$status" -eq 0 ] || return 1
-        [ "$output" = "launch_error" ] || { echo "not re-derivable: $s -> $output"; return 1; }
+        # The class is pinned PER SHAPE, because 2026-11-09 moved one of them.  A tensor
+        # the loader names and the file disagrees about is the FILE/LOADER disagreement,
+        # not a launch error: _re_vintage in autotune-model.sh now matches
+        # `check_tensor_dims|wrong shape`, because launch_error is MODEL-attributable and
+        # two such launches would have archived 67 GiB of intact weights over a naming
+        # difference (measured on GLM-5.3-Flash-REAP50-IQ3_M.gguf).  What this case exists
+        # for is unchanged: every shape is RE-DERIVABLE to a named class, and none of them
+        # becomes an architecture verdict.
+        case "$s" in
+            *check_tensor_dims*) want=loader_vintage ;;
+            *)                   want=launch_error ;;
+        esac
+        [ "$output" = "$want" ] || { echo "not re-derivable: $s -> $output (want $want)"; return 1; }
+        [ "$output" != "unsupported_arch" ] || { echo "architecture verdict from a load shape: $s"; return 1; }
     done
 }
 
