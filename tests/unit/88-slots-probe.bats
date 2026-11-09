@@ -247,6 +247,104 @@ EOS
     [ "$status" -eq 0 ]
 }
 
+@test "slots-probe: a cold card is warmed through the lane before the gate judges it" {
+    # Measured 2026-11-09 17:31: the clock term alone DEADLOCKS.  The card sat at 650 of
+    # 3,003 MHz with nothing using it, so the gate refused every run and the sweep could never
+    # start on the quiet box it requires.  Catches: a gate that refuses a cold card and offers
+    # no way to warm it — the state this probe was actually in for four runs.
+    awk '/^_warm_clock\(\)/,/^}/' "$PROBE" > "$TMP/warm.sh"
+    grep -q '_warm_clock' "$TMP/warm.sh" || { echo "helper not found"; return 1; }
+    cat > "$TMP/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+printf 'curl\n' >> "$CURL_LOG"
+exit "${CURL_RC:-0}"
+EOS
+    chmod +x "$TMP/bin/curl"
+    : > "$TMP/curl.log"
+    : > "$TMP/clock.n"
+    # The clock is read in a COMMAND SUBSTITUTION, so a counter held in a shell variable would
+    # reset on every read and never rise; the counter lives in a file.  sleep is stubbed so the
+    # case costs nothing and cannot depend on how fast the box is.
+    run env PATH="$TMP/bin:$PATH" CURL_LOG="$TMP/curl.log" CLOCK_N="$TMP/clock.n" bash -c '
+        source "$1"; PORT=18087
+        warn() { printf "%s\n" "$*" >&2; }
+        sleep() { :; }
+        _gpu_clock_mhz() {
+            local n
+            n=$(( $(cat "$CLOCK_N" 2>/dev/null || echo 0) + 1 ))
+            printf "%s\n" "$n" > "$CLOCK_N"
+            if (( n == 1 )); then printf "650 3003"; else printf "2496 3003"; fi
+        }
+        _warm_clock 90' _ "$TMP/warm.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"card warm at 2496 MHz of 3003"* ]]
+    # The warm-up must go through the LANE: three short completions, not a foreign GPU job that
+    # would have to be explained to the heavy-job lock.
+    [ "$(grep -c curl "$TMP/curl.log")" -eq 3 ]
+}
+
+@test "slots-probe: a cold card with no lane serving fails fast instead of polling" {
+    # Catches: 90 s of polling a clock nothing on this box can raise, which turns a clear
+    # refusal ("the lane is down") into a hang that reads as a stuck probe.
+    awk '/^_warm_clock\(\)/,/^}/' "$PROBE" > "$TMP/warm2.sh"
+    cat > "$TMP/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+printf 'curl\n' >> "$CURL_LOG"
+exit 7
+EOS
+    chmod +x "$TMP/bin/curl"
+    : > "$TMP/curl2.log"
+    run env PATH="$TMP/bin:$PATH" CURL_LOG="$TMP/curl2.log" bash -c '
+        source "$1"; PORT=18087
+        warn() { printf "%s\n" "$*" >&2; }
+        sleep() { printf "slept\n" >&2; }
+        _gpu_clock_mhz() { printf "650 3003"; }
+        _warm_clock 90' _ "$TMP/warm2.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no lane answered on port 18087"* ]]
+    # One clock read, then the refusal: no waiting on a card nothing is using.
+    [[ "$output" != *"slept"* ]]
+}
+
+@test "slots-probe: main warms a cold card and then refuses when the warming fails" {
+    # The WIRING case.  The two cases above prove _warm_clock works; this one proves main()
+    # CALLS it — the actual deadlock (a helper written, tested and never invoked).  A cold card
+    # and a lane that cannot answer must end in one refusal that names the clock, after exactly
+    # one warm-up attempt.  Every other gate term is pinned out of the way: a huge core count
+    # removes the load term and a 100% pressure threshold removes the PSI term, so the clock is
+    # the SOLE term and the warm-up path is the one under test.
+    cat > "$TMP/bin/nproc" <<'EOS'
+#!/usr/bin/env bash
+printf '512\n'
+EOS
+    cat > "$TMP/bin/pgrep" <<'EOS'
+#!/usr/bin/env bash
+exit 1
+EOS
+    cat > "$TMP/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+printf '650, 3003\n'
+EOS
+    cat > "$TMP/bin/curl" <<'EOS'
+#!/usr/bin/env bash
+printf 'curl\n' >> "$CURL_LOG"
+exit 7
+EOS
+    chmod +x "$TMP/bin/nproc" "$TMP/bin/pgrep" "$TMP/bin/nvidia-smi" "$TMP/bin/curl"
+    : > "$TMP/curl.log"
+    run env PATH="$TMP/bin:$PATH" SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CURL_LOG="$TMP/curl.log" \
+        LLM_AUTOTUNE_PSI_MAX_PCT=100 LLM_SLOTS_PROBE_CLOCK_MIN_PCT=60 \
+        bash "$PROBE" --unit llama-cuda-qwen3coder-30b-chat.service
+    [ "$status" -eq 1 ]
+    # It noticed the cold card and tried to warm it before refusing.
+    [[ "$output" == *"the card is cold"* ]]
+    [ "$(grep -c curl "$TMP/curl.log")" -eq 1 ]
+    [[ "$output" == *"no lane answered"* ]]
+    [[ "$output" == *"SM clock 650 MHz of 3003"* ]]
+    # And it refused WITHOUT measuring: nothing was stopped or started.
+    ! grep -qE '(^| )stop( |$)|(^| )start( |$)' "$SYSTEMCTL_LOG"
+}
+
 @test "slots-probe: the summary reports aggregate and per-stream, and NOT-RUN for a missing arm" {
     # Catches: an arm that never measured being printed as a slot count that measured badly.
     mkdir -p "$TMP/out"

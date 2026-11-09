@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 7
+#   v7 (2026-11-09): the clock term gets a WARM-UP, because on its own it deadlocks.  Measured
+#       17:31: the card sat at 650 of 3,003 MHz with nothing using it, so the gate refused every
+#       attempt and the sweep could never run on the quiet box it requires.  _warm_clock now sends
+#       three short completions through the lane that is ALREADY serving (before the probe stops
+#       it) and polls the clock to the floor, bounded at 90 s; the gate then judges a warm card.
+#       Best-effort by design: a lane that is down, or a card that stays cold, still reaches the
+#       gate, which refuses with its own reason rather than measuring a cold card.
 # Module Version: 6
 #   v6 (2026-11-09): the quiet gate gains a CLOCK term.  The 15:14 run was clean on every other
 #       term — load 1.90, no CI worker, not a byte of foreign CPU pressure — and still measured
@@ -243,6 +251,51 @@ _gpu_clock_mhz() {
     _line="$_raw"
     [[ "$_line" =~ ^([0-9]+),([0-9]+)$ ]] || return 0
     printf '%s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+
+# _warm_clock [secs] — bring the card up to the clock floor BEFORE the gate judges it.
+#
+# WHY (measured 2026-11-09 17:31): the clock term alone deadlocks.  An idle card sits at 650 of
+# 3,003 MHz, nothing else on this box uses the GPU, and the gate refuses before the probe starts
+# — so the sweep could never run on a quiet box, which is the only box it may run on.  The card
+# warms when the LANE serves, so the warm-up goes through the lane that is already up, before the
+# probe stops it.  Best-effort: a lane that is down, or a card that stays cold, is left to the
+# gate, which then refuses with its own reason.
+_warm_clock() {
+    local _bound="${1:-90}" _floor="${LLM_SLOTS_PROBE_CLOCK_MIN_PCT:-60}"
+    local _waited=0 _clk _sm _max _i _served=0
+    for _i in 1 2 3; do
+        # swallow-ok: a lane that is down cannot be warmed, and _served below decides that
+        if curl -fsS --max-time 30 "http://127.0.0.1:${PORT}/v1/chat/completions" \
+            -H 'Content-Type: application/json' \
+            -d '{"messages":[{"role":"user","content":"warm"}],"max_tokens":32,"temperature":0}' \
+            >/dev/null 2>&1; then
+            _served=1
+        else
+            break
+        fi
+    done
+    while (( _waited < _bound )); do
+        _clk="$(_gpu_clock_mhz)"
+        [[ -n "$_clk" ]] || return 0
+        read -r _sm _max <<< "$_clk"
+        if (( _max > 0 )) && awk -v s="$_sm" -v m="$_max" -v p="$_floor" \
+             'BEGIN{exit !(s * 100 >= m * p)}'; then
+            printf 'slots-probe: card warm at %s MHz of %s after %ss\n' "$_sm" "$_max" "$_waited"
+            return 0
+        fi
+        # ONE clock read before giving up on a silent lane: the card may already be warm from a
+        # job that just finished, but nothing this probe can do will raise a clock when the lane
+        # is not serving — polling for 90 s would only delay the refusal.
+        if (( _served == 0 )); then
+            warn "no lane answered on port ${PORT} — nothing can warm the card"
+            return 1
+        fi
+        sleep 5
+        _waited=$(( _waited + 5 ))
+    done
+    warn "the card stayed cold for ${_bound}s of warming through the lane"
+    return 1
 }
 
 # _quiet_verdict — may this run measure?  Prints a reason and returns 1 when the box is not
@@ -491,8 +544,24 @@ main() {
     # or whose group windows are shorter than the load that ended before they began, is a
     # number the run's own state invalidated.  Refuse and name the term — never measure anyway
     # and report it as if clean.
+    #
+    # A COLD CARD is the one refusal this probe can clear itself, so it gets a warm-up rather
+    # than a dead end (measured 17:31: 650 of 3,003 MHz with nothing using the card, so every
+    # run refused and the sweep could never start).  Only when the clock is the SOLE term:
+    # warming beside foreign load, or beside a CI worker, spends 90 s on a run that still
+    # refuses.
     local _why=""
     if ! _why="$(_quiet_verdict)"; then
+        if [[ "$_why" == "SM clock"* && "$_why" != *"; "* ]]; then
+            warn "the card is cold (${_why}) — warming it through the serving lane"
+            if _warm_clock 90; then
+                # A failing verdict still PRINTS its reason, so _why carries the term either
+                # way; an empty _why here means the warm-up cleared the only term that refused.
+                _why="$(_quiet_verdict)"
+            fi
+        fi
+    fi
+    if [[ -n "$_why" ]]; then
         warn "FATAL: this box is not quiet — ${_why}.  Not measuring."
         warn "  Wait for the job to clear (bin/heavy-job --status) and re-run; a swept row"
         warn "  measured on a busy box is worse than no row."
