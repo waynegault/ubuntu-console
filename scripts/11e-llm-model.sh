@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 109
+#   v109 (2026-11-09): a taken rollback name no longer blocks the build.  The move must not `mv`
+#   onto an existing directory (it nests and exits 0), so an existing `${build_dir}.prev-<commit>`
+#   was a hard refusal - and one interrupted build leaves its tree undated, so every retry then
+#   tried the SAME taken name and refused (measured 2026-11-09: a compile killed at 15:09 stopped
+#   the rebuild until the name was cleared by hand).  The next free `-2`, `-3` suffix is used
+#   instead: nothing overwritten, nothing nested, nothing deleted.
 # Module Version: 108
 #   v108 (2026-11-09): `llm-build`'s fresh-tree rule dates the TREE, not only the pull.  v107 moved
 #   the tree when `HEAD..@{u}` reached LLAMA_BUILD_FRESH_AT - which answers "how far is the source
@@ -5417,13 +5424,21 @@ function llm-build() {
                 why="${tree_behind}-commit tree lag"
             fi
         fi
-        local prev_dir
-        # swallow-ok: an unreadable HEAD names the tree "unknown"; the move still has one target
-        prev_dir="${build_dir}.prev-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        local prev_dir="${build_dir}.prev-${head_short:-unknown}"
         if [[ -e "$prev_dir" ]]
         then
-            __tac_info "Error" "rollback target exists (${prev_dir}) - refusing rather than nesting the move" "$C_Error"
-            return 1
+            # An earlier run at this same commit already owns the rollback name.  Refusing there
+            # blocks every later build after ONE interrupted run: a killed compile leaves the tree
+            # undated, so the next run moves it again onto a taken name (measured 2026-11-09, when
+            # a session kill stopped a compile and every retry then refused).  Take the next free
+            # suffix instead - still no nesting, still nothing deleted.
+            local _suffix=2
+            while [[ -e "${prev_dir}-${_suffix}" ]]
+            do
+                _suffix=$(( _suffix + 1 ))
+            done
+            prev_dir="${prev_dir}-${_suffix}"
+            __tac_info "Fresh" "rollback name taken; using ${prev_dir}" "$C_Dim"
         fi
         mv "$build_dir" "$prev_dir" || {
             __tac_info "Error" "could not move ${build_dir} aside" "$C_Error"; return 1

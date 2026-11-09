@@ -633,3 +633,30 @@ _prev_trees() {
     [[ "$out" == *"moved the build tree aside (tree has no readable build commit)"* ]]
     [ ! -e "$LLAMA_ROOT/build/OLD-TREE" ]
 }
+
+@test "llm-build: a taken rollback name takes the next suffix instead of refusing (v109)" {
+    # Catches: the refusal that blocked every retry after ONE interrupted build.  A killed compile
+    # leaves the tree undated, so the next run moves it again onto the name the previous run already
+    # took - measured 2026-11-09.  Nothing may be overwritten or nested: the existing rollback keeps
+    # its own contents and the new move lands beside it.
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m fixture
+    local head; head="$(git -C "$LLAMA_ROOT" rev-parse --short HEAD)"
+    mkdir -p "$LLAMA_ROOT/build.prev-${head}"
+    printf 'earlier rollback\n' > "$LLAMA_ROOT/build.prev-${head}/KEEP-ME"
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --no-pull --fresh --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"Done"* ]]
+    [[ "$out" != *"rollback target exists"* ]]
+    [[ "$out" == *"using $LLAMA_ROOT/build.prev-${head}-2"* ]]
+    [ -f "$LLAMA_ROOT/build.prev-${head}-2/OLD-TREE" ]
+    [ -f "$LLAMA_ROOT/build.prev-${head}/KEEP-ME" ]
+    [ ! -e "$LLAMA_ROOT/build.prev-${head}/OLD-TREE" ]
+}

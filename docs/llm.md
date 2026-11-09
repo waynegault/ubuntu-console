@@ -2039,6 +2039,13 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > `LLAMA_BUILD_FRESH_AT` moves it, and a tree that cannot name its commit — no binary, or a banner
 > that does not parse — counts as stale. `--no-pull` no longer disables the rule; it only removes
 > the pull's contribution to the measurement.
+>
+> **v109: a taken rollback name takes the next suffix.** The move cannot `mv` onto an existing
+> directory (it nests and exits 0), so `${build_dir}.prev-<commit>` used to be a hard refusal. One
+> interrupted build then blocked every retry, because its undated tree is moved again onto the same
+> name — measured 2026-11-09, when a compile killed mid-run left the rebuild refusing until the name
+> was cleared by hand. The next free `-2`, `-3` suffix is used instead; nothing is overwritten,
+> nested or deleted.
 
 ---
 
