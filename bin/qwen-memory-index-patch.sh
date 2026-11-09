@@ -138,7 +138,31 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-11-09): EIGHTH HUNK (corefilter + coreflag), card MEMORY-INDEX-CORE-001. The index
+#   was a FULL ENUMERATION: every note was one line in every session's context (measured
+#   2026-11-05: user store 183 entries / 24,813 units; project store 200 / 28,283 with 152 notes
+#   never listed). Wayne's 2026-11-05 ruling: 1a core is the EXPLICIT `index: core` flag only (no
+#   type defaults), 2a the pointer line names a command, a count and the directory, 3a apply now.
+#   TWO chunks, because the frontmatter parser is not in the builder's chunk (0.26.8:
+#   parseAutoMemoryTopicDocument in chunk-FUBDS3AV.js, the builders in chunk-QAEZSJL6.js) -- the
+#   same split that made scancap its own hunk:
+#     * coreflag (scanner): the parsed document gains `core:stringValue(parsedFrontmatter["index"])
+#       ==="core"`. The flag CANNOT be read at render time: the builder receives parsed documents,
+#       and `index:` is dropped by the parser. Unknown frontmatter keys are already ignored by
+#       validateStructuredAutoMemoryDocument, so no note is invalidated and no migration is forced.
+#     * corefilter (builder): buildManagedAutoMemoryIndex and buildTeamAutoMemoryIndex emit only
+#       `doc.core` documents, then append ONE pointer line. The filter is in the two BUILDERS, not
+#       in docIndexLine: structured recall and search also call docIndexLine and must keep seeing
+#       every note.
+#   ZERO-CORE FALLBACK, and why it is not optional. Every store on this box carries 0 marked notes
+#   (measured 2026-11-09: 177/231/116/35/157/13 note files, 0 with `index: core`). Landing the
+#   filter alone would collapse every catalog to one pointer line -- a silent loss of exactly the
+#   kind this card exists to prevent. So a store with NO core note renders the FULL ENUMERATION
+#   plus a warning that names the store: an unmarked store is REPORTED, never emptied. A store
+#   with at least one core note filters, and the pointer line is the only route to the rest.
+#   THE COST, NAMED: retrieval now depends on the agent searching, so the pointer line is
+#   asserted as CONTENT (count, directory and command), not as a line count.
 #   v14 (2026-11-09): CAP RAISE 400 -> 500 (Wayne's ruling "A"), and every hunk's `applied` test
 #   now reads the value it sets instead of a label. The user store hit 178 notes at 2.00/h, which
 #   reaches 400 on 2026-11-14T13:12Z -- before the standing 2026-11-15 review -- so both caps move
@@ -279,6 +303,15 @@ MARKER_BYTES="LOCAL PATCH 2026-10-01 (qwen-memory-index-bytecap)"
 MARKER_TITLE="LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap)"
 MARKER_LINES="LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap)"
 MARKER_SCAN="LOCAL PATCH 2026-11-06 (qwen-memory-index-scancap)"
+MARKER_CORE="LOCAL PATCH 2026-11-09 (qwen-memory-index-corefilter)"
+MARKER_COREFLAG="LOCAL PATCH 2026-11-09 (qwen-memory-index-coreflag)"
+
+# Hunk 8's two anchors, kept short and distinctive for state DETECTION only. The PROPERTY (the
+# filter is wired, the flag is parsed) decides `applied`, never these strings -- the lesson of
+# 2026-10-25, when three marker-only copies reported green over stock constants.
+STOCK_MANAGED_BUILDER='return assembleIndex(ordered.map(doc=>docIndexLine(doc))'
+STOCK_TEAM_BUILDER='return assembleIndex(groupTeamDocsByDescription(docs)'
+STOCK_SCANNER_TAIL='body:bodyContent.trim(),mtimeMs}}'
 
 # Hunk 6 lives in a DIFFERENT chunk from the builder (0.26.5/0.26.8: the scanner is
 # chunk-FUBDS3AV.js, the builder is chunk-QAEZSJL6.js), so it is selected and checked in its
@@ -1150,7 +1183,8 @@ new, n = re.subn(
 )
 if n != 1:
     raise SystemExit(
-        f"refusing to patch: a patchable MAX_SCANNED_MEMORY_FILES anchor ({'|'.join(anchors)}) occurred {n} times (expected 1)"
+        f"refusing to patch: a patchable MAX_SCANNED_MEMORY_FILES anchor "
+        f"({'|'.join(anchors)}) occurred {n} times (expected 1)"
     )
 
 # Post-conditions: the value is raised, there is exactly one declaration, and the marker is on it.
@@ -1302,6 +1336,286 @@ PATCHPY
 
     if node --check "$f"; then
         echo "  patched  linebudget ($name; syntax verified)"
+    else
+        echo "  BROKEN   $name - rolling back from ${backup/#$HOME/~}" >&2
+        cp -p "$backup" "$f"
+        rc=1
+    fi
+done
+
+# ------------------------------------------------------------------------------
+# Hunk 8a (coreflag): the SCANNER keeps the `index:` key.
+#
+# WHY IT CANNOT BE READ AT RENDER TIME (measured 2026-11-06 on 0.26.8). The builder receives
+# already-parsed documents; parseAutoMemoryTopicDocument returns a fixed object
+# {scope,type,filePath,relativePath,filename,title,description,category,keywords,usageScenarios,
+# body,mtimeMs} and DROPS every unknown frontmatter key. So `index: core` is invisible to
+# docIndexLine no matter what the builder does. The flag is therefore carried on the document, at
+# the one place that still holds the raw frontmatter -- the same chunk split that made scancap a
+# separate hunk (parser in chunk-FUBDS3AV.js, builder in chunk-QAEZSJL6.js).
+#
+# SAFE ON EXISTING NOTES: validateStructuredAutoMemoryDocument ignores unknown keys, so a note
+# without the key still validates, and one with it gains a field nobody else reads.
+# ------------------------------------------------------------------------------
+for f in "${scan_files[@]}"; do
+    name="${f/#$HOME/~}"
+
+    st_coreflag="UNKNOWN"
+    if grep -qF 'parsedFrontmatter["index"]' "$f"; then st_coreflag="applied"
+    elif grep -qF "$MARKER_COREFLAG" "$f"; then st_coreflag="counterfeit"
+    elif grep -qF "$STOCK_SCANNER_TAIL" "$f"; then st_coreflag="stock"; fi
+
+    if [[ "$st_coreflag" == "UNKNOWN" ]]; then
+        echo "  skip     $name (coreflag: no parseAutoMemoryTopicDocument tail in this chunk)"
+        continue
+    fi
+    if [[ "$st_coreflag" == "applied" ]]; then
+        echo "  ok       $name (coreflag: applied)"
+        continue
+    fi
+    if (( check_only )); then
+        echo "  NEEDS    $name (coreflag: $st_coreflag)" >&2
+        rc=1
+        continue
+    fi
+
+    backup="$f.orig"
+    if [[ ! -f "$backup" ]]; then
+        cp -p "$f" "$backup"
+        echo "  backup   ${backup/#$HOME/~}"
+    fi
+
+    if ! PATCH_FILE="$f" PATCH_MARKER_COREFLAG="$MARKER_COREFLAG" "$PYTHON_BIN" - <<'PY'
+import os, pathlib
+
+p = pathlib.Path(os.environ["PATCH_FILE"])
+marker = os.environ["PATCH_MARKER_COREFLAG"]
+src = p.read_text(encoding="utf-8")
+
+# The anchor is the parser's RETURN OBJECT TAIL, matched exactly once. It is the last field of the
+# returned literal, so the flag is appended beside `mtimeMs` rather than replacing anything.
+stock = "body:bodyContent.trim(),mtimeMs}}"
+if src.count(stock) != 1:
+    raise SystemExit(
+        f"refusing to patch: the parser return tail occurs {src.count(stock)} times (expected 1)"
+    )
+new = (
+    'body:bodyContent.trim(),mtimeMs,'
+    'core:stringValue(parsedFrontmatter["index"])==="core"'
+    "/*" + marker + "*/}}"
+)
+out = src.replace(stock, new)
+
+# Post-conditions: the flag is present exactly once, the stock tail is gone, and the parser still
+# returns mtimeMs (the patch appends; it must not swallow the field it anchored on).
+if out.count('core:stringValue(parsedFrontmatter["index"])==="core"') != 1:
+    raise SystemExit("refusing to patch: the core flag is not present exactly once in the result")
+if stock in out:
+    raise SystemExit("refusing to patch: the stock parser tail is still present in the result")
+if out.count("mtimeMs") < 1:
+    raise SystemExit("refusing to patch: mtimeMs vanished from the result")
+if out.count("function parseAutoMemoryTopicDocument(") != 1:
+    raise SystemExit("refusing to patch: the parser definition count is not 1 in the result")
+
+p.write_text(out, encoding="utf-8")
+PY
+    then
+        echo "  MISMATCH $name - the parser tail anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
+        rc=1
+        continue
+    fi
+
+    if node --check "$f"; then
+        echo "  patched  coreflag ($name; syntax verified)"
+    else
+        echo "  BROKEN   $name - rolling back from ${backup/#$HOME/~}" >&2
+        cp -p "$backup" "$f"
+        rc=1
+    fi
+done
+
+# ------------------------------------------------------------------------------
+# Hunk 8b (corefilter): the BUILDERS emit only core notes, plus ONE pointer line.
+#
+# Wayne's 2026-11-05 ruling, card MEMORY-INDEX-CORE-001: 1a core is the EXPLICIT `index: core`
+# flag only -- no default is inferred from `type`; 2a the pointer line names a command, a count and
+# the directory: `N more notes in <store dir> - find them with: rg -li '<term>'`.
+#
+# WHY THE FILTER IS IN THE BUILDERS AND NOT IN docIndexLine: structured recall and search also
+# call docIndexLine, and they must keep seeing every note. Filtering there would make a note
+# unfindable by the very mechanism that replaces the catalog.
+#
+# ZERO-CORE FALLBACK -- THE LOAD-BEARING HALF. Measured 2026-11-09: every store on this box holds
+# 0 notes carrying `index: core` (177 / 231 / 116 / 35 / 157 / 13 note files, 0 marked). Shipping
+# the filter without this would collapse every catalog to a single pointer line on the next
+# rebuild -- a silent loss of exactly the kind the flag exists to prevent. A store with NO core
+# note therefore renders the FULL ENUMERATION plus a warning that names the store: unmarked is
+# REPORTED, never emptied. Only a store with at least one core note filters.
+#
+# THE POINTER IS APPENDED AFTER assembleIndex, so it is never itself counted by MAX_INDEX_LINES
+# and never competes with the cap markers for a slot. N counts what the catalog does NOT show:
+# the non-core documents PLUS the notes the scan cap omitted.
+# ------------------------------------------------------------------------------
+for f in "${files[@]}"; do
+    name="${f/#$HOME/~}"
+
+    st_core="UNKNOWN"
+    # A RECEIPT IS NOT EVIDENCE (the 2026-10-25 lesson): marker present with the property absent
+    # is `counterfeit`, and it must read as a failure rather than as `applied`.
+    if grep -qF 'memoryCoreSplit' "$f"; then st_core="applied"
+    elif grep -qF "$MARKER_CORE" "$f"; then st_core="counterfeit"
+    elif grep -qF "$STOCK_MANAGED_BUILDER" "$f" || grep -qF "$STOCK_TEAM_BUILDER" "$f"; then
+        st_core="stock"
+    fi
+
+    if [[ "$st_core" == "UNKNOWN" ]]; then
+        echo "  skip     $name (corefilter: no known auto-memory index builder in this chunk)"
+        continue
+    fi
+    if [[ "$st_core" == "applied" ]]; then
+        echo "  ok       $name (corefilter: applied)"
+        continue
+    fi
+    if (( check_only )); then
+        echo "  NEEDS    $name (corefilter: $st_core)" >&2
+        rc=1
+        continue
+    fi
+
+    backup="$f.orig"
+    if [[ ! -f "$backup" ]]; then
+        cp -p "$f" "$backup"
+        echo "  backup   ${backup/#$HOME/~}"
+    fi
+
+    if ! PATCH_FILE="$f" PATCH_MARKER_CORE="$MARKER_CORE" "$PYTHON_BIN" - <<'PY'
+import os, pathlib
+
+p = pathlib.Path(os.environ["PATCH_FILE"])
+marker = os.environ["PATCH_MARKER_CORE"]
+src = p.read_text(encoding="utf-8")
+
+# The two stock builders, byte-for-byte as 0.26.8 ships them. Each must match EXACTLY ONCE: a
+# chunk carrying two copies is refused rather than half-patched, the same all-or-nothing rule the
+# other hunks use.
+STOCK_MANAGED = (
+    "function buildManagedAutoMemoryIndex(docs,_metadata,omitted=[]){"
+    "const ordered=[...docs].sort((a,b2)=>Number(isImportedMemoryDocument(a))"
+    "-Number(isImportedMemoryDocument(b2)));"
+    "const firstImported=ordered.findIndex(isImportedMemoryDocument);"
+    "return assembleIndex(ordered.map(doc=>docIndexLine(doc)),"
+    "describeScanOmissions(ordered,omitted),omitted.length,"
+    "firstImported<0?0:firstImported)}"
+    '__name(buildManagedAutoMemoryIndex,"buildManagedAutoMemoryIndex");'
+)
+STOCK_TEAM = (
+    "function buildTeamAutoMemoryIndex(docs,omitted=[]){"
+    "return assembleIndex(groupTeamDocsByDescription(docs).map(({primary,others})=>"
+    "docIndexLine(primary,others)),describeScanOmissions(docs,omitted),omitted.length)}"
+    '__name(buildTeamAutoMemoryIndex,"buildTeamAutoMemoryIndex");'
+)
+
+HELPERS = (
+    "function memoryCoreStoreDir(docs){"
+    "if(docs.length===0){return\"\"}"
+    "const rel=docs[0].relativePath||\"\";const abs=docs[0].filePath||\"\";"
+    "if(!rel||!abs.endsWith(rel)){return\"\"}"
+    "const dir=abs.slice(0,abs.length-rel.length).replace(/\\/+$/,\"\");"
+    "return dir||\"/\"}"
+    '__name(memoryCoreStoreDir,"memoryCoreStoreDir");'
+    "function memoryCoreSplit(docs){"
+    "const core=docs.filter(doc=>doc.core===true);"
+    "const fallback=core.length===0&&docs.length>0;"
+    "const hidden=fallback?[]:docs.filter(doc=>doc.core!==true);"
+    "return{core,hidden,fallback}}"
+    '__name(memoryCoreSplit,"memoryCoreSplit");'
+    "function memoryCoreFallbackNotice(docs){"
+    "return`\\n\\n> WARNING: no note in ${memoryCoreStoreDir(docs)} carries index: core, so this "
+    "catalog is a FULL ENUMERATION. Mark the durable notes with index: core and rebuild the "
+    "index.`}"
+    '__name(memoryCoreFallbackNotice,"memoryCoreFallbackNotice");'
+    "function memoryCorePointerLine(docs,more){"
+    "return`${more} more notes in ${memoryCoreStoreDir(docs)} \\u2014 find them with: "
+    "rg -li '<term>'`}"
+    '__name(memoryCorePointerLine,"memoryCorePointerLine");'
+)
+
+NEW_MANAGED = (
+    "function buildManagedAutoMemoryIndex(docs,_metadata,omitted=[]){"
+    "/*" + marker + "*/"
+    "const{core,hidden,fallback}=memoryCoreSplit(docs);"
+    "const emit=fallback?docs:core;"
+    "const ordered=[...emit].sort((a,b2)=>Number(isImportedMemoryDocument(a))"
+    "-Number(isImportedMemoryDocument(b2)));"
+    "const firstImported=ordered.findIndex(isImportedMemoryDocument);"
+    "const content=assembleIndex(ordered.map(doc=>docIndexLine(doc)),"
+    "describeScanOmissions(docs,omitted),omitted.length,"
+    "firstImported<0?0:firstImported);"
+    "if(fallback){return content+memoryCoreFallbackNotice(docs)}"
+    "const more=hidden.length+omitted.length;"
+    "return more>0?content+\"\\n\\n\"+memoryCorePointerLine(docs,more):content}"
+    '__name(buildManagedAutoMemoryIndex,"buildManagedAutoMemoryIndex");'
+)
+NEW_TEAM = (
+    "function buildTeamAutoMemoryIndex(docs,omitted=[]){"
+    "/*" + marker + "*/"
+    "const{core,hidden,fallback}=memoryCoreSplit(docs);"
+    "const emit=fallback?docs:core;"
+    "const content=assembleIndex(groupTeamDocsByDescription(emit).map(({primary,others})=>"
+    "docIndexLine(primary,others)),describeScanOmissions(docs,omitted),omitted.length);"
+    "if(fallback){return content+memoryCoreFallbackNotice(docs)}"
+    "const more=hidden.length+omitted.length;"
+    "return more>0?content+\"\\n\\n\"+memoryCorePointerLine(docs,more):content}"
+    '__name(buildTeamAutoMemoryIndex,"buildTeamAutoMemoryIndex");'
+)
+
+hits = 0
+for stock, new in ((STOCK_MANAGED, NEW_MANAGED), (STOCK_TEAM, NEW_TEAM)):
+    n = src.count(stock)
+    if n == 0:
+        continue
+    if n != 1:
+        raise SystemExit(f"refusing to patch: a builder anchor occurs {n} times (expected 1)")
+    src = src.replace(stock, new)
+    hits += 1
+
+if hits == 0:
+    raise SystemExit("refusing to patch: no known auto-memory index builder body (UNKNOWN shape)")
+
+# The helpers are defined ONCE, immediately before the first builder that uses them, so the
+# pointer and the fallback cannot drift between the managed and the team builder.
+first = src.find("function buildManagedAutoMemoryIndex(docs,_metadata,omitted=[]){")
+if first < 0:
+    first = src.find("function buildTeamAutoMemoryIndex(docs,omitted=[]){")
+if first < 0:
+    raise SystemExit("refusing to patch: the patched builders are not found in the result")
+src = src[:first] + HELPERS + src[first:]
+
+# Post-conditions: the property, not the marker. Both builders must route through
+# memoryCoreSplit; the helper set must exist exactly once; the stock enumeration must be gone from
+# BOTH builders; and docIndexLine must be untouched (recall and search still see every note).
+if src.count("function memoryCoreSplit(") != 1:
+    raise SystemExit("refusing to patch: memoryCoreSplit is not defined exactly once in the result")
+if src.count("memoryCorePointerLine(") < 3:
+    raise SystemExit("refusing to patch: the pointer line is not wired into both builders")
+for stock in (STOCK_MANAGED, STOCK_TEAM):
+    if stock in src:
+        raise SystemExit("refusing to patch: a stock builder body is still present in the result")
+if src.count("function docIndexLine") != 1:
+    raise SystemExit("refusing to patch: the docIndexLine definition count is not 1 in the result")
+if marker not in src:
+    raise SystemExit("refusing to patch: the core-filter marker is absent from the result")
+
+p.write_text(src, encoding="utf-8")
+PY
+    then
+        echo "  MISMATCH $name - a builder anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
+        rc=1
+        continue
+    fi
+
+    if node --check "$f"; then
+        echo "  patched  corefilter ($name; syntax verified)"
     else
         echo "  BROKEN   $name - rolling back from ${backup/#$HOME/~}" >&2
         cp -p "$backup" "$f"

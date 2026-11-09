@@ -408,4 +408,222 @@ console.log("kept=" + r.docs.length + " omitted=" + r.omitted.length);
     [ "$(sha256sum "$dir/chunk-unknown.js" | awk '{print $1}')" = "$before" ]
 }
 
+# ------------------------------------------------------------------------------
+# Hunk 8 (corefilter + coreflag, 2026-11-09, card MEMORY-INDEX-CORE-001): the index used to be a
+# FULL ENUMERATION -- every note was one line in every session's context. Wayne's ruling: core is
+# the EXPLICIT `index: core` flag (no type defaults), and the rest are reached by ONE pointer line
+# naming a command, a count and the directory.
+#
+# The flag is a SECOND hunk because the frontmatter parser is not in the builder's chunk on 0.26.8
+# (chunk-FUBDS3AV.js vs chunk-QAEZSJL6.js). So the harness is two fixtures, and every assertion is
+# on the OBSERVABLE (lines and content the builders emit, and `core` out of raw note text), never
+# on a marker string -- the defect class this file has already been bitten by twice.
+# ------------------------------------------------------------------------------
+
+setup_core_chunks() {
+    COREDIR="$BATS_TEST_TMPDIR/core-chunks"
+    mkdir -p "$COREDIR"
+    # DERIVE the caps from the patcher, never list them. The two fixtures are "hunks 1-7 already
+    # applied" chunks, so their cap values must equal whatever the patcher currently targets --
+    # otherwise a later raise makes this suite red for a reason that has nothing to do with hunk 8.
+    # A hand-written 400 was already stale once (2026-11-09) while the patcher moved to 500.
+    local line_cap scan_cap
+    line_cap=$(sed -n 's/^LINE_TARGET_CAP=\([0-9][0-9]*\)$/\1/p' "$PATCHER" | head -1)
+    scan_cap=$(sed -n 's/^SCAN_TARGET_CAP=\([0-9][0-9]*\)$/\1/p' "$PATCHER" | head -1)
+    # FALLBACK for a patcher that carries no *_TARGET_CAP constants (the 400-era shape): read the
+    # line cap out of the LINES replacement dict instead. The scan cap has no literal there (its
+    # replacement is built in Python), so without the constant this helper cannot align the
+    # scanner fixture -- and it says so rather than guessing a number.
+    if [[ -z "$line_cap" ]]; then
+        line_cap=$(sed -n 's/.*"var MAX_INDEX_LINES *= *\([0-9][0-9]*\);.*/\1/p' "$PATCHER" | tail -1)
+    fi
+    if [[ -z "$line_cap" || -z "$scan_cap" ]]; then
+        echo "cannot derive the patcher's cap targets (line='$line_cap' scan='$scan_cap')" >&3
+        return 1
+    fi
+
+    sed -e "s/^var MAX_INDEX_LINES = [0-9][0-9]*;/var MAX_INDEX_LINES = $line_cap;/" \
+        "$REPO_ROOT/tests/fixtures/memory-index-coreflag-builder-chunk.js" > "$COREDIR/memory-index-coreflag-builder-chunk.js"
+    sed -e "s/^var MAX_SCANNED_MEMORY_FILES=[0-9][0-9]*;/var MAX_SCANNED_MEMORY_FILES=$scan_cap;/" \
+        "$REPO_ROOT/tests/fixtures/memory-index-coreflag-scanner-chunk.js" > "$COREDIR/memory-index-coreflag-scanner-chunk.js"
+    COREBUILD="$COREDIR/memory-index-coreflag-builder-chunk.js"
+    CORESCAN="$COREDIR/memory-index-coreflag-scanner-chunk.js"
+}
+
+@test "index patch: hunk 8 reads NEEDS while only hunks 1-7 are applied" {
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER" --check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"corefilter: stock"* ]]
+    [[ "$output" == *"coreflag: stock"* ]]
+    # CONTROL: the fixture must isolate hunk 8. If hunks 1-7 also read NEEDS the case would be
+    # asserting on a half-built chunk and a hunk-8 failure could hide behind them.
+    [[ "$output" != *"bytecap: stock"* ]]
+    [[ "$output" != *"linecap: stock"* ]]
+    [[ "$output" != *"scancap: stock"* ]]
+}
+
+@test "index patch: hunk 8 applies to both chunks and --check then reads ok" {
+    command -v node >/dev/null || skip "node is required by the patcher's own syntax check"
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"patched  corefilter"* ]]
+    [[ "$output" == *"patched  coreflag"* ]]
+    # The backups are the PRISTINE fixture bytes.
+    cmp -s "$COREBUILD.orig" "$REPO_ROOT/tests/fixtures/memory-index-coreflag-builder-chunk.js"
+    cmp -s "$CORESCAN.orig" "$REPO_ROOT/tests/fixtures/memory-index-coreflag-scanner-chunk.js"
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER" --check
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"corefilter: applied"* ]]
+    [[ "$output" == *"coreflag: applied"* ]]
+}
+
+@test "index patch: a second hunk 8 apply is idempotent" {
+    command -v node >/dev/null || skip "node is required by the patcher's own syntax check"
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    local b1 s1 b2 s2
+    b1="$(sha256sum "$COREBUILD" | awk '{print $1}')"
+    s1="$(sha256sum "$CORESCAN" | awk '{print $1}')"
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    b2="$(sha256sum "$COREBUILD" | awk '{print $1}')"
+    s2="$(sha256sum "$CORESCAN" | awk '{print $1}')"
+    [ "$b1" = "$b2" ]
+    [ "$s1" = "$s2" ]
+}
+
+@test "index patch: 500 notes with exactly 1 core emit 2 lines, and the pointer names 499 and the store" {
+    command -v node >/dev/null || skip "node is required to run the harness"
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    run node -e '
+const m=require(process.argv[1]);
+const mk=(i,core)=>({scope:"project",type:"reference",filePath:"/tmp/store/reference/n"+i+".md",relativePath:"reference/n"+i+".md",filename:"n"+i+".md",title:"Note "+i,description:"d"+i,category:"reference",keywords:[],usageScenarios:[],body:"x",mtimeMs:0,core});
+const docs=Array.from({length:500},(_,i)=>mk(i,i===0));
+const out=m.buildManagedAutoMemoryIndex(docs,undefined,[]);
+const lines=out.split("\n").filter(l=>l.length>0);
+console.log("lines="+lines.length);
+console.log("units="+[...out].length);
+console.log(lines.join("\n"));
+' "$COREBUILD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"lines=2"* ]]
+    # The pointer is asserted as CONTENT (2a): count, directory, and command.
+    [[ "$output" == *"499 more notes in /tmp/store — find them with: rg -li '<term>'"* ]]
+    # The one core note is there; samples of the other 499 are not.
+    [[ "$output" == *"Note 0"* ]]
+    [[ "$output" != *"Note 1"* ]]
+    [[ "$output" != *"Note 250"* ]]
+    [[ "$output" != *"Note 499"* ]]
+}
+
+@test "index patch: 3 core notes emit 4 lines and NO non-core title appears" {
+    command -v node >/dev/null || skip "node is required to run the harness"
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    run node -e '
+const m=require(process.argv[1]);
+const mk=(i,core)=>({scope:"project",type:"reference",filePath:"/s/r/n"+i+".md",relativePath:"r/n"+i+".md",filename:"n"+i+".md",title:"Note "+i,description:"d"+i,category:"reference",keywords:[],usageScenarios:[],body:"x",mtimeMs:0,core});
+const docs=Array.from({length:10},(_,i)=>mk(i,i<3));
+const out=m.buildManagedAutoMemoryIndex(docs,undefined,[]);
+console.log("lines="+out.split("\n").filter(l=>l.length>0).length);
+console.log(out);
+' "$COREBUILD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"lines=4"* ]]
+    [[ "$output" == *"7 more notes in /s — find them with"* ]]
+    [[ "$output" == *"Note 2"* ]]
+    [[ "$output" != *"Note 3"* ]]
+    [[ "$output" != *"Note 9"* ]]
+}
+
+@test "index patch: a note with no index key is NOT emitted, and index: archive is not either (1a)" {
+    command -v node >/dev/null || skip "node is required to run the harness"
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    # 1a is explicit: no default is inferred from `type`. The unmarked note and the archive-marked
+    # note are both references BESIDE a core note, so the zero-core fallback cannot mask the result.
+    run node -e '
+const m=require(process.argv[1]);
+const mk=(i,core)=>({scope:"project",type:"reference",filePath:"/s/r/n"+i+".md",relativePath:"r/n"+i+".md",filename:"n"+i+".md",title:"Note "+i,description:"d"+i,category:"reference",keywords:[],usageScenarios:[],body:"x",mtimeMs:0,core});
+const out=m.buildManagedAutoMemoryIndex([mk(0,true),mk(1,undefined),mk(2,false)],undefined,[]);
+console.log(out);
+' "$COREBUILD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Note 0"* ]]
+    [[ "$output" != *"Note 1"* ]]
+    [[ "$output" != *"Note 2"* ]]
+    [[ "$output" == *"2 more notes in /s"* ]]
+}
+
+@test "index patch: CONTROL — a store with ZERO core notes is enumerated in full and WARNS, never emptied" {
+    # Measured 2026-11-09: every store on this box carries 0 marked notes. Without this fallback
+    # the filter would collapse every catalog to one pointer line -- the silent loss the flag
+    # exists to prevent.
+    command -v node >/dev/null || skip "node is required to run the harness"
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    run node -e '
+const m=require(process.argv[1]);
+const mk=(i)=>({scope:"project",type:"reference",filePath:"/s/r/n"+i+".md",relativePath:"r/n"+i+".md",filename:"n"+i+".md",title:"Note "+i,description:"d"+i,category:"reference",keywords:[],usageScenarios:[],body:"x",mtimeMs:0});
+const out=m.buildManagedAutoMemoryIndex(Array.from({length:4},(_,i)=>mk(i)),undefined,[]);
+console.log("lines="+out.split("\n").filter(l=>l.length>0).length);
+console.log(out);
+' "$COREBUILD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"lines=5"* ]]
+    [[ "$output" == *"Note 0"* ]]
+    [[ "$output" == *"Note 3"* ]]
+    [[ "$output" == *"FULL ENUMERATION"* ]]
+    [[ "$output" == *"no note in /s carries index: core"* ]]
+    [[ "$output" != *"more notes in"* ]]
+}
+
+@test "index patch: the CHAIN — raw note text carrying index: core parses to core=true" {
+    # Tests the assignment AND the delivery: the flag has to survive the frontmatter parser, not
+    # just appear as a string in the chunk. An `index: archive` note and a note with no key at
+    # all both read false, which is 1a's "no type default".
+    command -v node >/dev/null || skip "node is required to run the harness"
+    setup_core_chunks
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    run node -e '
+const s=require(process.argv[1]);
+const note=(extra)=>"---\nname: A note\ndescription: a description\ntype: reference\ncategory: reference\nkeywords: [a, b]\nusage_scenarios: [x]\n"+extra+"---\nbody\n";
+for(const [label,extra] of [["core","index: core\n"],["archive","index: archive\n"],["absent",""],["Core","index: Core\n"]]){
+  const d=s.parseAutoMemoryTopicDocument("/s/r/a.md",note(extra),0,"r/a.md","project");
+  console.log(label+"="+d.core+"/"+d.type+"/"+d.mtimeMs);
+}
+' "$CORESCAN"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"core=true/reference/0"* ]]
+    [[ "$output" == *"archive=false/reference/0"* ]]
+    [[ "$output" == *"absent=false/reference/0"* ]]
+    # Case matters: `index: Core` is not the flag, so a note cannot be marked by accident.
+    [[ "$output" == *"Core=false/reference/0"* ]]
+}
+
+@test "index patch: a corefilter MARKER without the filter reads counterfeit, never applied" {
+    # Same family as the 2026-10-25 finding for hunks 3-5: a receipt is not evidence. Both stock
+    # builder bodies are untouched; only the marker string is added, and it must read as FAILURE.
+    setup_core_chunks
+    printf '%s\n' '/* LOCAL PATCH 2026-11-09 (qwen-memory-index-corefilter) */' > "$COREDIR/forged.js"
+    cat "$REPO_ROOT/tests/fixtures/memory-index-coreflag-builder-chunk.js" >> "$COREDIR/forged.js"
+    rm -f "$COREBUILD"
+    grep -q 'return assembleIndex(ordered.map(doc=>docIndexLine(doc))' "$COREDIR/forged.js"
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$COREDIR" bash "$PATCHER" --check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"counterfeit"* ]]
+    [[ "$output" != *"corefilter: applied"* ]]
+}
+
 # end of file
