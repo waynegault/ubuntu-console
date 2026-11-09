@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 124
+#   v124 (2026-11-09): a `key not found in model:` failure no longer blames the BUILD.  The
+#     label said "rebuilding does not help, re-convert or obtain a matching GGUF", while
+#     bin/llm-archive-unusable.sh said "rebuild llama.cpp first" — the operator was told both
+#     things by one run.  Neither is knowable from the message: it means the LOADER asked for
+#     a key the FILE lacks, and either side can be the stale one.  Measured 2026-11-09,
+#     GLM-5.3-Flash-REAP50-IQ3_M.gguf was missing FOUR keys the installed build requires
+#     (attention.indexer.kpool plus hyper_connection.count/sinkhorn_iterations/epsilon, which
+#     the file carries under their old attention.hc.* names) after a rebuild failed to help
+#     on 2026-11-06 and again on 2026-11-08.  The label and the failure line now name the
+#     test that decides which side is stale, and no longer assert a cause.
+#     Same pass, same class: `check_tensor_dims: tensor 'X' not found` — the same
+#     disagreement one level deeper, measured once the keys parsed — matched the
+#     launch_error arm and was MODEL-attributable, so two launches would have archived
+#     67 GiB of intact weights over a naming difference.  It now vetoes with the rest.
 # Module Version: 123
 #   v123 (2026-11-08): load<=cores is necessary, not sufficient.  Two runs certified at
 #     load under the core count while the box was not quiet (2026-11-07 22:14Z: 3.48 on 8
@@ -503,9 +518,11 @@ __autotune_failure_label() {
         unsupported_arch)   printf 'unsupported architecture / no matching backend' ;;
         launch_error)       printf "launch or flag error, or a model the server could not load \
 (the server rejected its invocation)" ;;
-        loader_vintage)     printf "this loader cannot read the model's GGUF metadata \
-(a required key is absent, or a value has the wrong type: the FILE and the LOADER disagree — \
-rebuilding does not help, re-convert or obtain a matching GGUF)" ;;
+        loader_vintage)     printf "the FILE and the LOADER disagree about a required GGUF key \
+or tensor (a key is absent or mistyped, or a tensor the loader names is absent; the weights are \
+not at fault).  Which side is stale is not knowable from the message — check whether the \
+installed build knows the name (strings <libllama.so> | grep <name>): if it does, the file is \
+incomplete or misnamed (re-convert or obtain a matching GGUF); if it does not, rebuild llama.cpp" ;;
         insufficient_host_staging) printf "the largest shard cannot be staged in host memory \
 (split GGUFs stage one shard; guest RAM is the wall, not VRAM)" ;;
         loader_crash_unknown) printf "the launch died with no OOM witness and no load signature \
@@ -1492,9 +1509,16 @@ __autotune_classify_failure() {
     # does.
     local _re_vintage='key not found in model:|has wrong type .* but expected type|'
     _re_vintage+='error loading model hyperparameters|gguf version .* (not supported|unsupported)|'
-    _re_vintage+='unsupported gguf version|unknown gguf (key|value type)'
+    _re_vintage+='unsupported gguf version|unknown gguf (key|value type)|'
+    # A TENSOR the loader names and the file lacks is the same disagreement one level deeper, and
+    # it reached the ledger as launch_error — MODEL-attributable — until 2026-11-09.  Measured on
+    # GLM-5.3-Flash-REAP50-IQ3_M.gguf after its metadata was repaired: "check_tensor_dims: tensor
+    # 'blk.0.hc_attn_fn.weight' not found", because its converter wrote the hc_* tensors without
+    # the `.weight` suffix the current loader appends.  Two such launches would have archived
+    # 67 GiB of intact weights over a naming difference.
+    _re_vintage+='tensor .* not found|check_tensor_dims|wrong shape'
     local _re_load='failed to load model|error loading model|failed to open|cannot open model file|'
-    _re_load+='no such file|check_tensor_dims|wrong shape'
+    _re_load+='no such file'
     local _re_launch='invalid argument|unknown argument|unrecognized (option|argument)|unexpected argument|'
     _re_launch+='error while handling argument|invalid value for|failed to parse|usage: |address already in use|cannot open model'
     if grep -qiE "$_re_vintage" <<< "$_text"; then
@@ -3675,7 +3699,7 @@ _autotune_failure_report() {
         launch_error)
             echo "  failed: the server rejected its launch before it could be measured — not certified on this run" ;;
         loader_vintage)
-            echo "  failed: this build could not read the model's metadata — NOT CERTIFIED (rebuild the server; the model is not at fault)" ;;
+            echo "  failed: the file and the loader disagree about a required GGUF key — NOT CERTIFIED" ;;
         *)
             echo "  failed: no configuration could be measured — not certified on this run" ;;
     esac

@@ -109,14 +109,17 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "loader_vintage never archives, however many strikes it collects" {
-    # The arm that matters: build-148 vs glm5-next, three boots, one 67 GiB model.
-    # A build gap is a fact about the BINARY.  If this ever archives, a rebuild was
-    # the fix and the weights were deleted instead.
+    # The arm that matters: glm5-next vs a build that cannot read it, three boots, one 67 GiB
+    # model.  The class covers TWO causes — a stale build and a stale file — so a refusal that
+    # asserts either one sends the operator the wrong way; measured 2026-11-09 the file was the
+    # stale side (four required keys absent) after a rebuild had already failed to help.  If
+    # this ever archives, a recoverable file's weights were deleted.
     head -c 1000 /dev/zero > "$TMP/active/Vintage.gguf"
     run "$TOOL" --record-failure "Vintage.gguf" --class loader_vintage
     [ "$status" -eq 0 ]
     [[ "$output" == *"archive-eligible=no"* ]]
     [[ "$output" == *"rebuild llama.cpp"* ]]
+    [[ "$output" == *"the file is incomplete"* ]]
     run "$TOOL" --record-failure "Vintage.gguf" --class loader_vintage
     [[ "$output" == *"archive-eligible=no"* ]]
     run "$TOOL" --record-failure "Vintage.gguf" --class loader_vintage

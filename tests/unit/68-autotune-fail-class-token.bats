@@ -247,6 +247,19 @@ report_with() {
     [ "$output" = "loader_vintage" ]
 }
 
+@test "a TENSOR the loader names and the file lacks is loader_vintage too" {
+    # Measured 2026-11-09 on GLM-5.3-Flash-REAP50-IQ3_M.gguf once its metadata parsed: the
+    # file's converter wrote the hc_* tensors without the `.weight` suffix the loader appends,
+    # so the load died at `check_tensor_dims` — which matched the launch_error arm and counted
+    # as a fault of the MODEL.  Catches: a naming disagreement archiving intact weights.
+    printf '%s\n' \
+        "0.00.517.106 E llama_model_load: error loading model: check_tensor_dims: tensor 'blk.0.hc_attn_fn.weight' not found" \
+        "0.00.517.143 E llama_model_load_from_file_impl: failed to load model" > "$LOG"
+    run classify_with ""
+    [ "$status" -eq 0 ]
+    [ "$output" = "loader_vintage" ]
+}
+
 @test "an OOM log is still resource_exhausted, not swallowed by the vintage rule" {
     # The null arm for the new pattern: it must not read memory text as a build gap.
     printf '%s\n' "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 4096 MiB: cuda error: out of memory" > "$LOG"

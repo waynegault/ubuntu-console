@@ -27,6 +27,14 @@
 #
 # Exit: 0 done/not-eligible, 1 refused, 2 usage.
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 7
+#   v7 (2026-11-09): the loader_vintage refusal stopped asserting the cause.  v4 had changed it
+#       to "rebuild llama.cpp first, the weights are not the problem" to match a 2026-11-06
+#       measurement, while autotune-model.sh's label on the SAME class said "rebuilding does not
+#       help" — one run printed both.  Measured 2026-11-09: GLM-5.3-Flash-REAP50-IQ3_M.gguf lacks
+#       four keys the installed build requires (kpool and the renamed hyper_connection trio), so
+#       the file was the stale side and the earlier rebuild changed nothing.  The refusal now
+#       says the two sides disagree, names the check that decides, and keeps the verdict.
 # Module Version: 6
 #   v6 (2026-11-07): §18.3 debt this file carried from its first cut — a purpose comment
 #       above every function (9.5), one `warn` helper instead of five hand-written `>&2`
@@ -222,9 +230,11 @@ record_failure() {
         # finding none, and the alternative is a spurious error on a fresh box.
         # swallow-ok: absent ledger == no vintage row; grep's own stderr is not wanted here
         if grep -q $'^'"$base"$'\tloader_vintage\t' "$FAIL_FILE" 2>/dev/null; then
-            say "archive-eligible=no (loader_vintage - this build cannot read the model's" \
-                "GGUF metadata; rebuild llama.cpp first, the weights are not the problem." \
-                "Do not archive.)"
+            say "archive-eligible=no (loader_vintage - the FILE and the LOADER disagree about a" \
+                "required GGUF key, so the weights are not at fault.  Which side is stale is not" \
+                "knowable from the message: if the installed build knows the key the file is" \
+                "incomplete (re-convert or obtain a matching GGUF); if it does not, rebuild" \
+                "llama.cpp.  Do not archive.)"
         else
             say "archive-eligible=no (a recorded class is not a model verdict)"
         fi
