@@ -2000,6 +2000,16 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > any as NOT quiet, naming the count; `LLAMA_BUILD_ALLOW_CI=1` is the deliberate override for
 > building through one. That is the literal reading of "quieted and stays quiet, or it does not
 > build".
+>
+> **v107: the tree is refused as a link, and restarted on a large jump.** `cmake -B` follows a
+> symlink, so a `build-cuda/` that pointed into an older checkout reconciled that tree's cache —
+> measured 2026-11-05, a rebuild that reported Done over 147-commit-old objects. A symlinked
+> build tree is now refused by name, before the plan is printed. The jump rule then decides
+> whether the tree is reused: up to `LLAMA_BUILD_FRESH_AT` commits (default `20`) is a
+> reconfigure in place, at or past it the tree is MOVED to `${build_dir}.prev-<commit>` and
+> configured fresh. `--fresh` asks for the move regardless of size. The old tree is moved, never
+> deleted — a lane may still be executing the binary inside it — and an existing
+> `.prev-<commit>` is a refusal rather than a `mv` onto a directory (which nests and exits 0).
 
 ---
 

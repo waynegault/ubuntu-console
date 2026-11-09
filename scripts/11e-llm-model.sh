@@ -1,6 +1,17 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 107
+#   v107 (2026-11-09): `llm-build` refuses a symlinked build tree and starts a FRESH tree for a
+#   large jump.  Measured 2026-11-05: build-cuda/ was a symlink into the previous checkout, so
+#   `cmake -B` followed the link and reconciled a cache whose objects were 147 commits old - a
+#   rebuild that reported Done and produced nothing current.  The tree is now refused when it is
+#   a link, before the plan is printed.  The jump rule is the audit's: a few commits are a
+#   reconfigure in place, a large forward needs the objects thrown away, so the tree is MOVED
+#   aside (never deleted - a lane may hold the binary it contains) when HEAD..@{u} is at least
+#   `LLAMA_BUILD_FRESH_AT` (default 20) commits, or when `--fresh` asks for it.  The move is
+#   never a plain `mv` onto a name that exists: `mv` onto an existing DIRECTORY nests it and
+#   exits 0, so an existing `${build_dir}.prev-<commit>` is a refusal.
 # Module Version: 106
 #   v106 (2026-11-09): two opt-in lifecycle facts a lane could not state before.
 #     (a) IDLE RELEASE.  `model use N --idle-timeout S` starts bin/llm-idle-release.sh,
@@ -5146,12 +5157,16 @@ function model() {
 # LLAMA_CUDA_ARCH when it cannot be read), builds llama-server into ${LLAMA_BUILD_DIR}, and
 # reports the commit and size that landed.
 #
-# Usage:   llm-build [--quick] [--no-pull] [--yes]
+# Usage:   llm-build [--quick] [--no-pull] [--fresh] [--yes]
 # Options:
 #   --quick     Skip cmake reconfigure when the build dir already exists
 #              (just rebuild the binary with existing CMake cache)
 #   --no-pull   Skip git pull (rebuild the current checkout only)
+#   --fresh     Move the build tree aside before configuring, even for a small jump
 #   --yes       Skip the pre-flight confirmation (for deliberate, scripted use)
+#
+# Tuning (environment):
+#   LLAMA_BUILD_FRESH_AT  Commit jump that forces a fresh tree (default 20; 0 always)
 #
 # A pull is NOT free (2026-09-14): it moves the source under a tree the live
 # CUDA lane may be serving, and a reconfiguration is a 40-60 min rebuild.  One
@@ -5161,13 +5176,14 @@ function model() {
 # it FAILS CLOSED rather than pulling — pass --yes or --no-pull.
 # ---------------------------------------------------------------------------
 function llm-build() {
-    local quick=false no_pull=false yes=false
+    local quick=false no_pull=false yes=false fresh=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --quick) quick=true; shift ;;
             --no-pull) no_pull=true; shift ;;
+            --fresh) fresh=true; shift ;;
             --yes|-y) yes=true; shift ;;
-            *) __tac_info "Usage" "llm-build [--quick] [--no-pull] [--yes]" "$C_Warning"; return 1 ;;
+            *) __tac_info "Usage" "llm-build [--quick] [--no-pull] [--fresh] [--yes]" "$C_Warning"; return 1 ;;
         esac
     done
 
@@ -5194,6 +5210,18 @@ function llm-build() {
     if [[ "$build_dir" != "$root"/* ]]
     then
         __tac_info "Error" "LLAMA_BUILD_DIR (${build_dir}) is outside the checkout (${root}) - refusing" "$C_Error"
+        return 1
+    fi
+
+    # A symlinked tree is refused outright: `cmake -B` follows the link and reuses the cache
+    # (and objects) of whatever it points at.  Measured 2026-11-05: build-cuda/ was a link into
+    # the previous checkout, and the rebuild reconciled a 147-commit-old cache, reported Done,
+    # and produced nothing current.  Checked here, before the plan, so no row advertises a tree
+    # that will not be built.
+    if [[ -L "$build_dir" ]]
+    then
+        __tac_info "Refused" "${build_dir} is a symlink (-> $(readlink "$build_dir")) - cmake -B would\
+ follow it into that tree; unlink it first" "$C_Error"
         return 1
     fi
 
@@ -5313,6 +5341,44 @@ function llm-build() {
             __tac_info "Refusing" "no terminal to confirm the pull on - nothing pulled, nothing built. Re-run with --yes to pull, or --no-pull to build the current checkout." "$C_Error"
             return 1
         fi
+    fi
+
+    # ---- Fresh tree for a large jump ---------------------------------------------------
+    # A reconfigure in place is right for a few commits and wrong for a large forward: cmake
+    # keeps objects built from the old tree, and a stale object graph is what "Done" then
+    # advertises.  So the tree is MOVED aside when the jump is at least LLAMA_BUILD_FRESH_AT
+    # (default 20) commits, or when --fresh asks for it.  Moved, never deleted: a lane may
+    # still be executing the binary inside it, and a rename does not disturb that.
+    local fresh_at="${LLAMA_BUILD_FRESH_AT:-20}"
+    if [[ ! "$fresh_at" =~ ^[0-9]+$ ]]
+    then
+        __tac_info "Error" "LLAMA_BUILD_FRESH_AT is not a commit count: '${fresh_at}' - nothing pulled,\
+ nothing built" "$C_Error"
+        return 1
+    fi
+    # Under --no-pull nothing moves the source, so there is no jump to measure and only an
+    # explicit --fresh moves the tree.
+    local jump=0 jump_note="requested with --fresh"
+    if [[ "$no_pull" != "true" ]]
+    then
+        # swallow-ok: an untracked branch or a failed read counts as no jump, which leaves the tree alone
+        jump=$(git rev-list --count "HEAD..@{u}" 2>/dev/null) || jump=0
+        jump_note="${jump}-commit jump"
+    fi
+    if [[ -d "$build_dir" && ( "$fresh" == "true" || "$jump" -ge "$fresh_at" ) ]]
+    then
+        local prev_dir
+        # swallow-ok: an unreadable HEAD names the tree "unknown"; the move still has one target
+        prev_dir="${build_dir}.prev-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        if [[ -e "$prev_dir" ]]
+        then
+            __tac_info "Error" "rollback target exists (${prev_dir}) - refusing rather than nesting the move" "$C_Error"
+            return 1
+        fi
+        mv "$build_dir" "$prev_dir" || {
+            __tac_info "Error" "could not move ${build_dir} aside" "$C_Error"; return 1
+        }
+        __tac_info "Fresh" "moved the build tree aside (${jump_note}) -> ${prev_dir}" "$C_Info"
     fi
 
     # Pull latest upstream

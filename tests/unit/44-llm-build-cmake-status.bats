@@ -67,7 +67,27 @@ if [[ -n "${CMAKE_LOCK_LOG:-}" && -n "${HEAVY_JOB_LOCK:-}" ]]; then
 fi
 case "${1:-}" in
     -B) exit "${STUB_CONFIGURE_RC:-0}" ;;
-    --build) exit "${STUB_BUILD_RC:-0}" ;;
+    --build)
+        # A real build PRODUCES the target, and llm-build verifies the binary afterwards.  The
+        # fresh-tree cases move the old tree away, so a stub that only logs would leave nothing
+        # for the verification step and fail a correct build.
+        dir="${2:-}"
+        shift 2
+        target=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --target) target="${2:-}"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        rc="${STUB_BUILD_RC:-0}"
+        if [[ "$rc" -eq 0 && -n "$dir" && -n "$target" ]]; then
+            mkdir -p "$dir/bin"
+            printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/bin/$target"
+            chmod +x "$dir/bin/$target"
+        fi
+        exit "$rc"
+        ;;
     *) exit 0 ;;
 esac
 CMAKE_STUB
@@ -378,4 +398,159 @@ _run_build() {
     [ "$rc" -eq 0 ]
     [[ "$out" == *"Done"* ]]
     [ -s "$CMAKE_LOG" ]
+}
+
+# ---- v107 (2026-11-09): the tree is refused as a link, and restarted on a large jump ----
+# Two defects measured in the audit.  build-cuda/ was a SYMLINK into the previous checkout, so
+# `cmake -B` followed it and reconciled a 147-commit-old cache while reporting Done.  And a
+# reconfigure in place was applied to any jump at all, which is right for a few commits and
+# wrong for a large forward: cmake keeps objects built from the old tree.
+
+# _checkout_with_jump <n> - make $LLAMA_ROOT a checkout whose upstream is <n> commits ahead.
+# The remote is a local bare repo, so the pull path runs without network.  The jump is read from
+# HEAD..@{u}, which exists only for a branch that has an upstream - the shape the real checkout
+# has, and the only shape in which the rule can measure anything.
+_checkout_with_jump() {
+    local n="$1" seed="$BATS_TEST_TMPDIR/seed-$n" remote="$BATS_TEST_TMPDIR/remote-$n.git" i
+    git init -q --bare "$remote"
+    git init -q "$seed"
+    git -C "$seed" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m base
+    git -C "$seed" -c user.email=t@example.com -c user.name=t push -q "$remote" HEAD:refs/heads/master
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" remote add origin "$remote"
+    git -C "$LLAMA_ROOT" fetch -q origin
+    git -C "$LLAMA_ROOT" checkout -q --track -b master origin/master
+    for ((i = 1; i <= n; i++)); do
+        git -C "$seed" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m "ahead $i"
+    done
+    git -C "$seed" -c user.email=t@example.com -c user.name=t push -q "$remote" HEAD:refs/heads/master
+}
+
+# _prev_trees - the names of the trees a build moved aside, one per line (empty when none).
+_prev_trees() {
+    find "$LLAMA_ROOT" -maxdepth 1 -name 'build.prev-*' -printf '%f\n'
+}
+
+@test "llm-build: a symlinked build tree is refused, not followed (v107)" {
+    # Catches: `cmake -B` following the link into the tree it points at, reusing that tree's
+    # cache and objects - the 2026-11-05 measurement, which rebuilt 147-commit-old objects and
+    # reported Done.  Nothing may be configured, and the link's target must be untouched.
+    export LLAMA_BUILD_DIR="$LLAMA_ROOT/build-cuda"
+    mkdir -p "$BATS_TEST_TMPDIR/elsewhere"
+    ln -s "$BATS_TEST_TMPDIR/elsewhere" "$LLAMA_BUILD_DIR"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -ne 0 ]
+    [[ "$out" == *"symlink"* ]]
+    [[ "$out" == *"$BATS_TEST_TMPDIR/elsewhere"* ]]
+    [[ "$out" != *"Done"* ]]
+    [ ! -s "$CMAKE_LOG" ]
+    [ -L "$LLAMA_BUILD_DIR" ]
+    [ -z "$(find "$BATS_TEST_TMPDIR/elsewhere" -mindepth 1 -print -quit)" ]
+}
+
+@test "llm-build: --fresh moves the tree aside and builds a new one (v107)" {
+    # Catches: a --fresh that only reconfigures in place.  The old tree must SURVIVE under
+    # build.prev-<commit> (a lane may still hold its binary) and the built one must be new.
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t \
+        commit -q --allow-empty -m fixture
+    local head; head="$(git -C "$LLAMA_ROOT" rev-parse --short HEAD)"
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --no-pull --fresh --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"moved the build tree aside"* ]]
+    [[ "$out" == *"Done"* ]]
+    [ -f "$LLAMA_ROOT/build.prev-${head}/OLD-TREE" ]
+    [ ! -e "$LLAMA_ROOT/build/OLD-TREE" ]
+    [ -x "$LLAMA_ROOT/build/bin/llama-server" ]
+    grep -qF -- "-B $LLAMA_ROOT/build" "$CMAKE_LOG"
+}
+
+@test "llm-build: a small jump keeps the tree in place (control, v107)" {
+    # The control for the two cases below: 2 commits is a reconfigure, not a fresh tree.  Without
+    # this, "moves the tree on a large jump" could be a rule that always moves.
+    _checkout_with_jump 2
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"Done"* ]]
+    [[ "$out" != *"moved the build tree aside"* ]]
+    [ -f "$LLAMA_ROOT/build/OLD-TREE" ]
+    [ -z "$(_prev_trees)" ]
+}
+
+@test "llm-build: a jump at LLAMA_BUILD_FRESH_AT moves the tree (v107)" {
+    # Criterion (v107): the move happens when the jump REACHES the threshold, so 20 commits at
+    # the default moves and 19 does not.  This case is the reaching one.
+    _checkout_with_jump 20
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"moved the build tree aside (20-commit jump)"* ]]
+    [[ "$out" == *"Done"* ]]
+    [ -d "$LLAMA_ROOT/build" ]
+    [ -z "$(find "$LLAMA_ROOT/build" -name 'OLD-TREE' -print -quit)" ]
+}
+
+@test "llm-build: LLAMA_BUILD_FRESH_AT moves the threshold, not just the default (v107)" {
+    # Catches: a hard-coded 20.  The knob exists so a box that wants a wipe every rebuild can
+    # ask for one; with it at 2 the same 2-commit jump that stayed in place above must now move.
+    _checkout_with_jump 2
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    export LLAMA_BUILD_FRESH_AT=2
+
+    local result rc out
+    result="$(_run_build --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"moved the build tree aside (2-commit jump)"* ]]
+    [ -n "$(_prev_trees)" ]
+}
+
+@test "llm-build: a non-numeric LLAMA_BUILD_FRESH_AT refuses (v107)" {
+    # Catches: `[[ "$jump" -ge "$fresh_at" ]]` reading a typo as 0 - bash treats an unset/garbage
+    # operand as 0 in arithmetic, so 'lots' would silently mean "never fresh" or abort mid-run
+    # after the pull.  The refusal comes before anything is configured.
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t \
+        commit -q --allow-empty -m fixture
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    export LLAMA_BUILD_FRESH_AT=lots
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -ne 0 ]
+    [[ "$out" == *"LLAMA_BUILD_FRESH_AT"* ]]
+    [[ "$out" != *"Done"* ]]
+    [ ! -s "$CMAKE_LOG" ]
 }
