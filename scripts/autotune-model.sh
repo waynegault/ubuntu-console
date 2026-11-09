@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 126
+#   v126 (2026-11-09): the refusal names the term that refused.  v125's call site read the
+#     verdict through `$( )`, so __AUTOTUNE_VERDICT_REASON — script-scope state by design —
+#     never crossed the subshell and every refusal fell back to "load N on M cores", a
+#     sentence its own reading contradicts (21:48 today: row 3 measured 70.53 tps, load 3.14
+#     on 20 cores, and the CI/pressure term that actually refused was printed as load).
+#     The helper now also sets __AUTOTUNE_VERDICT, and the call site reads both globals in
+#     THIS shell with stdout discarded.  tests/unit/87 named the trap in a comment and then
+#     tested only the helper, which is why the call site kept it.
 # Module Version: 125
 #   v125 (2026-11-09): the winning save passes the boot's GPU carve (VRAM_TOTAL, MiB) to
 #     profile_save, so the row records the pool its tps was measured in (registry col 48,
@@ -1070,6 +1079,9 @@ __autotune_measurement_verdict() {
     # The reason travels with the verdict: a CI or pressure refusal happens on a box whose
     # LOAD is legitimately under the core count, so a caller that says "the load was
     # contended" would be printing a sentence its own reading contradicts.
+    # The WORD travels the same way — one echo for a reader of stdout, one script-scope
+    # global so the caller can take it without capturing stdout in a subshell (v126).
+    __AUTOTUNE_VERDICT=""
     __AUTOTUNE_VERDICT_REASON=""
     # A FORCED run cannot certify at all.  `--allow-contended` on its own only widens the
     # contended branch: when the live load happens to sit at or under the core count, the
@@ -1078,7 +1090,11 @@ __autotune_measurement_verdict() {
     # while 8 CI workers were live and llama-server held the rest of the load, so load>cores
     # was false at the moment of the read.  force=1 means "this run was let through a gate",
     # which is a fact the caller knows and the load figure does not.
-    if [[ "$force" == "1" && "$allow" == "1" ]]; then echo indicative; return 0; fi
+    if [[ "$force" == "1" && "$allow" == "1" ]]; then
+        __AUTOTUNE_VERDICT=indicative
+        echo "$__AUTOTUNE_VERDICT"
+        return 0
+    fi
     # THE LOAD TERM IS NECESSARY, NOT SUFFICIENT (2026-11-08).  load<=cores certified two
     # runs that were NOT quiet, and the number still read as a property of the model:
     #   2026-11-07 22:14Z  load 3.48 / 8 cores, llama-server at 111%, two runners 92/75%
@@ -1107,20 +1123,23 @@ __autotune_measurement_verdict() {
     fi
     if [[ -n "$contended" ]]; then
         __AUTOTUNE_VERDICT_REASON="$contended"
-        if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
+        if [[ "$allow" == "1" ]]; then __AUTOTUNE_VERDICT=indicative; else __AUTOTUNE_VERDICT=refuse; fi
+        echo "$__AUTOTUNE_VERDICT"
         return 0
     fi
     if [[ "$load" =~ ^[0-9]+([.][0-9]+)?$ && "$cores" =~ ^[0-9]+$ ]]; then
         if awk -v l="$load" -v c="$cores" 'BEGIN{exit !(l > c)}'; then
             __AUTOTUNE_VERDICT_REASON="load ${load} on ${cores} cores"
-            if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
+            if [[ "$allow" == "1" ]]; then __AUTOTUNE_VERDICT=indicative; else __AUTOTUNE_VERDICT=refuse; fi
         else
-            echo certified
+            __AUTOTUNE_VERDICT=certified
         fi
+        echo "$__AUTOTUNE_VERDICT"
         return 0
     fi
     __AUTOTUNE_VERDICT_REASON="load unreadable (\"${load}\")"
-    if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
+    if [[ "$allow" == "1" ]]; then __AUTOTUNE_VERDICT=indicative; else __AUTOTUNE_VERDICT=refuse; fi
+    echo "$__AUTOTUNE_VERDICT"
     return 0
 }
 
@@ -3887,11 +3906,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # as an error.  Every other unreadable term fails closed.
         # swallow-ok: pgrep exit 1 means no runners, which is the quiet reading — not an error
         _row_ci=$(pgrep -fc '[R]unner\.Worker' 2>/dev/null) || _row_ci=0
-        _meas_state=$(__autotune_measurement_verdict "$_row_load" "$_row_cores" \
+        # NOT in a subshell (v126).  Both the word and the reason are script-scope state, and
+        # `$( )` discards the reason: measured 21:48 today, row 3 refused and printed
+        # "load 3.14 on 20 cores" — a figure its own bound had already cleared — because the
+        # CI/pressure text never crossed the substitution.  stdout is discarded for the same
+        # reason: the word is read from the global, not captured.
+        __AUTOTUNE_VERDICT=""
+        __autotune_measurement_verdict "$_row_load" "$_row_cores" \
             "${ALLOW_CONTENDED:-0}" "${TAC_CONTENDED:-0}" \
-            "${START_PSI_PCT:-}" "$_row_ci")
+            "${START_PSI_PCT:-}" "$_row_ci" >/dev/null
+        _meas_state="$__AUTOTUNE_VERDICT"
         if [[ "$_meas_state" == "refuse" ]]; then
-            echo "  REFUSING to write: ${__AUTOTUNE_VERDICT_REASON:-load ${_row_load} on ${_row_cores} cores} — the box"
+            echo "  REFUSING to write: ${__AUTOTUNE_VERDICT_REASON:-the gate named no term} — the box"
             echo "  was CONTENDED, so this row's tps is indicative, not certified — nothing was written."
             echo "  Re-run on a quiet box, or pass --allow-contended to save it as meas_state=indicative."
             exit 1
