@@ -72,8 +72,46 @@ EOF
     # and 8d144104 appended to it — so a growing schema does not red this, while a reordered
     # or missing provenance column still does.
     [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy"* ]]
-    # Build identity (card 8d144104) is the tail today: what measured the row, and what it replaced.
-    [[ "$header" == *"|llama_build|llama_build_prev" ]]
+    # Build identity (card 8d144104) and the GPU carve (col 48) follow it.  Matched as an
+    # ORDERED SUBSTRING, not a tail: 8d144104 appended to this block once already, and a tail
+    # match reds on a schema that grew rather than on a column that went missing.
+    [[ "$header" == *"|llama_build|llama_build_prev|gpu_carve"* ]]
+}
+
+@test "registry-001: profile-save records the GPU carve, and replaces it on a re-tune" {
+    # Wayne, 2026-11-08: "a tps figure must name its GPU carve."  Rows certified at 24 GiB and
+    # rows certified at 32 GiB were indistinguishable in the registry, and a re-tune at a
+    # smaller carve replaced a better figure with nothing recording which pool either came
+    # from (schema v8, col 48).
+    cat > "$LLM_REGISTRY" <<'EOF'
+#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill
+1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no
+EOF
+    # The carve is the 33rd argument; everything between tps and it is the optional block.
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "12.3" \
+        "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" \
+        "" "" "" "" "" "" "" "" "" "24576"
+    [[ "$(awk -F'|' '$3=="model-one.gguf"{print $48}' "$LLM_REGISTRY")" == "24576" ]]
+    # A re-tune at a DIFFERENT carve REPLACES it: col 17 is replaced by the same save, so a
+    # carve kept from the previous run would name a pool this tps was not measured in.
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "11.9" \
+        "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" \
+        "" "" "" "" "" "" "" "" "" "32768"
+    [[ "$(awk -F'|' '$3=="model-one.gguf"{print $48}' "$LLM_REGISTRY")" == "32768" ]]
+    # A caller that cannot read the card passes nothing and must NOT erase what was recorded.
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "11.9" \
+        "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" \
+        "" "" "" "" "" "" "" "" "" ""
+    [[ "$(awk -F'|' '$3=="model-one.gguf"{print $48}' "$LLM_REGISTRY")" == "32768" ]]
+    # A non-numeric carve is dropped, not written as a label.
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "11.9" \
+        "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" \
+        "" "" "" "" "" "" "" "" "" "auto"
+    [[ "$(awk -F'|' '$3=="model-one.gguf"{print $48}' "$LLM_REGISTRY")" == "32768" ]]
+    # The row still agrees with the header the same writer emitted.
+    local _ncols
+    _ncols=$(awk -F'|' 'NR==1{print NF}' "$LLM_REGISTRY")
+    [[ "$(awk -F'|' '$3=="model-one.gguf"{print NF}' "$LLM_REGISTRY")" == "$_ncols" ]]
 }
 
 @test "ctxbudget-003: window policy classifies the observed profile (pure, no GPU)" {

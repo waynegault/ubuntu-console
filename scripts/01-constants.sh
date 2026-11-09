@@ -2,7 +2,17 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 54
+# Module Version: 55
+#   v55 (2026-11-09): the registry header gains gpu_carve (48) — the GPU carve the row was
+#     MEASURED under, in MiB as `nvidia-smi --query-gpu=memory.total` reports it.  Wayne,
+#     2026-11-08: "A tps figure must name its GPU carve."  Rows certified at 24 GiB and rows
+#     certified at 32 GiB sat side by side with nothing in either saying which pool the number
+#     came from, and the same model re-tuned at a smaller carve had replaced a better figure
+#     invisibly.  Written only by the autotune's profile_save (like meas_* and llama_build);
+#     scan/sync emit it empty.  It is REPLACED with each save, not kept as history: a tps is
+#     replaced by the re-measurement, so a carve describing the old measurement would lie
+#     about the new one (llama_build_prev exists because a build is an identity, a carve is
+#     the condition of the measurement beside it).
 #   v54 (2026-11-09): LLM_IDLE_PID_FILE names the idle-release monitor's pid file,
 #     beside ACTIVE_LLM_FILE.  `model use N --idle-timeout S` starts that monitor and
 #     `model stop` stops it, so the path is shared state and lives with the other
@@ -360,7 +370,14 @@ fi
 # local build in another, so only the reported string is comparable.  Col 47 holds the build
 # the row was MEASURED under before a re-bench under a DIFFERENT build replaced col 46, so the
 # two measurements stay distinguishable instead of the older one vanishing.
-export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy|llama_build|llama_build_prev'
+#
+# gpu_carve (48) is the carve the row was MEASURED under, in MiB, as
+# `nvidia-smi --query-gpu=memory.total` reports it — the card's total on THIS boot.  It is
+# written only by the autotune's profile_save and REPLACED with each save rather than kept
+# beside the old value: a re-measurement replaces col 17, so a carve describing the previous
+# measurement would assert a pool the new number was not taken in.  Empty means the row was
+# never measured by an autotune run, not that the carve was zero.
+export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy|llama_build|llama_build_prev|gpu_carve'
 # Overridable, like everything else in this file: a test, or a box whose models live
 # somewhere other than the home directory, has to be able to point at its own registry.
 # Measured 2026-10-30: the assignment ignored a pre-set LLM_REGISTRY, so a fixture

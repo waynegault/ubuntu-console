@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 109
+# Module Version: 110
+#   v110 (2026-11-09): `model info` binds and shows gpu_carve (col 48).  The carve is what makes
+#   a recorded tps comparable: the same model certified at 24 GiB and at 32 GiB are two different
+#   numbers, and the row is the only place that says which pool a figure came from.  Columns 46-47
+#   are bound for position only, so 48 lands on the carve.  A rescan keeps the column: the scan's
+#   previous-row read stops at col 39, and bash's `read` puts the remainder in the last variable,
+#   which the scan re-emits verbatim (verified 2026-11-09 against a 48-column fixture row).
 #   v109 (2026-11-09): a taken rollback name no longer blocks the build.  The move must not `mv`
 #   onto an existing directory (it nests and exits 0), so an existing `${build_dir}.prev-<commit>`
 #   was a hard refusal - and one interrupted build leaves its tree undated, so every retry then
@@ -3021,12 +3027,14 @@ function __model_info() {
     local _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl \
         _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx \
         _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n \
-        _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
+        _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy \
+        _llama_build _llama_build_prev _gpu_carve
     # The trailing fields are bound for position only, and marked unread (SC2034)
-    # so the positional binding needs no suppression.  The list runs to column 45
+    # so the positional binding needs no suppression.  The list runs to column 48
     # because meas_state (44) is the registry's own not-certified flag and DEF-024
     # requires `model info` to SURFACE it: before this, the row of an unloadable model
-    # printed its FIT and TPS values and said nothing about usability.
+    # printed its FIT and TPS values and said nothing about usability.  46-47 are bound
+    # only so 48 lands on gpu_carve — the carve that qualifies the tps figure above it.
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads \
         batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps \
         autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch \
@@ -3034,7 +3042,7 @@ function __model_info() {
         _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms \
         _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty \
         _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state \
-        _ctx_policy <<< "$entry"
+        _ctx_policy _llama_build _llama_build_prev _gpu_carve <<< "$entry"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -3057,6 +3065,9 @@ function __model_info() {
     __tac_info "mmap_mode" "${mmap_mode:-auto}" "$C_Text"
     __tac_info "flash_attn" "${flash_attn:-on}" "$C_Text"
     __tac_info "tps" "${tps:--}" "$C_Text"
+    # The carve qualifies the tps: the same model certified at 24 GiB and at 32 GiB is two
+    # different numbers, so a bare figure without its pool is not comparable to anything.
+    [[ -n "${_gpu_carve:-}" ]] && __tac_info "gpu_carve" "${_gpu_carve} MiB" "$C_Text"
     __tac_info "autotuned" "${autotuned:-no}" "$C_Text"
     __tac_info "is_default" "${is_default:-no}" "$C_Text"
     __tac_info "in_vram" "${in_vram:-no}" "$C_Text"

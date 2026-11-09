@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 124
+# Module Version: 125
+#   v125 (2026-11-09): the winning save passes the boot's GPU carve (VRAM_TOTAL, MiB) to
+#     profile_save, so the row records the pool its tps was measured in (registry col 48,
+#     Wayne 2026-11-08 "a tps figure must name its GPU carve").  The figure is the one the run
+#     already validated at its start — an unreadable card still refuses the run, so a row is
+#     never written with a guessed carve.
 #   v124 (2026-11-09): a `key not found in model:` failure no longer blames the BUILD.  The
 #     label said "rebuilding does not help, re-convert or obtain a matching GGUF", while
 #     bin/llm-archive-unusable.sh said "rebuild llama.cpp first" — the operator was told both
@@ -3989,7 +3994,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
             "$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
-            "$LLAMA_BUILD_ID" \
+            "$LLAMA_BUILD_ID" "$VRAM_TOTAL" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the

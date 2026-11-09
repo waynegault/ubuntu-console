@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 41
+# Module Version: 42
+#   v42 (2026-11-09): profile_save takes the GPU carve as its 33rd argument and records it in
+#     col 48 (`gpu_carve`, MiB, the card total this boot).  Wayne, 2026-11-08: a tps figure
+#     must name its carve — rows certified at 24 GiB and at 32 GiB were indistinguishable in
+#     the registry, and a re-tune at a smaller carve replaced a better figure invisibly.  The
+#     column is REPLACED by each save (col 17 is), and an empty argument leaves it alone, so a
+#     caller that cannot read the card cannot erase what a measured run recorded.
 #   v41 (2026-11-07): build identity (card 8d144104).  __llm_llama_build_id asks the binary
 #     the caller MEASURED WITH for its own `--version` line, and profile_save takes that
 #     string as its 32nd argument: col 46 records it, and col 47 keeps the value it replaced
@@ -517,6 +523,7 @@ function __llm_autotune_done_for_model() {
 #       [spec_type] [spec_draft_model] [spec_n_max] [spec_ngl] [spec_device]
 #       [spec_accept_len] [workload] [ttft_ms] [meas_load] [meas_n]
 #       [meas_spread_pct] [meas_drift_pct] [meas_state] [ctx_policy]
+#       [llama_build] [gpu_carve]
 #   Profile 1 (existing columns) = max-ctx config; prefill_tps (col 21) is its
 #   prompt-eval throughput. Profile 2 (cols 22-26) = max-decode-TPS config for
 #   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v"), ngl (col 7)
@@ -529,7 +536,9 @@ function __llm_autotune_done_for_model() {
 #   (AUTOTUNE-005), never by this function.  ctx_policy (col 45) is the verdict of
 #   __autotune_window_policy over the observed bench_avg_prompt_tokens: it records
 #   that a certified MAX-ctx window over/under/fits what the investigator actually
-#   sends, or profile-missing when no profile was measured.
+#   sends, or profile-missing when no profile was measured.  gpu_carve (col 48) is the
+#   card's total in MiB at measurement time — the pool the tps was taken in — replaced by
+#   each save and left untouched when the caller passes nothing.
 # @returns 0 on success, 1 on validation/write failure.
 # ---------------------------------------------------------------------------
 function __llm_autotune_profile_save() {
@@ -561,6 +570,7 @@ function __llm_autotune_profile_save() {
     local meas_load="${26:-}" meas_n="${27:-}" meas_spread_pct="${28:-}" meas_drift_pct="${29:-}" meas_state="${30:-}"
     local ctx_policy="${31:-}"
     local llama_build="${32:-}"
+    local gpu_carve="${33:-}"
     local profile_file="$LLM_REGISTRY"
 
     # $1 is a row NUMBER or a model FILE name; both are accepted so existing callers
@@ -619,6 +629,10 @@ function __llm_autotune_profile_save() {
         || "$ctx_policy" =~ ^profile-(fits|over|under):[0-9]+$ ]]; then
         ctx_policy=""
     fi
+    # gpu_carve (col 48): MiB, numeric only.  Empty means "this caller does not know the
+    # carve", and the awk below then leaves the column ALONE — a caller that cannot read the
+    # card must not erase the pool a measured run recorded.
+    [[ "$gpu_carve" =~ ^[0-9]+$ ]] || gpu_carve=""
 
     # Registry hygiene: persist measured floats at a maximum of 2 decimal
     # places. The server timings carry full float64 precision (e.g. prefill
@@ -691,6 +705,7 @@ function __llm_autotune_profile_save() {
         -v meas_state_val="$meas_state" \
         -v ctx_policy_val="$ctx_policy" \
         -v llama_build_val="$llama_build" \
+        -v gpu_carve_val="$gpu_carve" \
         -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
@@ -754,6 +769,11 @@ function __llm_autotune_profile_save() {
                     if ($46 != "" && $46 != llama_build_val) $47 = $46
                     $46 = llama_build_val
                 }
+                # GPU CARVE (48): the pool this measurement was taken in.  REPLACED rather than
+                # kept beside an older value — col 17 is replaced by this same save, so a carve
+                # left over from the previous run would name a pool the new figure was not
+                # measured in.
+                if (gpu_carve_val != "") $48 = gpu_carve_val
             }
             # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
             # P-core ceiling (6) on every registry write — a pre-cap row must
