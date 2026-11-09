@@ -117,7 +117,7 @@ EOF
     [[ "$(echo "$row" | cut -d'|' -f32)" == "6.67" ]]
 }
 
-@test "spec-dec-004: __spec_block_size reads the registry winner" {
+@test "spec-dec-004: __spec_launch_flags reads the registry winner" {
     cat > "$LLM_REGISTRY" <<'EOF'
 #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len
 1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|yes|no|no|||||||ngram||16|||6.67
@@ -130,4 +130,62 @@ EOF
         __spec_block_size
     ' _ "$REPO_ROOT" "$TMPDIR_BATS"
     [[ "$output" == "16" ]]
+}
+
+# v42/v105: a MODEL-BASED draft type must be NAMED on the argv, and a row's spec
+# columns must actually reach the launch.  Before these, __spec_launch_flags emitted
+# --spec-type only for `ngram` (a row with draft-dflash launched the file with no type
+# and llama-server used its own default) and __model_use never assigned row_spec_* at
+# all (the fields were parsed as `_row_spec_*` and dropped).  Criterion: the adopted
+# Qwen3.8-27B DFlash configuration — measured 2026-11-09 at ~1.5x — ran with
+# --spec-type draft-dflash, --spec-draft-n-max 7, --spec-draft-ngl and draft backend
+# sampling, so that exact argv is what a row must produce.
+@test "spec-dec-004: __spec_launch_flags NAMES a model-based draft type" {
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        row_spec_type=draft-dflash row_spec_draft_model=/models/d.gguf \
+            row_spec_n_max=7 row_spec_ngl=999 __spec_launch_flags
+    ' _ "$REPO_ROOT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"--spec-type"* ]] && [[ "$output" == *"draft-dflash"* ]]
+    [[ "$output" == *"--spec-draft-n-max"* ]]
+    [[ "$output" == *"--spec-draft-ngl"* ]]
+    [[ "$output" == *"--spec-draft-backend-sampling"* ]]
+
+    # The sampler ships with the type, and 0 turns it off without dropping the type.
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        row_spec_type=draft-dflash row_spec_draft_model=/models/d.gguf \
+            LLM_SPEC_DRAFT_BACKEND_SAMPLING=0 __spec_launch_flags
+    ' _ "$REPO_ROOT"
+    [[ "$output" == *"--spec-type"* ]]
+    [[ "$output" != *"--spec-draft-backend-sampling"* ]]
+
+    # An unrecognised type is SAID on stderr; it never silently becomes the default.
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        row_spec_type=draft-bogus row_spec_draft_model=/models/d.gguf __spec_launch_flags
+    ' _ "$REPO_ROOT"
+    [[ "$output" != *"--spec-type"* ]]
+    [[ "$output" == *"unknown spec_type draft-bogus"* ]]
+}
+
+@test "spec-dec-004: model use hands a row's spec columns to the launch" {
+    cat > "$TMPDIR_BATS/wired.conf" <<'EOF'
+#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len
+1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|999|4096|6|1024|256|1|1024|llama_server|auto|on|0|yes|no|no|||||||draft-dflash|d.gguf|7|999||
+EOF
+    run bash -c '
+        source "$1/scripts/01-constants.sh"
+        source "$1/scripts/11a-llm-registry.sh"
+        source "$1/scripts/11d-llm-gpu.sh"
+        source "$1/scripts/11e-llm-model.sh"
+        export LLM_REGISTRY="$2/wired.conf"
+        __model_use_resolve_model 1 >/dev/null 2>&1
+        __spec_launch_flags
+    ' _ "$REPO_ROOT" "$TMPDIR_BATS"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"--spec-type"* ]] && [[ "$output" == *"draft-dflash"* ]]
+    [[ "$output" == *"d.gguf"* ]]
+    [[ "$output" == *"--spec-draft-n-max"* ]]
 }

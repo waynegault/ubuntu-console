@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 42
+#   v42 (2026-11-09): __spec_launch_flags NAMES a model-based draft type.  It emitted
+#   --spec-type only for `ngram`, so a registry row carrying spec_type=draft-dflash
+#   (or mtp/simple/eagle3/dspark) with a draft file launched that file with no type and
+#   llama-server fell back to its own default — the row's value, read and dropped.  The
+#   adopted Qwen3.8-27B DFlash configuration ran with the type named, so the row must
+#   reproduce it; backend sampling ships with it and LLM_SPEC_DRAFT_BACKEND_SAMPLING=0
+#   turns that off.  An unrecognised type now says so on stderr instead of vanishing.
 # Module Version: 41
 #   v41 (2026-11-08): __llm_stand_down_cuda_lanes asks the SHARED collector which lanes
 #   hold CUDA memory, and refuses to run under AUTOTUNE_SELFTEST=1.  It keyed that
@@ -1658,6 +1666,30 @@ function __spec_launch_flags() {
     then
         printf '%s\n' "--spec-draft-n-max" "$_n_max"
     fi
+
+    # v42: a MODEL-BASED draft type must be NAMED.  Only `ngram` emitted --spec-type
+    # before, so a row carrying spec_type=draft-dflash (etc.) launched the draft file
+    # with no type at all and llama-server fell back to its own default — the row's
+    # value was read and then silently dropped.  Measured 2026-11-09: the adopted
+    # Qwen3.8-27B DFlash arm named the type explicitly, so the row must reproduce it.
+    case "$_type" in
+        '' | ngram) ;;
+        draft-simple | draft-eagle3 | draft-mtp | draft-dflash | draft-dspark)
+            printf '%s\n' "--spec-type" "$_type"
+            # Backend sampling is what the measured DFlash arm ran and what a
+            # model-based drafter expects; LLM_SPEC_DRAFT_BACKEND_SAMPLING=0 disables
+            # it.  ngram drafting has no sampler of its own, so it is not emitted there.
+            case "${LLM_SPEC_DRAFT_BACKEND_SAMPLING:-1}" in
+                0 | false | FALSE | no | NO | off | OFF) ;;
+                *) printf '%s\n' "--spec-draft-backend-sampling" ;;
+            esac
+            ;;
+        *)
+            # stdout is the flag stream (mapfile at the caller), so this one note
+            # goes to stderr; it is the only stderr write in this function.
+            printf 'spec-decode: unknown spec_type %s ignored\n' "$_type" >&2
+            ;;
+    esac
 }
 
 # __calc_threads — CPU threads based on how much spills to CPU.

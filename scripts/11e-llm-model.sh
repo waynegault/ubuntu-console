@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 105
+#   v105 (2026-11-09): `model use` HANDS the row's spec columns to the launch.  The
+#   registry has carried spec_type/spec_draft_model/spec_draft_n_max/spec_draft_ngl/
+#   spec_draft_device (columns 27-31) since SPEC-DEC-004, and __spec_launch_flags reads
+#   them from dynamic scope — but __model_use never declared or assigned them, so every
+#   row's spec settings were parsed (as `_row_spec_*`, deliberately unread) and dropped.
+#   Measured: row 11 carries spec_type=ngram with spec_n_max=16 and its lane's argv has
+#   no spec flag.  Same failure shape as the flag builder's missing --spec-type: the
+#   value is read, then silently not used.
 # Module Version: 103
 #   v103 (2026-11-08): the sweep-ownership refusal dd714d23 added was 178 chars, so it is wrapped
 #     with a backslash-newline INSIDE the quoted string — bash removes it, so the emitted text is
@@ -1096,7 +1105,7 @@ function __model_use_resolve_model() {
     # Every field is bound, unused ones included: the registry row is positional,
     # so dropping a name would shift every field after it.  The `_` prefix marks
     # the field as deliberately unread for SC2034 — do not delete these.
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram _row_prefill _row_p2_ctx _row_p2_batch _row_p2_ubatch _row_p2_tps _row_p2_prefill _row_spec_type _row_spec_draft_model _row_spec_n_max _row_spec_ngl _row_spec_device _row_spec_accept_len <<< "$entry"
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram _row_prefill _row_p2_ctx _row_p2_batch _row_p2_ubatch _row_p2_tps _row_p2_prefill row_spec_type row_spec_draft_model row_spec_n_max row_spec_ngl row_spec_device _row_spec_accept_len <<< "$entry"
 
     # AUTOTUNE-004 retired (2026-09-14): the registry parallel column is no
     # longer read for launch, and --parallel is pinned to 1 below.  The column
@@ -2465,6 +2474,11 @@ function __model_use() {
     local ctx threads batch_size ubatch_size parallel_slots fit_target_mb
     local row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
     local row_kv_k row_kv_v
+    # SPEC-DEC-004 inputs, consumed by __spec_launch_flags through dynamic scope.  That
+    # builder reads row_spec_* but nothing ever SET them here, so a row's spec columns
+    # reached no launch at all (measured 2026-11-09: row 11 carries spec_type=ngram and
+    # spec_n_max=16 while the lane it serves runs with no spec flag in its argv).
+    local row_spec_type row_spec_draft_model row_spec_n_max row_spec_ngl row_spec_device
     local model_path model_bytes quant_rating llm_backend python_bin
     local smi_cmd free_vram_mb type_k_val use_no_mmap
     local cmd model_shell_pid moe_offload_flag=""
