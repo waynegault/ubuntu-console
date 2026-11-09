@@ -76,8 +76,26 @@ _set_module_list() {
 # Extra assignments are added to the child's environment.  Both streams are
 # merged: bash writes each printf directly, so the captured order is the real
 # write order.
+#
+# HERMETIC: every knob the loader under test reads is scrubbed from the inherited
+# environment first, then the caller's own NAME=VALUE pairs are applied.  Without
+# this the suite asserts about whatever shell happens to launch it.
+#
+# Measured 2026-11-09: ~/.profile exports TAC_STARTUP_NO_CLEAR=1 (a temporary
+# debug switch put there on 2026-11-05 so a pre-bash line stays on screen).  The
+# loader honours it by drawing neither the clear nor the header, so cases 1, 2, 4
+# and 5 went red with `[: : integer expected` while cases 3, 6, 7, 8 and 9 passed
+# — and the same file was 9/9 in a shell that had not sourced ~/.profile.  The
+# loader was correct; the fixture was reporting the parent environment.
+#
+# Keep this list equal to the environment the loader actually reads
+# (tactical-console.bashrc: __TAC_INITIALIZED, __TAC_DISPLAY_BANNER,
+# TAC_STARTUP_NO_CLEAR, TAC_STARTUP_LOG, DEBUG_TAC_STARTUP).
+# `env -u` is applied before the assignments, so a case that sets one of these
+# itself still wins.
 _run_loader() {
     env -u __TAC_INITIALIZED -u __TAC_DISPLAY_BANNER \
+        -u TAC_STARTUP_NO_CLEAR -u TAC_STARTUP_LOG -u DEBUG_TAC_STARTUP \
         HOME="$FAKE_HOME" PS1= TERM=dumb \
         TACTICAL_REPO_ROOT="$FAKE_REPO" "$@" \
         bash --noprofile --norc -i -c "source '$LOADER'" 2>&1
