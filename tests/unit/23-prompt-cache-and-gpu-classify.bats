@@ -106,6 +106,14 @@ case "$op" in
             cat "$MOCK_STATE/active_enter" 2>/dev/null || echo ""
             exit 0
         fi
+        # The busy branch defers a stop for a lane that started under CUDA_START_GRACE_S
+        # ago (v28).  Absent a fixture the stamp reads 0, which is "no recent start", so
+        # every existing case keeps the stop it always asserted.
+        if [[ "$*" == *"ExecMainStartTimestampMonotonic"* ]]
+        then
+            cat "$MOCK_STATE/exec_start_mono" 2>/dev/null || echo "0"
+            exit 0
+        fi
         unit="${1:-}"
         case "$unit" in
             *cuda*)      cat "$MOCK_STATE/cuda_state" 2>/dev/null || echo "inactive" ;;
@@ -771,6 +779,48 @@ JSON
     grep -q 'stop llama-cuda-llama32-3b-chat.service' "$MOCK_STATE/systemctl.log"
     # And it never actuates: the classifier's run adds no systemctl verb of its own.
     [[ "$(grep -c 'stop ' "$MOCK_STATE/systemctl.log")" -eq 1 ]]
+}
+
+@test "gpu-classify: a lane that is still LOADING is not stopped by its own utilisation" {
+    # The failure this catches (measured at boot 2026-11-09 18:34:31): the chat lane started,
+    # began loading a 17.7 GiB model, and the next tick read util=30%>=15% — its OWN load —
+    # and stopped it mid-load.  Every boot threw away the start it had just paid for.
+    rm -f "$MOCK_STATE/classify-calls"
+    : > "$MOCK_STATE/systemctl.log"
+    touch "$MOCK_STATE/busy"
+    echo "active" > "$MOCK_STATE/cuda_state"
+    printf '%s\n' "util=30%>=15%" > "$MOCK_STATE/gpu_reason"
+    # Started one second ago, in /proc/uptime's monotonic microseconds.
+    awk '{printf "%d", $1 * 1000000 - 1000000}' /proc/uptime > "$MOCK_STATE/exec_start_mono"
+
+    run "$WATCHDOG"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"is still loading"* ]] \
+        || { echo "the deferral was not reported: $output"; return 1; }
+    [[ "$output" == *"the stop is deferred"* ]]
+    [[ "$output" != *"GPU busy — stopping"* ]]
+    [[ ! -s "$MOCK_STATE/systemctl.log" ]] \
+        || { echo "the lane was actuated: $(cat "$MOCK_STATE/systemctl.log")"; return 1; }
+}
+
+@test "gpu-classify: the loading deferral is BOUNDED — an older start still stops" {
+    # Control for the case above.  Same busy card and same utilisation reason; the only
+    # difference is that the lane started an hour ago, i.e. it is not loading.  Without this
+    # the deferral could be a blanket refusal and the first case would still pass.
+    rm -f "$MOCK_STATE/classify-calls"
+    : > "$MOCK_STATE/systemctl.log"
+    touch "$MOCK_STATE/busy"
+    echo "active" > "$MOCK_STATE/cuda_state"
+    printf '%s\n' "util=30%>=15%" > "$MOCK_STATE/gpu_reason"
+    awk '{printf "%d", $1 * 1000000 - 3600000000}' /proc/uptime > "$MOCK_STATE/exec_start_mono"
+
+    run "$WATCHDOG"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"GPU busy — stopping"* ]] \
+        || { echo "a lane in the way was not stopped: $output"; return 1; }
+    grep -q 'stop llama-cuda-llama32-3b-chat.service' "$MOCK_STATE/systemctl.log"
 }
 
 @test "gpu-classify: a driver-level blip does not park a running lane once a re-probe finds it free" {

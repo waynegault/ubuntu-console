@@ -148,7 +148,17 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 27
+# Module Version: 28
+#   v28 (2026-11-09): the busy gate no longer stops a lane that is still LOADING.  Measured at
+#     boot 18:34:31: the chat lane started at :29, began loading a 17.7 GiB model at :30, and
+#     the next tick read `util=30%>=15%` — the lane's OWN load — and stopped it mid-load, so
+#     every boot threw away the start it had just paid for.  The utilisation term cannot tell a
+#     lane's own loading from a foreign workload, and the existing evidence guards only cover a
+#     lane that answers 200 (v24) or a probe that errored (v27) — a loading lane answers 503 or
+#     nothing at all.  The stop is now DEFERRED for CUDA_START_GRACE_S (default 180) after the
+#     unit's ExecMainStartTimestampMonotonic, the same shape v3.14 uses for a driver-level blip:
+#     bounded, and only the STOP is deferred — the start gate still fails closed, and a lane
+#     genuinely in the way is stopped when the window ends.
 #   v27 (2026-11-08): LLM-LANE-STOP-001 option (b) — a gpu-busy probe that ERRORS (unexpected
 #     rc, or rc 0 with no JSON: OUR TOOLING failing, not an answer about the card) no longer
 #     parks a lane that is SERVING.  The verdict stays fail-closed for the START gate; only the
@@ -331,6 +341,15 @@ CUDA_SUSPEND_FILE="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-c
 # exactly one restart and never mask a genuine death after that.
 CUDA_GPUSTOP_FILE="${LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.gpustop}"
 CUDA_GPUSTOP_TTL_S="${LLAMA_WATCHDOG_CUDA_GPUSTOP_TTL_S:-1800}"
+# A lane systemd started very recently is LOADING, and loading a 17-18 GiB model is itself
+# what raises the utilisation the busy gate reads.  Measured 2026-11-09 18:34:31 (boot): the
+# chat lane started at :29, began loading at :30, and the next tick read
+# `util=30%>=15%` — its OWN load — and stopped the lane mid-load, wasting the start.
+# The stop is destructive and cannot be undone from here, so it is DEFERRED for this window
+# (the shape v3.14 uses for a driver-level blip).  Only the stop is deferred; the start gate
+# is untouched and still fails closed, and a lane genuinely in the way stops when the window
+# ends.  Env-overridable so the suite can pin it.
+CUDA_START_GRACE_S="${LLAMA_WATCHDOG_CUDA_START_GRACE_S:-180}"
 
 # health: 0=ok, 1=down/fail, 2=still loading (503) — treat 2 as "not ready, don't touch"
 health() {
@@ -618,6 +637,24 @@ gpu_driver_failclosed() {
 # lane looks like on a wedged driver — so only rc==0 counts here.
 gpu_serving_now() {
     health "$CUDA_PORT"
+}
+
+# cuda_within_start_grace — 0 when the CUDA lane's main process started less than
+# CUDA_START_GRACE_S ago, i.e. it is (probably) still loading its model.
+#
+# Monotonic microseconds on both sides, so a clock step cannot widen or close the window.
+# An unreadable start stamp is NOT evidence of a recent start: it answers 1, which leaves the
+# busy branch exactly as it was before this helper existed.
+cuda_within_start_grace() {
+    local started now_us age_s _prop="-p ExecMainStartTimestampMonotonic"
+    # swallow-ok: an unreadable start stamp is not evidence of a recent start, so the caller keeps its stop
+    started=$(systemctl --user show "${CUDA_UNIT}.service" "$_prop" --value 2>/dev/null) || return 1
+    [[ "$started" =~ ^[0-9]+$ ]] && (( started > 0 )) || return 1
+    # swallow-ok: /proc/uptime unreadable means no monotonic clock to compare against — fail to "no grace"
+    now_us=$(awk '{printf "%d", $1 * 1000000}' /proc/uptime 2>/dev/null) || return 1
+    [[ "$now_us" =~ ^[0-9]+$ ]] || return 1
+    age_s=$(( (now_us - started) / 1000000 ))
+    (( age_s >= 0 && age_s < CUDA_START_GRACE_S ))
 }
 
 # Re-probe dials (v3.14): how many attempts, and how far apart.
@@ -949,6 +986,16 @@ supervise_cuda_lane() {
             # 13 agents on hosted fallback every time.
             log "gpu-busy probe ERRORED (no usable answer) — but $CUDA_UNIT answers /health 200" \
                 "on :${CUDA_PORT}, so the stop is refused (a failed probe is not a held card)"
+            gpustop_clear
+            strike_reset "$STRIKE_CUDA"
+        elif [[ "$cuda_state" == "active" ]] && cuda_within_start_grace; then
+            # The lane started moments ago and is loading its model: at util >= 15% the probe
+            # is reading OUR OWN load (measured 2026-11-09 18:34:31, util=30% two seconds after
+            # a start), so the stop would destroy the start it just paid for.  Deferred, not
+            # refused — the window is bounded and a lane genuinely in the way stops after it.
+            log "GPU busy${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]} but $CUDA_UNIT started" \
+                "under ${CUDA_START_GRACE_S}s ago and is still loading — its OWN load is what the" \
+                "probe reads, so the stop is deferred"
             gpustop_clear
             strike_reset "$STRIKE_CUDA"
         else
