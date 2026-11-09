@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 6
+#   v6 (2026-11-09): the quiet gate gains a CLOCK term.  The 15:14 run was clean on every other
+#       term — load 1.90, no CI worker, not a byte of foreign CPU pressure — and still measured
+#       28.44 tok/s at four slots where the same arm read 119.12 on a warm card: the SM clock was
+#       at 656 of 3,003 MHz and the card drew 1.7 W.  A load average cannot see that, so the gate
+#       now refuses below LLM_SLOTS_PROBE_CLOCK_MIN_PCT (default 60%) of this boot's max and
+#       quotes both readings; an UNREADABLE clock stays no-evidence, like the PSI term.
 # Module Version: 5
 #   v5 (2026-11-09): the probe refuses to measure a box that is not quiet, and voids an arm
 #       whose numbers cannot be true.  Measured on the second real run (load 6.80 at start):
@@ -221,6 +228,23 @@ _cpu_pressure_pct() {
     printf '%s' "${BASH_REMATCH[1]}"
 }
 
+# _gpu_clock_mhz — the SM clock and this boot's max, as "sm max", or EMPTY when unreadable.
+# Measured 2026-11-09 while the sweep ran: 656 MHz of 3,003 — the IDLE floor — with the card
+# drawing 1.7 W.  That sweep produced 28.44 tok/s at four slots against 119.12 from the same
+# arm on a warm card, i.e. a clock factor of ~4 that nothing in the result recorded.  The
+# clock is the one confounder a load average cannot see at all.
+_gpu_clock_mhz() {
+    local _line="" _raw=""
+    # The pipeline's status is captured rather than forced to 0 with an appended `exit 0`: a
+    # missing nvidia-smi must read as UNKNOWN, and that is decided below on _raw, not here.
+    _raw="$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi \
+        --query-gpu=clocks.sm,clocks.max.sm \
+        --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')" || _raw=""  # swallow-ok: clock UNKNOWN
+    _line="$_raw"
+    [[ "$_line" =~ ^([0-9]+),([0-9]+)$ ]] || return 0
+    printf '%s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+
 # _quiet_verdict — may this run measure?  Prints a reason and returns 1 when the box is not
 # quiet; returns 0 with no output when it is.
 #
@@ -228,23 +252,37 @@ _cpu_pressure_pct() {
 # 2.43 aggregate against 4.72 per-stream — arithmetically impossible, because during the
 # 20 s group window the sweep's own `ss` polling adds load that does not exist while the
 # samples are taken.  A sweep that reports a number the box's state invalidated is worse than
-# a refused run.  THREE terms, none ever licensed by a missing instrument:
+# a refused run.  FOUR terms, none ever licensed by a missing instrument:
 #   * load1 above the core count (a run-queue average cannot see few saturated threads, so
 #     this alone is not enough — it is the cheap first term);
 #   * CPU pressure above LLM_AUTOTUNE_PSI_MAX_PCT (default 10%), sampled BEFORE any server
 #     launches so the probe's own threads are not mistaken for foreign load;
 #   * an active CI runner worker — CI's bats children never take heavy-job, so the lock
-#     cannot see them (the same rule autotune-model.sh v85 adopted).
+#     cannot see them (the same rule autotune-model.sh v85 adopted);
+#   * an SM clock below LLM_SLOTS_PROBE_CLOCK_MIN_PCT (default 60%) of this boot's max.  A
+#     quiet, IDLE card is the other way this sweep lies: the 2026-11-09 15:14 run was clean
+#     on load, 1.90, and still measured at the 656 MHz floor.
 _quiet_verdict() {
-    local _load _cores _psi _ci _term=""
+    local _load _cores _psi _ci _clk _sm _max _term=""
     read -r _load _ _ < /proc/loadavg || _load=""
     # swallow-ok: an unreadable core count leaves the load term unavailable, which is not a refusal
     _cores="$(nproc 2>/dev/null)" || _cores=""
     _psi="$(_cpu_pressure_pct)"
     # swallow-ok: no runner process means no CI term; pgrep's own status is not a finding
     _ci="$(pgrep -c -f 'actions-runner.*[R]unner\.Worker' 2>/dev/null || true)"
+    _clk="$(_gpu_clock_mhz)"
     if [[ "$_ci" =~ ^[0-9]+$ ]] && (( _ci > 0 )); then
         _term="${_ci} CI runner worker(s) active"
+    fi
+    if [[ -n "$_clk" ]]; then
+        read -r _sm _max <<< "$_clk"
+        if (( _max > 0 )) && awk -v s="$_sm" -v m="$_max" \
+             -v p="${LLM_SLOTS_PROBE_CLOCK_MIN_PCT:-60}" 'BEGIN{exit !(s * 100 < m * p)}'; then
+            # One printf keeps the text on one line without a bare continuation word: adjacent
+            # string literals joined by "\" would form the "A"B"C" shape shellcheck warns on.
+            _term="${_term:+$_term; }$(printf 'SM clock %s MHz of %s (below %s%% - an idle card measures ~4x low)' \
+                "$_sm" "$_max" "${LLM_SLOTS_PROBE_CLOCK_MIN_PCT:-60}")"
+        fi
     fi
     if [[ -n "$_psi" ]] && awk -v p="$_psi" -v m="${LLM_AUTOTUNE_PSI_MAX_PCT:-10}" 'BEGIN{exit !(p > m)}'; then
         _term="${_term:+$_term; }cpu pressure ${_psi}% (some avg10, threshold ${LLM_AUTOTUNE_PSI_MAX_PCT:-10}%)"

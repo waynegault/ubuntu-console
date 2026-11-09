@@ -202,6 +202,51 @@ EOS
     [[ "$output" == *"CI runner worker"* ]]
 }
 
+@test "slots-probe: the quiet verdict refuses an idle-clock card and names the reading" {
+    # Measured 2026-11-09 15:14: a run on a QUIET box (load 1.90) still measured 28.44 tok/s at
+    # four slots against 119.12 from the same arm on a warm card, because the SM clock sat at
+    # 656 of 3,003 MHz and the card drew 1.7 W.  Catches: a load-clean, clock-idle run reported
+    # as a measurement.  Fixture-driven, so the live clock decides nothing here.
+    awk '/^_gpu_clock_mhz\(\)/,/^}/' "$PROBE" > "$TMP/clock.sh"
+    awk '/^_quiet_verdict\(\)/,/^}/' "$PROBE" >> "$TMP/clock.sh"
+    grep -q '_quiet_verdict' "$TMP/clock.sh" || { echo "helper not found"; return 1; }
+    cat > "$TMP/bin/nproc" <<'EOS'
+#!/usr/bin/env bash
+printf '20\n'
+EOS
+    # A pgrep that answers "no runner process": without it the LIVE box's CI worker decides the
+    # warm-clock and unreadable-clock arms, and this suite reds whenever CI is running — the
+    # fixture leak that failed these two arms the first time they were written.
+    cat > "$TMP/bin/pgrep" <<'EOS'
+#!/usr/bin/env bash
+exit 1
+EOS
+    chmod +x "$TMP/bin/nproc" "$TMP/bin/pgrep"
+    # Below the 60% floor: refuse, and quote both numbers.
+    run env PATH="$TMP/bin:$PATH" LLM_SLOTS_PROBE_CLOCK_MIN_PCT=60 bash -c '
+        source "$1"
+        _cpu_pressure_pct() { printf "0"; }
+        _gpu_clock_mhz() { printf "656 3003"; }
+        _quiet_verdict' _ "$TMP/clock.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"SM clock 656 MHz of 3003"* ]]
+    # Above the floor: the clock term stays silent, so a warm card is never refused for it.
+    run env PATH="$TMP/bin:$PATH" LLM_SLOTS_PROBE_CLOCK_MIN_PCT=60 bash -c '
+        source "$1"
+        _cpu_pressure_pct() { printf "0"; }
+        _gpu_clock_mhz() { printf "2496 3003"; }
+        _quiet_verdict' _ "$TMP/clock.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"SM clock"* ]]
+    # An UNREADABLE clock is no evidence, not a refusal — the rule the PSI term already follows.
+    run env PATH="$TMP/bin:$PATH" LLM_SLOTS_PROBE_CLOCK_MIN_PCT=60 bash -c '
+        source "$1"
+        _cpu_pressure_pct() { printf "0"; }
+        _gpu_clock_mhz() { return 0; }
+        _quiet_verdict' _ "$TMP/clock.sh"
+    [ "$status" -eq 0 ]
+}
+
 @test "slots-probe: the summary reports aggregate and per-stream, and NOT-RUN for a missing arm" {
     # Catches: an arm that never measured being printed as a slot count that measured badly.
     mkdir -p "$TMP/out"
