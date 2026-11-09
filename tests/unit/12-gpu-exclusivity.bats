@@ -1390,14 +1390,15 @@ EOS
     awk '/^function __llm_stand_down_cuda_lanes\(\)/,/^}/' "$MODULE" > "$sb/lane.sh"
     grep -q '__llm_stand_down_cuda_lanes' "$sb/lane.sh" || { echo "helper not found"; return 1; }
 
-    # Stub nvidia-smi: only the CUDA lane's MainPID (4242) holds the card, and the
-    # per-process figure is [N/A] — the reading this box actually returns for every PID
-    # (WSL2 dxgkrnl).  A helper that keyed attribution on a NUMBER would stand nothing
-    # down here and silently no-op, which is the defect these tests exist for.
+    # Stub nvidia-smi: the compute-apps list is EMPTY with rc 0 — the reading this box
+    # actually returns (measured 2026-11-08: no rows at 32,331 MiB used).  Attribution
+    # comes from __llm_cuda_server_pids, which falls back to /proc/PID/exe; a helper that
+    # keyed on the compute-apps list alone stood nothing down and silently no-oped, which
+    # is the defect these tests exist for.
     cat > "$sb/bin/nvidia-smi" <<'EOS'
 #!/usr/bin/env bash
 case "$*" in
-    *query-compute-apps*) printf '4242, [N/A]\n' ;;
+    *query-compute-apps*) exit 0 ;;
     *) exit 1 ;;
 esac
 EOS
@@ -1427,6 +1428,8 @@ set -uo pipefail
 C_Warning=""
 __tac_info() { printf '%s %s\n' "$1" "$2"; }
 __llm_gpu_foreign_owner() { return 1; }
+# Only the CUDA lane's MainPID (4242) is resident; the Xe lane's (7777) is not in the set.
+__llm_cuda_server_pids() { printf '4242\n'; }
 source "$1"
 __llm_stand_down_cuda_lanes
 EOS
@@ -1471,6 +1474,7 @@ set -uo pipefail
 C_Warning=""
 __tac_info() { printf '%s %s\n' "$1" "$2"; }
 __llm_gpu_foreign_owner() { return 1; }
+__llm_cuda_server_pids() { printf '4242\n'; }
 source "$1"
 __llm_stand_down_cuda_lanes
 EOS
@@ -1525,4 +1529,82 @@ EOS
     [[ "$status" -eq 0 ]]
     [ ! -s "$sb/stopped" ] || { echo "STOPPED a foreign run's lane: $(cat "$sb/stopped")"; return 1; }
     [[ "$output" == *"card owned by another run"* ]] || { echo "out: $output"; return 1; }
+}
+
+# A declared lane whose server is NOT resident holds no memory to release, so the
+# stand-down must leave it alone: stopping a unit nobody is serving is a state change
+# with no measurement behind it.  Catches: an empty resident set read as "everything is
+# CUDA" (which is what an empty case-pattern match would do).
+@test "lane stand-down: a declared lane that is not resident is left serving" {
+    local sb="$TAC_TEST_TMPDIR/lane-not-resident"
+    mkdir -p "$sb/bin"
+    awk '/^function __llm_stand_down_cuda_lanes\(\)/,/^}/' "$MODULE" > "$sb/lane.sh"
+    cat > "$sb/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *query-compute-apps*) exit 0 ;;
+    *) exit 1 ;;
+esac
+EOS
+    cat > "$sb/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+unit="${@: -1}"
+case "$*" in
+    *"is-active"*) exit 0 ;;
+    *"show -p MainPID"*) printf '4242\n' ;;
+    *"stop"*) printf '%s\n' "$unit" >> "$STOP_LOG" ;;
+esac
+exit 0
+EOS
+    chmod +x "$sb/bin/nvidia-smi" "$sb/bin/systemctl"
+    : > "$sb/stopped"
+    cat > "$sb/probe.sh" <<'EOS'
+set -uo pipefail
+C_Warning=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+__llm_gpu_foreign_owner() { return 1; }
+# No resident CUDA server at all.
+__llm_cuda_server_pids() { return 0; }
+source "$1"
+__llm_stand_down_cuda_lanes
+EOS
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" \
+        LLAMA_LANE_SPECS='llama-cuda-qwen3coder-30b-chat.service|18087' \
+        bash "$sb/probe.sh" "$sb/lane.sh"
+    [[ "$status" -eq 0 ]]
+    [ ! -s "$sb/stopped" ] || { echo "stopped a lane that was not resident: $(cat "$sb/stopped")"; return 1; }
+}
+
+# Attribution now reaches the live lane through /proc/PID/exe, so a canned run that
+# selected this path would stop the operator's serving lane — the incident v103 recorded
+# for the suspend hold.  Catches: the guard being dropped from the stand-down.
+@test "lane stand-down: a selftest never stands a live lane down" {
+    local sb="$TAC_TEST_TMPDIR/lane-selftest"
+    mkdir -p "$sb/bin"
+    awk '/^function __llm_stand_down_cuda_lanes\(\)/,/^}/' "$MODULE" > "$sb/lane.sh"
+    cat > "$sb/bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *"stop"*) printf '%s\n' "${@: -1}" >> "$STOP_LOG" ;;
+esac
+exit 0
+EOS
+    chmod +x "$sb/bin/systemctl"
+    : > "$sb/stopped"
+    cat > "$sb/probe.sh" <<'EOS'
+set -uo pipefail
+C_Warning=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+warn() { printf '%s\n' "$*" >&2; }
+__llm_gpu_foreign_owner() { return 1; }
+__llm_cuda_server_pids() { printf '4242\n'; }
+source "$1"
+__llm_stand_down_cuda_lanes
+EOS
+    run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" AUTOTUNE_SELFTEST=1 \
+        LLAMA_LANE_SPECS='llama-cuda-qwen3coder-30b-chat.service|18087' \
+        bash "$sb/probe.sh" "$sb/lane.sh"
+    [[ "$status" -eq 0 ]]
+    [ ! -s "$sb/stopped" ] || { echo "a selftest stopped a lane: $(cat "$sb/stopped")"; return 1; }
+    [[ "$output" == *"selftest — not standing any lane down"* ]] || { echo "out: $output"; return 1; }
 }

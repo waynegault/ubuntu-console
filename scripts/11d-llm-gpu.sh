@@ -1,6 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 41
+#   v41 (2026-11-08): __llm_stand_down_cuda_lanes asks the SHARED collector which lanes
+#   hold CUDA memory, and refuses to run under AUTOTUNE_SELFTEST=1.  It keyed that
+#   decision on nvidia-smi's compute-apps list alone, which answers rc=0 with NO rows on
+#   this host — so the deliberate stand-down was a silent no-op: measured 2026-11-08
+#   23:54, `model autotune 1` was refused with "Unlisted holders (declared tenants:
+#   …embed.service)" naming llama-cuda-qwen3coder-30b-chat.service, a lane the profile
+#   says IS stood down for an autotune, while that list reported nothing at 32,331 MiB
+#   used.  __llm_cuda_server_pids (v37) is the attribution that works here; the selftest
+#   guard is required BECAUSE of it, or a canned run would stop the live lane.
 # Module Version: 40
 #   v40 (2026-11-06): __calc_gpu_layers' MoE branch no longer CLAIMS the experts are on
 #   the CPU.  `-ngl` moves whole layers, expert tensors included; they leave VRAM only
@@ -764,10 +774,32 @@ function __llm_stand_down_cuda_lanes() {
         warn "[lanes] card owned by another run (pid $(__llm_gpu_lock_holder)) — leaving the lanes alone"
         return 0
     fi
-    local _unit _port _pid _idle _waited _smi _mib _keep
-    # swallow-ok: a missing nvidia-smi is the documented no-attribution answer; the caller fails closed
+    # A SELFTEST must not touch live state — the rule v37 gave the reaper, for the same
+    # reason: the /proc fallback below makes the live lanes VISIBLE, and standing one
+    # down to satisfy a canned run is how v103 stopped the production lane twice.
+    if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]
+    then
+        warn "[lanes] selftest — not standing any lane down"
+        return 0
+    fi
+    local _unit _port _pid _waited _smi _mib _keep _cpid
+    local -a _cuda_pids=()
+    # WHICH LANES HOLD CUDA comes from the shared collector: compute-apps when it
+    # answers, the process table by /proc/PID/exe when it does not.  Keyed on
+    # compute-apps alone this helper was a SILENT no-op — measured 2026-11-08 23:54 at a
+    # 32 GiB carve, that list answered rc=0 with NO rows while the chat lane held
+    # 32,331 MiB, so nothing was stood down and the row was refused with
+    # "Unlisted holders (declared tenants: …embed.service)" naming a lane whose own
+    # profile says it IS stood down for an autotune.
+    while IFS= read -r _cpid
+    do
+        [[ "$_cpid" =~ ^[0-9]+$ ]] || continue
+        _cuda_pids+=("$_cpid")
+    done < <(__llm_cuda_server_pids)
+    # nvidia-smi is still asked for the per-process MiB, which is a message
+    # embellishment only (this host answers [N/A]); the attribution is already decided.
+    # swallow-ok: a missing nvidia-smi costs the figure, never the attribution above
     _smi=$(command -v nvidia-smi 2>/dev/null || true)
-    [[ -n "$_smi" ]] || return 0
     while IFS='|' read -r _unit _port
     do
         [[ -n "$_unit" ]] || continue
@@ -791,16 +823,23 @@ function __llm_stand_down_cuda_lanes() {
         # swallow-ok: a unit with no MainPID has nothing to stand down
         _pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
         [[ "$_pid" =~ ^[0-9]+$ ]] && (( _pid > 0 )) || continue
-        # Attribution is PRESENCE in the compute-apps list, not a memory figure: on this
-        # box (WSL2 dxgkrnl) nvidia-smi reports used_gpu_memory as [N/A] for every PID, so
-        # keying the decision on a number meant no lane was ever stood down — the exact
-        # silent no-op that made `model autotune 2` keep refusing.  An Xe/OpenCL lane in
-        # the declared list never appears here and is therefore left serving.
-        # swallow-ok: an unreadable compute-apps list yields no candidate; the baseline gate fails closed
-        _mib=$("$_smi" --query-compute-apps=pid,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null \
-            | awk -F',' -v p="$_pid" '{gsub(/ /,"",$1); gsub(/ /,"",$2); if ($1+0 == p+0) {print $2; exit}}')
-        [[ -n "$_mib" ]] || continue
-        case "$_mib" in ''|*[!0-9]*) _mib="" ;; esac
+        # PRESENCE in the resident CUDA set decides, never a memory figure: on this box
+        # (WSL2 dxgkrnl) nvidia-smi reports used_gpu_memory as [N/A] for every PID, and
+        # the compute-apps list itself comes back empty.  An Xe/OpenCL lane in the
+        # declared list is absent from the set (the collector excludes build-opencl), and
+        # a lane whose server is not resident is absent too, so both stay serving.
+        case " ${_cuda_pids[*]-} " in
+            *" $_pid "*) ;;
+            *) continue ;;
+        esac
+        _mib=""
+        if [[ -n "$_smi" ]]
+        then
+            # swallow-ok: the figure is optional; the decision above is already made
+            _mib=$("$_smi" --query-compute-apps=pid,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null \
+                | awk -F',' -v p="$_pid" '{gsub(/ /,"",$1); gsub(/ /,"",$2); if ($1+0 == p+0) {print $2; exit}}')
+            case "$_mib" in ''|*[!0-9]*) _mib="" ;; esac
+        fi
         __tac_info "Lanes" \
             "stopping $_unit (pid $_pid${_mib:+, ${_mib} MiB CUDA}) to clear the VRAM baseline" \
             "$C_Warning"
