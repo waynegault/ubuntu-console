@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 3
+#   v3 (2026-11-09): the restore waits for the PORT, not just for the process.  Measured on the
+#       first real run: the last arm's server was killed, the trap started the lane while 18087
+#       was still bound, llama-server died with "couldn't bind HTTP server socket" six times and
+#       systemd rate-limited the unit into `failed` — the run ended with the fleet's primary lane
+#       DOWN and needed reset-failed by hand.  _wait_listen_free (ss, not a connect probe) now
+#       gates both the per-arm teardown and the restore, and the restore clears a rate limit
+#       before starting.
 # Module Version: 2
 #   v2 (2026-11-09): §18.3 debt the first cut carried — eight bare `exit 2` sites became one
 #       `die_usage` helper holding the status (9.7 79 -> 79, and no line pushed past 120
@@ -198,10 +206,39 @@ _wait_health() {
     return 1
 }
 
+# _wait_listen_free [secs] — bounded wait until nothing LISTENs on the arm's port.
+# Measured 2026-11-09: killing the last arm's server is not enough.  The restore trap then
+# started the lane while 18087 was still bound, llama-server died with "couldn't bind HTTP
+# server socket", systemd retried six times and rate-limited the unit into `failed` — so the
+# run ended with the fleet's primary lane DOWN.  `ss` is the check that answers the question
+# bind() actually asks; a connect probe says "free" for a port in TIME_WAIT.
+_wait_listen_free() {
+    local _bound="${1:-30}" _waited=0 _listen=""
+    while (( _waited < _bound )); do
+        # swallow-ok: ss's own diagnostics are not wanted; a FAILED read is decided below, not here
+        if ! _listen="$(ss -ltnH "sport = :${PORT}" 2>/dev/null)"; then
+            # An unreadable socket table is not "free": say so and let the caller's start decide.
+            warn "cannot read the socket table for port ${PORT} — assuming it is free"
+            return 1
+        fi
+        [[ -n "$_listen" ]] || return 0
+        sleep 1
+        _waited=$(( _waited + 1 ))
+    done
+    warn "port ${PORT} was still listening after ${_bound}s — the lane's restart may fail"
+    return 1
+}
+
 # _restore_lane — put the lane back.  Installed as the EXIT trap BEFORE the first stop, so
 # a refusal, a failed arm or a signal all leave the box serving what it served before.
 _restore_lane() {
     [[ "${LANE_STOPPED:-0}" == "1" ]] || return 0
+    # The port must be free BEFORE the start: a bind failure is what rate-limits the unit.
+    # swallow-ok: a port that never frees is reported by _wait_listen_free, and the start below still runs
+    _wait_listen_free 30 || true
+    # A unit that failed during an arm is rate-limited; clearing that is part of a restore.
+    # swallow-ok: reset-failed reports non-zero when the unit is not failed, which is the normal case
+    systemctl --user reset-failed "$UNIT" >/dev/null 2>&1 || true
     if systemctl --user start "$UNIT" >/dev/null 2>&1; then
         printf 'slots-probe: restored %s\n' "$UNIT"
     else
@@ -255,6 +292,10 @@ _run_arm() {
     kill "$_pid" 2>/dev/null || true
     # swallow-ok: wait's status is the server's, not the measurement's — the bench's rc is returned
     wait "$_pid" 2>/dev/null || true
+    # The NEXT arm (and the restore) must find the port free: a bind failure is what rate-limits
+    # the unit, and it is the failure this probe caused on its first real run.
+    # swallow-ok: a port that never frees is reported by _wait_listen_free; the arm's rc still decides
+    _wait_listen_free 30 || true
     return "$_rc"
 }
 

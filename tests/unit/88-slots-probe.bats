@@ -85,6 +85,36 @@ teardown() {
     [[ "$output" == *"unknown argument"* ]]
 }
 
+@test "slots-probe: the restore waits for the port and clears a rate limit before starting" {
+    # Measured 2026-11-09 on the first real run: the trap started the lane while 18087 was
+    # still bound, llama-server died with "couldn't bind HTTP server socket" six times, systemd
+    # rate-limited the unit into `failed`, and the fleet's primary lane stayed DOWN.  Catches:
+    # a restore that starts first and waits never.
+    cat > "$TMP/bin/ss" <<'EOS'
+#!/usr/bin/env bash
+n=$(( $(cat "$SS_COUNT" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$n" > "$SS_COUNT"
+printf 'ss %s\n' "$n" >> "$SYSTEMCTL_LOG"
+(( n <= 2 )) && printf 'LISTEN 0 128 127.0.0.1:18087 0.0.0.0:*\n'
+exit 0
+EOS
+    chmod +x "$TMP/bin/ss"
+    : > "$TMP/ss.count"
+    awk '/^_wait_listen_free\(\)/,/^}/' "$PROBE" > "$TMP/restore.sh"
+    awk '/^_restore_lane\(\)/,/^}/' "$PROBE" >> "$TMP/restore.sh"
+    grep -q '_restore_lane' "$TMP/restore.sh" || { echo "helper not found"; return 1; }
+    run env PATH="$TMP/bin:$PATH" SYSTEMCTL_LOG="$SYSTEMCTL_LOG" SS_COUNT="$TMP/ss.count" \
+        bash -c 'source "$1"; PORT=18087; UNIT=u.service; LANE_STOPPED=1
+                 warn() { printf "%s\n" "$*" >&2; }; _restore_lane' _ "$TMP/restore.sh"
+    [ "$status" -eq 0 ]
+    # The port was polled until free (two bound polls, then free) before the start.
+    [ "$(cat "$TMP/ss.count")" -ge 3 ]
+    # reset-failed comes BEFORE start, or the start is refused by the rate limit.
+    reset_line="$(grep -n 'reset-failed' "$SYSTEMCTL_LOG" | cut -d: -f1 | head -1)"
+    start_line="$(grep -n ' start ' "$SYSTEMCTL_LOG" | cut -d: -f1 | head -1)"
+    [ -n "$reset_line" ] && [ -n "$start_line" ] && [ "$reset_line" -lt "$start_line" ]
+}
+
 @test "slots-probe: the summary reports aggregate and per-stream, and NOT-RUN for a missing arm" {
     # Catches: an arm that never measured being printed as a slot count that measured badly.
     mkdir -p "$TMP/out"
