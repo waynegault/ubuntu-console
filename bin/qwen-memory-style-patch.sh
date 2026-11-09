@@ -75,7 +75,7 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
 #   v5 (2026-10-24): the injected rule gains clause (5) — NEVER begin a wrapped line with an
 #   operator — after a memory note wrapped a formula so a continuation line began `+ 0 + …`,
 #   which markdown reads as a list marker (MD004 on prose).  Payload v3 -> v4, and a v3 copy is
@@ -114,7 +114,12 @@ EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
 # marker (card 59f47689: without that, an already-patched copy is skipped by its marker and the
 # new clauses never land).  Each payload carries a phrase no earlier one had, so this separates
 # v4 from v3/v2/v1, and the python below upgrades in place from any of them.
-RULE_NEWEST_CLAUSE="NEVER begin a wrapped line"
+# The phrase that distinguishes the CURRENT payload from every earlier one. It MUST be a
+# clause the newest payload alone carries: a probe pinned to an older clause that the new
+# payload still contains reads every copy as "applied" and silently skips the upgrade —
+# measured 2026-11-09 landing clause (6), where the v4/v5 probe "NEVER begin a wrapped line"
+# is still inside v6, so all three copies reported ok and the new clause never arrived.
+RULE_NEWEST_CLAUSE="The file ENDS with"
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -200,7 +205,7 @@ EXTRACTOR = "You are now acting as the managed memory extraction subagent"
 # a list marker, so the lint fired on prose and the obvious "fix" would have rewritten the
 # arithmetic.  The wrap is the writer's, so the instruction belongs here.
 # ASCII only, like the elements it sits among.
-rule_text = (
+V5_RULE_TEXT = (
     "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
     "lints every note it holds, so: (1) EMPHASIS uses underscores ONLY, _like this_. The "
     "asterisk must NEVER delimit emphasis -- re-read every span you emit and convert "
@@ -210,6 +215,23 @@ rule_text = (
     "language tag, never indented. (5) NEVER begin a wrapped line with +, -, * or #, and never "
     "begin one with a number followed by a full stop: markdown reads a line-initial marker as a "
     "list or heading, so keep a formula or a code span on ONE line even when it is long."
+)
+v5_literal = '"' + V5_RULE_TEXT + '"'
+rule_text = (
+    "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
+    "lints every note it holds, so: (1) EMPHASIS uses underscores ONLY, _like this_. The "
+    "asterisk must NEVER delimit emphasis -- re-read every span you emit and convert "
+    "*like this* to _like this_. STRONG text keeps its asterisks (**bold**); never convert "
+    "those to underscores. (2) A blank line before and after every list and heading. (3) The "
+    "single H1 repeats the frontmatter name value. (4) Every code block is fenced with a "
+    "language tag, never indented. (5) NEVER begin a wrapped line with +, -, * or #, and never "
+    "begin one with a number followed by a full stop: markdown reads a line-initial marker as a "
+    "list or heading, so keep a formula or a code span on ONE line even when it is long. "
+    "(6) The file ENDS with "
+
+    "EXACTLY ONE newline: no missing final newline (the linter reports MD047) and no blank "
+
+    "line after the last paragraph."
 )
 rule_literal = '"' + rule_text + '"'
 
@@ -242,7 +264,7 @@ V1_RULE_TEXT = (
     "asterisks (*like this*), and a blank line before and after every list."
 )
 v1_literal = '"' + V1_RULE_TEXT + '"'
-SUPERSEDED = (v3_literal, v2_literal, v1_literal)
+SUPERSEDED = (v5_literal, v3_literal, v2_literal, v1_literal)
 
 MIN_ANCHOR = '"Memory file format reference:",...MEMORY_FRONTMATTER_EXAMPLE]'
 SPACED_ANCHOR = '"Memory file format reference:",\n  ...MEMORY_FRONTMATTER_EXAMPLE\n]'
@@ -303,7 +325,7 @@ if src.index(marker) > src.index(MIN_ANCHOR if min_hits == 1 else SPACED_ANCHOR)
     raise SystemExit("refusing to patch: the rule landed after the format reference, not before it")
 
 p.write_text(src, encoding="utf-8")
-print("  upgraded extractor-style (superseded payload -> v4)" if upgraded else "  patched  extractor-style")
+print("  upgraded extractor-style (superseded payload -> v6)" if upgraded else "  patched  extractor-style")
 PY
     then
         echo "  MISMATCH $name — an anchor did not match; the chunk is UNCHANGED (backup kept)" >&2

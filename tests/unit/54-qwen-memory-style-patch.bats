@@ -47,7 +47,8 @@ V3_CLAUSE="The asterisk must NEVER delimit emphasis"
 # The v2 payload's opening, absent from v3, so "0 occurrences" is the upgrade's proof.
 V2_OPENING="Match the store's Markdown style: emphasis with underscores"
 # The v4 clause — the phrase that distinguishes the CURRENT payload from every earlier one.
-NEWEST_CLAUSE="NEVER begin a wrapped line"
+# The v6 clause — the phrase that distinguishes the CURRENT payload from every earlier one.
+NEWEST_CLAUSE="The file ENDS with"
 
 @test "style patch: a chunk carrying the superseded payload reads NEEDS, not applied" {
     run env QWEN_STYLE_PATCH_CHUNK_DIRS="$CHUNKS" bash "$PATCHER" --check
@@ -55,10 +56,10 @@ NEWEST_CLAUSE="NEVER begin a wrapped line"
     [[ "$output" == *"superseded"* ]]
 }
 
-@test "style patch: applying UPGRADES the payload in place — v4 present once, v2 gone, and it still parses" {
+@test "style patch: applying UPGRADES the payload in place — v6 present once, v2 gone, and it still parses" {
     run env QWEN_STYLE_PATCH_CHUNK_DIRS="$CHUNKS" bash "$PATCHER"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"upgraded extractor-style (superseded payload -> v4)"* ]]
+    [[ "$output" == *"upgraded extractor-style (superseded payload -> v6)"* ]]
     [[ "$output" == *"syntax verified"* ]]
 
     # The upgrade's whole point: one style element, and it is the CURRENT one.
