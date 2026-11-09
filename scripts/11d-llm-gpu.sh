@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 43
+#   v43 (2026-11-09): __spec_launch_flags reports an unknown draft type through this
+#   file's `warn` helper.  v42 wrote it with a hand-written `>&2`, which is exactly the
+#   pattern §18.3 10.7 counts — tools/count-ratchet.sh read 245 -> 246 on the commit that
+#   carried it, so the tip could not be pushed.  The file already had the helper, with a
+#   comment saying it exists to keep new lines off that count; the flag stream on stdout
+#   is still the reason the note cannot be a normal tac_info line.
 # Module Version: 42
 #   v42 (2026-11-09): __spec_launch_flags NAMES a model-based draft type.  It emitted
 #   --spec-type only for `ngram`, so a registry row carrying spec_type=draft-dflash
@@ -1685,9 +1692,9 @@ function __spec_launch_flags() {
             esac
             ;;
         *)
-            # stdout is the flag stream (mapfile at the caller), so this one note
-            # goes to stderr; it is the only stderr write in this function.
-            printf 'spec-decode: unknown spec_type %s ignored\n' "$_type" >&2
+            # stdout is the flag stream (mapfile at the caller), so the note goes through
+            # this file's warn helper; a hand-written >&2 here raises §18.3 10.7.
+            warn "spec-decode: unknown spec_type $_type ignored"
             ;;
     esac
 }
