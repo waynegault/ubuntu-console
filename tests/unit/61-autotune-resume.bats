@@ -85,6 +85,29 @@ RESTART_EOF
     chmod +x "$RESTART_TOOL_STUB"
     export TAC_RESUME_RESTART_TOOL="$RESTART_TOOL_STUB"
 
+    # v17: the RETRY arm is stubbed here, for every case, and that is not a convenience.
+    # `schedule_retry` falls back to a REAL `systemd-run --user --on-active=900s
+    # --unit=autotune-resume-retry`, and the PAUSE cases below all reach it (they run with
+    # TAC_RESUME_CI_WAIT_S=0, so wait_for_ci_clear fails on the first poll and the loop
+    # schedules a retry before returning 4).  Measured 2026-11-08: those cases armed a LIVE
+    # transient timer in the developer's user manager four times (19:27, 23:38, 23:53, 00:13
+    # GMT), each one starting the REAL autotune-resume.service against the REAL state dir,
+    # and the 23:38 fire armed another 900 s timer while the suite was still running.  The
+    # campaign is under Wayne's do-not-re-arm ruling, so a test that can start it is not a
+    # test.  A case that wants the argv ("an exhausted CI wait ARMS A RETRY") re-exports its
+    # own stub over these two variables, so this stub only catches the cases that never meant
+    # to arm anything at all.
+    RETRY_ARGV="$SANDBOX/retry.argv"
+    export RETRY_ARGV
+    cat > "$SANDBOX/retry-stub.sh" <<'RETRY_EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$RETRY_ARGV"
+exit 0
+RETRY_EOF
+    chmod +x "$SANDBOX/retry-stub.sh"
+    export TAC_RESUME_RETRY_CMD="$SANDBOX/retry-stub.sh"
+    : > "$RETRY_ARGV"
+
     CI_WORKERS_STUB="$SANDBOX/ci-workers.sh"
     export CI_WORKERS_STUB
     _write_ci_workers 0
@@ -466,10 +489,8 @@ EOS
     _row 1 uncertified.gguf 2.00 yes 1.00 > "$TAC_RESUME_REGISTRY"
     printf '0\n' > "$ENTRY_RC_FILE"
     _write_ci_workers 1                       # a CI job is executing: the gate cannot clear
-    export RETRY_ARGV="$SANDBOX/retry.argv"
-    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$RETRY_ARGV"\n' > "$SANDBOX/retry-stub.sh"
-    chmod +x "$SANDBOX/retry-stub.sh"
-    export TAC_RESUME_RETRY_CMD="$SANDBOX/retry-stub.sh"
+    # The stub and RETRY_ARGV come from setup(), which is the point of v17: this case wants the
+    # argv RECORDED, and the three PAUSE cases that do not want it are stubbed by the same seam.
     : > "$RETRY_ARGV"
 
     # (1) The wait exhausts: a retry is armed with the shipped delay and the unit it must start.
@@ -582,6 +603,13 @@ EOS
     [ "$status" -eq 4 ]
     [[ "$output" == *"a CI job is executing on this box"* ]]
     [ ! -e "$RESTART_ARGV" ]
+
+    # v17 FALSIFIER: a PAUSE arms a retry, and that arm must go through the SEAM.  Removing the
+    # setup() stub sends this case back to a real `systemd-run`, which starts the live
+    # autotune-resume.service 900 s later — measured four times on 2026-11-08.  So the stub is
+    # asserted here, in the case that used to do the most damage rather than in a new one.
+    grep -qxF '900 autotune-resume-retry autotune-resume.service' "$RETRY_ARGV" \
+        || { echo "a PAUSE must arm the retry through TAC_RESUME_RETRY_CMD (got: $(cat "$RETRY_ARGV"))"; return 1; }
 
     # v8 criterion change (Wayne's ruling "1a", 2026-10-17): the gate now sits at the MEASUREMENT,
     # not only at the arming.  `wait_for_ci_clear` used to guard `arm_restart` alone, so the chunk
