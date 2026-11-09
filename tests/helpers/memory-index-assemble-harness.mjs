@@ -49,13 +49,23 @@ function readDecl(name) {
 }
 
 // The contract the patch promises: the byte cap is RAISED (256000), the LINE cap is RAISED
-// (400 — hunk 5, because the old 200 shed 45 of one real store's 245 notes), and the per-line
+// (500 — hunk 5, because the old 200 shed 45 of one real store's 245 notes), and the per-line
 // cap is untouched at 150.
 const CAP_LINE_CHARS = readDecl("MAX_INDEX_LINE_CHARS");
 const CAP_LINES = readDecl("MAX_INDEX_LINES");
 const CAP_BYTES = readDecl("MAX_INDEX_BYTES");
+
+// RAISED, NOT EQUAL-TO-A-LITERAL (2026-11-09, Wayne's 400->500 ruling).  This used to assert
+// `CAP_LINES === 400`, which is a copy of the patcher's target constant living in a second
+// place: every future cap raise broke the harness and buried the real question ("is the cap
+// raised?") under an edit of a number that carries no meaning of its own.  The EXACT value is
+// asserted once, in tests/unit/51-memory-index-patch.bats; here the contract is the property.
+const STOCK_LINES = 200;
+assert(
+  CAP_LINES > STOCK_LINES,
+  `MAX_INDEX_LINES must be RAISED above the stock ${STOCK_LINES} (hunk 5); found ${CAP_LINES}`,
+);
 assert.equal(CAP_LINE_CHARS, 150, "MAX_INDEX_LINE_CHARS must stay 150");
-assert.equal(CAP_LINES, 400, "MAX_INDEX_LINES must be the RAISED value 400 (hunk 5)");
 assert.equal(CAP_BYTES, 256000, "the byte cap must be the RAISED value 256000");
 
 const start = src.indexOf("function assembleIndex(lines)");

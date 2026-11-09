@@ -72,7 +72,7 @@ setup() {
     # The cap is raised and the loss is NAMED (and the stock sentence survives as a prefix).
     grep -qF 'var MAX_INDEX_BYTES=256000;' "$PATCHED"
     # Hunk 5 raises the LINE cap, and hunk 4 leaves its marker on the title budget.
-    grep -qF 'var MAX_INDEX_LINES=400;' "$PATCHED"
+    grep -qF 'var MAX_INDEX_LINES=500;' "$PATCHED"
     grep -qF 'LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap)' "$PATCHED"
     grep -qF 'INCOMPLETE: wrote' "$PATCHED"
     grep -qF '> WARNING: MEMORY.md is too large; only part of it was written.' "$PATCHED"
@@ -227,7 +227,7 @@ console.log("patched="+p.first+" stock="+s.first+" fn="+p.fn+" cap="+p.cap);
     run grep -qF 'var MAX_INDEX_CHARS=25e3;' "$PATCHED_0251"
     [ "$status" -ne 0 ]
     # Hunks 4-5 still apply here (their anchors match 0.25.1).
-    grep -qF 'var MAX_INDEX_LINES=400;' "$PATCHED_0251"
+    grep -qF 'var MAX_INDEX_LINES=500;' "$PATCHED_0251"
     grep -qF 'LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap)' "$PATCHED_0251"
 
     # TRAP 1: the two uncapped-scan rewires must be SKIPPED.  Both anchors EXIST in this fixture
@@ -305,9 +305,15 @@ console.log("patched="+p.first+" stock="+s.first+" fn="+p.fn+" cap="+p.cap);
 # ------------------------------------------------------------------------------
 # Hunk 6 (scancap, 2026-11-06): the notes-scanned cap lives in the SCANNER chunk, not the
 # builder's, so it is selected by its OWN constant and judged per chunk.  The criterion is the
-# patch's stated contract -- a store that fits the line cap (hunk 5: 400) must not be cut before
-# rendering -- so the expected value is 400, and the assertion is the OBSERVABLE (how many
+# patch's stated contract -- a store that fits the line cap (hunk 5: 500) must not be cut before
+# rendering -- so the expected value is 500, and the assertion is the OBSERVABLE (how many
 # entries survive a scan), not only the literal declaration.
+#
+# THE SCAN MUST STILL OVERFLOW THE CAP (2026-11-09, Wayne's 400->500 ruling).  The scan is sized
+# ABOVE the cap (600 entries against a 500 cap) so "kept=N omitted=M" still proves truncation
+# happened.  Sizing the scan AT the cap instead would assert kept=500 omitted=0, which passes
+# just as happily against an uncapped scanner -- a green that cannot fail.  Measured: 500 ->
+# kept=500 omitted=0, 600 -> kept=500 omitted=100, 900 -> kept=500 omitted=400.
 # ------------------------------------------------------------------------------
 
 @test "index patch: hunk 6 reads NEEDS when the scanner chunk is stock" {
@@ -323,7 +329,7 @@ console.log("patched="+p.first+" stock="+s.first+" fn="+p.fn+" cap="+p.cap);
     [[ "$output" != *"no Qwen memory-index chunk found"* ]]
 }
 
-@test "index patch: hunk 6 raises the scan cap to the line cap and a 500-entry scan keeps 400" {
+@test "index patch: hunk 6 raises the scan cap to the line cap and a 600-entry scan keeps 500" {
     command -v node >/dev/null || skip "node is required by the patcher's own syntax check"
     local dir="$WORK/chunks-scan"
     mkdir -p "$dir"
@@ -339,17 +345,17 @@ console.log("patched="+p.first+" stock="+s.first+" fn="+p.fn+" cap="+p.cap);
     # The stock value is gone, the target and the receipt are present.
     run grep -qF 'MAX_SCANNED_MEMORY_FILES=200' "$patched"
     [ "$status" -ne 0 ]
-    grep -qF 'MAX_SCANNED_MEMORY_FILES=400' "$patched"
+    grep -qF 'MAX_SCANNED_MEMORY_FILES=500' "$patched"
     grep -qF 'LOCAL PATCH 2026-11-06 (qwen-memory-index-scancap)' "$patched"
 
-    # The OBSERVABLE: the capped scan now keeps 400 of 500 entries.
+    # The OBSERVABLE: the capped scan now keeps 500 of 600 entries.
     run node -e '
 const m = require(process.argv[1]);
-const r = m.scanEntries(Array.from({ length: 500 }, (_v, i) => i));
+const r = m.scanEntries(Array.from({ length: 600 }, (_v, i) => i));
 console.log("kept=" + r.docs.length + " omitted=" + r.omitted.length);
 ' "$patched"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"kept=400 omitted=100"* ]]
+    [[ "$output" == *"kept=500 omitted=100"* ]]
 
     run env QWEN_INDEX_PATCH_CHUNK_DIRS="$dir" bash "$PATCHER" --check
     [ "$status" -eq 0 ]

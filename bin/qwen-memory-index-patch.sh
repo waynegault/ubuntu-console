@@ -138,7 +138,21 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-11-09): CAP RAISE 400 -> 500 (Wayne's ruling "A"), and every hunk's `applied` test
+#   now reads the value it sets instead of a label. The user store hit 178 notes at 2.00/h, which
+#   reaches 400 on 2026-11-14T13:12Z -- before the standing 2026-11-15 review -- so both caps move
+#   together (MAX_INDEX_LINES and MAX_SCANNED_MEMORY_FILES; the line cap binds at ~399 files, so
+#   raising the scan cap alone is a no-op). TWO DEFECTS this exposed, both the same shape: hunk 5
+#   was gated on `marker_lines in src`, i.e. on the MARKER not the value, so a copy carrying the
+#   marker was skipped however stale its NUMBER was -- the apply printed "already linecap" while
+#   --check correctly said "counterfeit"; and the scancap anchor matched only the stock `200`
+#   spelling, so a second raise could never move an already-raised copy. SCAN_ANCHOR_CAPS now lists
+#   every patchable cap, which makes the raise idempotent AND re-raisable. The behavioural harness
+#   stopped pinning the literal (it asserted === 400, a copy of this file's target in a second
+#   place) and asserts the property -- raised above the stock 200 -- so the next raise is a
+#   one-line change. Tests: the 500-entry scan assertion became 600 entries, because at the new cap
+#   a 500-entry scan keeps all 500 and would pass against an UNCAPT scanner.
 #   v13 (2026-11-08): SEVENTH HUNK (linebudget). The per-line cap, enforced where the lines are
 #   JOINED rather than in each provider. Hunk 4 caps the TITLE inside docIndexLine, but
 #   assembleIndex takes already-formatted strings, so every other provider was unbudgeted --
@@ -271,7 +285,16 @@ MARKER_SCAN="LOCAL PATCH 2026-11-06 (qwen-memory-index-scancap)"
 # own pass.  The value, not the marker, decides `applied` -- the same lesson hunk 3 learned on
 # 2026-10-25 when three marker-only copies reported green over stock constants.
 SCAN_STOCK_CAP=200
-SCAN_TARGET_CAP=400
+SCAN_TARGET_CAP=500
+#: Caps that are PATCHABLE, not just pristine stock (added 2026-11-09, Wayne's ruling "A").
+#: The anchor used to be the stock value alone, so a bundle already raised to 400 was reported
+#: `applied` and never reached the apply path -- correct for idempotence, useless for a RAISE.
+#: Wayne raised 400 -> 500 on 2026-11-09 after measuring the user store at 178 notes growing
+#: 2.00/h, which reaches 400 around 2026-11-14T13:12Z.
+SCAN_ANCHOR_CAPS="200|400"
+#: The line cap must move WITH the scan cap: MAX_INDEX_LINES counts index LINES and binds at
+#: ~399 note files, so raising only the scan cap is a no-op. Same coupling at 500.
+LINE_TARGET_CAP=500
 
 # Stock anchors used only for state detection in --check.
 PATHCAP_STOCK_SPACED='const chars = [...value].slice(0, MAX_INDEX_FIELD_CHARS);'
@@ -417,7 +440,7 @@ for f in "${files[@]}"; do
     lines_num=$(grep -oE 'MAX_INDEX_LINES *= *[0-9]+' "$f" | head -1 | sed 's/.*= *//' || true)
     st_lines="UNKNOWN"
     if [[ -n "$lines_num" ]]; then
-        if (( lines_num >= 400 )); then st_lines="applied"
+        if (( lines_num >= LINE_TARGET_CAP )); then st_lines="applied"
         elif grep -qF "$MARKER_LINES" "$f"; then st_lines="counterfeit"
         else st_lines="stock"; fi
     elif grep -qF "$MARKER_LINES" "$f"; then
@@ -779,9 +802,16 @@ NEW_TITLE_MIN = (
 # still bounds a pathological store (400 lines x ~150 chars is ~60 KB).
 LINES = {
     "var MAX_INDEX_LINES = 200;":
-        "var MAX_INDEX_LINES = 400; /* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
+        "var MAX_INDEX_LINES = 500; /* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
     "var MAX_INDEX_LINES=200;":
-        "var MAX_INDEX_LINES=400;/* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
+        "var MAX_INDEX_LINES=500;/* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
+    # Already-patched-at-400 copies (2026-11-09, Wayne's ruling "A"). Without these the dict
+    # matched only the STOCK spelling, so a copy raised to 400 earlier found no anchor and the
+    # raise could not move it. Exact bytes, verified on all three live bundles.
+    "var MAX_INDEX_LINES = 400; /* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */":
+        "var MAX_INDEX_LINES = 500; /* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
+    "var MAX_INDEX_LINES=400;/* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */":
+        "var MAX_INDEX_LINES=500;/* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
 }
 
 # --- apply, per-copy all-or-nothing (nothing is written unless every needed anchor matches) ---
@@ -1098,24 +1128,29 @@ for f in "${scan_files[@]}"; do
     # The anchor is the STOCK VALUE, exactly once.  A copy already at 400 is `applied` above and
     # never reaches here, so a second apply changes nothing (the suite asserts idempotence).
     if ! PATCH_FILE="$f" PATCH_MARKER_SCAN="$MARKER_SCAN" PATCH_SCAN_STOCK="$SCAN_STOCK_CAP" \
-         PATCH_SCAN_TARGET="$SCAN_TARGET_CAP" "$PYTHON_BIN" - <<'PY'
+         PATCH_SCAN_TARGET="$SCAN_TARGET_CAP" PATCH_SCAN_ANCHORS="$SCAN_ANCHOR_CAPS" "$PYTHON_BIN" - <<'PY'
 import os, pathlib, re
 
 p = pathlib.Path(os.environ["PATCH_FILE"])
 marker = os.environ["PATCH_MARKER_SCAN"]
 stock = os.environ["PATCH_SCAN_STOCK"]
 target = os.environ["PATCH_SCAN_TARGET"]
+anchors = os.environ["PATCH_SCAN_ANCHORS"].split("|")
 src = p.read_text(encoding="utf-8")
 
-anchor = f"MAX_SCANNED_MEMORY_FILES={stock};"
+# Any listed cap is patchable, not just pristine stock: a copy already raised to an earlier
+# target must still be movable by a later raise (2026-11-09).
+anchor_re = (
+    r"MAX_SCANNED_MEMORY_FILES\s*=\s*(" + "|".join(re.escape(a) for a in anchors) + r")\s*;"
+)
 new, n = re.subn(
-    r"MAX_SCANNED_MEMORY_FILES\s*=\s*" + re.escape(stock) + r"\s*;",
+    anchor_re,
     f"MAX_SCANNED_MEMORY_FILES={target};/*{marker}*/",
     src,
 )
 if n != 1:
     raise SystemExit(
-        f"refusing to patch: the MAX_SCANNED_MEMORY_FILES={stock} anchor occurred {n} times (expected 1)"
+        f"refusing to patch: a patchable MAX_SCANNED_MEMORY_FILES anchor ({'|'.join(anchors)}) occurred {n} times (expected 1)"
     )
 
 # Post-conditions: the value is raised, there is exactly one declaration, and the marker is on it.
@@ -1126,8 +1161,8 @@ if int(decls[0]) < int(target):
     raise SystemExit(f"refusing to patch: the scan cap reads {decls[0]} in the result, expected {target}")
 if marker not in new:
     raise SystemExit("refusing to patch: the scan-cap marker is absent from the result")
-if anchor in new:
-    raise SystemExit("refusing to patch: the stock scan cap is still present in the result")
+if any(f"MAX_SCANNED_MEMORY_FILES={a};" in new for a in anchors):
+    raise SystemExit("refusing to patch: a pre-patch scan cap is still present in the result")
 
 p.write_text(new, encoding="utf-8")
 PY
