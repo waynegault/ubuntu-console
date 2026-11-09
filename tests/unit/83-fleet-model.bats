@@ -8,7 +8,10 @@
 # that service is agents.defaults.model.primary. Measured 2026-11-06 23:41-23:42: the
 # gateway logged ECONNREFUSED for cuda-qwen3coder-30b on every subagent run and only then
 # failed over — every agent paid a denied attempt before it could work. The ruling is
-# that during a sweep the fleet USES deepseek/deepseek-flash.
+# that during a sweep the fleet USES a hosted deepseek lane.  WHICH lane is Wayne's
+# 2026-11-08 refinement (bin/fleet-model.sh v5, commit 0181b4f8): the sweep lane is
+# cheaper-inference's deepseek-v4.1-flash-1017, not the direct deepseek/deepseek-flash.
+# The expected value below is pinned from that ruling, not read off the implementation.
 #
 # The interesting half is not the switch, it is the RETURN:
 #   * a sweep that dies must not leave the fleet on the hosted model silently;
@@ -23,6 +26,9 @@
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 SRC="$REPO_ROOT/bin/fleet-model.sh"
+# The sweep lane, from Wayne's 2026-11-08 ruling (bin/fleet-model.sh v5).  One place, so
+# the next refinement is one edit rather than four assertions drifting apart.
+SWEEP_MODEL="cheaper-inference/deepseek-v4.1-flash-1017"
 
 setup() {
     TMP="$(mktemp -d)"
@@ -30,7 +36,7 @@ setup() {
     export OPENCLAW_CONFIG="$TMP/openclaw.json"
     mkdir -p "$TMP/bin"
     cat > "$OPENCLAW_CONFIG" <<'JSON'
-{"agents":{"defaults":{"model":{"primary":"cuda-qwen3coder-30b/qwen3-coder-30b-gpu","fallbacks":["deepseek/deepseek-flash"]}}}}
+{"agents":{"defaults":{"model":{"primary":"cuda-qwen3coder-30b/qwen3-coder-30b-gpu","fallbacks":["cheaper-inference/deepseek-v4.1-flash-1017"]}}}}
 JSON
     # The stub performs the same write the real CLI performs, and records the call.
     cat > "$TMP/bin/openclaw" <<'STUB'
@@ -74,9 +80,9 @@ primary() {
 @test "sweep moves the primary to the sweep model and saves what was there" {
     run bash "$SRC" sweep
     [ "$status" -eq 0 ]
-    [ "$(primary)" = "deepseek/deepseek-flash" ]
+    [ "$(primary)" = "$SWEEP_MODEL" ]
     [ "$(cat "$TAC_STATE_DIR/fleet-model.saved")" = "cuda-qwen3coder-30b/qwen3-coder-30b-gpu" ]
-    grep -qF 'models set deepseek/deepseek-flash' "$STUB_LOG"
+    grep -qF "models set $SWEEP_MODEL" "$STUB_LOG"
 }
 
 @test "sweep goes through the documented writer, not a hand edit" {
@@ -147,7 +153,7 @@ primary() {
     [[ "$output" == *"saved=none"* ]]
     bash "$SRC" sweep
     run bash "$SRC" status
-    [[ "$output" == *"primary=deepseek/deepseek-flash"* ]]
+    [[ "$output" == *"primary=$SWEEP_MODEL"* ]]
     [[ "$output" == *"saved=cuda-qwen3coder-30b/qwen3-coder-30b-gpu"* ]]
 }
 
