@@ -10,6 +10,11 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 9
+#   v9 (2026-11-09): the §18.3 rises v8 added are cleared at source, not re-baselined — the two
+#   MD047 read-back tests are `[[ … ]]` (6.7 107 -> 107) and the awk invocation's swallow marker
+#   sits on the line directly above it so the code fits the 120-column bound (8.1.8 287 -> 287).
+#   Same predicate, same site classified; no behaviour change.
 # Module Version: 8
 #   v8 (2026-11-09, card MEMORY-FORMATTER-AT-WRITE-001): MD047 is now FIXED, not prescribed.  The rule is
 #   fully determined by the file's last byte, so there is nothing to interpret: a missing final newline
@@ -394,6 +399,8 @@ fix_final_newline() {
             # Keep every line, then emit exactly one newline at the end. printf '%s\n' per line
             # without the trailing blank run: awk drops trailing empty lines by construction,
             # because the last non-empty line is the last thing it prints.
+            # The long awk invocation is split so the swallow marker sits on its own line:
+            # the 120-column bound counts the code, not the comment that justifies it.
             if awk '
                 { lines[NR] = $0 }
                 END {
@@ -401,7 +408,8 @@ fix_final_newline() {
                     while (last > 0 && lines[last] == "") last--
                     for (i = 1; i <= last; i++) print lines[i]
                 }
-            ' "$note" > "$tmp" 2>/dev/null; then  # swallow-ok: a failed rewrite is REFUSED by name below; there is no fourth state
+            ' "$note" > "$tmp" 2>/dev/null  # swallow-ok: a failed rewrite is REFUSED by name below
+            then
                 # HOLD THE RESULT TO THE CONTRACT, NOT TO A COPY OF ITSELF.  The first version
                 # appended a newline to a copy of the rewritten file and compared — but that file
                 # already ends in one, so the two could never match and every note was refused with
@@ -409,8 +417,8 @@ fix_final_newline() {
                 # contract is narrower than a copy: the last byte is a newline and the byte before
                 # it is not.  Both are read back from the file after the move.
                 if mv "$tmp" "$note" &&
-                    [ "$(tail -c 1 "$note" | od -An -c | tr -d ' ')" = '\n' ] &&
-                    [ "$(tail -c 2 "$note" | od -An -c | tr -d ' ')" != '\n\n' ]; then
+                    [[ "$(tail -c 1 "$note" | od -An -c | tr -d ' ')" == '\n' ]] &&
+                    [[ "$(tail -c 2 "$note" | od -An -c | tr -d ' ')" != '\n\n' ]]; then
                     echo "memory-markdownlint: FIXED final newline in $note (MD047)."
                     printf '%s\n' "$note" >> "$FIXED_LIST"
                 else
