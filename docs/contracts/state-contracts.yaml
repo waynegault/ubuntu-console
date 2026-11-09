@@ -110,6 +110,22 @@ files:
       which `model scan` reassigns; consumers resolve the row by file name and read the
       number from it for display)
 
+  - path: /dev/shm/llm-idle-release.pid
+    bindings: [LLM_IDLE_PID_FILE]
+    producer:
+      - scripts/01-constants.sh
+      - bin/llm-idle-release.sh
+    consumers:
+      - file: scripts/11e-llm-model.sh
+        via: [LLM_IDLE_PID_FILE]
+    invalidators:
+      - scripts/11e-llm-model.sh
+      - bin/llm-idle-release.sh
+    format: plain text
+    semantics: pid of the idle-release monitor for the current `model use` lane; written
+      before the first probe, removed on exit and by `model stop`, which ends the monitor
+      with the lane it watches
+
   - path: /dev/shm/last_tps
     bindings: [LLM_TPS_CACHE]
     producer:

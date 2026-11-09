@@ -277,6 +277,53 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 | `wake` | Lock GPU persistence mode (`nvidia-smi -pm 1`) to prevent WDDM sleep |
 | `mlogs` | Open the llama-server log file in VS Code |
 
+### Releasing an idle lane
+
+`model use` holds the CUDA card for the life of the lane; there is no systemd timer
+behind a `model use` server, so a lane left up overnight keeps its 17-30 GiB of VRAM
+until someone runs `model stop`. The release is opt-in per launch:
+
+```bash
+model use 11 --idle-timeout 1800     # release after 30 minutes with no requests
+serve 11 --idle-timeout 1800         # the same, through serve
+model use 11 --idle-timeout 0        # explicitly disabled (the default)
+```
+
+The monitor is `bin/llm-idle-release.sh`. It reads llama-server's own Prometheus
+counters on the lane's listener (`llamacpp:prompt_tokens_total`, which any served
+request increments, and `llamacpp:requests_processing`, the in-flight gauge) and
+runs `tac-exec halt` when the window expires. It does **not** watch the log's mtime:
+`/health` probes and scrapes do not log, so mtime is neither activity nor its absence.
+A monitor is started only after `/health` answers, so the model load is not counted
+as idleness.
+
+The monitor publishes its pid to `/dev/shm/llm-idle-release.pid` before the first
+probe, and `model stop` ends it with the lane. A pid record whose process is not this
+monitor is discarded rather than signalled. The release and its reason are appended
+to the lane log (`mlogs`).
+
+**Off by default on purpose.** The CUDA chat lane is also the Qwen Code backend, and
+agents run four slots on it; an idle release there would kill live sessions, so the
+window is asked for explicitly rather than assumed.
+
+### Vision models and the multimodal projector
+
+A vision row needs `--mmproj`. Without it the server is **healthy**: `/health`
+answers, text completions work, and every image request fails on its own, so nothing
+in the lane's state says the projector is missing. `model use` therefore passes a
+projector when one is present:
+
+- `mmproj*.gguf` beside the model is used automatically (`mmproj-F16.gguf`, then
+  `mmproj-BF16.gguf`, then any other `mmproj*.gguf`).
+- `LLAMA_MMPROJ=/path/to/mmproj.gguf` names a different file and wins over a sibling.
+  A named file that does not exist warns and launches **without** a projector; it does
+  not silently substitute the sibling.
+- A row whose arch or file name reads as vision with no projector present warns before
+  launch instead of starting a lane whose image path is dead.
+
+`model bench` passes no projector, because the autotune certifies an argv without one
+and the bench exists to reproduce that argv.
+
 ### Where a download lands
 
 Every lane launches with an explicit `-m "$LLAMA_MODEL_DIR/<file>.gguf"`, so the

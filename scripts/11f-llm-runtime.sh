@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-11-09): `serve --idle-timeout S` passes the release window through to
+#     `model use` (11e v104).  A lane started by `serve` holds the card exactly like
+#     one started by `model use`, so it needs the same opt-in release rather than a
+#     second, differently-spelled option.
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -17,8 +21,9 @@
 __TAC_MOD_11F_LLM_RUNTIME_LOADED=1
 
 function serve() {
-    # Parse optional --ctx-size override before passing to model use
+    # Parse optional overrides before passing to model use
     local ctx_override=""
+    local idle_override=""
     local model_arg=""
     while [[ $# -gt 0 ]]
     do
@@ -27,9 +32,13 @@ function serve() {
                 ctx_override="$2"
                 shift 2
                 ;;
+            --idle-timeout|--idle)
+                idle_override="$2"
+                shift 2
+                ;;
             -*)
                 printf '%s\n' "${C_Error}[Unknown option: '$1']${C_Reset}"
-                printf '%s\n' "  ${C_Dim}Usage: serve [MODEL_NUM] [--ctx-size N]${C_Reset}"
+                printf '%s\n' "  ${C_Dim}Usage: serve [MODEL_NUM] [--ctx-size N] [--idle-timeout S]${C_Reset}"
                 return 1
                 ;;
             *)
@@ -39,7 +48,7 @@ function serve() {
         esac
     done
 
-    # Export context size override so __model_use can pick it up
+    # Export the overrides so __model_use can pick them up
     if [[ -n "$ctx_override" ]]
     then
         if [[ ! "$ctx_override" =~ ^[0-9]+$ ]]
@@ -48,6 +57,15 @@ function serve() {
             return 1
         fi
         export TAC_CTX_SIZE="$ctx_override"
+    fi
+    if [[ -n "$idle_override" ]]
+    then
+        if [[ ! "$idle_override" =~ ^[0-9]+$ ]]
+        then
+            printf '%s\n' "${C_Error}[Not a number: '--idle-timeout' = '$idle_override']${C_Reset}"
+            return 1
+        fi
+        export TAC_IDLE_TIMEOUT="$idle_override"
     fi
 
     if [[ -n "$model_arg" ]]

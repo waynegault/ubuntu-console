@@ -1,6 +1,23 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 106
+#   v106 (2026-11-09): two opt-in lifecycle facts a lane could not state before.
+#     (a) IDLE RELEASE.  `model use N --idle-timeout S` starts bin/llm-idle-release.sh,
+#     which watches llama-server's own Prometheus counters and runs `tac-exec halt` when
+#     the lane has served nothing for S seconds.  Activity is the counters, NOT the
+#     log's mtime: /health probes and scrapes do not log, so mtime is neither activity
+#     nor its absence (measured 2026-11-09).  Off unless asked for, because this lane is
+#     also the Qwen Code backend and unloading it would kill a live session.  `model
+#     stop` kills the monitor with the lane; a stale monitor is ended before a new one.
+#     (b) MULTIMODAL PROJECTOR.  A `mmproj*.gguf` beside the model (or LLAMA_MMPROJ) is
+#     passed as --mmproj.  Without it a vision row launches and answers text while every
+#     image request fails - silently, because the server is healthy.  A row whose arch
+#     or file name reads as vision with no projector present now says so before launch.
+#     Bench mode passes neither: the autotune certifies an argv without them.
+#     Also: TAC_CTX_SIZE and TAC_IDLE_TIMEOUT are consumed once.  Exported for a single
+#     `serve`/`model use`, they used to survive in the shell and silently apply to the
+#     NEXT launch in it.
 # Module Version: 105
 #   v105 (2026-11-09): `model use` HANDS the row's spec columns to the launch.  The
 #   registry has carried spec_type/spec_draft_model/spec_draft_n_max/spec_draft_ngl/
@@ -1117,12 +1134,17 @@ function __model_use_resolve_model() {
     # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
     if [[ -n "${TAC_CTX_SIZE:-}" ]]
     then
-        if [[ "${TAC_CTX_SIZE:-}" =~ ^[0-9]+$ ]]
+        # Consumed once.  Exported for THIS launch by `serve`/`model use`, it used to
+        # survive in the shell and silently size the NEXT model in it.
+        local _ctx_override="$TAC_CTX_SIZE"
+        unset TAC_CTX_SIZE
+        if [[ "$_ctx_override" =~ ^[0-9]+$ ]]
         then
-            ctx="$TAC_CTX_SIZE"
+            ctx="$_ctx_override"
             __tac_info "Context" "[OVERRIDDEN to $ctx via --ctx-size]" "$C_Dim"
         else
-            __tac_info "Context" "[Invalid override '$TAC_CTX_SIZE' — using registry value $ctx]" "$C_Warning"
+            __tac_info "Context" \
+                "[Invalid override '$_ctx_override' — using registry value $ctx]" "$C_Warning"
         fi
     fi
 }
@@ -1931,6 +1953,63 @@ function __model_use_build_command() {
 
         cmd=("$LLAMA_SERVER_BIN")
         cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
+        # Multimodal projector (v106).  A vision row launched without one is HEALTHY
+        # and answers text while every image request fails, so the failure is silent.
+        # The download places mmproj*.gguf beside the weights; LLAMA_MMPROJ names
+        # another file deliberately.  Bench mode passes neither, because the autotune
+        # certifies an argv without a projector and this builder must reproduce it.
+        if [[ -z "${__BENCH_MODE:-}" ]]
+        then
+            local _mmproj="${LLAMA_MMPROJ:-}" _mmdir _cand _vision_like=0
+            if [[ -z "$_mmproj" ]]
+            then
+                _mmdir="$(dirname "$model_path")"
+                for _cand in "$_mmdir"/mmproj-F16.gguf "$_mmdir"/mmproj-BF16.gguf \
+                    "$_mmdir"/mmproj*.gguf
+                do
+                    if [[ -f "$_cand" ]]
+                    then
+                        _mmproj="$_cand"
+                        break
+                    fi
+                done
+            fi
+            if [[ -n "$_mmproj" ]]
+            then
+                if [[ -f "$_mmproj" ]]
+                then
+                    cmd+=("--mmproj" "$_mmproj")
+                else
+                    local _mm_msg
+                    _mm_msg="[LLAMA_MMPROJ=$_mmproj does not exist - launching WITHOUT a"
+                    _mm_msg+=" multimodal projector; image input will fail]"
+                    __tac_info "Warning" "$_mm_msg" "$C_Warning"
+                fi
+            else
+                case "${arch,,}" in
+                    qwen2vl|qwen2_vl|qwen25vl|qwen2.5vl|qwen3vl|qwen3_vl|qwen3vlmoe)
+                        _vision_like=1 ;;
+                    llava*|bakllava|minicpmv*|gemma3*|mllama*|pixtral*|idefics*)
+                        _vision_like=1 ;;
+                    internvl*|glm4v*|molmo*|ovis*|smolvlm*)
+                        _vision_like=1 ;;
+                    *) ;;
+                esac
+                case "${model_path,,}" in
+                    *-vl-*|*-vl.*|*_vl*|*vision*|*llava*|*minicpmv*)
+                        _vision_like=1 ;;
+                    *) ;;
+                esac
+                if (( _vision_like ))
+                then
+                    local _vis_msg
+                    _vis_msg="[this row reads as a vision model but no mmproj*.gguf sits"
+                    _vis_msg+=" beside it - image input will fail; place mmproj-F16.gguf"
+                    _vis_msg+=" beside the model or set LLAMA_MMPROJ]"
+                    __tac_info "Warning" "$_vis_msg" "$C_Warning"
+                fi
+            fi
+        fi
         cmd+=("--ctx-size" "$ctx")
         cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
         cmd+=("--threads" "$threads")
@@ -2482,12 +2561,19 @@ function __model_use() {
     local model_path model_bytes quant_rating llm_backend python_bin
     local smi_cmd free_vram_mb type_k_val use_no_mmap
     local cmd model_shell_pid moe_offload_flag=""
+    # Consumed ONCE at entry, so a launch that fails on any later branch cannot leave
+    # the setting behind for the next `model use` in the same shell.
+    local _idle_timeout_requested="${TAC_IDLE_TIMEOUT:-}"
+    unset TAC_IDLE_TIMEOUT
     # Captured BEFORE the launch stops anything.  The predicate is the MODEL-USE
     # port, not __llm_server_running: that helper scans every llama backend the
     # user owns, so the five resident lanes would make every `model use` claim a
     # swap.  A listener on LLM_PORT is the lane this launch is about to replace.
     local _model_swap=0
     __test_port "$LLM_PORT" && _model_swap=1
+    # A monitor from a previous launch would watch the port this launch is about to
+    # take; end it first, so exactly one monitor follows one lane.
+    __model_idle_release_stop
 
     __model_use_resolve_model "$@" || return 1
     __model_use_ensure_downloaded || return 1
@@ -2511,6 +2597,12 @@ function __model_use() {
     __model_use_launch_server || return 1
     __model_use_wait_healthy "$_model_swap" "$(( SECONDS - _launch_t0 ))"
     local _health_rc=$?
+    # Only a lane that answered is worth watching: the monitor's clock starts when
+    # the model can serve, not when the load began.
+    if (( _health_rc == 0 ))
+    then
+        __model_use_start_idle_release "$_idle_timeout_requested"
+    fi
     # Reported AFTER the model is up, so "still operational" is measured with the
     # card already taken — the point of keeping the lane, not a claim about intent.
     __model_use_confirm_kept_lanes
@@ -2548,11 +2640,89 @@ function __model_autotune_help() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_idle_release_stop
+# @description End the idle-release monitor watching the current `model use`
+#   lane, if one is running.  Safe when there is none.
+# @uses LLM_IDLE_PID_FILE
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __model_idle_release_stop() {
+    local _pid_file="${LLM_IDLE_PID_FILE:-/dev/shm/llm-idle-release.pid}"
+    local _pid="" _cmd=""
+    if [[ -r "$_pid_file" ]]
+    then
+        read -r _pid < "$_pid_file" || _pid=""
+    fi
+    if [[ "$_pid" =~ ^[0-9]+$ ]] && [[ "$_pid" != "$$" ]]
+    then
+        if [[ -r "/proc/$_pid/cmdline" ]]
+        then
+            # The monitor's argv carries its own file name, so a recycled pid cannot
+            # make a stale record kill an unrelated process.
+            _cmd=$(tr '\0' ' ' < "/proc/$_pid/cmdline")
+        fi
+        if [[ "$_cmd" == *llm-idle-release.sh* ]]
+        then
+            # swallow-ok: a monitor that already exited is the outcome this seeks
+            kill -TERM "$_pid" 2>/dev/null || true
+            if [[ -z "${__BENCH_MODE:-}" ]]
+            then
+                __tac_info "Idle release" "[stopped the monitor (pid $_pid)]" "$C_Dim"
+            fi
+        fi
+    fi
+    rm -f "${LLM_IDLE_PID_FILE:-/dev/shm/llm-idle-release.pid}"
+}
+
+# ---------------------------------------------------------------------------
+# __model_use_start_idle_release
+# @description Start the idle-release monitor for the lane this launch started.
+#   Called only after /health answers: a monitor started earlier would count the
+#   model load as idleness.
+# @uses LLM_PORT, LLM_LOG_FILE, LLM_IDLE_PID_FILE, TAC_IDLE_TIMEOUT, __BENCH_MODE
+# @returns 0 always; a monitor that cannot start is reported, not hidden.
+# ---------------------------------------------------------------------------
+function __model_use_start_idle_release() {
+    [[ -z "${__BENCH_MODE:-}" ]] || return 0
+    # The requested value is passed in by __model_use, which consumes the exported
+    # one at entry: a launch that fails early must not leave it set for the next.
+    local _timeout="${1:-${LLAMA_IDLE_TIMEOUT_S:-0}}"
+    [[ "$_timeout" =~ ^[0-9]+$ ]] || return 0
+    (( _timeout > 0 )) || return 0
+
+    local _bin="${LLM_IDLE_RELEASE_BIN:-}"
+    if [[ -z "$_bin" ]]
+    then
+        local _src
+        _src="$(readlink -f "${BASH_SOURCE[0]}")"
+        _bin="${_src%/*}/../bin/llm-idle-release.sh"
+    fi
+    if [[ ! -x "$_bin" ]]
+    then
+        local _msg
+        _msg="[idle release requested but $_bin is not executable - the lane will NOT be released]"
+        __tac_info "Warning" "$_msg" "$C_Warning"
+        return 0
+    fi
+
+    # nohup, so closing the terminal does not end the release: an idle lane is
+    # usually forgotten precisely because the shell that started it is gone.  Its
+    # own output belongs in the lane log, where `mlogs` shows it.
+    nohup "$_bin" --port "$LLM_PORT" --timeout "$_timeout" \
+        --pid-file "${LLM_IDLE_PID_FILE:-/dev/shm/llm-idle-release.pid}" \
+        --log "$LLM_LOG_FILE" >> "$LLM_LOG_FILE" 2>&1 &
+    local _mon_pid=$!
+    __tac_info "Idle release" \
+        "[${_timeout}s with no requests stops this lane (monitor pid ${_mon_pid})]" "$C_Dim"
+}
+
+# ---------------------------------------------------------------------------
 # __model_stop
 # @description Stop the running llama-server process and clear active model state.
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_stop() {
+    __model_idle_release_stop
     __llm_server_stop
     # Release the CUDA card mark this lane took (__model_use_claim_cuda_card) so
     # the watchdog may bring the CUDA lane back.  Left in place when a bench or
@@ -4761,8 +4931,8 @@ function model() {
             ;;
 
         use)
-            # Parse --ctx-size override from remaining args
-            local _use_ctx=""
+            # Parse --ctx-size and --idle-timeout overrides from remaining args
+            local _use_ctx="" _use_idle=""
             local _use_num="${1:-}"
             # swallow-ok: shifting past the arguments is a no-op with nothing to report
             shift 2>/dev/null || true
@@ -4773,6 +4943,10 @@ function model() {
                         _use_ctx="$2"
                         shift 2
                         ;;
+                    --idle-timeout|--idle)
+                        _use_idle="$2"
+                        shift 2
+                        ;;
                     *)
                         shift
                         ;;
@@ -4781,6 +4955,17 @@ function model() {
             if [[ -n "$_use_ctx" ]]
             then
                 export TAC_CTX_SIZE="$_use_ctx"
+            fi
+            if [[ -n "$_use_idle" ]]
+            then
+                if [[ ! "$_use_idle" =~ ^[0-9]+$ ]]
+                then
+                    __tac_info "Error" \
+                        "[--idle-timeout must be a whole number of seconds: '$_use_idle']" \
+                        "$C_Error"
+                    return 1
+                fi
+                export TAC_IDLE_TIMEOUT="$_use_idle"
             fi
             __model_use "$_use_num"
             ;;

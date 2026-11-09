@@ -270,8 +270,8 @@ commands:
   - name: model use
     family: llm
     summary: Start selected model with computed runtime settings
-    version: 2
-    updated: 2026-10-06
+    version: 3
+    updated: 2026-11-09
     status: active
     scope: both
     effect: mutate
@@ -283,16 +283,25 @@ commands:
       - witness: __llm_wait_for_health
         file: scripts/11c-llm-server.sh
         asserts: the serving port answers before the launch reports success
+      - witness: __model_use_start_idle_release
+        file: scripts/11e-llm-model.sh
+        asserts: a requested idle window starts a monitor, and the monitor's pid is published before it watches
     verified_by:
       - "tests/unit/25-claimed-success-witness.bats::model use: the recorded state makes ONLINE honest"
       - "tests/unit/25-claimed-success-witness.bats::model use: the state missing at the success line is FAILURE, not ONLINE"
+      - "tests/unit/89-model-idle-release.bats::model use: the monitor starts only when a positive timeout is asked for"
+      - "tests/unit/89-model-idle-release.bats::model use: bench mode starts no monitor even with a timeout set"
+      - "tests/unit/90-model-mmproj.bats::mmproj: an F16 projector beside the model is passed as --mmproj"
+      - "tests/unit/90-model-mmproj.bats::mmproj: a vision arch with no projector warns before launch"
     contract:
       args:
         - "<model_number>"
         - --ctx-size N
+        - --idle-timeout N
       side_effects:
         - writes active model state
         - starts llama-server process
+        - starts an idle-release monitor when --idle-timeout N is given
       output_shape:
         - startup status and selected model details
       exit_code: non-zero on startup/validation failure
@@ -300,8 +309,8 @@ commands:
   - name: model stop
     family: llm
     summary: Stop local llama-server
-    version: 2
-    updated: 2026-10-06
+    version: 3
+    updated: 2026-11-09
     status: active
     scope: both
     effect: mutate
@@ -310,11 +319,17 @@ commands:
       - witness: __llm_server_gone
         file: scripts/11c-llm-server.sh
         asserts: no llama backend is still running and the serving port is released, read back before STOPPED is printed
+      - witness: __model_idle_release_stop
+        file: scripts/11e-llm-model.sh
+        asserts: the idle monitor is ended and its pid record removed before the lane is stopped
     verified_by:
       - "tests/unit/25-claimed-success-witness.bats::model stop: a stop that really landed still reports STOPPED"
       - "tests/tactical-console.bats::model: model stop succeeds when no server running"
+      - "tests/unit/89-model-idle-release.bats::model stop: the monitor is ended by a pid record that names it"
+      - "tests/unit/89-model-idle-release.bats::model stop: a pid record for another program is discarded, not signalled"
     contract:
       side_effects:
+        - stops the idle-release monitor
         - stops model server process
       output_shape:
         - status message

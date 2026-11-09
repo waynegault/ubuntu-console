@@ -318,7 +318,9 @@ jobs:
                tests/unit/85-model-use-sweep-ownership.bats \
                tests/unit/86-staging-gate-is-runtime.bats \
                tests/unit/87-verdict-sees-contention.bats \
-               tests/unit/88-slots-probe.bats
+               tests/unit/88-slots-probe.bats \
+               tests/unit/89-model-idle-release.bats \
+               tests/unit/90-model-mmproj.bats
 
       - name: Run integration tests
         run: |

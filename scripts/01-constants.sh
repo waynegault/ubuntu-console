@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 53
+# Module Version: 54
+#   v54 (2026-11-09): LLM_IDLE_PID_FILE names the idle-release monitor's pid file,
+#     beside ACTIVE_LLM_FILE.  `model use N --idle-timeout S` starts that monitor and
+#     `model stop` stops it, so the path is shared state and lives with the other
+#     /dev/shm lane state rather than inside one module.
 #   v53 (2026-11-07): the registry header gains llama_build (46) and llama_build_prev (47) —
 #     the BUILD IDENTITY card 8d144104 requires (Wayne, 2026-11-04: "Bench rows should carry
 #     build identity").  Col 46 is the string the MEASURING binary reports; col 47 keeps the
@@ -373,6 +377,10 @@ export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLM_STATE_DIR/default_model.conf}"
 export ACTIVE_LLM_FILE="${ACTIVE_LLM_FILE:-/dev/shm/active_llm}"
 export LLM_LOG_FILE="${LLM_LOG_FILE:-/dev/shm/llama-server.log}"
 export LLM_TPS_CACHE="${LLM_TPS_CACHE:-/dev/shm/last_tps}"
+# The idle-release monitor (`model use N --idle-timeout S`) publishes its pid here so
+# `model stop` can end it with the lane it watches.  /dev/shm for the same reason as
+# ACTIVE_LLM_FILE: a pid is boot-scoped runtime state, not a durable record.
+export LLM_IDLE_PID_FILE="${LLM_IDLE_PID_FILE:-/dev/shm/llm-idle-release.pid}"
 # Sidecar for the window-invariant check (11e-llm-model.sh): a non-destructive
 # per-run note, never written back into LLM_REGISTRY — a bench-time mismatch
 # reflects whatever else shared the GPU during that run, not a re-certified
