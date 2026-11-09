@@ -15,6 +15,20 @@
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 PROBE="$REPO_ROOT/scripts/slots-probe.sh"
 
+# _py — the interpreter the extracted helpers are run with, resolved the way
+# scripts/slots-probe.sh resolves its own (venv when executable, else PATH).  Sourcing one
+# function leaves that fallback out of scope, so a hardcoded .venv path passes here and fails
+# on the runner, which carries no .venv — CI run 42607713123, `not ok 1102`.  ONE definition,
+# because the two cases added after that fix reintroduced the same hardcoded path.
+_py() {
+    local p="$REPO_ROOT/.venv/bin/python3"
+    [[ -x "$p" ]] || p="$(command -v python3 || true)"
+    # Validate the FALLBACK too: `command -v` answers with whatever PATH resolves, and a stale
+    # or non-executable answer would hand a broken interpreter to the helper.
+    [[ -x "$p" ]] || return 1
+    printf '%s\n' "$p"
+}
+
 setup() {
     TMP="$(mktemp -d)"
     mkdir -p "$TMP/bin"
@@ -129,7 +143,7 @@ EOS
                          {"warmup":false,"decode_tokens_per_second":2.43}]}]}
 JSON
     awk '/^_summarise\(\)/,/^}/' "$PROBE" > "$TMP/sum2.sh"
-    run env TAC_PYTHON="$REPO_ROOT/.venv/bin/python3" \
+    run env TAC_PYTHON="$(_py)" \
         bash -c 'source "$1"; _summarise "$2" 262144 4' _ "$TMP/sum2.sh" "$TMP/void"
     [ "$status" -eq 0 ]
     # The row itself must read VOID, never the bogus numbers — those survive only inside the
@@ -153,7 +167,7 @@ JSON
                          {"warmup":false,"decode_tokens_per_second":161.93}]}]}
 JSON
     awk '/^_summarise\(\)/,/^}/' "$PROBE" > "$TMP/sum3.sh"
-    run env TAC_PYTHON="$REPO_ROOT/.venv/bin/python3" \
+    run env TAC_PYTHON="$(_py)" \
         bash -c 'source "$1"; _summarise "$2" 262144 16' _ "$TMP/sum3.sh" "$TMP/ok"
     [ "$status" -eq 0 ]
     [[ "$output" == *"163.48"* ]]
@@ -205,10 +219,7 @@ JSON
     # _summarise leaves that fallback out of scope, so a hardcoded .venv path passed here and
     # failed on the runner, which has no .venv — CI run 42607713123, `not ok 1102`,
     # `[ "$status" -eq 0 ]` failed.
-    local py="$REPO_ROOT/.venv/bin/python3"
-    [[ -x "$py" ]] || py="$(command -v python3 || true)"
-    [ -n "$py" ] || { echo "no python3 to run the summary"; return 1; }
-    run env TAC_PYTHON="$py" \
+    run env TAC_PYTHON="$(_py)" \
         bash -c 'source "$1"; _summarise "$2" 262144 4,8,16' _ "$TMP/summarise.sh" "$TMP/out"
     [ "$status" -eq 0 ]
     [[ "$output" == *"120.50"* ]]
