@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-09): §18.3 debt the first cut carried — eight bare `exit 2` sites became one
+#       `die_usage` helper holding the status (9.7 79 -> 79, and no line pushed past 120
+#       chars doing it, 8.1.8), and the signal trap names its code.  No behaviour change:
+#       the same text reaches stderr and the same status leaves the process.
 #   v1 (2026-11-09): first cut.  The lane serves --parallel 4 because Wayne asked for at
 #       least four slots (2026-11-07), and nothing has ever measured whether 8 or 16 earns
 #       its KV.  A vLLM recipe on the same silicon (devjeonghwan/vllm-for-rtx-spark) runs
@@ -52,8 +56,19 @@ OUT_DIR=""
 DRY_RUN=0
 HEALTH_TIMEOUT=180
 
+# Named exit codes (§18.3 9.7).  The header documents 0/1/2, and a bare `exit 2` at eight
+# call sites is exactly the shape that item counts: an exit code is part of a function's
+# interface, so it gets a name here rather than a comment repeated eight times.
+readonly EXIT_USAGE=2
+readonly EXIT_INTERRUPTED=130
+
 # warn — this tool's ONE stderr path, so every refusal has the same shape (10.7).
 warn() { printf 'slots-probe: %s\n' "$*" >&2; }
+
+# die_usage — refuse a bad invocation.  One place holds the usage status, so the eight
+# argument checks below name their reason and nothing else (9.7), and each stays inside
+# the line budget (8.1.8) instead of repeating `exit "$EXIT_USAGE"` on a long line.
+die_usage() { warn "FATAL: $*"; exit "$EXIT_USAGE"; }
 
 # usage — the CLI synopsis; stdout on --help, stderr on a bad flag.
 usage() {
@@ -76,15 +91,15 @@ parse_args() {
             --out) OUT_DIR="${2:?--out needs a directory}"; shift 2 ;;
             --dry-run) DRY_RUN=1; shift ;;
             -h|--help) usage; exit 0 ;;
-            *) usage >&2; warn "FATAL: unknown argument $1"; exit 2 ;;
+            *) usage >&2; die_usage "unknown argument $1" ;;
         esac
     done
-    [[ -n "$UNIT" ]] || { usage >&2; warn "FATAL: --unit is required (or set LLAMA_CUDA_LANE_UNIT)"; exit 2; }
-    [[ "$PROMPT_TOKENS" =~ ^[1-9][0-9]*$ ]] || { warn "FATAL: --prompt-tokens must be a positive integer"; exit 2; }
-    [[ "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]] || { warn "FATAL: --max-tokens must be a positive integer"; exit 2; }
-    [[ "$REPETITIONS" =~ ^[1-9][0-9]*$ ]] || { warn "FATAL: --repetitions must be a positive integer"; exit 2; }
+    [[ -n "$UNIT" ]] || { usage >&2; die_usage "--unit is required (or set LLAMA_CUDA_LANE_UNIT)"; }
+    [[ "$PROMPT_TOKENS" =~ ^[1-9][0-9]*$ ]] || die_usage "--prompt-tokens must be a positive integer"
+    [[ "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]] || die_usage "--max-tokens must be a positive integer"
+    [[ "$REPETITIONS" =~ ^[1-9][0-9]*$ ]] || die_usage "--repetitions must be a positive integer"
     [[ -z "$CONCURRENCY" || "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]] \
-        || { warn "FATAL: --concurrency must be a positive integer"; exit 2; }
+        || die_usage "--concurrency must be a positive integer"
     # Validate the slot list HERE, not only where it is emitted: a bad entry inside a
     # process substitution cannot set this script's exit status, so a dry run would print
     # a plan and exit 0 (measured 2026-11-09 by this suite's own case).
@@ -92,7 +107,7 @@ parse_args() {
     local -a _vals=()
     IFS=',' read -ra _vals <<< "$VALUES"
     for _v in "${_vals[@]}"; do
-        [[ "$_v" =~ ^[1-9][0-9]*$ ]] || { warn "FATAL: --values entry '$_v' is not a positive integer"; exit 2; }
+        [[ "$_v" =~ ^[1-9][0-9]*$ ]] || die_usage "--values entry '$_v' is not a positive integer"
     done
     [[ -x "$TAC_PYTHON" ]] || { warn "FATAL: no python3 (set TAC_PYTHON)"; exit 1; }
     [[ -f "$BENCH" ]] || { warn "FATAL: $BENCH is missing"; exit 1; }
@@ -302,7 +317,7 @@ main() {
     OUT_DIR="${OUT_DIR:-$REPO_ROOT/logs/slots-probe/$(date -u +%Y%m%dT%H%M%SZ)}"
     mkdir -p "$OUT_DIR" || { warn "FATAL: cannot create $OUT_DIR"; exit 1; }
     trap '_restore_lane' EXIT
-    trap 'exit 130' INT TERM
+    trap 'exit "$EXIT_INTERRUPTED"' INT TERM
     local _v _rc=0
     while IFS= read -r _v; do
         printf 'slots-probe: arm %s slots (concurrency %s)\n' "$_v" "${CONCURRENCY:-$_v}"

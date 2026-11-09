@@ -250,6 +250,12 @@
 # check was relaxed — the guard it carried (name the tree a rebuild replaces) is now a
 # behavioural case in tests/unit/44.  Hand-edited, not --update, which rewrites the file
 # and drops other lanes' hand-added notes.
+# 2026-11-09: 10.7 244 -> 245 — CORPUS GROWTH from ONE newly added file, scripts/slots-probe.sh
+# (Wayne's 80760abf).  Its `warn()` is the tool's single stderr writer, which is what 10.7
+# asks for, and the counter counts that helper's own definition line — the same irreducible
+# site recorded above for tools/check-ruff-pin.sh and bin/wsl-restart.sh.  The same commit's
+# 9.7 +8 was NOT accepted: those were eight bare `exit 2` sites, now one `die_usage` helper
+# holding the status, so 9.7 stays at 79.  Hand-edited, not --update.
 4.2.4	20
 4.2.6	9
 4.3.6	31
@@ -258,5 +264,5 @@
 9.5	118
 9.7	79
 10.4	41
-10.7	244
+10.7	245
 10.8	0
