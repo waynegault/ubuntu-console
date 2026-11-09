@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 4
+#   v4 (2026-11-09): the summary stopped printing a figure that was wrong twice.  `ctx / slots /
+#       1024` was labelled "MiB" — it is K TOKENS — and every arm passes --kv-unified, so the
+#       window is SHARED and a per-slot division describes a configuration this lane never runs.
+#       The table now names the ctx in tokens and says the window is shared; the JSON drops
+#       kv_mib_per_slot.  Found by reading the first real run's own output, not by a test: the
+#       case that existed asserted the wrong label, which is why the new assertion checks that
+#       "MiB" is absent.
 # Module Version: 3
 #   v3 (2026-11-09): the restore waits for the PORT, not just for the process.  Measured on the
 #       first real run: the last arm's server was killed, the trap started the lane while 18087
@@ -320,14 +328,18 @@ for slots in sorted(set(requested)):
             per = (summary.get("decode_tokens_per_second") or {}).get("median")
         except (OSError, KeyError, IndexError, ValueError):
             agg = per = None
-    rows.append({"slots": slots, "aggregate_tps": agg, "per_stream_tps": per,
-                 "kv_mib_per_slot": round(ctx / slots / 1024, 1) if slots and ctx else None})
-print(f"{'slots':>5} {'aggregate tok/s':>16} {'per-stream tok/s':>17} {'ctx/slot':>9}")
+    rows.append({"slots": slots, "aggregate_tps": agg, "per_stream_tps": per})
+# NO per-slot context figure.  An earlier cut printed `ctx / slots / 1024` as "MiB", which was
+# wrong twice: it is K TOKENS, not bytes, and every arm passes --kv-unified, so the window is
+# SHARED rather than divided — the per-slot arithmetic described a configuration this lane does
+# not run.  What actually changes between arms is throughput, and that is what is printed.
+if ctx:
+    print(f"ctx={ctx} tokens, --kv-unified: the window is shared by all slots, not divided")
+print(f"{'slots':>5} {'aggregate tok/s':>16} {'per-stream tok/s':>17}")
 for r in rows:
     agg = "NOT-RUN" if r["aggregate_tps"] is None else f"{r['aggregate_tps']:.2f}"
     per = "NOT-RUN" if r["per_stream_tps"] is None else f"{r['per_stream_tps']:.2f}"
-    kv = "-" if r["kv_mib_per_slot"] is None else f"{r['kv_mib_per_slot']:.0f} MiB"
-    print(f"{r['slots']:>5} {agg:>16} {per:>17} {kv:>9}")
+    print(f"{r['slots']:>5} {agg:>16} {per:>17}")
 (out / "summary.json").write_text(json.dumps({"ctx": ctx, "arms": rows}, indent=2) + "\n",
                                   encoding="utf-8")
 PYEOF

@@ -128,15 +128,25 @@ JSON
 JSON
     awk '/^_summarise\(\)/,/^}/' "$PROBE" > "$TMP/summarise.sh"
     grep -q '_summarise' "$TMP/summarise.sh" || { echo "helper not found"; return 1; }
-    run env TAC_PYTHON="$REPO_ROOT/.venv/bin/python3" \
+    # Resolve the interpreter the way the script does (slots-probe.sh:53-55).  Sourcing only
+    # _summarise leaves that fallback out of scope, so a hardcoded .venv path passed here and
+    # failed on the runner, which has no .venv — CI run 42607713123, `not ok 1102`,
+    # `[ "$status" -eq 0 ]` failed.
+    local py="$REPO_ROOT/.venv/bin/python3"
+    [[ -x "$py" ]] || py="$(command -v python3 || true)"
+    [ -n "$py" ] || { echo "no python3 to run the summary"; return 1; }
+    run env TAC_PYTHON="$py" \
         bash -c 'source "$1"; _summarise "$2" 262144 4,8,16' _ "$TMP/summarise.sh" "$TMP/out"
     [ "$status" -eq 0 ]
     [[ "$output" == *"120.50"* ]]
     [[ "$output" == *"210.25"* ]]
     [[ "$output" == *"30.10"* ]]
-    # 262144 ctx over 4 slots is 64 MiB per slot; over 8 it is 32 MiB.
-    [[ "$output" == *"64 MiB"* ]]
-    [[ "$output" == *"32 MiB"* ]]
+    # Catches the mislabel the first real run printed: `ctx / slots / 1024` reported as "MiB".
+    # It is neither bytes nor a divided window — every arm passes --kv-unified, so the window
+    # is shared.  The table must name the ctx and must NOT invent a per-slot byte figure.
+    [[ "$output" == *"ctx=262144 tokens"* ]]
+    [[ "$output" == *"shared by all slots"* ]]
+    [[ "$output" != *"MiB"* ]]
     # Arm 16 was REQUESTED and produced no artifact: it must be named, not omitted.
     [[ "$output" == *"NOT-RUN"* ]]
     # The JSON is written beside the arms and names all three requested counts.
