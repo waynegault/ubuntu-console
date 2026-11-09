@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 8
+#   v8 (2026-11-09): the cold-card refusal reads as one sentence.  v7 wrapped the gate's reason in
+#       brackets of its own, so the live message nested them — "the card is cold (SM clock 650 MHz
+#       of 3003 (below 60% ...))", which is what the 17:58 run actually printed.  The reason is now
+#       spliced after a dash.  No behaviour changes: the same terms, the same refusals.
 # Module Version: 7
 #   v7 (2026-11-09): the clock term gets a WARM-UP, because on its own it deadlocks.  Measured
 #       17:31: the card sat at 650 of 3,003 MHz with nothing using it, so the gate refused every
@@ -553,7 +558,7 @@ main() {
     local _why=""
     if ! _why="$(_quiet_verdict)"; then
         if [[ "$_why" == "SM clock"* && "$_why" != *"; "* ]]; then
-            warn "the card is cold (${_why}) — warming it through the serving lane"
+            warn "the card is cold — ${_why}; warming it through the serving lane"
             if _warm_clock 90; then
                 # A failing verdict still PRINTS its reason, so _why carries the term either
                 # way; an empty _why here means the warm-up cleared the only term that refused.
