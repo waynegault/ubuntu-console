@@ -115,6 +115,79 @@ EOS
     [ -n "$reset_line" ] && [ -n "$start_line" ] && [ "$reset_line" -lt "$start_line" ]
 }
 
+@test "slots-probe: the summary voids an arm whose aggregate cannot be true" {
+    # Measured 2026-11-09 on the second real run: arm 4 read aggregate 2.43 against
+    # per-stream 4.72.  A group total cannot be below one stream's own median, so that arm is
+    # not a slow slot count — it is a voided measurement.  Catches: a rate that cannot exist
+    # printed in a table as if it were data.
+    mkdir -p "$TMP/void"
+    cat > "$TMP/void/arm-4.json" <<'JSON'
+{"workloads":[{"summary":{"concurrency_group_decode_tokens_per_second":{"median":2.43},
+                          "decode_tokens_per_second":{"median":4.72}},
+               "groups":[{"warmup":false,"decode_tokens_per_second":5.52},
+                         {"warmup":false,"decode_tokens_per_second":1.96},
+                         {"warmup":false,"decode_tokens_per_second":2.43}]}]}
+JSON
+    awk '/^_summarise\(\)/,/^}/' "$PROBE" > "$TMP/sum2.sh"
+    run env TAC_PYTHON="$REPO_ROOT/.venv/bin/python3" \
+        bash -c 'source "$1"; _summarise "$2" 262144 4' _ "$TMP/sum2.sh" "$TMP/void"
+    [ "$status" -eq 0 ]
+    # The row itself must read VOID, never the bogus numbers — those survive only inside the
+    # evidence text that names them as impossible.
+    ! printf '%s\n' "$output" | grep -qE '^ *4 +2\.43 +4\.72'
+    [[ "$output" == *"VOID"* ]]
+    [[ "$output" == *"impossible"* ]]
+    run grep -c '"suspect"' "$TMP/void/summary.json"
+    [ "$output" -eq 1 ]
+}
+
+@test "slots-probe: a healthy arm with a tight group spread is NOT voided" {
+    # The null arm: the first (load ~3.5) run's arm 16 was [165.25, 163.48, 161.93] — a 2%
+    # spread — and must print as data, or the void rule eats good measurements.
+    mkdir -p "$TMP/ok"
+    cat > "$TMP/ok/arm-16.json" <<'JSON'
+{"workloads":[{"summary":{"concurrency_group_decode_tokens_per_second":{"median":163.4763},
+                          "decode_tokens_per_second":{"median":13.6332}},
+               "groups":[{"warmup":false,"decode_tokens_per_second":165.25},
+                         {"warmup":false,"decode_tokens_per_second":163.48},
+                         {"warmup":false,"decode_tokens_per_second":161.93}]}]}
+JSON
+    awk '/^_summarise\(\)/,/^}/' "$PROBE" > "$TMP/sum3.sh"
+    run env TAC_PYTHON="$REPO_ROOT/.venv/bin/python3" \
+        bash -c 'source "$1"; _summarise "$2" 262144 16' _ "$TMP/sum3.sh" "$TMP/ok"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"163.48"* ]]
+    [[ "$output" != *"VOID"* ]]
+}
+
+@test "slots-probe: the quiet verdict names the term that refuses" {
+    # Catches: a probe that measures a busy box and reports the result as clean.  Each term is
+    # fed a fixture, so the case decides the answer rather than the host's current load.
+    awk '/^_quiet_verdict\(\)/,/^}/' "$PROBE" > "$TMP/quiet.sh"
+    grep -q '_quiet_verdict' "$TMP/quiet.sh" || { echo "helper not found"; return 1; }
+    cat > "$TMP/bin/nproc" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "${FAKE_CORES:-20}"
+EOS
+    chmod +x "$TMP/bin/nproc"
+    # A box whose pressure is over the threshold refuses, and NAMES that term.  Pressure is
+    # overridden as a function so the case decides it, not the live host.
+    run env PATH="$TMP/bin:$PATH" FAKE_CORES=4 LLM_AUTOTUNE_PSI_MAX_PCT=0 \
+        bash -c 'source "$1"; _cpu_pressure_pct() { printf "42"; }; _quiet_verdict' _ "$TMP/quiet.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cpu pressure 42%"* ]]
+    # An ACTIVE CI runner worker refuses on its own, whatever the load.
+    cat > "$TMP/bin/pgrep" <<'EOS'
+#!/usr/bin/env bash
+printf '2\n'
+EOS
+    chmod +x "$TMP/bin/pgrep"
+    run env PATH="$TMP/bin:$PATH" FAKE_CORES=20 bash -c '
+        source "$1"; _cpu_pressure_pct() { printf "0"; }; _quiet_verdict' _ "$TMP/quiet.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"CI runner worker"* ]]
+}
+
 @test "slots-probe: the summary reports aggregate and per-stream, and NOT-RUN for a missing arm" {
     # Catches: an arm that never measured being printed as a slot count that measured badly.
     mkdir -p "$TMP/out"

@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 5
+#   v5 (2026-11-09): the probe refuses to measure a box that is not quiet, and voids an arm
+#       whose numbers cannot be true.  Measured on the second real run (load 6.80 at start):
+#       arm 4 reported aggregate 2.43 against per-stream 4.72 — impossible — because its
+#       groups read [5.52, 1.96, 2.43] while the 20 s windows were short of a contender that
+#       ended inside them.  _quiet_verdict now gates the run on load-vs-cores, CPU pressure
+#       (the same /proc/pressure/cpu reading autotune-model.sh uses) and an active CI runner
+#       worker, naming the term that refused; _summarise prints VOID instead of a rate when
+#       aggregate < per-stream or the group spread exceeds 50 %, and the JSON carries suspect=.
 # Module Version: 4
 #   v4 (2026-11-09): the summary stopped printing a figure that was wrong twice.  `ctx / slots /
 #       1024` was labelled "MiB" — it is K TOKENS — and every arm passes --kv-unified, so the
@@ -200,6 +209,55 @@ with open(path, "w", encoding="utf-8") as fh:
 PYEOF
 }
 
+# _cpu_pressure_pct — `some avg10` from /proc/pressure/cpu, or EMPTY when there is no
+# instrument.  Same reading as scripts/autotune-model.sh uses, so the two tools judge the box
+# the same way; empty means "no evidence", never a refusal.
+_cpu_pressure_pct() {
+    local line="" rc=0
+    # swallow-ok: a kernel without CONFIG_PSI yields nothing; the caller reads empty as "no instrument"
+    line="$(cat /proc/pressure/cpu 2>/dev/null)" || rc=$?
+    (( rc == 0 )) || return 0
+    [[ "$line" =~ some[[:space:]]+avg10=([0-9]+([.][0-9]+)?) ]] || return 0
+    printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# _quiet_verdict — may this run measure?  Prints a reason and returns 1 when the box is not
+# quiet; returns 0 with no output when it is.
+#
+# WHY (measured 2026-11-09): without this the probe measured at load 6.80 and arm 4 read
+# 2.43 aggregate against 4.72 per-stream — arithmetically impossible, because during the
+# 20 s group window the sweep's own `ss` polling adds load that does not exist while the
+# samples are taken.  A sweep that reports a number the box's state invalidated is worse than
+# a refused run.  THREE terms, none ever licensed by a missing instrument:
+#   * load1 above the core count (a run-queue average cannot see few saturated threads, so
+#     this alone is not enough — it is the cheap first term);
+#   * CPU pressure above LLM_AUTOTUNE_PSI_MAX_PCT (default 10%), sampled BEFORE any server
+#     launches so the probe's own threads are not mistaken for foreign load;
+#   * an active CI runner worker — CI's bats children never take heavy-job, so the lock
+#     cannot see them (the same rule autotune-model.sh v85 adopted).
+_quiet_verdict() {
+    local _load _cores _psi _ci _term=""
+    read -r _load _ _ < /proc/loadavg || _load=""
+    # swallow-ok: an unreadable core count leaves the load term unavailable, which is not a refusal
+    _cores="$(nproc 2>/dev/null)" || _cores=""
+    _psi="$(_cpu_pressure_pct)"
+    # swallow-ok: no runner process means no CI term; pgrep's own status is not a finding
+    _ci="$(pgrep -c -f 'actions-runner.*[R]unner\.Worker' 2>/dev/null || true)"
+    if [[ "$_ci" =~ ^[0-9]+$ ]] && (( _ci > 0 )); then
+        _term="${_ci} CI runner worker(s) active"
+    fi
+    if [[ -n "$_psi" ]] && awk -v p="$_psi" -v m="${LLM_AUTOTUNE_PSI_MAX_PCT:-10}" 'BEGIN{exit !(p > m)}'; then
+        _term="${_term:+$_term; }cpu pressure ${_psi}% (some avg10, threshold ${LLM_AUTOTUNE_PSI_MAX_PCT:-10}%)"
+    fi
+    if [[ "$_load" =~ ^[0-9]+([.][0-9]+)?$ && "$_cores" =~ ^[0-9]+$ ]] \
+       && awk -v l="$_load" -v c="$_cores" 'BEGIN{exit !(l > c)}'; then
+        _term="${_term:+$_term; }load ${_load} on ${_cores} cores"
+    fi
+    [[ -z "$_term" ]] && return 0
+    printf '%s' "$_term"
+    return 1
+}
+
 # _wait_health — bounded wait for the arm's server to answer /health.
 _wait_health() {
     local _waited=0
@@ -320,15 +378,32 @@ rows = []
 for slots in sorted(set(requested)):
     art = out / f"arm-{slots}.json"
     agg = per = None
+    suspect = ""
     if art.is_file():
         try:
             doc = json.loads(art.read_text(encoding="utf-8"))
-            summary = doc["workloads"][0]["summary"]
+            workload = doc["workloads"][0]
+            summary = workload["summary"]
             agg = (summary.get("concurrency_group_decode_tokens_per_second") or {}).get("median")
             per = (summary.get("decode_tokens_per_second") or {}).get("median")
+            groups = [g.get("decode_tokens_per_second") for g in workload.get("groups", [])
+                      if not g.get("warmup")]
+            groups = [g for g in groups if isinstance(g, (int, float))]
+            if agg is not None and per is not None and agg < per:
+                # Impossible, so the ARM is not a measurement.  Measured 2026-11-09: a median of
+                # group rates over groups that include a drowned 1.96 settled BELOW one stream's
+                # own median.  A rate that cannot exist must not sit in a table looking like data.
+                suspect = f"aggregate {agg:.2f} < per-stream {per:.2f} is impossible"
+                agg = per = None
+            elif len(groups) > 1:
+                spread = (max(groups) - min(groups)) / max(groups) if max(groups) > 0 else 1.0
+                if spread > 0.5:
+                    # The same reading on the first contended run: one group drowned while its
+                    # neighbours were healthy — foreign load that ended inside the window.
+                    suspect = f"group spread {spread:.0%} (groups {', '.join(f'{g:.1f}' for g in groups)})"
         except (OSError, KeyError, IndexError, ValueError):
             agg = per = None
-    rows.append({"slots": slots, "aggregate_tps": agg, "per_stream_tps": per})
+    rows.append({"slots": slots, "aggregate_tps": agg, "per_stream_tps": per, "suspect": suspect})
 # NO per-slot context figure.  An earlier cut printed `ctx / slots / 1024` as "MiB", which was
 # wrong twice: it is K TOKENS, not bytes, and every arm passes --kv-unified, so the window is
 # SHARED rather than divided — the per-slot arithmetic described a configuration this lane does
@@ -337,9 +412,16 @@ if ctx:
     print(f"ctx={ctx} tokens, --kv-unified: the window is shared by all slots, not divided")
 print(f"{'slots':>5} {'aggregate tok/s':>16} {'per-stream tok/s':>17}")
 for r in rows:
+    if r["suspect"]:
+        print(f"{r['slots']:>5} {'VOID':>16} {'VOID':>17}   {r['suspect']}")
+        continue
     agg = "NOT-RUN" if r["aggregate_tps"] is None else f"{r['aggregate_tps']:.2f}"
     per = "NOT-RUN" if r["per_stream_tps"] is None else f"{r['per_stream_tps']:.2f}"
     print(f"{r['slots']:>5} {agg:>16} {per:>17}")
+voided = [r["slots"] for r in rows if r["suspect"]]
+if voided:
+    print(f"VOID arms: {', '.join(str(v) for v in voided)} — re-run them on a quiet box; "
+          f"a void arm is not a slow slot count.")
 (out / "summary.json").write_text(json.dumps({"ctx": ctx, "arms": rows}, indent=2) + "\n",
                                   encoding="utf-8")
 PYEOF
@@ -366,6 +448,17 @@ main() {
     if (( DRY_RUN == 1 )); then
         dry_run
         return 0
+    fi
+    # The box must be quiet BEFORE the first stop: a slot count measured beside foreign load,
+    # or whose group windows are shorter than the load that ended before they began, is a
+    # number the run's own state invalidated.  Refuse and name the term — never measure anyway
+    # and report it as if clean.
+    local _why=""
+    if ! _why="$(_quiet_verdict)"; then
+        warn "FATAL: this box is not quiet — ${_why}.  Not measuring."
+        warn "  Wait for the job to clear (bin/heavy-job --status) and re-run; a swept row"
+        warn "  measured on a busy box is worse than no row."
+        exit 1
     fi
     OUT_DIR="${OUT_DIR:-$REPO_ROOT/logs/slots-probe/$(date -u +%Y%m%dT%H%M%SZ)}"
     mkdir -p "$OUT_DIR" || { warn "FATAL: cannot create $OUT_DIR"; exit 1; }
