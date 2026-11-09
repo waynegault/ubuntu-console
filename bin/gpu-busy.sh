@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.13.0 (2026-11-09: the verdict now names WHICH ARM fired and which arms ran
+#          before it (card 62fbc8cb, criterion (b) as Wayne ruled). The card asked for
+#          "positive evidence of a DECLARED workload before a busy stop", and that cannot
+#          be implemented as written: busy() is a short-circuiting OR and
+#          declared_workload_busy is arm 5 of 6, so when utilisation_arm is reached "no
+#          declared workload" is true BY CONSTRUCTION. Disabling the arm would have been
+#          the only literal reading, so the requirement is met by RECORD instead: every
+#          verdict carries arm=<the one that answered busy, or none> and
+#          checked=<the arms that ran, in order>. Measured 03:23:27 and again 18:01Z: a
+#          stop on `util-suppressed:92%>=15%` left a reader unable to tell whether the
+#          five prior arms had run at all — the reason named the reading we declined to
+#          act on, never that a declared workload had been looked for and not found.
+#          Additive: `reasons` keeps its position and shape, so every consumer and every
+#          existing test still reads it the same way.
 # Version: 1.12.0 (2026-11-08: the serving check asks EVERY CUDA lane on the card, not one
 #          port.  Measured 03:23:27 (card 62fbc8cb) — `util=91%>=15%` was the only reason
 #          recorded while the CHAT lane was idle and the EMBEDDING lane on the SAME card
@@ -112,7 +126,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 21
+# Module Version: 22
 #   v21 (2026-11-08): the serving check asks every CUDA lane on the card (card 62fbc8cb) —
 #     see the 1.12.0 entry at the top of this file.  No other behaviour changes.
 #   v20 (2026-11-06): the declared reason is assembled in a variable instead of one
@@ -241,6 +255,10 @@ libcuda_shadowed() {
 RESIDENCY_EMPTY=0   # nvidia-smi listed no compute app at all
 LANE_SERVING=0      # some sanctioned lane on this card answered >=1 processing request
 LANE_SERVING_PORT=""  # WHICH lane answered — the audit line names it, not just "a lane"
+# Which arm answered BUSY, and which arms ran before it. Empty ARM on the free path, by
+# design: "no arm fired" is a reading, and an empty string says so without inventing one.
+ARM=""
+ARMS_RUN=()
 SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
 
 # _sanctioned_lane_ports -- echo the port of every RUNNING CUDA lane on this card,
@@ -344,6 +362,7 @@ util_busy() {
     [[ "$m" =~ ^[0-9]+$ ]] || return 1
     (( m >= UTIL_THRESHOLD )) || return 1
     REASONS+=("util=${m}%>=${UTIL_THRESHOLD}%")
+    ARM="utilisation"
     return 0
 }
 
@@ -357,6 +376,7 @@ util_busy() {
 # A quiet card records nothing: with utilisation below the threshold there is nothing
 # to attribute and an annotation would be noise on every idle poll.
 utilisation_arm() {
+    ARMS_RUN+=("utilisation")
     local m
     if sanctioned_residents_only; then
         :
@@ -479,6 +499,7 @@ sanctioned_residents_only() {
 }
 
 foreign_apps_busy() {
+    ARMS_RUN+=("foreign-app")
     local pid comm exe smi_out smi_rc _a
     # When the driver/NVML blocks GPU access, nvidia-smi exits non-zero AND prints
     # its error text on STDOUT. Without this guard that text was read as a pid,
@@ -488,6 +509,7 @@ foreign_apps_busy() {
     smi_rc=$?
     if (( smi_rc != 0 )) || grep -qvE '^[0-9]*$' <<< "${smi_out:-0}"; then
         REASONS+=("nvidia-smi-unavailable")
+        ARM="nvidia-smi-unavailable"
         return 0
     fi
     # The residents this probe must not report as foreign, resolved to their real
@@ -516,12 +538,14 @@ foreign_apps_busy() {
         # them — their exe is the interpreter, which says nothing about the role.
         _is_non_gpu_resident "$pid" && continue
         REASONS+=("foreign-app pid=$pid $comm exe=${exe:-unreadable}")
+        ARM="foreign-app"
         return 0
     done <<< "$smi_out"
     return 1
 }
 
 declared_workload_busy() {
+    ARMS_RUN+=("declared-workload")
     local _why=""
     # Patterns here name a real artefact — a script PATH or an executable — and
     # never a bare word.  A bare word matches any process whose command line
@@ -566,6 +590,7 @@ declared_workload_busy() {
         local _reason="declared:$_why pid=${_MATCH_PID:-unknown} rule=${_MATCH_RULE:-unknown}"
         _reason+=" argv=${_MATCH_ARGV:-unreadable}"
         REASONS+=("$_reason")
+        ARM="declared-workload"
         return 0
     fi
     return 1
@@ -768,8 +793,10 @@ _any_executing_process() {
 }
 
 lock_busy() {
+    ARMS_RUN+=("bench-lock")
     if [ -f "$BENCH_LOCK" ]; then
         REASONS+=("lock:$BENCH_LOCK")
+        ARM="bench-lock"
         return 0
     fi
     return 1
@@ -782,12 +809,14 @@ cuda_owner_busy() {
     # existence-gated — `flock -n` also fails on a MISSING path, so reading a
     # failed probe as "held" would report busy forever on a box that never took
     # the lock.
+    ARMS_RUN+=("cuda-owner")
     local _lock="${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
     [[ -e "$_lock" ]] || return 1
     if flock -n "$_lock" -c true 2>/dev/null; then
         return 1   # we took it, so nobody else holds it
     fi
     REASONS+=("cuda-owned-by-another-run pid=$(tr -dc '0-9' < "$_lock" 2>/dev/null || true)")
+    ARM="cuda-owner"
     return 0
 }
 
@@ -804,6 +833,7 @@ cuda_owner_busy() {
 # The reason carries the card's footprint when nvidia-smi answers, so the watchdog's busy
 # line can tell "training holds the card" from an unknown holder without a second probe.
 training_tenant_busy() {
+    ARMS_RUN+=("training-tenant")
     _any_executing_process '/train-timeout-runner\.sh' train-timeout-runner.sh || return 1
     local _used
     # swallow-ok: a failed probe only drops the footprint figure; the tenant match above already decided BUSY
@@ -813,10 +843,16 @@ training_tenant_busy() {
     else
         REASONS+=("declared:training")
     fi
+    ARM="training-tenant"
     return 0
 }
 
 busy() {
+    # Per-call reset, so a --wait loop or a second call cannot accumulate another call's
+    # arms. REASONS is reset by each caller; these two are reset here, where the chain
+    # that appends to them begins.
+    ARM=""
+    ARMS_RUN=()
     # Order is the fix, not a style choice. This is a short-circuiting OR: whichever
     # signal answers first is the ONLY reason recorded, and the rest never run. Asking
     # utilisation first meant a serving lane always answered "util=95%>=15%" and the
@@ -844,10 +880,18 @@ emit() {
     if (( ${#REASONS[@]} > 0 )); then
         reasons=$(printf '"%s",' "${REASONS[@]}" | sed 's/,$//')
     fi
-    if [ "${JSON_OUT:-0}" = "1" ]; then
-        printf '{"busy":%s,"reasons":[%s]}\n' "$state" "$reasons"
+    # arm/checked are APPENDED, so `reasons` keeps its position and shape: every existing
+    # consumer parses that field by prefix, and a stop that is attributable but unreadable
+    # by the watchdog would be no improvement at all.
+    local _checked=""
+    if (( ${#ARMS_RUN[@]} > 0 )); then
+        _checked=$(printf '"%s",' "${ARMS_RUN[@]}" | sed 's/,$//')
     fi
-    log "busy=$state reasons=${REASONS[*]:-none}"
+    if [ "${JSON_OUT:-0}" = "1" ]; then
+        printf '{"busy":%s,"reasons":[%s],"arm":"%s","checked":[%s]}\n' \
+            "$state" "$reasons" "${ARM:-none}" "$_checked"
+    fi
+    log "busy=$state reasons=${REASONS[*]:-none} arm=${ARM:-none} checked=${ARMS_RUN[*]:-none}"
 }
 
 JSON_OUT=0

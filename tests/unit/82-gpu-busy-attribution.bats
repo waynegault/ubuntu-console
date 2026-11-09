@@ -96,6 +96,24 @@ fi
 EOS
 }
 
+# _build_probe_with_arms — same extraction, epilogue also prints the two attribution
+# fields this file's criterion-(b) tests read. Separate from _build_probe so the older
+# arms keep their exact-output assertions (58 pins `free reasons=none` byte-for-byte).
+_build_probe_with_arms() {
+    local last
+    last=$(grep -n '^if busy; then$' "$SRC" | tail -1 | cut -d: -f1)
+    [ -n "$last" ] || { echo "could not locate the main block in $SRC" >&2; return 1; }
+    head -n "$((last - 2))" "$SRC" > "$TAC_TEST_TMPDIR/probe-arms.sh"
+    cat >> "$TAC_TEST_TMPDIR/probe-arms.sh" <<'EOS'
+REASONS=()
+if busy; then
+    printf 'busy reasons=%s arm=%s checked=%s\n' "${REASONS[*]}" "${ARM:-none}" "${ARMS_RUN[*]:-none}"
+else
+    printf 'free reasons=%s arm=%s checked=%s\n' "${REASONS[*]:-none}" "${ARM:-none}" "${ARMS_RUN[*]:-none}"
+fi
+EOS
+}
+
 # start_detached [argv...] — run the fake autotune with extra argv, OUTSIDE this test's
 # ancestry. It must not descend from bats or 1.10.0's harness suppression hides it and
 # every arm would prove nothing.
@@ -152,6 +170,60 @@ start_detached() {
     [[ "$output" != *'"'* ]] || { echo "a quote would break the reasons JSON: $output"; return 1; }
     [[ "$output" != *']'* ]] || { echo "a bracket would end the probe bracket early: $output"; return 1; }
     (( ${#output} < 400 )) || { echo "the line is unbounded: ${#output} chars"; return 1; }
+}
+
+# ---------------------------------------------------------------------------------
+# Criterion (b) as Wayne ruled it (2026-11-09): a busy stop must say which arm fired and
+# which arms were consulted. It cannot say "a declared workload was positively ruled out"
+# because the chain is a short-circuiting OR and declared_workload_busy is arm 5 of 6 —
+# once utilisation_arm runs, "no declared workload" is true by construction. So the
+# requirement is met by RECORD, and these three arms pin that record.
+# ---------------------------------------------------------------------------------
+
+@test "arms: a free card says every arm ran and none fired" {
+    _build_probe_with_arms
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == free* ]] || { echo "expected free, got: $output"; return 1; }
+    [[ "$output" == *"arm=none"* ]] || { echo "a free verdict must not name a firing arm: $output"; return 1; }
+    [[ "$output" == *"checked=training-tenant bench-lock cuda-owner foreign-app declared-workload utilisation"* ]] \
+        || { echo "every arm must be recorded as consulted: $output"; return 1; }
+}
+
+@test "arms: a declared workload names ITSELF and the arms that ran before it" {
+    _build_probe_with_arms
+    start_detached
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == busy* ]] || { echo "expected busy, got: $output"; return 1; }
+    [[ "$output" == *"arm=declared-workload"* ]] || { echo "the firing arm must be named: $output"; return 1; }
+    # Short-circuit visible: declared-workload is 5th, so utilisation never ran.
+    [[ "$output" == *"checked=training-tenant bench-lock cuda-owner foreign-app declared-workload"* ]] \
+        || { echo "the consulted arms must stop where the OR stopped: $output"; return 1; }
+    [[ "$output" != *"utilisation"* ]] || { echo "an arm after the answer cannot have run: $output"; return 1; }
+}
+
+@test "arms: the 03:23:27 shape names utilisation AND proves the declared arm was consulted" {
+    # The incident: no compute-app listing, no lane answering, utilisation high. The stop
+    # was correct and unreadable — a reader could not tell whether a declared workload had
+    # been looked for at all. This is the arm that says it was.
+    _build_probe_with_arms
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-compute-apps=pid*)  exit 0 ;;
+    *--query-gpu=utilization.gpu*) printf '92\n' ;;
+    *--query-gpu=memory.used*)   printf '0\n' ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == busy* ]] || { echo "expected busy, got: $output"; return 1; }
+    [[ "$output" == *"arm=utilisation"* ]] || { echo "utilisation must be named as the arm: $output"; return 1; }
+    [[ "$output" == *"declared-workload"* ]] \
+        || { echo "the record must prove the declared arm ran: $output"; return 1; }
 }
 
 @test "attribution: a suppressed test-harness match carries its argv too" {
