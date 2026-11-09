@@ -989,9 +989,19 @@ measured minutes apart here, `dmesg` said 2 while the journal said 30.
 
 Note also that "the leak" itself remains unmeasured. Disabling the CUDA VMM pool
 (`-DGGML_CUDA_NO_VMM=ON`) removes a 32 GiB per-process VA reservation by
-construction and is runtime-verifiable as `NO_VMM = 1`, but no test has yet shown
-it changes the counter or the failure rate. Its status is **unproven,
-mechanism-justified, cheap** — do not record it as either a fix or a myth.
+construction and is runtime-verifiable as `NO_VMM = 1`, but no test has shown it
+changes the counter or the failure rate. **Decided 2026-11-09: `llm-build` does
+not pass it, and a fresh tree configures to `OFF`.** The measurement that closed
+the question is the 2026-09-14 spike (`docs/llama-cpp-runtime-audit.md` §4): 24
+spawn/kill cycles of the bench model on both builds, the boot-scoped
+`dxgkio_reserve_gpu_va: -75` counter never moved off 30, and decode speed was
+identical (57-59 tps). The production teardown (SIGTERM + 15 s grace) already
+prevents the orphaned pool reservation, so the flag buys no measured benefit for
+the failure this box actually hits — and leaving it out keeps the serving binary
+on upstream's default. **Re-open** only if a measured leak or vanished lane
+correlates with the VMM reservation; the test is that same 24-cycle probe with the
+counter read either side of it. Then it is a one-line deliberate override
+(`-DGGML_CUDA_NO_VMM=ON`), never a default.
 
 Both `autotune-model.sh` and `run-autotune-batch.sh` therefore share one
 boot-scoped ledger in `/dev/shm` and halt with a resume hint when:
@@ -1860,7 +1870,7 @@ cmake -B "${LLAMA_BUILD_DIR:-build}" \
 | `GGML_CUDA_NCCL` | `ON` | NCCL multi-GPU support (harmless when only one GPU is present) |
 | `GGML_CUDA_FORCE_MMQ` | `OFF` | Keep the default cuBLAS matmul path (MMQ is slower on Ampere) |
 | `GGML_CUDA_COMPRESSION_MODE` | `size` | Compresses the compiled CUDA **binary** (`nvcc -compress-mode`). It does **not** touch model weights and buys **no** VRAM headroom — see the note below. |
-| `GGML_CUDA_NO_VMM` | not passed | `llm-build` does not set this, so a tree keeps whatever its cache already holds: `ON` in the x86 box's `build/` (2026-09 audit, `build/CMakeCache.txt`) and `OFF` in this box's `build-cuda/` (measured 2026-11-05). Passing `-DGGML_CUDA_NO_VMM=ON` removes a 32 GiB per-process VA reservation by construction (runtime-verifiable as `NO_VMM = 1`), but its benefit is **unproven, mechanism-justified, cheap**: it has not been shown to change the dxgkrnl counter or the failure rate. Adding it is a deliberate override, not a default. See `docs/llama-cpp-runtime-audit.md` §4. |
+| `GGML_CUDA_NO_VMM` | not passed, decided | `llm-build` does not set this, and a FRESH tree configures it to `OFF` — measured 2026-11-09 by configuring a new tree from the v107 guard, so the `ON` in the x86 box's `build/` is a value someone passed by hand, never an inherited default (this box's `build-cuda/` reads `OFF`, 2026-11-05). Decided 2026-11-09 to leave it out: the 2026-09-14 spike ran 24 spawn/kill cycles on both builds and the boot-scoped `dxgkio_reserve_gpu_va: -75` counter never moved off 30, with identical decode speed, so the 32 GiB per-process VA reservation it removes buys no measured benefit for this box's failure mode; the SIGTERM + 15 s teardown already prevents the orphaned pool reservation. Re-open if a measured leak correlates with the reservation, and then pass `-DGGML_CUDA_NO_VMM=ON` as a deliberate override. See `docs/llama-cpp-runtime-audit.md` §4. |
 | `GGML_NATIVE` | `ON` | Detect host CPU and enable all available instruction sets (AVX2, FMA, BMI2 on i9-12900HK). Without this flag, only a portable baseline is used. |
 | `GGML_OPENMP` | `ON` | OpenMP parallelisation for CPU fallback layers. Essential when VRAM is tight and some layers land on CPU. |
 | `GGML_CCACHE` | `ON` | Cache compiled object files. With only 12 vCPUs this is marginal for clean builds but **significantly** speeds up incremental rebuilds after `git pull`. The cache lives at `~/.cache/ccache`; `ccache -s` reports ~0.9 GiB in use against a 5 GiB cap, so the cap is not a constraint at this scale. |
@@ -2010,6 +2020,13 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > configured fresh. `--fresh` asks for the move regardless of size. The old tree is moved, never
 > deleted — a lane may still be executing the binary inside it — and an existing
 > `.prev-<commit>` is a refusal rather than a `mv` onto a directory (which nests and exits 0).
+>
+> **Proven 2026-11-09 against a real checkout, not only the stubbed suite.** In a scratch worktree
+> 60 commits behind `origin/master`: a symlinked `build-cuda/` was refused by name with the link left
+> intact; the pull path then printed `moved the build tree aside (60-commit jump) ->
+> build-cuda.prev-3ed7284f2`, kept the old tree, and a real `cmake -B` configured the new one for
+> `sm_121` with `GGML_CCACHE_FOUND=/usr/bin/ccache` and `GGML_CUDA=ON`. Only the compile was
+> short-circuited, so that run ended `Build failed (exit=1)` by design.
 
 ---
 

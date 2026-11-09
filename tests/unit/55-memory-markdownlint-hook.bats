@@ -42,7 +42,8 @@ setup() {
   "default": false,
   "MD049": true,
   "MD041": true,
-  "MD032": true
+  "MD032": true,
+  "MD047": true
 }
 JSONC
 }
@@ -189,3 +190,50 @@ fail_mv() {
 }
 
 # end of file
+
+# ── v8: the final newline (card MEMORY-FORMATTER-AT-WRITE-001) ────────────────────────────────
+# MD047 is the one rule here that is fully determined by the file's own last byte, so it is fixed
+# rather than prescribed: the advice block only ever reached notes a later turn happened to touch.
+# The expectations come from MD047's contract, not from the hook: "exactly one newline at EOF".
+@test "memory lint hook: MD047 is FIXED — a missing final newline is added and reported" {
+    printf -- '---\nname: fixture\n---\n\n# Fixture\n\nno final newline' > "$FIX/.qwen/memories/note.md"
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"FIXED final newline"* ]]
+    [ "$(tail -c 1 "$FIX/.qwen/memories/note.md" | od -An -c | tr -d ' ')" = "\n" ]
+    [ "$(lint | wc -l)" -eq 0 ]
+}
+
+@test "memory lint hook: MD047 does not fire for two trailing newlines, so the hook leaves them" {
+    # CORRECTED FROM MEASUREMENT, not from my expectation.  I wrote this case believing MD047 covered
+    # "a run of trailing blank lines".  markdownlint's MD047 is "no multiple blanks": a missing final
+    # newline is the only error it reports for end-of-file (measured 2026-11-09 on this box — a note
+    # ending in three newlines lints rc=0).  So the assertion is the OBSERVABLE the linter gives:
+    # nothing is cited for MD047, nothing is rewritten, and the bytes stay as they were.  A fixer that
+    # silently collapsed them would be doing work no rule asked for.
+    printf -- '---\nname: fixture\n---\n\n# Fixture\n\nbody\n\n\n' > "$FIX/.qwen/memories/note.md"
+    before="$(md5sum "$FIX/.qwen/memories/note.md" | cut -d' ' -f1)"
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"FIXED final newline"* ]]
+    [ "$before" = "$(md5sum "$FIX/.qwen/memories/note.md" | cut -d' ' -f1)" ]
+}
+
+@test "memory lint hook: a note it cannot write is REFUSED for MD047, never reported as FIXED" {
+    # The v6 lesson, applied to the new fixer: a success message must have a write behind it.
+    printf -- '---\nname: fixture\n---\n\n# Fixture\n\nno final newline' > "$FIX/.qwen/memories/note.md"
+    chmod 444 "$FIX/.qwen/memories/note.md"
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"FIXED final newline"* ]]
+    chmod 644 "$FIX/.qwen/memories/note.md"
+}
+
+@test "memory lint hook: a clean note is still untouched and silent for MD047" {
+    printf -- '---\nname: fixture\n---\n\n# Fixture\n\nfine\n' > "$FIX/.qwen/memories/note.md"
+    before="$(md5sum "$FIX/.qwen/memories/note.md" | cut -d' ' -f1)"
+    run run_hook
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$before" = "$(md5sum "$FIX/.qwen/memories/note.md" | cut -d' ' -f1)" ]
+}

@@ -10,7 +10,18 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-11-09, card MEMORY-FORMATTER-AT-WRITE-001): MD047 is now FIXED, not prescribed.  The rule is
+#   fully determined by the file's last byte, so there is nothing to interpret: a missing final newline
+#   gains one and a trailing blank run collapses to one, verified by reading the file back (last byte
+#   a newline, byte before it not).  Reason it moved: the v6 writer payload states the rule in the
+#   extractor's prompt and held for 14 consecutive notes, yet still missed one, and the advice block
+#   only reached notes a later turn happened to touch.  The fixer's FIRST verifier was itself the
+#   defect — it appended a newline to a copy of the rewritten file and compared, which can never match,
+#   so every note was refused as "did not read back as intended" while the rewrite was correct; that is
+#   the same success-message-without-a-write family v6 closed, in reverse.  No other rule is touched:
+#   MD049/MD004 remain findings, because a wrapped formula rewritten by position changes arithmetic
+#   while still linting clean.
 #   v7 (2026-11-01): the v6 refusal message ran to 131 characters, over §18.3 item 8.1.8's 120-column
 #   bound, so it is wrapped across a continuation instead of being absorbed by the ratchet baseline.
 #   Behaviour is identical; the wrapped form still matches the suite's `REFUSED to fix emphasis` glob.
@@ -357,6 +368,62 @@ fix_shape() {
     done
 }
 
+# ── fix_final_newline (MD047) ──────────────────────────────────────────────────────────────
+# THE QUARANTINE IS NOW A FIX.  Every other shape this hook can repair is reported by the turn hook
+# and then repaired by a later turn — but MD047 is fully determined by the file's own last byte, so
+# there is nothing to interpret and nothing to be wrong about.  Leaving it to the advice block meant
+# one MD047 per extraction wave, each cleared by hand in whichever turn the hook happened to fire,
+# and a note never touched again kept its finding.  v6 of the writer payload states the rule in the
+# extractor's prompt; this repairs what a prompt cannot guarantee.
+#
+# TWO SHAPES, BOTH CLOSED: a missing final newline (append one) and a run of trailing blank lines
+# (collapse to one).  Exactly one "\n" is the contract, so the fix is a byte operation on the tail,
+# never a re-render. NO --fix, NO FULL CONFIG: the restricted config the advice block recommends is
+# right for whitespace only, but it cannot even express "exactly one", and running the linter here
+# would put a formatter in the write path of every turn's verdict.  awk rewrites the tail; the whole
+# note is read back and compared byte-for-byte with what was intended.
+fix_final_newline() {
+    printf '%s\n' "$report" | grep -F 'MD047' | cut -d: -f1 | sort -u |
+        while IFS= read -r note; do
+            [[ -f "$note" ]] || continue
+            [[ -r "$note" && -w "$note" ]] || {
+                shape_refuse "$note" MD047 "the note is not readable and writable"
+                continue
+            }
+            tmp="$note.finalnewline-fix.$$"
+            # Keep every line, then emit exactly one newline at the end. printf '%s\n' per line
+            # without the trailing blank run: awk drops trailing empty lines by construction,
+            # because the last non-empty line is the last thing it prints.
+            if awk '
+                { lines[NR] = $0 }
+                END {
+                    last = NR
+                    while (last > 0 && lines[last] == "") last--
+                    for (i = 1; i <= last; i++) print lines[i]
+                }
+            ' "$note" > "$tmp" 2>/dev/null; then  # swallow-ok: a failed rewrite is REFUSED by name below; there is no fourth state
+                # HOLD THE RESULT TO THE CONTRACT, NOT TO A COPY OF ITSELF.  The first version
+                # appended a newline to a copy of the rewritten file and compared — but that file
+                # already ends in one, so the two could never match and every note was refused with
+                # "did not read back as intended" while the rewrite was in fact correct.  The
+                # contract is narrower than a copy: the last byte is a newline and the byte before
+                # it is not.  Both are read back from the file after the move.
+                if mv "$tmp" "$note" &&
+                    [ "$(tail -c 1 "$note" | od -An -c | tr -d ' ')" = '\n' ] &&
+                    [ "$(tail -c 2 "$note" | od -An -c | tr -d ' ')" != '\n\n' ]; then
+                    echo "memory-markdownlint: FIXED final newline in $note (MD047)."
+                    printf '%s\n' "$note" >> "$FIXED_LIST"
+                else
+                    echo "memory-markdownlint: REFUSED to fix MD047 in $note —" \
+                        "the note does not read back as ending in exactly one newline."
+                fi
+            else
+                shape_refuse "$note" MD047 "the note could not be rewritten"
+            fi
+            rm -f "$tmp"
+        done
+}
+
 # collect_all — every note in scope, used when there is no stamp yet.
 collect_all() {
     find memories -type f -name '*.md' -not -name 'MEMORY.md'
@@ -407,6 +474,9 @@ if printf '%s\n' "$report" | grep -qF 'MD049'; then
 fi
 if printf '%s\n' "$report" | grep -qE 'MD041/|MD032/'; then
     fix_shape
+fi
+if printf '%s\n' "$report" | grep -qF 'MD047'; then
+    fix_final_newline
 fi
 
 # Re-lint the notes a fixer touched, so the verdict below describes the tree AS IT NOW IS rather
