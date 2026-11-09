@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 from _paths import REPO_ROOT
@@ -25,6 +26,23 @@ import gguf_metadata_add as mod
 ALIGNMENT = 32
 ARCH = "glm5-next"
 KPOOL = "glm5-next.attention.indexer.kpool"
+
+
+class Fixture(TypedDict):
+    """The offsets build_fixture computed, typed so the cases can do arithmetic on them.
+
+    A plain dict[str, object] made `expect["info_end"] + delta` an object-plus-int, which
+    mypy rejects — and the annotation is the only thing that says which entries are
+    numbers and which are bytes.
+    """
+
+    kv_count: int
+    kv_bytes: bytes
+    info_bytes: bytes
+    data_start: int
+    info_end: int
+    blob: bytes
+    tensor_count: int
 
 
 def _kv_string(key: str, value: str) -> bytes:
@@ -55,7 +73,7 @@ def _tensor_info(name: str, dims: tuple[int, ...], ttype: int, offset: int) -> b
     return out + struct.pack("<Q", offset)
 
 
-def build_fixture(path: Path, *, with_kpool: bool = False, truncate: int = 0) -> dict[str, object]:
+def build_fixture(path: Path, *, with_kpool: bool = False, truncate: int = 0) -> Fixture:
     """Write a minimal GGUF and return the offsets the cases assert against."""
     kv = [
         _kv_string("general.architecture", ARCH),
