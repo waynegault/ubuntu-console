@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-09): the local logger is `_idle_log`, not `log`.  `bin/_tac-bin-lib.sh`
+#   owns the `log` name and the fast suite pins that (card a1076d6f), so this file's
+#   own logger shadowed it and failed `bin: the shared helpers are defined ONCE` on
+#   every tip that carried it.  Renamed rather than rewired: this one brands lines
+#   with the port and appends to the run's log file, which the shared helper does not.
 # llm-idle-release.sh - stop a `model use` lane after a quiet interval.
 #
 # WHY THIS EXISTS.  `model use` takes the CUDA card and holds it until `model stop`:
@@ -99,8 +104,10 @@ then
     exit 0
 fi
 
-# log - one timestamped decision, to the lane log or to stderr.
-log() {
+# _idle_log - one timestamped decision, to the lane log or to stderr.
+# Not named `log`: bin/_tac-bin-lib.sh owns that name, and this one is a different
+# thing - it brands every line with the port and appends to the run's own log file.
+_idle_log() {
     local _msg
     _msg="$(date '+%Y-%m-%d %H:%M:%S') llm-idle-release[$PORT]: $*"
     if [[ -n "$LOG_FILE" ]]
@@ -121,7 +128,7 @@ then
 fi
 if [[ -z "$EXEC_CMD" || ! -x "$EXEC_CMD" ]]
 then
-    log "no stop command found (tac-exec); refusing to watch a lane it cannot release"
+    _idle_log "no stop command found (tac-exec); refusing to watch a lane it cannot release"
     exit 1
 fi
 
@@ -130,7 +137,7 @@ fi
 _pid_tmp="$PID_FILE.tmp.$$"
 if ! { printf '%s\n' "$$" > "$_pid_tmp" && mv "$_pid_tmp" "$PID_FILE"; }
 then
-    log "cannot write $PID_FILE; refusing to watch (a monitor that cannot be stopped is a hazard)"
+    _idle_log "cannot write $PID_FILE; refusing to watch (a monitor that cannot be stopped is a hazard)"
     exit 1
 fi
 
@@ -179,7 +186,7 @@ probe() {
 last_counter=""
 last_active="$(date +%s)"
 failures=0
-log "watching :$PORT; release after ${TIMEOUT}s with no requests (poll ${POLL}s)"
+_idle_log "watching :$PORT; release after ${TIMEOUT}s with no requests (poll ${POLL}s)"
 
 while true
 do
@@ -192,7 +199,7 @@ do
         failures=$(( failures + 1 ))
         if (( failures >= 3 ))
         then
-            log "metrics stopped answering for ${failures} probes; the lane is gone or unmeasured - exiting"
+            _idle_log "metrics stopped answering for ${failures} probes; the lane is gone or unmeasured - exiting"
             exit 0
         fi
         continue
@@ -238,7 +245,7 @@ do
         continue
     fi
 
-    log "idle ${idle}s (no request since $last_active); releasing the lane via $EXEC_CMD halt"
+    _idle_log "idle ${idle}s (no request since $last_active); releasing the lane via $EXEC_CMD halt"
     # Drop OUR record first: the stop path reads this file and would otherwise send
     # this monitor its own TERM before the stop could complete.
     rm -f "$LLM_IDLE_PID_FILE"
@@ -251,9 +258,9 @@ do
     fi
     if (( _rc != 0 ))
     then
-        log "stop command exited ${_rc}; the lane may still be serving"
+        _idle_log "stop command exited ${_rc}; the lane may still be serving"
     else
-        log "lane released"
+        _idle_log "lane released"
     fi
     exit "$_rc"
 done
