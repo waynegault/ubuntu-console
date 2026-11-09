@@ -2030,6 +2030,15 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > build-cuda.prev-3ed7284f2`, kept the old tree, and a real `cmake -B` configured the new one for
 > `sm_121` with `GGML_CCACHE_FOUND=/usr/bin/ccache` and `GGML_CUDA=ON`. Only the compile was
 > short-circuited, so that run ended `Build failed (exit=1)` by design.
+>
+> **v108: the rule dates the TREE, not only the pull.** `HEAD..@{u}` answers "how far is the source
+> from upstream" — and it reads **0** when the checkout has already advanced while the build stood
+> still, which is exactly the case this box was in on 2026-11-09 14:18: binary `3ed7284f2` under
+> HEAD `a4d4f2fd4`, jump 0, no move, and an in-place reconfigure over 61 commits of stale objects.
+> The tree is now dated from the commit its binary reports: a lag of at least
+> `LLAMA_BUILD_FRESH_AT` moves it, and a tree that cannot name its commit — no binary, or a banner
+> that does not parse — counts as stale. `--no-pull` no longer disables the rule; it only removes
+> the pull's contribution to the measurement.
 
 ---
 

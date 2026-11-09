@@ -45,8 +45,17 @@ setup() {
     export LLAMA_BUILD_ALLOW_CI=1
     LLAMA_ROOT="$(mktemp -d)"
     mkdir -p "$LLAMA_ROOT/build/bin"
-    # A STALE binary: this is what the pre-fix path reports as "built".
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$LLAMA_ROOT/build/bin/llama-server"
+    # A STALE binary: this is what the pre-fix path reports as "built".  It also DATES the tree -
+    # the fresh-tree rule reads the commit a tree's binary reports - so a case that wants a current
+    # tree writes that commit to $LLAMA_ROOT/.stub-commit.  No file means "cannot date this tree",
+    # which the rule must treat as stale.
+    cat > "$LLAMA_ROOT/build/bin/llama-server" <<BIN
+#!/usr/bin/env bash
+if [ -r "$LLAMA_ROOT/.stub-commit" ]; then
+    printf 'version: 0.0.0-dev (build 1, commit %s)\n' "\$(cat "$LLAMA_ROOT/.stub-commit")"
+fi
+exit 0
+BIN
     chmod +x "$LLAMA_ROOT/build/bin/llama-server"
     export LLAMA_ROOT
     # llm-build now runs every cmake step under bin/heavy-job, which EXECs the command:
@@ -480,8 +489,10 @@ _prev_trees() {
 
 @test "llm-build: a small jump keeps the tree in place (control, v107)" {
     # The control for the two cases below: 2 commits is a reconfigure, not a fresh tree.  Without
-    # this, "moves the tree on a large jump" could be a rule that always moves.
+    # this, "moves the tree on a large jump" could be a rule that always moves.  The tree declares
+    # itself CURRENT, because v108 also moves a tree that cannot date itself.
     _checkout_with_jump 2
+    git -C "$LLAMA_ROOT" rev-parse HEAD > "$LLAMA_ROOT/.stub-commit"
     printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
     CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
     : > "$CMAKE_LOG"
@@ -553,4 +564,72 @@ _prev_trees() {
     [[ "$out" == *"LLAMA_BUILD_FRESH_AT"* ]]
     [[ "$out" != *"Done"* ]]
     [ ! -s "$CMAKE_LOG" ]
+}
+
+# ---- v108 (2026-11-09): the tree's OWN commit decides, not only the pull's ----
+# Measured on this box: HEAD was already at origin's tip (61 commits ahead of the binary), so
+# `HEAD..@{u}` read 0 and v107 moved nothing - the rebuild reused objects built from 3ed7284f2.
+# The rule now dates the tree from the commit its binary reports.
+
+@test "llm-build: a tree built from an older commit is moved aside with no pull at all (v108)" {
+    # Catches: v107's blind spot - a checkout that advanced while the tree stood still.  --no-pull
+    # makes the pull jump 0 by construction, so ONLY the tree's own lag can move it here.
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m base
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m head
+    local head; head="$(git -C "$LLAMA_ROOT" rev-parse --short HEAD)"
+    git -C "$LLAMA_ROOT" rev-parse HEAD~1 > "$LLAMA_ROOT/.stub-commit"
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    export LLAMA_BUILD_FRESH_AT=1
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"moved the build tree aside (1-commit tree lag)"* ]]
+    [ -f "$LLAMA_ROOT/build.prev-${head}/OLD-TREE" ]
+    [ ! -e "$LLAMA_ROOT/build/OLD-TREE" ]
+}
+
+@test "llm-build: a tree ONE commit behind stays in place at the default threshold (control, v108)" {
+    # The control: the same one-commit lag with the default 20 must NOT move it, or "moves a stale
+    # tree" would really be "moves any tree whose binary names a commit".
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m base
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m head
+    git -C "$LLAMA_ROOT" rev-parse HEAD~1 > "$LLAMA_ROOT/.stub-commit"
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" != *"moved the build tree aside"* ]]
+    [ -f "$LLAMA_ROOT/build/OLD-TREE" ]
+    [ -z "$(_prev_trees)" ]
+}
+
+@test "llm-build: a tree that cannot date its own binary is stale (v108)" {
+    # Catches: an empty answer read as "0 commits behind" - the reason a tree with no binary at all
+    # would silently keep its objects.  No .stub-commit means the binary names no commit.
+    git -C "$LLAMA_ROOT" init -q
+    git -C "$LLAMA_ROOT" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m base
+    printf 'old\n' > "$LLAMA_ROOT/build/OLD-TREE"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+    export LLAMA_BUILD_FRESH_AT=1
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"moved the build tree aside (tree has no readable build commit)"* ]]
+    [ ! -e "$LLAMA_ROOT/build/OLD-TREE" ]
 }

@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 108
+#   v108 (2026-11-09): `llm-build`'s fresh-tree rule dates the TREE, not only the pull.  v107 moved
+#   the tree when `HEAD..@{u}` reached LLAMA_BUILD_FRESH_AT - which answers "how far is the source
+#   from upstream", and reads 0 when the checkout has already advanced and only the build stood
+#   still.  Measured 2026-11-09 on this box: binary 3ed7284f2 under HEAD a4d4f2fd4, jump 0, no move,
+#   and the rebuild reused objects built 61 commits earlier.  The binary reports the commit it was
+#   built from, so the tree is now dated directly: a lag of at least LLAMA_BUILD_FRESH_AT moves it,
+#   and a tree that cannot name its commit (no binary, or an unreadable banner) counts as stale.
+#   `--no-pull` no longer disables the rule - it only drops the pull's contribution.
 # Module Version: 107
 #   v107 (2026-11-09): `llm-build` refuses a symlinked build tree and starts a FRESH tree for a
 #   large jump.  Measured 2026-11-05: build-cuda/ was a symlink into the previous checkout, so
@@ -5356,17 +5365,58 @@ function llm-build() {
  nothing built" "$C_Error"
         return 1
     fi
-    # Under --no-pull nothing moves the source, so there is no jump to measure and only an
-    # explicit --fresh moves the tree.
-    local jump=0 jump_note="requested with --fresh"
+    # Under --no-pull nothing moves the source, so there is no pull jump to measure; the tree's
+    # own staleness is still measurable and still decides.
+    local jump=0
     if [[ "$no_pull" != "true" ]]
     then
         # swallow-ok: an untracked branch or a failed read counts as no jump, which leaves the tree alone
         jump=$(git rev-list --count "HEAD..@{u}" 2>/dev/null) || jump=0
-        jump_note="${jump}-commit jump"
     fi
-    if [[ -d "$build_dir" && ( "$fresh" == "true" || "$jump" -ge "$fresh_at" ) ]]
+    # The tree's OWN commit, not only the pull's.  `HEAD..@{u}` answers "how far is the source
+    # from upstream", which is 0 when the checkout has already advanced and only the build stood
+    # still - measured 2026-11-09: a tree 61 commits behind an up-to-date checkout, where that
+    # rule moved nothing and the rebuild reused objects built from 3ed7284f2 while HEAD was
+    # a4d4f2fd4.  The binary reports the commit it was built from, so the tree can be dated.
+    local tree_commit="" tree_behind=0 tree_undated=false
+    if [[ -x "$build_dir/bin/llama-server" ]]
     then
+        # swallow-ok: an unreadable banner leaves tree_commit empty, and empty reads as STALE below
+        tree_commit=$("$build_dir/bin/llama-server" --version 2>&1 \
+            | sed -n 's/.*commit \([0-9a-f]\{7,40\}\).*/\1/p' | head -1)
+    fi
+    local head_short
+    # swallow-ok: a checkout that cannot name HEAD has nothing to compare the tree against
+    head_short=$(git rev-parse --short HEAD 2>/dev/null) || head_short=""
+    if [[ -n "$head_short" ]]
+    then
+        # swallow-ok: an object id this repo does not know cannot date the tree, and the elif reads that as stale
+        if [[ -n "$tree_commit" ]] && git cat-file -e "${tree_commit}^{commit}" 2>/dev/null
+        then
+            # swallow-ok: a failed count leaves 0, which reads as a tree that matches HEAD
+            tree_behind=$(git rev-list --count "${tree_commit}..HEAD" 2>/dev/null) || tree_behind=0
+        elif [[ -d "$build_dir" ]]
+        then
+            # A tree that exists but cannot say what it was built from is stale by definition.
+            tree_undated=true
+            tree_behind=$(( fresh_at + 1 ))
+        fi
+    fi
+    if [[ -d "$build_dir" && ( "$fresh" == "true" || "$jump" -ge "$fresh_at" || "$tree_behind" -ge "$fresh_at" ) ]]
+    then
+        local why="requested with --fresh"
+        if [[ "$fresh" != "true" ]]
+        then
+            if [[ "$jump" -ge "$fresh_at" ]]
+            then
+                why="${jump}-commit jump"
+            elif [[ "$tree_undated" == "true" ]]
+            then
+                why="tree has no readable build commit"
+            else
+                why="${tree_behind}-commit tree lag"
+            fi
+        fi
         local prev_dir
         # swallow-ok: an unreadable HEAD names the tree "unknown"; the move still has one target
         prev_dir="${build_dir}.prev-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -5378,7 +5428,7 @@ function llm-build() {
         mv "$build_dir" "$prev_dir" || {
             __tac_info "Error" "could not move ${build_dir} aside" "$C_Error"; return 1
         }
-        __tac_info "Fresh" "moved the build tree aside (${jump_note}) -> ${prev_dir}" "$C_Info"
+        __tac_info "Fresh" "moved the build tree aside (${why}) -> ${prev_dir}" "$C_Info"
     fi
 
     # Pull latest upstream
