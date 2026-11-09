@@ -69,3 +69,39 @@ TimeoutStartSec=180
 
 [Install]
 WantedBy=default.target
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHICH SURFACE WINS (2026-11-09) — the precedence the 2026-11-01 HF drift exposed,
+# written down because nothing recorded it and a day was spent on the consequence.
+#
+# Four surfaces can hold a credential. They do not have equal authority:
+#
+#   1. Windows User environment       the canonical SOURCE. The /dev/shm bridge cache
+#                                     is a copy of it, wiped by a reboot and re-read
+#                                     by this unit.
+#   2. systemd user-manager env       DERIVED — this unit pushes into it. Read by
+#                                     everything the manager starts EXCEPT the gateway.
+#   3. ~/.openclaw/gateway.systemd.env  DERIVED, and the AUTHORITY for the gateway for
+#                                     every name in the gateway unit's
+#                                     OPENCLAW_SERVICE_MANAGED_ENV_KEYS (23 names,
+#                                     2026-11-09). It is an EnvironmentFile= on that
+#                                     unit, and an EnvironmentFile OVERRIDES an
+#                                     inherited manager variable of the same name.
+#   4. ~/.config/environment.d/       absent on this box (2026-11-09): contributes nothing.
+#
+# THE CONSEQUENCE — for a MANAGED key, a disagreement between (2) and (3) is not two
+# sources of truth. It is one source and one stale copy, and the gateway silently runs
+# the stale one. Measured 2026-11-01: HUGGINGFACE_TOKEN was 37 chars `hf_…` in the
+# manager and 825 chars `hf_oauth…` in the file, and the gateway held the 825-char
+# value. Correcting the manager alone would NOT have fixed it; the FILE had to change.
+#
+# VERIFIED 2026-11-09 (lengths and sha prefixes only, never values): HUGGINGFACE_TOKEN
+# and DEEPSEEK_API_KEY agree across (2) and (3) — 37/37 and 35/35, matching sha.
+# OPENROUTER_API_KEY is ABSENT from (2) and present in (3) at 73 chars: that is the
+# DESIGNED arrangement for a managed key, not a fault, and must not be "repaired" by
+# pushing it into the manager.
+#
+# The 24 names the run reports as ON NO SURFACE are a different population again:
+# bridged in Windows, named by no config ref, present on none of (2), (3) or (4). They
+# are waiting for a consumer, not broken.
+# ─────────────────────────────────────────────────────────────────────────────
