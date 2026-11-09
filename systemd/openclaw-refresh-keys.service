@@ -66,6 +66,36 @@ ExecStart=%h/.local/bin/tac-exec oc refresh-keys
 # The refresh bridges from Windows over WSL interop (20s pwsh timeout), syncs
 # SecretRefs, pushes the manager env and may restart the gateway. Give it room.
 TimeoutStartSec=180
+# A STOP IS NOT A FAULT, AND IT MUST NOT BE REPORTED AS ONE (2026-11-09).
+#
+# Measured: of the 68 recorded starts of this unit, exactly ONE ended in a signal —
+# 2026-11-01T17:22:17Z, `Main process exited, code=killed, status=15/TERM` then
+# `Failed with result 'signal'`. Its last log line was "Gateway [restart issued —
+# waiting up to 120s for it to serve]": an operator stop landed inside this unit's own
+# DESIGNED wait, and systemd filed the result next to units that had genuinely broken.
+# A shutdown does the same thing, because Type=oneshot has no chance to finish.
+#
+# A TIMEOUT IS STILL A FAILURE, and this directive does not hide it. Measured in a
+# throwaway oneshot (TimeoutStartSec=3, ExecStart=/bin/sleep 30, this directive):
+# `Result=timeout`, `ExecMainCode=2`, `ExecMainStatus=15`, and the unit WAS still in
+# `systemctl --user --failed` — systemd kills with TERM but classifies the expiry as
+# its own result, so swallowed-by-SIGTERM does not apply. Measured again for the stop
+# itself: `inactive/dead`, `Result=success`, `ExecMainStatus=0`, absent from --failed.
+#
+# THE OBJECTION THAT HELD THIS BACK WAS WRONG ABOUT ITS OWN PREMISE. It read: "TERM
+# cannot distinguish an operator stop from a mid-write kill, and this is the only
+# re-derive path for gateway.systemd.env." This unit does not write that file at all
+# — `__oc_sync_gateway_env_file` step 2 refuses to, precisely because OpenClaw
+# fingerprints its own unit; the file's mtime is 2026-11-07 16:36:14, days before
+# this unit last ran. What it does write is `systemctl --user set-environment` (one
+# atomic, idempotent call per name) plus the two hash/set markers, and those are
+# written ONLY after every push succeeded. So an interruption cannot be recorded as
+# a success: the markers stay unwritten and the next run retries. The design already
+# tolerates being cut; the directive only stops it from being called broken.
+#
+# SIGSEGV, SIGKILL and any non-zero exit are untouched by this line, so a real crash
+# still lands in --failed.
+SuccessExitStatus=SIGTERM
 
 [Install]
 WantedBy=default.target
