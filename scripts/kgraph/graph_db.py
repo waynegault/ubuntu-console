@@ -1,8 +1,9 @@
 """Graph database persistence layer.
 
-Stores and retrieves ``Graph`` models from SQLite.  Accepts both
-``Graph`` instances and legacy dicts (auto-converted via
-``Graph.from_dict()``).
+Stores and retrieves ``Graph`` models from SQLite.  A caller at a JSON boundary
+validates with ``Graph.from_dict()`` itself; this layer takes only a ``Graph``,
+so no write path can put schema validation behind the destructive
+delete-and-insert.
 """
 
 from __future__ import annotations
@@ -267,14 +268,12 @@ def load_from_graph_db(dbpath: str) -> Graph:
     return graph
 
 
-def save_to_graph_db(dbpath: str, graph: Graph | dict) -> None:
-    """Persist a ``Graph`` (or legacy dict) to the SQLite graph database.
+def save_to_graph_db(dbpath: str, graph: Graph) -> None:
+    """Persist a validated ``Graph`` to the SQLite graph database.
 
     Refuses a graph with a dangling edge BEFORE the destructive delete-and-insert,
     so a bad write cannot replace a good graph with one no view can traverse.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
     missing = dangling_edges(graph.nodes, graph.edges)
     if missing:
         sample = "; ".join(f"{e.source} -> {e.target} [{e.label}]" for e in missing[:5])

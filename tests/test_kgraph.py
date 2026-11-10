@@ -59,7 +59,7 @@ class KGraphTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             db_path = os.path.join(td, "graph.sqlite")
-            kgraph.save_to_graph_db(db_path, graph)
+            kgraph.save_to_graph_db(db_path, kgraph.Graph.from_dict(graph))
             loaded = kgraph.load_from_graph_db(db_path)
 
         self.assertEqual(loaded.nodes[0].id, "n1")
@@ -110,23 +110,25 @@ class KGraphTests(unittest.TestCase):
             db_path = os.path.join(td, "graph.sqlite")
             kgraph.save_to_graph_db(
                 db_path,
-                {
-                    "nodes": [
-                        {
-                            "id": "ast_file:stale",
-                            "label": "stale.sh",
-                            "type": "file",
-                            "path": "/gone/stale.sh",
-                            "rel_path": "stale.sh",
-                        },
-                        # A USER node: memory-derived nodes are now pruned and re-read
-                        # on every update, so they cannot stand in for "user data".
-                        {"id": "user:keep", "label": "keep", "type": "topic"},
-                    ],
-                    "edges": [
-                        {"from": "ast_file:stale", "to": "user:keep", "label": "calls"},
-                    ],
-                },
+                kgraph.Graph.from_dict(
+                    {
+                        "nodes": [
+                            {
+                                "id": "ast_file:stale",
+                                "label": "stale.sh",
+                                "type": "file",
+                                "path": "/gone/stale.sh",
+                                "rel_path": "stale.sh",
+                            },
+                            # A USER node: memory-derived nodes are now pruned and re-read
+                            # on every update, so they cannot stand in for "user data".
+                            {"id": "user:keep", "label": "keep", "type": "topic"},
+                        ],
+                        "edges": [
+                            {"from": "ast_file:stale", "to": "user:keep", "label": "calls"},
+                        ],
+                    }
+                ),
             )
             from kgraph.update import incremental_update
 
@@ -182,7 +184,7 @@ class KGraphTests(unittest.TestCase):
             old_cwd = os.getcwd()
             os.chdir(td)
             try:
-                kgraph.save_to_graph_db("graph.sqlite", graph)
+                kgraph.save_to_graph_db("graph.sqlite", kgraph.Graph.from_dict(graph))
                 loaded = kgraph.load_from_graph_db("graph.sqlite")
             finally:
                 os.chdir(old_cwd)
@@ -2007,10 +2009,12 @@ class VocabularyStampTests(unittest.TestCase):
             db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(
                 db,
-                {
-                    "nodes": [{"id": "n1", "label": "a"}],
-                    "edges": [],
-                },
+                kgraph.Graph.from_dict(
+                    {
+                        "nodes": [{"id": "n1", "label": "a"}],
+                        "edges": [],
+                    }
+                ),
             )
             self.assertEqual(read_vocabulary_version(db), constants.VOCABULARY_VERSION)
 
@@ -2211,7 +2215,7 @@ class CommunityDigestPersistenceTests(unittest.TestCase):
             db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(db, graph)
             self.assertIsNotNone(read_community_digest(db))
-            save_to_graph_db(db, {"nodes": [{"id": "a", "label": "A"}], "edges": []})
+            save_to_graph_db(db, kgraph.Graph.from_dict({"nodes": [{"id": "a", "label": "A"}], "edges": []}))
             self.assertIsNone(read_community_digest(db))
             self.assertEqual(load_from_graph_db(db).meta.communities, [])
 
@@ -2393,13 +2397,15 @@ class SourceLineagePersistenceTests(unittest.TestCase):
             db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(
                 db,
-                {
-                    "nodes": [
-                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
-                        {"id": "b", "label": "Beta", "sources": ["file:one.md"]},
-                    ],
-                    "edges": [{"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]}],
-                },
+                kgraph.Graph.from_dict(
+                    {
+                        "nodes": [
+                            {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                            {"id": "b", "label": "Beta", "sources": ["file:one.md"]},
+                        ],
+                        "edges": [{"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]}],
+                    }
+                ),
             )
             self.assertEqual(read_sources_version(db), SOURCES_VERSION)
             loaded = load_from_graph_db(db)
@@ -2464,14 +2470,16 @@ class SourceLineagePersistenceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             db = os.path.join(td, "graph.sqlite")
-            save_to_graph_db(db, {"nodes": [{"id": "keep", "label": "Keep"}], "edges": []})
+            save_to_graph_db(db, kgraph.Graph.from_dict({"nodes": [{"id": "keep", "label": "Keep"}], "edges": []}))
             with self.assertRaises(ValueError):
                 save_to_graph_db(
                     db,
-                    {
-                        "nodes": [{"id": "a", "label": "A"}],
-                        "edges": [{"from": "a", "to": "missing", "label": "links"}],
-                    },
+                    kgraph.Graph.from_dict(
+                        {
+                            "nodes": [{"id": "a", "label": "A"}],
+                            "edges": [{"from": "a", "to": "missing", "label": "links"}],
+                        }
+                    ),
                 )
             # The good graph survived: validation precedes the DELETE.
             self.assertEqual([n.id for n in load_from_graph_db(db).nodes], ["keep"])
@@ -2483,13 +2491,15 @@ class SourceLineagePersistenceTests(unittest.TestCase):
             db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(
                 db,
-                {
-                    "nodes": [
-                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
-                        {"id": "b", "label": "Beta", "sources": ["file:one.md", "file:two.md"]},
-                    ],
-                    "edges": [{"from": "b", "to": "a", "label": "links", "sources": ["file:one.md"]}],
-                },
+                kgraph.Graph.from_dict(
+                    {
+                        "nodes": [
+                            {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                            {"id": "b", "label": "Beta", "sources": ["file:one.md", "file:two.md"]},
+                        ],
+                        "edges": [{"from": "b", "to": "a", "label": "links", "sources": ["file:one.md"]}],
+                    }
+                ),
             )
             graph = load_from_graph_db(db)
             graph.remove_source("file:one.md")
@@ -2509,17 +2519,19 @@ class SourceLineagePersistenceTests(unittest.TestCase):
             db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(
                 db,
-                {
-                    "nodes": [
-                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
-                        {"id": "b", "label": "Beta", "sources": ["file:two.md"]},
-                    ],
-                    "edges": [],
-                    "meta": {
-                        "community_method": "leiden_like",
-                        "communities": [{"id": "c0", "label": "A and B", "members": ["a", "b"], "size": 2}],
-                    },
-                },
+                kgraph.Graph.from_dict(
+                    {
+                        "nodes": [
+                            {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                            {"id": "b", "label": "Beta", "sources": ["file:two.md"]},
+                        ],
+                        "edges": [],
+                        "meta": {
+                            "community_method": "leiden_like",
+                            "communities": [{"id": "c0", "label": "A and B", "members": ["a", "b"], "size": 2}],
+                        },
+                    }
+                ),
             )
             graph = load_from_graph_db(db)
             self.assertEqual(len(graph.meta.communities), 1)
@@ -2660,13 +2672,15 @@ class SourceLineageCliTests(unittest.TestCase):
             db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(
                 db,
-                {
-                    "nodes": [
-                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
-                        {"id": "b", "label": "Beta", "sources": ["file:two.md"]},
-                    ],
-                    "edges": [{"from": "b", "to": "a", "label": "links", "sources": ["file:two.md"]}],
-                },
+                kgraph.Graph.from_dict(
+                    {
+                        "nodes": [
+                            {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                            {"id": "b", "label": "Beta", "sources": ["file:two.md"]},
+                        ],
+                        "edges": [{"from": "b", "to": "a", "label": "links", "sources": ["file:two.md"]}],
+                    }
+                ),
             )
             result = subprocess.run(
                 [sys.executable, "-m", "kgraph", "remove-source", "--graph-db", db, "--remove-source", "file:one.md"],

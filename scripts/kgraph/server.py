@@ -406,14 +406,14 @@ class GraphRequestHandler(SimpleHTTPRequestHandler):
         """Validate the payload, then persist it to the graph DB.
 
         Security validation (size, node/edge caps, nesting depth, XSS patterns)
-        runs before any DB write.  save_to_graph_db then validates the schema
-        (Graph.from_dict) before its DELETE, so neither a malformed nor a hostile
-        body can wipe the existing graph.
+        runs before any DB write, and the schema is validated here — at the JSON
+        boundary, before the destructive delete-and-insert — rather than inside
+        ``save_to_graph_db``, which takes only a ``Graph``.
         """
         ok, reason = validate_graph_payload(payload)
         if not ok:
             raise ValueError(reason)
-        save_to_graph_db(self.graph_db, payload)
+        save_to_graph_db(self.graph_db, Graph.from_dict(payload))
 
     def _handle_graph_post(self) -> None:
         """Write path for POST /graph.json."""

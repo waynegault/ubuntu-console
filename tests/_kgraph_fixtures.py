@@ -12,6 +12,8 @@ import os
 
 from _paths import SCRIPT_DIR
 
+import kgraph
+
 # `_paths` puts the repo's scripts/ on sys.path; assert the bootstrap ran rather
 # than letting a later `import kgraph` fail with a confusing ImportError.
 if not os.path.isdir(SCRIPT_DIR):
@@ -46,6 +48,10 @@ _SMALL_GRAPH = {
     ],
 }
 
+# ``save_to_graph_db`` takes a validated ``Graph``; a JSON caller crosses that
+# boundary itself.  The same fixture, in the form a persistence call needs.
+_SMALL_GRAPH_MODEL = kgraph.Graph.from_dict(_SMALL_GRAPH)
+
 
 class _FakeHTTPServer:
     """Captures the handler class serve_file builds, without listening."""
@@ -61,5 +67,6 @@ class _FakeHTTPServer:
 
     def shutdown(self):
         pass
+
 
 # end of file

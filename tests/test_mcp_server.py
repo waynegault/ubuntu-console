@@ -11,7 +11,7 @@ import unittest
 from http.server import HTTPServer
 from unittest import mock
 
-from _kgraph_fixtures import _SMALL_GRAPH, _FakeHTTPServer
+from _kgraph_fixtures import _SMALL_GRAPH_MODEL, _FakeHTTPServer
 import kgraph
 
 
@@ -40,7 +40,7 @@ class _MCPHarness(unittest.TestCase):
         self.db = os.path.join(self.tmp, "graph.sqlite")
         self.reports = os.path.join(self.tmp, "reports")
         os.makedirs(self.reports)
-        kgraph.save_to_graph_db(self.db, _SMALL_GRAPH)
+        kgraph.save_to_graph_db(self.db, _SMALL_GRAPH_MODEL)
         env = mock.patch.dict(os.environ, {"KG_REPORTS_DIR": self.reports})
         env.start()
         self.addCleanup(env.stop)
@@ -189,40 +189,42 @@ class TestMCPServerTools(_MCPHarness):
         # a and b as one theme.
         kgraph.save_to_graph_db(
             self.db,
-            {
-                "nodes": [
-                    {"id": "a", "label": "Alpha", "type": "topic"},
-                    {"id": "b", "label": "Beta", "type": "topic"},
-                    {"id": "c", "label": "Gamma", "type": "topic"},
-                ],
-                "edges": [
-                    {"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]},
-                    # The list hit the array bound, so the true count is in the
-                    # metadata and the payload has to carry it: 64 keys look exactly
-                    # like a complete list otherwise.
-                    {
-                        "from": "b",
-                        "to": "c",
-                        "label": "links",
-                        "sources": ["file:two.md"],
-                        "metadata": {"sources_overflow": 900},
-                    },
-                ],
-                "meta": {
-                    "communities": [
+            kgraph.Graph.from_dict(
+                {
+                    "nodes": [
+                        {"id": "a", "label": "Alpha", "type": "topic"},
+                        {"id": "b", "label": "Beta", "type": "topic"},
+                        {"id": "c", "label": "Gamma", "type": "topic"},
+                    ],
+                    "edges": [
+                        {"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]},
+                        # The list hit the array bound, so the true count is in the
+                        # metadata and the payload has to carry it: 64 keys look exactly
+                        # like a complete list otherwise.
                         {
-                            "id": "community_0",
-                            "label": "Cached · Theme",
-                            "size": 2,
-                            "members": ["a", "b"],
-                            "central_nodes": [{"id": "a", "label": "Alpha", "composite_score": 0.5}],
-                            "god_nodes": [],
-                            "boundary_edges": [],
-                            "boundary_edge_count": 0,
-                        }
-                    ]
+                            "from": "b",
+                            "to": "c",
+                            "label": "links",
+                            "sources": ["file:two.md"],
+                            "metadata": {"sources_overflow": 900},
+                        },
+                    ],
+                    "meta": {
+                        "communities": [
+                            {
+                                "id": "community_0",
+                                "label": "Cached · Theme",
+                                "size": 2,
+                                "members": ["a", "b"],
+                                "central_nodes": [{"id": "a", "label": "Alpha", "composite_score": 0.5}],
+                                "god_nodes": [],
+                                "boundary_edges": [],
+                                "boundary_edge_count": 0,
+                            }
+                        ]
+                    },
                 },
-            },
+            ),
         )
         explained = self._data("kgraph_explain", {"node_id": "b"})
         self.assertEqual(explained["node"]["community"], {"id": "community_0", "label": "Cached · Theme", "size": 2})
@@ -236,28 +238,32 @@ class TestMCPServerTools(_MCPHarness):
         """The community tool exists, is listed, and does not recompute."""
         kgraph.save_to_graph_db(
             self.db,
-            {
-                "nodes": [
-                    {"id": "a", "label": "Alpha", "type": "topic"},
-                    {"id": "b", "label": "Beta", "type": "topic"},
-                ],
-                "edges": [{"from": "a", "to": "b", "label": "links"}],
-                "meta": {
-                    "community_method": "cached-greedy",
-                    "communities": [
-                        {
-                            "id": "community_0",
-                            "label": "Cached · Theme",
-                            "size": 2,
-                            "members": ["a", "b"],
-                            "central_nodes": [{"id": "a", "label": "Alpha", "composite_score": 0.5}],
-                            "god_nodes": [{"id": "a", "label": "Alpha"}],
-                            "boundary_edges": [{"source": "a", "target": "z", "label": "links", "direction": "out"}],
-                            "boundary_edge_count": 1,
-                        }
+            kgraph.Graph.from_dict(
+                {
+                    "nodes": [
+                        {"id": "a", "label": "Alpha", "type": "topic"},
+                        {"id": "b", "label": "Beta", "type": "topic"},
                     ],
+                    "edges": [{"from": "a", "to": "b", "label": "links"}],
+                    "meta": {
+                        "community_method": "cached-greedy",
+                        "communities": [
+                            {
+                                "id": "community_0",
+                                "label": "Cached · Theme",
+                                "size": 2,
+                                "members": ["a", "b"],
+                                "central_nodes": [{"id": "a", "label": "Alpha", "composite_score": 0.5}],
+                                "god_nodes": [{"id": "a", "label": "Alpha"}],
+                                "boundary_edges": [
+                                    {"source": "a", "target": "z", "label": "links", "direction": "out"}
+                                ],
+                                "boundary_edge_count": 1,
+                            }
+                        ],
+                    },
                 },
-            },
+            ),
         )
         result = self._data("kgraph_community")
         self.assertEqual(result["source"], "digest")
@@ -273,7 +279,9 @@ class TestMCPServerTools(_MCPHarness):
             self._data("kgraph_stats"),
             {"nodes": 3, "edges": 2, "node_types": {"topic": 1, "project": 1, "decision": 1}},
         )
-        kgraph.save_to_graph_db(self.db, {"nodes": [{"id": "only", "label": "Only", "type": "topic"}], "edges": []})
+        kgraph.save_to_graph_db(
+            self.db, kgraph.Graph.from_dict({"nodes": [{"id": "only", "label": "Only", "type": "topic"}], "edges": []})
+        )
         self.assertEqual(self._data("kgraph_stats")["node_types"], {"topic": 1})
 
     def test_a_tool_failure_becomes_a_jsonrpc_error(self):

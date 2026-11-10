@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from _kgraph_fixtures import _AST_GRAPH, _SMALL_GRAPH
+from _kgraph_fixtures import _AST_GRAPH, _SMALL_GRAPH, _SMALL_GRAPH_MODEL
 import kgraph
 
 
@@ -21,7 +21,8 @@ class TestCliGraphLoad(unittest.TestCase):
         from kgraph.cli import _load_graph
 
         args = argparse.Namespace(
-            graph=graph_path, graph_db=os.path.join(tempfile.gettempdir(), "kgraph-missing.sqlite"),
+            graph=graph_path,
+            graph_db=os.path.join(tempfile.gettempdir(), "kgraph-missing.sqlite"),
             import_db=None,
         )
         return _load_graph(args)
@@ -72,8 +73,11 @@ class _CliHarness(unittest.TestCase):
         # cli.main() takes no argv and argparse reads sys.argv itself, so the
         # sys.argv *list* is swapped for the duration of the call (restored on
         # exit); nothing else in this process reads argv while it is patched.
-        with (mock.patch.object(sys, "argv", argv),
-              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr)):
+        with (
+            mock.patch.object(sys, "argv", argv),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
             try:
                 cli.main()
             except SystemExit as exc:
@@ -93,8 +97,7 @@ class TestCliLoadGraphFallbacks(unittest.TestCase):
 
         from kgraph.cli import _load_graph
 
-        return _load_graph(argparse.Namespace(graph=graph, graph_db=graph_db,
-                                             import_db=import_db))
+        return _load_graph(argparse.Namespace(graph=graph, graph_db=graph_db, import_db=import_db))
 
     def test_a_graph_file_wins_and_the_graph_db_is_the_fallback(self):
         with tempfile.TemporaryDirectory() as td:
@@ -102,11 +105,10 @@ class TestCliLoadGraphFallbacks(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(_AST_GRAPH, f)
             db = os.path.join(td, "graph.sqlite")
-            kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+            kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
             from_file = self._args(graph=path, graph_db=db)
             from_db = self._args(graph_db=db, import_db=os.path.join(td, "no-mem.db"))
-        self.assertEqual({n["id"] for n in from_file["nodes"]},
-                         {n["id"] for n in _AST_GRAPH["nodes"]})
+        self.assertEqual({n["id"] for n in from_file["nodes"]}, {n["id"] for n in _AST_GRAPH["nodes"]})
         self.assertEqual({n["id"] for n in from_db["nodes"]}, {"a", "b", "c"})
 
     def test_an_empty_graph_db_falls_through_to_the_memory_db(self):
@@ -114,13 +116,14 @@ class TestCliLoadGraphFallbacks(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             db = os.path.join(td, "graph.sqlite")
-            kgraph.save_to_graph_db(db, {"nodes": [], "edges": []})
+            kgraph.save_to_graph_db(db, kgraph.Graph.from_dict({"nodes": [], "edges": []}))
             mem = os.path.join(td, "mem.sqlite")
             with open(mem, "w", encoding="utf-8") as f:
                 f.write("")
-            with (mock.patch.object(cli, "resolve_memory_db_path", return_value=mem),
-                  mock.patch.object(cli, "load_from_memory_db",
-                                    return_value=kgraph.Graph.from_dict(_AST_GRAPH))):
+            with (
+                mock.patch.object(cli, "resolve_memory_db_path", return_value=mem),
+                mock.patch.object(cli, "load_from_memory_db", return_value=kgraph.Graph.from_dict(_AST_GRAPH)),
+            ):
                 loaded = self._args(graph_db=db, import_db=None)
         self.assertEqual(len(loaded["nodes"]), len(_AST_GRAPH["nodes"]))
 
@@ -133,26 +136,27 @@ class TestCliLoadGraphFallbacks(unittest.TestCase):
             for path in (db, mem):
                 with open(path, "w", encoding="utf-8") as f:
                     f.write("not a sqlite db")
-            with (mock.patch.object(cli, "load_from_graph_db", side_effect=OSError("locked")),
-                  mock.patch.object(cli, "resolve_memory_db_path", return_value=mem),
-                  mock.patch.object(cli, "load_from_memory_db", side_effect=ValueError("bad db")),
-                  self.assertLogs("kgraph.cli", level="WARNING") as captured):
+            with (
+                mock.patch.object(cli, "load_from_graph_db", side_effect=OSError("locked")),
+                mock.patch.object(cli, "resolve_memory_db_path", return_value=mem),
+                mock.patch.object(cli, "load_from_memory_db", side_effect=ValueError("bad db")),
+                self.assertLogs("kgraph.cli", level="WARNING") as captured,
+            ):
                 loaded = self._args(graph_db=db, import_db=None)
             self.assertTrue(any("Failed to load graph from graph DB" in m for m in captured.output))
             self.assertTrue(any("Failed to load graph from memory DB" in m for m in captured.output))
             # Nothing exists and nothing is resolvable: the sample graph.
-            loaded = self._args(graph_db=os.path.join(td, "missing.sqlite"),
-                                import_db=os.path.join(td, "missing-mem.db"))
-        self.assertEqual({n["id"] for n in loaded["nodes"]},
-                         {n["id"] for n in kgraph.SAMPLE_GRAPH["nodes"]})
+            loaded = self._args(
+                graph_db=os.path.join(td, "missing.sqlite"), import_db=os.path.join(td, "missing-mem.db")
+            )
+        self.assertEqual({n["id"] for n in loaded["nodes"]}, {n["id"] for n in kgraph.SAMPLE_GRAPH["nodes"]})
 
 
 class TestCliMainModes(_CliHarness):
     def test_reporting_modes_print_and_write_expected_output(self):
         with tempfile.TemporaryDirectory() as td:
             graph = self._graph_file(td)
-            bench, report, html = (os.path.join(td, n) for n in
-                                   ("bench.json", "r.md", "flow.html"))
+            bench, report, html = (os.path.join(td, n) for n in ("bench.json", "r.md", "flow.html"))
             cases = [
                 (["query", "--query", "Alpha"], ["1 matching nodes:", "[topic] Alpha (a)", "match=exact"]),
                 (["query", "--query", "zzz-nope"], ['No nodes matching "zzz-nope"']),
@@ -211,14 +215,28 @@ class TestCliMainModes(_CliHarness):
             graph = self._graph_file(td)
             target = os.path.join(td, "dash.html")
             with mock.patch("kgraph.pr_dashboard.generate_pr_dashboard") as build:
-                code, out, _ = self._run([
-                    "kgraph", "pr-dashboard", "--graph", graph, "--output", target,
-                    "--days", "7", "--author", "Wayne", "--max-prs", "5"])
+                code, out, _ = self._run(
+                    [
+                        "kgraph",
+                        "pr-dashboard",
+                        "--graph",
+                        graph,
+                        "--output",
+                        target,
+                        "--days",
+                        "7",
+                        "--author",
+                        "Wayne",
+                        "--max-prs",
+                        "5",
+                    ]
+                )
             self.assertEqual(code, 0)
             self.assertIn(f"Written to {target}", out)
             kwargs = build.call_args.kwargs
-            self.assertEqual((kwargs["output_path"], kwargs["days"], kwargs["author"],
-                              kwargs["max_prs"]), (target, 7, "Wayne", 5))
+            self.assertEqual(
+                (kwargs["output_path"], kwargs["days"], kwargs["author"], kwargs["max_prs"]), (target, 7, "Wayne", 5)
+            )
             self.assertEqual(len(kwargs["graph_data"]["nodes"]), 3)
 
     def test_update_and_watch_forward_their_options(self):
@@ -229,16 +247,29 @@ class TestCliMainModes(_CliHarness):
             out_json = os.path.join(td, "updated.json")
             graph = kgraph.Graph.from_dict(_SMALL_GRAPH)
             with mock.patch.object(cli, "incremental_update", return_value=graph) as upd:
-                code, out, _ = self._run([
-                    "kgraph", "update", "--graph-db", db, "--import-db", mem,
-                    "--source-dir", td, "--ast-vars", "--ast-max-files", "5",
-                    "--include-all", "--output", out_json])
+                code, out, _ = self._run(
+                    [
+                        "kgraph",
+                        "update",
+                        "--graph-db",
+                        db,
+                        "--import-db",
+                        mem,
+                        "--source-dir",
+                        td,
+                        "--ast-vars",
+                        "--ast-max-files",
+                        "5",
+                        "--include-all",
+                        "--output",
+                        out_json,
+                    ]
+                )
             self.assertEqual(code, 0)
             self.assertIn("Update complete: 3 nodes, 2 edges", out)
             self.assertIn("EXTRACTED: 0, INFERRED: 2, AMBIGUOUS: 0", out)
             kwargs = upd.call_args.kwargs
-            self.assertEqual((upd.call_args.args[0], kwargs["mem_db_path"], kwargs["source_dir"]),
-                             (db, mem, td))
+            self.assertEqual((upd.call_args.args[0], kwargs["mem_db_path"], kwargs["source_dir"]), (db, mem, td))
             self.assertTrue((kwargs["ast"], kwargs["ast_vars"], kwargs["include_all"]))
             self.assertEqual(kwargs["ast_max_files"], 5)
             with open(out_json, encoding="utf-8") as f:
@@ -246,16 +277,35 @@ class TestCliMainModes(_CliHarness):
             with mock.patch.object(cli, "incremental_update", return_value=graph) as upd:
                 self._run(["kgraph", "update", "--graph-db", db, "--import-db", mem])
             # No source dir means no AST pass, and no --output means no file.
-            self.assertEqual((upd.call_args.kwargs["ast"],
-                              upd.call_args.kwargs["source_dir"]), (False, None))
+            self.assertEqual((upd.call_args.kwargs["ast"], upd.call_args.kwargs["source_dir"]), (False, None))
             with mock.patch.object(cli, "start_watch") as watch:
-                self.assertEqual(self._run([
-                    "kgraph", "watch", "--graph-db", db, "--import-db", mem,
-                    "--source-dir", td, "--watch-interval", "7", "--ast-vars",
-                    "--ast-max-files", "3", "--ast-subdirs", "sub"])[0], 0)
+                self.assertEqual(
+                    self._run(
+                        [
+                            "kgraph",
+                            "watch",
+                            "--graph-db",
+                            db,
+                            "--import-db",
+                            mem,
+                            "--source-dir",
+                            td,
+                            "--watch-interval",
+                            "7",
+                            "--ast-vars",
+                            "--ast-max-files",
+                            "3",
+                            "--ast-subdirs",
+                            "sub",
+                        ]
+                    )[0],
+                    0,
+                )
             kwargs = watch.call_args.kwargs
-            self.assertEqual((watch.call_args.args[0], kwargs["mem_db_path"],
-                              kwargs["source_dir"], kwargs["interval"]), (db, mem, td, 7))
+            self.assertEqual(
+                (watch.call_args.args[0], kwargs["mem_db_path"], kwargs["source_dir"], kwargs["interval"]),
+                (db, mem, td, 7),
+            )
             self.assertTrue((kwargs["ast"], kwargs["ast_vars"]))
             self.assertEqual((kwargs["ast_max_files"], kwargs["ast_subdirs"]), (3, ["sub"]))
 
@@ -263,14 +313,17 @@ class TestCliMainModes(_CliHarness):
         with tempfile.TemporaryDirectory() as td:
             with mock.patch("kgraph.mcp_server.serve_mcp") as serve:
                 self.assertEqual(self._run(["kgraph", "mcp"])[0], 0)
-            self.assertEqual((serve.call_args.kwargs["port"], serve.call_args.kwargs["graph_db"]),
-                             (8331, kgraph.GRAPH_DB_DEFAULT))
+            self.assertEqual(
+                (serve.call_args.kwargs["port"], serve.call_args.kwargs["graph_db"]), (8331, kgraph.GRAPH_DB_DEFAULT)
+            )
             with mock.patch("kgraph.mcp_server.serve_mcp") as serve:
-                self._run(["kgraph", "mcp", "--host", "0.0.0.0", "--port", "9000",
-                           "--graph-db", os.path.join(td, "g.sqlite")])
-        self.assertEqual((serve.call_args.kwargs["host"], serve.call_args.kwargs["port"],
-                          serve.call_args.kwargs["graph_db"]),
-                         ("0.0.0.0", 9000, os.path.join(td, "g.sqlite")))
+                self._run(
+                    ["kgraph", "mcp", "--host", "0.0.0.0", "--port", "9000", "--graph-db", os.path.join(td, "g.sqlite")]
+                )
+        self.assertEqual(
+            (serve.call_args.kwargs["host"], serve.call_args.kwargs["port"], serve.call_args.kwargs["graph_db"]),
+            ("0.0.0.0", 9000, os.path.join(td, "g.sqlite")),
+        )
 
     def test_ast_errors_and_a_real_extraction(self):
         from kgraph import cli
@@ -290,9 +343,21 @@ class TestCliMainModes(_CliHarness):
             _, out, _ = self._run(["kgraph", "ast", "--repo", td])
             self.assertIn('"ast_func:python:hello"', out)
             target = os.path.join(td, "ast.json")
-            _, out, _ = self._run(["kgraph", "ast", "--repo", td, "--ast-vars",
-                                   "--ast-max-files", "5", "--ast-subdirs", "parser",
-                                   "--output", target])
+            _, out, _ = self._run(
+                [
+                    "kgraph",
+                    "ast",
+                    "--repo",
+                    td,
+                    "--ast-vars",
+                    "--ast-max-files",
+                    "5",
+                    "--ast-subdirs",
+                    "parser",
+                    "--output",
+                    target,
+                ]
+            )
             self.assertIn(f"Saved to {target}", out)
             with open(target, encoding="utf-8") as f:
                 ids = {n["id"] for n in json.load(f)["nodes"]}
@@ -310,8 +375,7 @@ class TestCliMainModes(_CliHarness):
             _, out, _ = self._run(["kgraph", "wiring", "--repo", td])
             self.assertIn("Wiring analysis:", out)
             self.assertIn("'orphans': 1", out)
-            with mock.patch.object(wiring, "format_wiring_report",
-                                   return_value="FULL REPORT") as fmt:
+            with mock.patch.object(wiring, "format_wiring_report", return_value="FULL REPORT") as fmt:
                 _, out, _ = self._run(["kgraph", "wiring", "--repo", td, "--wiring-all"])
         self.assertIn("FULL REPORT", out)
         self.assertTrue(fmt.call_args.kwargs["show_all"])
@@ -326,17 +390,35 @@ class TestCliMainModes(_CliHarness):
             self.assertEqual((code, out.splitlines()[0]), (0, f"Wrote {target}"))
             self.assertIn("usage: kgraph", out)
             with mock.patch.object(cli, "serve_file") as serve:
-                code, out, _ = self._run([
-                    "kgraph", "serve", "--graph", graph, "--output", target,
-                    "--host", "0.0.0.0", "--port", "8123", "--store",
-                    os.path.join(td, "store.json"), "--embed", "--view", "topics",
-                    "--semantic-threshold", "0.5"])
+                code, out, _ = self._run(
+                    [
+                        "kgraph",
+                        "serve",
+                        "--graph",
+                        graph,
+                        "--output",
+                        target,
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        "8123",
+                        "--store",
+                        os.path.join(td, "store.json"),
+                        "--embed",
+                        "--view",
+                        "topics",
+                        "--semantic-threshold",
+                        "0.5",
+                    ]
+                )
             self.assertEqual(code, 0)
             self.assertNotIn("usage: kgraph", out)
             kwargs = serve.call_args.kwargs
             self.assertEqual(serve.call_args.args[0], target)
-            self.assertEqual((kwargs["host"], kwargs["port"], kwargs["store_path"]),
-                             ("0.0.0.0", 8123, os.path.join(td, "store.json")))
+            self.assertEqual(
+                (kwargs["host"], kwargs["port"], kwargs["store_path"]),
+                ("0.0.0.0", 8123, os.path.join(td, "store.json")),
+            )
             self.assertTrue(kwargs["force_embed"])
             self.assertEqual((kwargs["view_mode"], kwargs["semantic_threshold"]), ("topics", 0.5))
             self.assertEqual(kwargs["graph_db_path"], os.path.expanduser(kgraph.GRAPH_DB_DEFAULT))
@@ -428,8 +510,7 @@ class TestCliGitHooks(_CliHarness):
                     self.assertIn("kgraph auto-rebuild", content)
                     self.assertIn("kgraph update --source-dir", content)
                 # A pre-existing kgraph hook is rewritten, not refused.
-                self.assertNotIn("not installed by kgraph",
-                                 self._run(["kgraph", "install-hook"])[2])
+                self.assertNotIn("not installed by kgraph", self._run(["kgraph", "install-hook"])[2])
 
             foreign = os.path.join(hooks, "post-commit")
             with open(foreign, "w", encoding="utf-8") as f:
@@ -468,8 +549,7 @@ class TestCliGitHooks(_CliHarness):
             os.makedirs(unreadable)
             with mock.patch.object(cli, "_find_git_hooks_dir", return_value=hooks):
                 code, _, err = self._run(["kgraph", "uninstall-hook"])
-            self.assertEqual((code, "cannot read hook" in err, os.path.isdir(unreadable)),
-                             (0, True, True))
+            self.assertEqual((code, "cannot read hook" in err, os.path.isdir(unreadable)), (0, True, True))
 
     def test_hook_commands_exit_when_not_in_a_git_repo(self):
         from kgraph import cli
@@ -505,8 +585,7 @@ class TestCliFindGitHooksDir(unittest.TestCase):
             # So the expectation is BOUNDED by an independent oracle rather than assumed:
             # git applies the same walk-up, and it is the authority on whether this cwd
             # is inside a repository at all.
-            enclosing = subprocess.run(["git", "rev-parse", "--git-path", "hooks"],
-                                       capture_output=True, text=True)
+            enclosing = subprocess.run(["git", "rev-parse", "--git-path", "hooks"], capture_output=True, text=True)
             got = _find_git_hooks_dir()
             if enclosing.returncode == 0:
                 self.assertEqual(got, os.path.abspath(enclosing.stdout.strip()))
@@ -524,8 +603,7 @@ class TestCliFindGitHooksDir(unittest.TestCase):
             subprocess.run(["git", "-C", repo, "init", "-q"], check=True, capture_output=True)
             tracked = os.path.join(td, "tracked-hooks")
             os.makedirs(tracked)
-            subprocess.run(["git", "-C", repo, "config", "core.hooksPath", tracked],
-                           check=True, capture_output=True)
+            subprocess.run(["git", "-C", repo, "config", "core.hooksPath", tracked], check=True, capture_output=True)
             os.chdir(repo)
             self.assertEqual(_find_git_hooks_dir(), tracked)
 
@@ -538,8 +616,9 @@ class TestCliFindGitHooksDir(unittest.TestCase):
             repo = os.path.join(td, "repo")
             os.makedirs(repo)
             subprocess.run(["git", "-C", repo, "init", "-q"], check=True, capture_output=True)
-            subprocess.run(["git", "-C", repo, "config", "core.hooksPath", "tools/hooks"],
-                           check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", repo, "config", "core.hooksPath", "tools/hooks"], check=True, capture_output=True
+            )
             os.chdir(repo)
             self.assertEqual(_find_git_hooks_dir(), os.path.join(repo, "tools", "hooks"))
 

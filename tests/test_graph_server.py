@@ -9,7 +9,7 @@ import unittest
 from http.server import HTTPServer
 from unittest import mock
 
-from _kgraph_fixtures import _SMALL_GRAPH, _FakeHTTPServer
+from _kgraph_fixtures import _SMALL_GRAPH_MODEL, _FakeHTTPServer
 import kgraph
 
 
@@ -29,7 +29,7 @@ class TestGraphServerPost(unittest.TestCase):
         self.store_path = os.path.join(td.name, "store.json")
         with open(self.store_path, "w", encoding="utf-8") as f:
             json.dump({"nodes": [], "edges": []}, f)
-        kgraph.save_to_graph_db(self.db_path, _SMALL_GRAPH)
+        kgraph.save_to_graph_db(self.db_path, _SMALL_GRAPH_MODEL)
 
         from kgraph import server as kgraph_server
 
@@ -41,8 +41,11 @@ class TestGraphServerPost(unittest.TestCase):
             mock.patch.object(kgraph_server, "resolve_memory_db_path", return_value=None),
         ):
             kgraph_server.serve_file(
-                self.store_path, host="127.0.0.1", force_embed=True,
-                graph_db_path=self.db_path, store_path=self.store_path,
+                self.store_path,
+                host="127.0.0.1",
+                force_embed=True,
+                graph_db_path=self.db_path,
+                store_path=self.store_path,
             )
 
         httpd = HTTPServer(("127.0.0.1", 0), captured["handler"])
@@ -73,12 +76,12 @@ class TestGraphServerPost(unittest.TestCase):
         # The Vite dev frontend is the one cross-origin reader the read path is
         # meant to serve, so its Origin is echoed back.
         status, body, headers = self._request(
-            "GET", "/graph.json?view=raw",
+            "GET",
+            "/graph.json?view=raw",
             headers={"Origin": "http://localhost:5173"},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(headers.get("Access-Control-Allow-Origin"),
-                         "http://localhost:5173")
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://localhost:5173")
         self.assertEqual(headers.get("Vary"), "Origin")
         self.assertIn("nodes", json.loads(body))
 
@@ -87,7 +90,8 @@ class TestGraphServerPost(unittest.TestCase):
         # user visits cannot read the graph. Regression guard for the old
         # `Access-Control-Allow-Origin: *`.
         status, body, headers = self._request(
-            "GET", "/graph.json?view=raw",
+            "GET",
+            "/graph.json?view=raw",
             headers={"Origin": "http://evil.example"},
         )
         self.assertEqual(status, 200)
@@ -108,22 +112,30 @@ class TestGraphServerPost(unittest.TestCase):
         # cross-origin read path must not serve it, nor the content fields.
         graph = {
             "nodes": [
-                {"id": "memory:abc12345-6789-4abc",
-                 "label": "NAS SSH access available for storage management",
-                 "type": "memory",
-                 "content": "NAS SSH access available for storage management",
-                 "tags": "infra",
-                 "content_preview": "NAS SSH access available ..."},
-                {"id": "summary:def99999-1111",
-                 "label": "Weekly legal briefing",
-                 "type": "summary",
-                 "content_preview": "Weekly legal briefing body"},
-                {"id": "topic:keep", "label": "Legal research", "type": "topic",
-                 "content_preview": "Legal research notes"},
+                {
+                    "id": "memory:abc12345-6789-4abc",
+                    "label": "NAS SSH access available for storage management",
+                    "type": "memory",
+                    "content": "NAS SSH access available for storage management",
+                    "tags": "infra",
+                    "content_preview": "NAS SSH access available ...",
+                },
+                {
+                    "id": "summary:def99999-1111",
+                    "label": "Weekly legal briefing",
+                    "type": "summary",
+                    "content_preview": "Weekly legal briefing body",
+                },
+                {
+                    "id": "topic:keep",
+                    "label": "Legal research",
+                    "type": "topic",
+                    "content_preview": "Legal research notes",
+                },
             ],
             "edges": [],
         }
-        kgraph.save_to_graph_db(self.db_path, graph)
+        kgraph.save_to_graph_db(self.db_path, kgraph.Graph.from_dict(graph))
 
         status, body, _ = self._request("GET", "/graph.json?view=raw")
         self.assertEqual(status, 200)
@@ -168,7 +180,8 @@ class TestGraphServerPost(unittest.TestCase):
 
     def test_cross_origin_post_rejected(self):
         status, _, _ = self._post(
-            json.dumps({"nodes": []}), origin="http://evil.example",
+            json.dumps({"nodes": []}),
+            origin="http://evil.example",
         )
         self.assertEqual(status, 403)
         self.assertEqual(self._node_ids(), {"a", "b", "c"})
@@ -182,7 +195,8 @@ class TestGraphServerPost(unittest.TestCase):
 
     def test_options_refuses_post_preflight(self):
         status, _, headers = self._request(
-            "OPTIONS", "/graph.json",
+            "OPTIONS",
+            "/graph.json",
             headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"},
         )
         self.assertEqual(status, 403)
@@ -205,8 +219,7 @@ class TestGraphServerPost(unittest.TestCase):
 
     def test_nested_xss_rejected_and_graph_intact(self):
         payload = {
-            "nodes": [{"id": "x", "label": "ok",
-                       "payload": {"note": "<script>alert(1)</script>"}}],
+            "nodes": [{"id": "x", "label": "ok", "payload": {"note": "<script>alert(1)</script>"}}],
             "edges": [],
         }
         status, _, _ = self._post(json.dumps(payload))
@@ -229,11 +242,16 @@ class TestGraphHandlerConstruction(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         db = os.path.join(td.name, "graph.sqlite")
-        kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+        kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
 
         handler_cls = build_graph_handler(
-            serve_dir=os.getcwd(), store=os.path.join(td.name, "missing.json"),
-            graph_db=db, view_mode="topics", semantic_threshold=0.9, memory_db=None)
+            serve_dir=os.getcwd(),
+            store=os.path.join(td.name, "missing.json"),
+            graph_db=db,
+            view_mode="topics",
+            semantic_threshold=0.9,
+            memory_db=None,
+        )
         self.assertTrue(issubclass(handler_cls, GraphRequestHandler))
 
         httpd = HTTPServer(("127.0.0.1", 0), handler_cls)
@@ -254,11 +272,11 @@ class TestGraphHandlerConstruction(unittest.TestCase):
         from kgraph.server import build_graph_handler
 
         first = build_graph_handler(
-            serve_dir=".", store="", graph_db="", view_mode="overview",
-            semantic_threshold=0.82, memory_db=None)
+            serve_dir=".", store="", graph_db="", view_mode="overview", semantic_threshold=0.82, memory_db=None
+        )
         second = build_graph_handler(
-            serve_dir=".", store="", graph_db="", view_mode="raw",
-            semantic_threshold=0.5, memory_db=None)
+            serve_dir=".", store="", graph_db="", view_mode="raw", semantic_threshold=0.5, memory_db=None
+        )
         self.assertEqual((first.view_mode, second.view_mode), ("overview", "raw"))
         first._rl_requests.append(1.0)
         # A list inherited from the base would leak the sliding window across
@@ -292,8 +310,8 @@ class TestGraphServerRefusesSample(unittest.TestCase):
         from kgraph.server import build_graph_handler
 
         handler = build_graph_handler(
-            serve_dir=os.getcwd(), store="", graph_db="", view_mode="raw",
-            semantic_threshold=0.5, memory_db=None)
+            serve_dir=os.getcwd(), store="", graph_db="", view_mode="raw", semantic_threshold=0.5, memory_db=None
+        )
         status, body = self._get(handler)
         self.assertEqual(status, 503)
         payload = json.loads(body)
@@ -307,10 +325,10 @@ class TestGraphServerRefusesSample(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         db = os.path.join(td.name, "graph.sqlite")
-        kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+        kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
         handler = kgraph_server.build_graph_handler(
-            serve_dir=os.getcwd(), store="", graph_db=db, view_mode="raw",
-            semantic_threshold=0.5, memory_db=None)
+            serve_dir=os.getcwd(), store="", graph_db=db, view_mode="raw", semantic_threshold=0.5, memory_db=None
+        )
         with mock.patch.object(kgraph_server, "project_graph", side_effect=ValueError("boom")):
             status, body = self._get(handler)
         self.assertEqual(status, 503)
@@ -324,10 +342,10 @@ class TestGraphServerRefusesSample(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         db = os.path.join(td.name, "graph.sqlite")
-        kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+        kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
         handler = build_graph_handler(
-            serve_dir=os.getcwd(), store="", graph_db=db, view_mode="raw",
-            semantic_threshold=0.5, memory_db=None)
+            serve_dir=os.getcwd(), store="", graph_db=db, view_mode="raw", semantic_threshold=0.5, memory_db=None
+        )
         status, body = self._get(handler)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["_meta"]["source"], "graph-db")

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from _kgraph_fixtures import _SMALL_GRAPH
+from _kgraph_fixtures import _SMALL_GRAPH, _SMALL_GRAPH_MODEL
 import kgraph
 
 
@@ -37,16 +37,16 @@ class TestUpdate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             db_path = os.path.join(td, "graph.sqlite")
             # Seed with initial data
-            kgraph.save_to_graph_db(db_path, _SMALL_GRAPH)
+            kgraph.save_to_graph_db(db_path, _SMALL_GRAPH_MODEL)
             # Run incremental update (no memory DB, no AST)
             result = kgraph.incremental_update(db_path, ast=False)
             self.assertGreater(len(result.nodes), 0)
 
 
 class TestUpdateIncremental(unittest.TestCase):
-    def _seed(self, td, graph=None):
+    def _seed(self, td, payload=None):
         db = os.path.join(td, "graph.sqlite")
-        kgraph.save_to_graph_db(db, graph if graph is not None else _SMALL_GRAPH)
+        kgraph.save_to_graph_db(db, kgraph.Graph.from_dict(payload if payload is not None else _SMALL_GRAPH))
         return db
 
     def test_a_failing_memory_db_fails_the_update_by_default(self):
@@ -256,7 +256,7 @@ class TestStartWatch(unittest.TestCase):
             note = os.path.join(src, "a.py")
             with open(note, "w", encoding="utf-8") as f:
                 f.write("x = 1\n")
-            kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+            kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
 
             def touch_note():
                 with open(note, "w", encoding="utf-8") as f:
@@ -291,7 +291,7 @@ class TestStartWatch(unittest.TestCase):
             os.makedirs(src)
             with open(os.path.join(src, "a.py"), "w", encoding="utf-8") as f:
                 f.write("x = 1\n")
-            kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+            kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
 
             stub = _StubTime(lambda: None, lambda: None)
             stdout = io.StringIO()
@@ -325,7 +325,7 @@ class TestStartWatch(unittest.TestCase):
             # dir (unlink needs only the parent's write bit), and a teardown-time
             # chmod would run after the dir is gone.
             os.chmod(unreadable, 0)
-            kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+            kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
 
             stub = _StubTime(lambda: None, lambda: None)
             stdout = io.StringIO()
@@ -355,7 +355,7 @@ class TestStartWatch(unittest.TestCase):
             mem = os.path.join(td, "mem.sqlite")
             with open(mem, "w", encoding="utf-8") as f:
                 f.write("")
-            kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+            kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
             stamp = os.path.getmtime(mem)
 
             def bump_mtime():
@@ -384,7 +384,7 @@ class TestStartWatch(unittest.TestCase):
             note = os.path.join(src, "a.py")
             with open(note, "w", encoding="utf-8") as f:
                 f.write("x = 1\n")
-            kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+            kgraph.save_to_graph_db(db, _SMALL_GRAPH_MODEL)
 
             def touch_note():
                 with open(note, "w", encoding="utf-8") as f:
