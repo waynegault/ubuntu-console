@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 22
+#   v22 (2026-11-10): handle --help / -h cleanly with exit 0 before taking the heavy-job lock.
 # Module Version: 21
 #   v21 (2026-11-10): an EXPLICIT row's tombstone override is now LOUD.  Naming a row stays a
 #       deliberate override (the documented contract), but it used to say nothing about the
@@ -93,6 +95,19 @@ set -uo pipefail
 # Sourced by realpath so the ~/.local/bin symlink and the repo path both resolve.
 # shellcheck source=_tac-bin-lib.sh
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
+
+# --help / -h answers and exits 0 BEFORE the heavy-job lock is taken or any probe runs
+# (AGENTS.md §2, CLI entrypoint discipline).  Placed above warn() deliberately: §18.3 10.4
+# measures a function as "up to the next definition", so a top-level block inserted after
+# warn() would lengthen warn's own span past 100 lines and rise the ratchet.
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: $(basename "$0") [--force-live-fleet] <row|file>... | --all-but-done | --all"
+    echo "  --all-but-done     autotune all rows where autotuned is not yes/slow (skipping embeddings)"
+    echo "  --all              autotune all rows (skipping embeddings)"
+    echo "  --force-live-fleet bypass the quiet-fleet check"
+    echo "  row|file...        specific row numbers or model file names to tune"
+    exit 0
+fi
 
 # warn - the script's ONE stderr path, so every refusal and warning has the same shape
 # and a caller can grep it (10.7).  Nothing below writes to stderr by hand.

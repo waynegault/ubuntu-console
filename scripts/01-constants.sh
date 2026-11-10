@@ -2,6 +2,9 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
+# Module Version: 58
+#   v58 (2026-11-10): TACTICAL_REPO_ROOT verifies that the directory exists before keeping
+#     an inherited environment variable; falls back to resolving relative to BASH_SOURCE.
 # Module Version: 57
 #   v57 (2026-11-10): TAC_PYTHON resolves .venv/bin/python3 first before .venv/bin/python.
 # Module Version: 56
@@ -151,7 +154,12 @@
 # resident lanes and labels.  Resolved once, here, because every module below reads
 # these values.  A host with no profile keeps the generic defaults and is told so
 # once (tools/host-profile.sh); nothing here aborts a shell over it.
-export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+if [[ -z "${TACTICAL_REPO_ROOT:-}" || ! -d "$TACTICAL_REPO_ROOT" ]]; then
+    # Assigned, then exported: `export X="$(…)"` masks the substitution's status (SC2155),
+    # so a failed cd would export an empty root as if it had worked.
+    TACTICAL_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    export TACTICAL_REPO_ROOT
+fi
 # shellcheck source=/dev/null
 source "$TACTICAL_REPO_ROOT/tools/host-profile.sh"
 # Never aborts: no matching profile is announced once inside the applier and leaves
