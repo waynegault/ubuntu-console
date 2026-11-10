@@ -521,6 +521,23 @@ A failed response contract refuses the profile write; `chat` remains unchanged.
 - Failure classes: `oom` (VRAM), `load_fail` (unsupported/corrupt GGUF), `timeout`, and below-floor TPS.
 - VRAM guard: refuses to run unless the pre-run VRAM baseline is cleared (see `LLM_AUTOTUNE_BASELINE_GAP_MAX`).
 
+### Two budgets — the card and guest RAM
+
+A row is priced against two pools, because on a shared-memory host they are not the
+same one. The GPU pool holds the offloaded layers and the KV cache; guest
+`MemAvailable` holds whatever `ngl` leaves un-offloaded plus the staging a split set
+needs. The ctx start probe uses the GGUF's own KV geometry (`n_kv_heads` × `head_dim`
+× layers × dtype width) instead of a per-layer constant, and falls back to that
+constant with a stated warning when the header carries no KV keys.
+
+The host side returns one of four verdicts, and every one is said out loud:
+`fits`; `clamp` (probe at `MIN_CTX` and name the host as the binding pool); `refuse`
+(preflight class `insufficient_host_ram`, both figures named, nothing launched); or
+`unknown` (MemAvailable unreadable — no host-side verdict, never a silent pass).
+On a shared-memory profile the `n_gpu_layers` ladder is skipped: a step DOWN moves
+weights out of the GPU pool and into the smaller host pool, which is how the
+2026-11-03 run reached `ngl=27`, 448 MiB of available RAM and eight kernel OOM kills.
+
 ### Shared card — the investigator GPU lock
 
 The GPU is shared with the `investigator` repo, whose pipeline takes a
@@ -941,6 +958,8 @@ a coin-flip.  Use the card-explicit launchers.
 | `LLM_AUTOTUNE_BENCH_TIMEOUT` | `300` | Per-bench server timeout (seconds) |
 | `LLM_AUTOTUNE_SPEC_N_MAX_LIST` | `4 8 16 32` | Speculative-decoding draft lengths to try |
 | `LLM_AUTOTUNE_BASELINE_GAP_MAX` | `800` | Max MiB of held VRAM tolerated before refusing to run. `800` is the no-lane default. It does **not** cover a lane the host keeps: on asus-n1n-rtx-spark the profile tolerates `3500` for the driver's reservation alone, while the spared embedding lane holds 4094 MiB, so the guard refuses — see card `AUTOTUNE-BASELINE-002` for the unresolved trade-off |
+| `LLM_AUTOTUNE_HOST_FACTOR_PCT` | `100` | Host-side bound: the run's guest-RAM footprint (weights not offloaded at `ngl` + staging) may not exceed this percentage of `MemAvailable`; above it the row is refused as `insufficient_host_ram` with both figures named |
+| `LLM_AUTOTUNE_HOST_TIGHT_PCT` | `75` | Band below that bound where the run still proceeds but probes at `MIN_CTX`, because the host — not the card — is the binding pool |
 | `LLM_AUTOTUNE_VRAM_CAP_MULT` | `2` | Second cap on the ctx-probe ceiling: `min(<arch>.context_length, START_CTX × N)`. The KV-fit estimate under-probes **by design** — Phi-3.5-mini (native 131072) serves 32768 FULL in 9 s while a 2× cap stops the probe near 15360 — and it is ~4× too pessimistic for hybrid-attention models (Spark). Raising it is NOT a licence to certify a slow window: Phase 4's TPS-first descent still refuses anything that cannot hold `LLM_MIN_TPS` |
 | `CUDA_CYCLE_BUDGET` | `60` | CUDA context create/destroy cycles allowed in one WSL boot before the run halts (the batch exits **4**, the designed end of one boot's measuring). See the WSL2 cycle-budget note below |
 | `CUDA_DEGRADE_CONSECUTIVE_STALLS` | `2` | Consecutive launches that stay alive but never report healthy before halting as the dxgkrnl degradation signature (`0` disables) |
