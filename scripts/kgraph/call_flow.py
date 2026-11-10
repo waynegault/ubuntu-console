@@ -88,8 +88,7 @@ def generate_call_flow_html(graph: Graph | dict, **kwargs) -> str:
     mermaid_code = generate_call_flow_mermaid(graph, title=title)
 
     ast_nodes = [
-        n for n in graph.nodes
-        if n.source == "ast" or n.type.lower() in ("function", "class", "module", "call")
+        n for n in graph.nodes if n.source == "ast" or n.type.lower() in ("function", "class", "module", "call")
     ]
 
     safe_title = escape(title)

@@ -105,11 +105,7 @@ def scored_edges(graph: Graph) -> list[GraphEdge]:
     Everything else in a graph is EXTRACTED (an AST ``calls``/``defines`` edge, a
     direct memory relation) and needs no threshold: it asserts what a document said.
     """
-    return [
-        edge
-        for edge in graph.edges
-        if edge.semantic_score is not None or edge.cooccurrence_count is not None
-    ]
+    return [edge for edge in graph.edges if edge.semantic_score is not None or edge.cooccurrence_count is not None]
 
 
 def _signal_value(edge: GraphEdge, signal: str) -> float | None:
@@ -159,13 +155,10 @@ def sample_scored_edges(graph: Graph, *, limit: int, seed: int) -> Sample:
     """
     scored = sorted(scored_edges(graph), key=lambda e: (e.source, e.label, e.target))
     by_signal: dict[str, list[GraphEdge]] = {
-        signal: [edge for edge in scored if _signal_value(edge, signal) is not None]
-        for signal in SIGNAL_KEYS
+        signal: [edge for edge in scored if _signal_value(edge, signal) is not None] for signal in SIGNAL_KEYS
     }
     if not scored:
-        return Sample(
-            rows=[], signals={}, population=0, per_signal={k: 0 for k in SIGNAL_KEYS}
-        )
+        return Sample(rows=[], signals={}, population=0, per_signal={k: 0 for k in SIGNAL_KEYS})
 
     rng = random.Random(seed)
     picked = _stratified_pick(scored, max(1, limit), rng, by_signal)
@@ -185,9 +178,7 @@ def sample_scored_edges(graph: Graph, *, limit: int, seed: int) -> Sample:
                 "real": "",
             }
         )
-        values = {
-            k: v for k in SIGNAL_KEYS if (v := _signal_value(edge, k)) is not None
-        }
+        values = {k: v for k in SIGNAL_KEYS if (v := _signal_value(edge, k)) is not None}
         signals[ident] = values
 
     return Sample(
@@ -198,19 +189,14 @@ def sample_scored_edges(graph: Graph, *, limit: int, seed: int) -> Sample:
     )
 
 
-def write_sample(
-    sample: Sample, directory: str, *, provenance: dict[str, Any]
-) -> list[str]:
+def write_sample(sample: Sample, directory: str, *, provenance: dict[str, Any]) -> list[str]:
     """Write ``sample.csv`` / ``signals.json`` / ``provenance.json``; return the paths.
 
     The signals file is written with the ids in the CSV, never merged into it — see the
     module docstring for why the split is load-bearing rather than cosmetic.
     """
     os.makedirs(directory, exist_ok=True)
-    paths = {
-        name: os.path.join(directory, name)
-        for name in (_SAMPLE_FILE, _SIGNALS_FILE, _PROVENANCE_FILE)
-    }
+    paths = {name: os.path.join(directory, name) for name in (_SAMPLE_FILE, _SIGNALS_FILE, _PROVENANCE_FILE)}
     with open(paths[_SAMPLE_FILE], "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
@@ -314,9 +300,7 @@ def precision_recall_curve(
     would measure the rule that is not under test.
     """
     pairs = [
-        (values[signal], labels[ident])
-        for ident, values in signals.items()
-        if signal in values and ident in labels
+        (values[signal], labels[ident]) for ident, values in signals.items() if signal in values and ident in labels
     ]
     if not pairs:
         return []
@@ -325,9 +309,7 @@ def precision_recall_curve(
     points: list[CurvePoint] = []
     for threshold in thresholds:
         true_positives = sum(1 for value, real in pairs if value >= threshold and real)
-        false_positives = sum(
-            1 for value, real in pairs if value >= threshold and not real
-        )
+        false_positives = sum(1 for value, real in pairs if value >= threshold and not real)
         false_negatives = positives - true_positives
         predicted = true_positives + false_positives
         points.append(
@@ -358,9 +340,7 @@ def operating_point(curve: list[CurvePoint], min_precision: float) -> CurvePoint
     for index, point in enumerate(curve):
         if point.precision is not None and point.precision < min_precision:
             highest_violation = index
-    candidate = (
-        curve[highest_violation + 1] if highest_violation + 1 < len(curve) else None
-    )
+    candidate = curve[highest_violation + 1] if highest_violation + 1 < len(curve) else None
     return candidate
 
 
@@ -391,8 +371,7 @@ def derive(
             signal,
             curve,
             None,
-            f"only {len(labels)} labelled edges; {min_sample} are required before "
-            f"this harness will name a threshold",
+            f"only {len(labels)} labelled edges; {min_sample} are required before this harness will name a threshold",
         )
     if positives == 0 or positives == len(labels):
         return Derived(
@@ -404,11 +383,7 @@ def derive(
             "the labels are one class only, so no threshold separates anything",
         )
     point = operating_point(curve, min_precision)
-    refusal = (
-        None
-        if point is not None
-        else (f"no threshold reaches precision {min_precision:.2f} anywhere above it")
-    )
+    refusal = None if point is not None else (f"no threshold reaches precision {min_precision:.2f} anywhere above it")
     return Derived(len(labels), positives, signal, curve, point, refusal)
 
 
@@ -438,9 +413,7 @@ def render_report(
         lines += ["", f"## {item.signal}", ""]
         point = item.point
         if item.refusal or point is None:
-            lines.append(
-                f"**No threshold named.** {item.refusal or 'the sweep produced no point'}."
-            )
+            lines.append(f"**No threshold named.** {item.refusal or 'the sweep produced no point'}.")
         else:
             lines += [
                 f"**Operating point: {point.threshold:g}** — precision "
@@ -462,11 +435,7 @@ def render_report(
                 f"{_pct(point.precision)} | {_pct(point.recall)} |"
             )
         lowest = item.curve[0].threshold if item.curve else None
-        if (
-            item.point is not None
-            and lowest is not None
-            and item.point.threshold == lowest
-        ):
+        if item.point is not None and lowest is not None and item.point.threshold == lowest:
             lines += [
                 "",
                 "> The operating point is the LOWEST observed value, so the floor "
@@ -487,9 +456,7 @@ def _provenance(graph_db: str, *, seed: int, limit: int) -> dict[str, Any]:
     if os.path.exists(path):
         stat = {
             "graph_db": path,
-            "graph_mtime": datetime.datetime.fromtimestamp(
-                os.path.getmtime(path)
-            ).isoformat(timespec="seconds"),
+            "graph_mtime": datetime.datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds"),
             "graph_bytes": os.path.getsize(path),
         }
     return {
@@ -524,20 +491,12 @@ def main(argv: list[str] | None = None) -> Result:
         description="Calibrate the INFERRED/AMBIGUOUS edge thresholds from a labelled sample.",
     )
     parser.add_argument("--graph-db", default=GRAPH_DB_DEFAULT)
-    parser.add_argument(
-        "--export", metavar="DIR", help="write a labelling sample into DIR"
-    )
-    parser.add_argument(
-        "--score", metavar="DIR", help="score the sample in DIR (real filled)"
-    )
-    parser.add_argument(
-        "--limit", type=int, default=200, help="edges to draw (default 200)"
-    )
+    parser.add_argument("--export", metavar="DIR", help="write a labelling sample into DIR")
+    parser.add_argument("--score", metavar="DIR", help="score the sample in DIR (real filled)")
+    parser.add_argument("--limit", type=int, default=200, help="edges to draw (default 200)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--min-precision", type=float, default=DEFAULT_MIN_PRECISION)
-    parser.add_argument(
-        "--report", metavar="PATH", help="write the markdown report here"
-    )
+    parser.add_argument("--report", metavar="PATH", help="write the markdown report here")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.export:
@@ -568,10 +527,7 @@ def main(argv: list[str] | None = None) -> Result:
 
     if args.score:
         labels, signals, rejected = load_labels(args.score)
-        derived = [
-            derive(labels, signals, signal, min_precision=args.min_precision)
-            for signal in SIGNAL_KEYS
-        ]
+        derived = [derive(labels, signals, signal, min_precision=args.min_precision) for signal in SIGNAL_KEYS]
         provenance = {
             "sample": os.path.join(args.score, _SAMPLE_FILE),
             "labelled": len(labels),
@@ -585,9 +541,7 @@ def main(argv: list[str] | None = None) -> Result:
         if args.report:
             with open(args.report, "w", encoding="utf-8") as handle:
                 handle.write(report)
-        return Result(
-            output=report, code=0 if any(item.point for item in derived) else 2
-        )
+        return Result(output=report, code=0 if any(item.point for item in derived) else 2)
 
     return Result(error=parser.format_help(), code=1)
 
@@ -597,7 +551,5 @@ if __name__ == "__main__":  # CLI boundary: the only place this module emits
     if _RESULT.output:
         sys.stdout.write(_RESULT.output)
     if _RESULT.error:
-        sys.stderr.write(
-            _RESULT.error if _RESULT.error.endswith("\n") else _RESULT.error + "\n"
-        )
+        sys.stderr.write(_RESULT.error if _RESULT.error.endswith("\n") else _RESULT.error + "\n")
     raise SystemExit(_RESULT.code)

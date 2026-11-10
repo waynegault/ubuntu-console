@@ -56,11 +56,13 @@ def benchmark_graph_vs_raw(graph: Graph | dict, source_files: list[str] | None =
                 tokens = estimate_tokens(content)
                 raw_tokens += tokens
                 files_available += 1
-                file_sizes.append({
-                    "path": fpath,
-                    "size_bytes": len(content.encode("utf-8")),
-                    "tokens": tokens,
-                })
+                file_sizes.append(
+                    {
+                        "path": fpath,
+                        "size_bytes": len(content.encode("utf-8")),
+                        "tokens": tokens,
+                    }
+                )
             except OSError as exc:
                 # Skipping a file under-counts raw_tokens/files_scanned, i.e.
                 # corrupts the very number this benchmark reports — log it.
@@ -81,12 +83,8 @@ def benchmark_graph_vs_raw(graph: Graph | dict, source_files: list[str] | None =
     if isinstance(result["raw_file_tokens"], int) and raw_tokens > 0:
         result["raw_to_graph_ratio"] = round(raw_tokens / max(1, graph_token_estimate), 2)
         result["raw_to_compressed_ratio"] = round(raw_tokens / max(1, compressed_node_tokens), 2)
-        result["savings_pct_vs_raw"] = round(
-            (1 - graph_token_estimate / raw_tokens) * 100, 1
-        )
-        result["compressed_savings_pct_vs_raw"] = round(
-            (1 - compressed_node_tokens / raw_tokens) * 100, 1
-        )
+        result["savings_pct_vs_raw"] = round((1 - graph_token_estimate / raw_tokens) * 100, 1)
+        result["compressed_savings_pct_vs_raw"] = round((1 - compressed_node_tokens / raw_tokens) * 100, 1)
 
     if file_sizes:
         file_sizes.sort(key=lambda x: x["tokens"], reverse=True)
@@ -111,18 +109,18 @@ def format_benchmark(result: dict) -> str:
     """
     lines = [
         "=== Token-Reduction Benchmark ===",
-        f'  Graph nodes: {result.get("node_count", 0)}',
-        f'  Graph edges: {result.get("edge_count", 0)}',
-        f'  Estimated graph tokens: {result.get("graph_tokens", "N/A")}',
-        f'  Compressed graph tokens: {result.get("compressed_graph_tokens", "N/A")}',
+        f"  Graph nodes: {result.get('node_count', 0)}",
+        f"  Graph edges: {result.get('edge_count', 0)}",
+        f"  Estimated graph tokens: {result.get('graph_tokens', 'N/A')}",
+        f"  Compressed graph tokens: {result.get('compressed_graph_tokens', 'N/A')}",
     ]
     raw = result.get("raw_file_tokens", "N/A")
     lines.append(f"  Raw file tokens: {raw}")
     if isinstance(raw, int):
-        lines.append(f'  Raw-to-graph ratio: {result.get("raw_to_graph_ratio", "N/A")}x')
-        lines.append(f'  Raw-to-compressed ratio: {result.get("raw_to_compressed_ratio", "N/A")}x')
-        lines.append(f'  Savings vs raw: {result.get("savings_pct_vs_raw", "N/A")}%')
-        lines.append(f'  Compressed savings vs raw: {result.get("compressed_savings_pct_vs_raw", "N/A")}%')
-    lines.append(f'  Avg tokens/node: {result.get("avg_tokens_per_node", "N/A")}')
-    lines.append(f'  Avg tokens/edge: {result.get("avg_tokens_per_edge", "N/A")}')
+        lines.append(f"  Raw-to-graph ratio: {result.get('raw_to_graph_ratio', 'N/A')}x")
+        lines.append(f"  Raw-to-compressed ratio: {result.get('raw_to_compressed_ratio', 'N/A')}x")
+        lines.append(f"  Savings vs raw: {result.get('savings_pct_vs_raw', 'N/A')}%")
+        lines.append(f"  Compressed savings vs raw: {result.get('compressed_savings_pct_vs_raw', 'N/A')}%")
+    lines.append(f"  Avg tokens/node: {result.get('avg_tokens_per_node', 'N/A')}")
+    lines.append(f"  Avg tokens/edge: {result.get('avg_tokens_per_edge', 'N/A')}")
     return "\n".join(lines)

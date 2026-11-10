@@ -29,6 +29,7 @@ Query: Any
 QueryCursor: Any
 try:
     from tree_sitter import Language, Parser, Query, QueryCursor
+
     _AST_AVAILABLE = True
 except ImportError:
     _AST_AVAILABLE = False
@@ -44,6 +45,7 @@ def _load_grammars() -> dict:
     try:
         import tree_sitter_bash
         import tree_sitter_python
+
         _LANGUAGES["bash"] = Language(tree_sitter_bash.language())
         _LANGUAGES["python"] = Language(tree_sitter_python.language())
     except ImportError as exc:
@@ -89,7 +91,7 @@ def _query_captures(lang: Any, query_text: str, root_node) -> list[tuple]:
 
 def _node_text(node, code: bytes) -> str:
     try:
-        return code[node.start_byte:node.end_byte].decode("utf-8")
+        return code[node.start_byte : node.end_byte].decode("utf-8")
     except (UnicodeDecodeError, IndexError) as exc:
         logger.warning("Failed to decode node text from source bytes: %s", exc)
         return ""
@@ -120,10 +122,7 @@ def _symbol_slug(name: str) -> str:
     """
     if _SYMBOL_SAFE_RE.match(name):
         return name
-    body = "".join(
-        ch if (ch.isascii() and (ch.isalnum() or ch in "-.")) else f"_{ord(ch):x}"
-        for ch in name
-    )
+    body = "".join(ch if (ch.isascii() and (ch.isalnum() or ch in "-.")) else f"_{ord(ch):x}" for ch in name)
     return f"~{body}"
 
 
@@ -283,9 +282,7 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
                 lang = _shebang_lang(fpath)
                 if lang is None:
                     continue
-            if scan_subdirs and not any(
-                fpath.relative_to(root).as_posix().startswith(s) for s in scan_subdirs
-            ):
+            if scan_subdirs and not any(fpath.relative_to(root).as_posix().startswith(s) for s in scan_subdirs):
                 continue
             source_files.append((fpath, lang))
 
@@ -320,26 +317,26 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
         # ``file:<path>`` key in memory_import.py.
         file_source = source_key("file", rel_path)
 
-        builder.add_node({
-            "id": file_id,
-            "label": fpath.name,
-            "type": "file",
-            "path": str(fpath),
-            "rel_path": rel_path,
-            "language": lang,
-            "source": "ast",
-            "sources": [file_source],
-        })
+        builder.add_node(
+            {
+                "id": file_id,
+                "label": fpath.name,
+                "type": "file",
+                "path": str(fpath),
+                "rel_path": rel_path,
+                "language": lang,
+                "source": "ast",
+                "sources": [file_source],
+            }
+        )
 
         tree = parser.parse(code)
         root_node = tree.root_node
 
         if lang == "python":
-            _extract_python_defs(root_node, code, rel_path, file_id, builder,
-                                 include_variables, file_source)
+            _extract_python_defs(root_node, code, rel_path, file_id, builder, include_variables, file_source)
         elif lang == "bash":
-            _extract_bash_defs(root_node, code, rel_path, file_id, builder,
-                               include_variables, file_source)
+            _extract_bash_defs(root_node, code, rel_path, file_id, builder, include_variables, file_source)
 
         _extract_calls(root_node, code, lang, rel_path, file_id, builder, file_source)
 
@@ -361,9 +358,15 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
 # ── language-specific extraction helpers ──────────────────────────────
 
 
-def _extract_bash_defs(root_node, code: bytes, rel_path: str, file_id: str,
-                       builder: GraphBuilder, include_variables: bool,
-                       file_source: str) -> None:
+def _extract_bash_defs(
+    root_node,
+    code: bytes,
+    rel_path: str,
+    file_id: str,
+    builder: GraphBuilder,
+    include_variables: bool,
+    file_source: str,
+) -> None:
     """Extract bash function definitions and variable assignments."""
     lang = _LANGUAGES.get("bash")
     if not lang:
@@ -375,15 +378,28 @@ def _extract_bash_defs(root_node, code: bytes, rel_path: str, file_id: str,
             if not name or not name.strip():
                 continue
             nid = _symbol_id("func", "bash", name)
-            builder.add_node({
-                "id": nid, "label": name.strip(), "type": "function",
-                "language": "bash", "source": "ast", "file": rel_path,
-                "confidence": ConfidenceLevel.EXTRACTED,
-                # The file that defines it is the document asserting the node.
-                "sources": [file_source],
-            })
-            builder.add_edge({"source": file_id, "target": nid, "label": "defines",
-                              "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+            builder.add_node(
+                {
+                    "id": nid,
+                    "label": name.strip(),
+                    "type": "function",
+                    "language": "bash",
+                    "source": "ast",
+                    "file": rel_path,
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    # The file that defines it is the document asserting the node.
+                    "sources": [file_source],
+                }
+            )
+            builder.add_edge(
+                {
+                    "source": file_id,
+                    "target": nid,
+                    "label": "defines",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "sources": [file_source],
+                }
+            )
 
     if include_variables:
         for node, tag in _query_captures(lang, BASH_QUERIES["variable_def"], root_node):
@@ -392,18 +408,37 @@ def _extract_bash_defs(root_node, code: bytes, rel_path: str, file_id: str,
                 if not name or not name.strip():
                     continue
                 nid = _symbol_id("var", "bash", name)
-                builder.add_node({
-                    "id": nid, "label": name.strip(), "type": "variable",
-                    "language": "bash", "source": "ast", "confidence": ConfidenceLevel.EXTRACTED,
-                    "sources": [file_source],
-                })
-                builder.add_edge({"source": file_id, "target": nid, "label": "defines",
-                                  "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+                builder.add_node(
+                    {
+                        "id": nid,
+                        "label": name.strip(),
+                        "type": "variable",
+                        "language": "bash",
+                        "source": "ast",
+                        "confidence": ConfidenceLevel.EXTRACTED,
+                        "sources": [file_source],
+                    }
+                )
+                builder.add_edge(
+                    {
+                        "source": file_id,
+                        "target": nid,
+                        "label": "defines",
+                        "confidence": ConfidenceLevel.EXTRACTED,
+                        "sources": [file_source],
+                    }
+                )
 
 
-def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
-                         builder: GraphBuilder, include_variables: bool,
-                         file_source: str) -> None:
+def _extract_python_defs(
+    root_node,
+    code: bytes,
+    rel_path: str,
+    file_id: str,
+    builder: GraphBuilder,
+    include_variables: bool,
+    file_source: str,
+) -> None:
     """Extract Python function and class definitions."""
     lang = _LANGUAGES.get("python")
     if not lang:
@@ -416,17 +451,31 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
                 continue
             nid = _symbol_id("func", "python", name)
             parent = node.parent
-            is_async = parent and parent.type == "function_definition" and any(
-                c.type == "async" for c in parent.children
+            is_async = (
+                parent and parent.type == "function_definition" and any(c.type == "async" for c in parent.children)
             )
-            builder.add_node({
-                "id": nid, "label": name.strip(), "type": "function",
-                "language": "python", "source": "ast", "file": rel_path,
-                "confidence": ConfidenceLevel.EXTRACTED, "is_async": is_async,
-                "sources": [file_source],
-            })
-            builder.add_edge({"source": file_id, "target": nid, "label": "defines",
-                              "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+            builder.add_node(
+                {
+                    "id": nid,
+                    "label": name.strip(),
+                    "type": "function",
+                    "language": "python",
+                    "source": "ast",
+                    "file": rel_path,
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "is_async": is_async,
+                    "sources": [file_source],
+                }
+            )
+            builder.add_edge(
+                {
+                    "source": file_id,
+                    "target": nid,
+                    "label": "defines",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "sources": [file_source],
+                }
+            )
 
     for node, tag in _query_captures(lang, PYTHON_QUERIES["class_def"], root_node):
         if tag == "name":
@@ -434,14 +483,27 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
             if not name or not name.strip():
                 continue
             nid = _symbol_id("class", "python", name)
-            builder.add_node({
-                "id": nid, "label": name.strip(), "type": "class",
-                "language": "python", "source": "ast", "file": rel_path,
-                "confidence": ConfidenceLevel.EXTRACTED,
-                "sources": [file_source],
-            })
-            builder.add_edge({"source": file_id, "target": nid, "label": "defines",
-                              "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+            builder.add_node(
+                {
+                    "id": nid,
+                    "label": name.strip(),
+                    "type": "class",
+                    "language": "python",
+                    "source": "ast",
+                    "file": rel_path,
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "sources": [file_source],
+                }
+            )
+            builder.add_edge(
+                {
+                    "source": file_id,
+                    "target": nid,
+                    "label": "defines",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "sources": [file_source],
+                }
+            )
 
     for query_key in ("import", "import_from"):
         for node, tag in _query_captures(lang, PYTHON_QUERIES[query_key], root_node):
@@ -449,13 +511,26 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
                 module = _node_text(node, code)
                 if module:
                     nid = _symbol_id("module", "python", module)
-                    builder.add_node({
-                        "id": nid, "label": module.strip(), "type": "module",
-                        "language": "python", "source": "ast", "confidence": ConfidenceLevel.EXTRACTED,
-                        "sources": [file_source],
-                    })
-                    builder.add_edge({"source": file_id, "target": nid, "label": "imports",
-                                      "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+                    builder.add_node(
+                        {
+                            "id": nid,
+                            "label": module.strip(),
+                            "type": "module",
+                            "language": "python",
+                            "source": "ast",
+                            "confidence": ConfidenceLevel.EXTRACTED,
+                            "sources": [file_source],
+                        }
+                    )
+                    builder.add_edge(
+                        {
+                            "source": file_id,
+                            "target": nid,
+                            "label": "imports",
+                            "confidence": ConfidenceLevel.EXTRACTED,
+                            "sources": [file_source],
+                        }
+                    )
 
 
 # Bash functions that invoke a function NAME handed to them as an argument.  Such a
@@ -472,9 +547,9 @@ _BASH_DISPATCHERS = {
 }
 
 
-def _extract_dispatched_calls(command_nodes: list, code: bytes, file_id: str,
-                              builder: GraphBuilder, seen_calls: set[str],
-                              file_source: str) -> None:
+def _extract_dispatched_calls(
+    command_nodes: list, code: bytes, file_id: str, builder: GraphBuilder, seen_calls: set[str], file_source: str
+) -> None:
     """Record function names passed to a known dispatcher as call references.
 
     The edge is deliberately the ordinary call shape — file -> ast_call -> ast_func —
@@ -502,12 +577,25 @@ def _extract_dispatched_calls(command_nodes: list, code: bytes, file_id: str,
                 continue
             seen_calls.add(name)
             nid = _symbol_id("call", "bash", name)
-            builder.add_node({
-                "id": nid, "label": name, "type": "call",
-                "language": "bash", "source": "ast", "confidence": ConfidenceLevel.EXTRACTED,
-            })
-            builder.add_edge({"source": file_id, "target": nid, "label": "calls",
-                              "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+            builder.add_node(
+                {
+                    "id": nid,
+                    "label": name,
+                    "type": "call",
+                    "language": "bash",
+                    "source": "ast",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                }
+            )
+            builder.add_edge(
+                {
+                    "source": file_id,
+                    "target": nid,
+                    "label": "calls",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "sources": [file_source],
+                }
+            )
 
 
 # A trap handler is shell code held in a STRING, so the `command_name` capture never
@@ -541,8 +629,7 @@ def _shell_command_names(grammar_lang: Any, source: str) -> list[str]:
     snippet = source.encode("utf-8")
     parser = Parser(grammar_lang)
     names = []
-    for node, tag in _query_captures(grammar_lang, BASH_QUERIES["function_call"],
-                                     parser.parse(snippet).root_node):
+    for node, tag in _query_captures(grammar_lang, BASH_QUERIES["function_call"], parser.parse(snippet).root_node):
         if tag != "call":
             continue
         name = _node_text(node, snippet).strip()
@@ -551,9 +638,15 @@ def _shell_command_names(grammar_lang: Any, source: str) -> list[str]:
     return names
 
 
-def _extract_trap_handlers(grammar_lang: Any, command_nodes: list, code: bytes, file_id: str,
-                           builder: GraphBuilder, seen_calls: set[str],
-                           file_source: str) -> None:
+def _extract_trap_handlers(
+    grammar_lang: Any,
+    command_nodes: list,
+    code: bytes,
+    file_id: str,
+    builder: GraphBuilder,
+    seen_calls: set[str],
+    file_source: str,
+) -> None:
     """Record the calls made from `trap '<handler>' SIGNAL` handler strings.
 
     `command_nodes` is the file's `command_name` words, captured once by `_extract_calls`.
@@ -583,16 +676,30 @@ def _extract_trap_handlers(grammar_lang: Any, command_nodes: list, code: bytes, 
                 continue
             seen_calls.add(name)
             nid = _symbol_id("call", "bash", name)
-            builder.add_node({
-                "id": nid, "label": name, "type": "call",
-                "language": "bash", "source": "ast", "confidence": ConfidenceLevel.EXTRACTED,
-            })
-            builder.add_edge({"source": file_id, "target": nid, "label": "calls",
-                              "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+            builder.add_node(
+                {
+                    "id": nid,
+                    "label": name,
+                    "type": "call",
+                    "language": "bash",
+                    "source": "ast",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                }
+            )
+            builder.add_edge(
+                {
+                    "source": file_id,
+                    "target": nid,
+                    "label": "calls",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "sources": [file_source],
+                }
+            )
 
 
-def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
-                   file_id: str, builder: GraphBuilder, file_source: str) -> None:
+def _extract_calls(
+    root_node, code: bytes, lang: str, rel_path: str, file_id: str, builder: GraphBuilder, file_source: str
+) -> None:
     """Extract function/method call references."""
     grammar_lang = _LANGUAGES.get(lang)
     if not grammar_lang:
@@ -617,28 +724,39 @@ def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
                 continue
             seen_calls.add(name.strip())
             nid = _symbol_id("call", lang, name)
-            builder.add_node({
-                "id": nid, "label": name.strip(), "type": "call",
-                "language": lang, "source": "ast", "confidence": ConfidenceLevel.EXTRACTED,
-                # Deliberately no ``sources``: an ast_call node is keyed by NAME
-                # only (language + name, no file), so it aggregates every file
-                # that calls that name.  Attaching a source here would make one
-                # node's array grow with the corpus — the article's array-size
-                # warning — and would misattribute a call to one file.  The
-                # file -> call EDGE below carries the asserting file instead.
-            })
-            builder.add_edge({"source": file_id, "target": nid, "label": "calls",
-                              "confidence": ConfidenceLevel.EXTRACTED, "sources": [file_source]})
+            builder.add_node(
+                {
+                    "id": nid,
+                    "label": name.strip(),
+                    "type": "call",
+                    "language": lang,
+                    "source": "ast",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    # Deliberately no ``sources``: an ast_call node is keyed by NAME
+                    # only (language + name, no file), so it aggregates every file
+                    # that calls that name.  Attaching a source here would make one
+                    # node's array grow with the corpus — the article's array-size
+                    # warning — and would misattribute a call to one file.  The
+                    # file -> call EDGE below carries the asserting file instead.
+                }
+            )
+            builder.add_edge(
+                {
+                    "source": file_id,
+                    "target": nid,
+                    "label": "calls",
+                    "confidence": ConfidenceLevel.EXTRACTED,
+                    "sources": [file_source],
+                }
+            )
 
     if lang == "bash":
         # One capture, three consumers: each used to re-run (and recompile) this query.
         _extract_dispatched_calls(command_nodes, code, file_id, builder, seen_calls, file_source)
-        _extract_trap_handlers(grammar_lang, command_nodes, code, file_id, builder, seen_calls,
-                               file_source)
+        _extract_trap_handlers(grammar_lang, command_nodes, code, file_id, builder, seen_calls, file_source)
 
 
-def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph,
-                          builder: GraphBuilder) -> None:
+def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph, builder: GraphBuilder) -> None:
     """Connect import nodes to file nodes when module name matches path.
 
     No ``sources``: this edge is DERIVED by matching a module name against file
@@ -652,7 +770,9 @@ def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph,
         for rel_path, fid in file_node_ids.items():
             rel_stem = Path(rel_path).stem.lower().replace("-", "_")
             if label == rel_stem or label.endswith("." + rel_stem):
-                builder.add_edge({"source": n.id, "target": fid, "label": "resolves_to", "confidence": ConfidenceLevel.INFERRED})
+                builder.add_edge(
+                    {"source": n.id, "target": fid, "label": "resolves_to", "confidence": ConfidenceLevel.INFERRED}
+                )
                 break
 
 
@@ -679,9 +799,11 @@ def _link_call_defs(builder: GraphBuilder) -> None:
             continue
         func_id = _symbol_id("func", node.language or "bash", name)
         if builder.has_node(func_id):
-            builder.add_edge({
-                "source": node.id,
-                "target": func_id,
-                "label": "calls",
-                "confidence": ConfidenceLevel.INFERRED,
-            })
+            builder.add_edge(
+                {
+                    "source": node.id,
+                    "target": func_id,
+                    "label": "calls",
+                    "confidence": ConfidenceLevel.INFERRED,
+                }
+            )

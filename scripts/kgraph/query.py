@@ -197,7 +197,9 @@ def _path_strength(edge: GraphEdge) -> float:
     if not math.isfinite(value):
         logger.warning(
             "Non-finite semantic_score %r on edge %s → %s; reading it as strength 1.0",
-            raw, edge.source, edge.target,
+            raw,
+            edge.source,
+            edge.target,
         )
         return 1.0
     return min(_PATH_STRENGTH_MAX, max(_PATH_STRENGTH_MIN, value))
@@ -229,7 +231,9 @@ def _neighbourhood(graph: Graph) -> dict[str, list[tuple[str, str, GraphEdge]]]:
 
 
 def _resolve_endpoint(
-    node_by_id: dict[str, GraphNode], id_by_label: dict[str, str], name: str,
+    node_by_id: dict[str, GraphNode],
+    id_by_label: dict[str, str],
+    name: str,
 ) -> str | None:
     """A node id for *name*: the id itself, else the first label containing it.
 
@@ -246,7 +250,10 @@ def _resolve_endpoint(
 
 
 def _shortest_path_edges(
-    adj: dict[str, list[tuple[str, str, GraphEdge]]], src_id: str, tgt_id: str, max_depth: int,
+    adj: dict[str, list[tuple[str, str, GraphEdge]]],
+    src_id: str,
+    tgt_id: str,
+    max_depth: int,
 ) -> list[dict]:
     """BFS: the fewest-hop path, ties broken by edge order in ``graph.edges``.
 
@@ -266,16 +273,21 @@ def _shortest_path_edges(
         for neighbor, _lbl, edge in adj.get(current, []):
             if neighbor not in visited:
                 visited.add(neighbor)
-                queue.append((
-                    neighbor,
-                    path_edges + [edge.model_dump(mode="json", exclude_none=True)],
-                ))
+                queue.append(
+                    (
+                        neighbor,
+                        path_edges + [edge.model_dump(mode="json", exclude_none=True)],
+                    )
+                )
 
     return []
 
 
 def _strongest_path_edges(
-    adj: dict[str, list[tuple[str, str, GraphEdge]]], src_id: str, tgt_id: str, max_depth: int,
+    adj: dict[str, list[tuple[str, str, GraphEdge]]],
+    src_id: str,
+    tgt_id: str,
+    max_depth: int,
 ) -> list[dict]:
     """Dijkstra over ``-log(strength)``: the maximum-product-strength path.
 
@@ -318,11 +330,14 @@ def _strongest_path_edges(
             if current is not None and current <= candidate:
                 continue
             best[neighbor] = candidate
-            heapq.heappush(heap, (
-                candidate + (next(_path_tiebreak),),
-                neighbor,
-                edges + [edge.model_dump(mode="json", exclude_none=True)],
-            ))
+            heapq.heappush(
+                heap,
+                (
+                    candidate + (next(_path_tiebreak),),
+                    neighbor,
+                    edges + [edge.model_dump(mode="json", exclude_none=True)],
+                ),
+            )
 
     return []
 
@@ -359,9 +374,7 @@ def find_path_result(
 
     normalized = str(mode).strip().lower()
     if normalized not in _PATH_MODES:
-        raise ValueError(
-            f"unknown path mode {mode!r}: expected one of {sorted(_PATH_MODES)}"
-        )
+        raise ValueError(f"unknown path mode {mode!r}: expected one of {sorted(_PATH_MODES)}")
 
     max_depth = kwargs.get("max_depth", 10)
 
@@ -462,23 +475,27 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
     for e in graph.edges:
         conf = e.confidence.value if e.confidence else "INFERRED"
         if e.source == nid:
-            outbound.append({
-                "target": e.target,
-                "label": e.label,
-                "confidence": conf,
-                "semantic_score": e.semantic_score,
-                "sources": list(e.sources),
-                **_source_overflow(e),
-            })
+            outbound.append(
+                {
+                    "target": e.target,
+                    "label": e.label,
+                    "confidence": conf,
+                    "semantic_score": e.semantic_score,
+                    "sources": list(e.sources),
+                    **_source_overflow(e),
+                }
+            )
         elif e.target == nid:
-            inbound.append({
-                "source": e.source,
-                "label": e.label,
-                "confidence": conf,
-                "semantic_score": e.semantic_score,
-                "sources": list(e.sources),
-                **_source_overflow(e),
-            })
+            inbound.append(
+                {
+                    "source": e.source,
+                    "label": e.label,
+                    "confidence": conf,
+                    "semantic_score": e.semantic_score,
+                    "sources": list(e.sources),
+                    **_source_overflow(e),
+                }
+            )
 
     # Build label lookup
     label_map = {n.id: n.label for n in graph.nodes}
@@ -496,7 +513,9 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
             "label": target_node.label,
             "type": target_node.type,
             "content_preview": target_node.content_preview,
-            "community": None if community is None else {
+            "community": None
+            if community is None
+            else {
                 "id": str(community.get("id")),
                 "label": community.get("label", ""),
                 "size": community.get("size", len(community.get("members") or [])),
@@ -513,44 +532,44 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
 def format_explain(explanation: dict) -> str:
     """Format an explain_node result as human-readable text."""
     if "error" in explanation:
-        return f'Error: {explanation["error"]}'
+        return f"Error: {explanation['error']}"
 
     node = explanation["node"]
     lines = [
-        f'Node: {node["label"]} ({node["id"]})',
-        f'Type: {node["type"]}',
-        f'Connections: {explanation["total_connections"]} '
-        f'({explanation["outbound_count"]} out, {explanation["inbound_count"]} in)',
+        f"Node: {node['label']} ({node['id']})",
+        f"Type: {node['type']}",
+        f"Connections: {explanation['total_connections']} "
+        f"({explanation['outbound_count']} out, {explanation['inbound_count']} in)",
     ]
 
     community = node.get("community")
     if community:
-        lines.append(f'Community: {community["label"]} ({community["id"]}, {community["size"]} members)')
+        lines.append(f"Community: {community['label']} ({community['id']}, {community['size']} members)")
 
     if node.get("content_preview"):
-        lines.append(f'Preview: {node["content_preview"]}')
+        lines.append(f"Preview: {node['content_preview']}")
 
     if explanation["outbound_connections"]:
         lines.append("")
         lines.append("Outbound:")
         for c in explanation["outbound_connections"]:
-            score = f' [{c.get("semantic_score")}]' if c.get("semantic_score") else ""
-            conf = f' ({c["confidence"]})' if c.get("confidence") else ""
-            src = f' — source: {", ".join(c["sources"])}' if c.get("sources") else ""
+            score = f" [{c.get('semantic_score')}]" if c.get("semantic_score") else ""
+            conf = f" ({c['confidence']})" if c.get("confidence") else ""
+            src = f" — source: {', '.join(c['sources'])}" if c.get("sources") else ""
             if c.get("sources_overflow"):
-                src += f' (capped: {len(c["sources"])} of {c["sources_overflow"]})'
-            lines.append(f'  → {c["target_label"]} ({c["label"]}){score}{conf}{src}')
+                src += f" (capped: {len(c['sources'])} of {c['sources_overflow']})"
+            lines.append(f"  → {c['target_label']} ({c['label']}){score}{conf}{src}")
 
     if explanation["inbound_connections"]:
         lines.append("")
         lines.append("Inbound:")
         for c in explanation["inbound_connections"]:
-            score = f' [{c.get("semantic_score")}]' if c.get("semantic_score") else ""
-            conf = f' ({c["confidence"]})' if c.get("confidence") else ""
-            src = f' — source: {", ".join(c["sources"])}' if c.get("sources") else ""
+            score = f" [{c.get('semantic_score')}]" if c.get("semantic_score") else ""
+            conf = f" ({c['confidence']})" if c.get("confidence") else ""
+            src = f" — source: {', '.join(c['sources'])}" if c.get("sources") else ""
             if c.get("sources_overflow"):
-                src += f' (capped: {len(c["sources"])} of {c["sources_overflow"]})'
-            lines.append(f'  ← {c["source_label"]} ({c["label"]}){score}{conf}{src}')
+                src += f" (capped: {len(c['sources'])} of {c['sources_overflow']})"
+            lines.append(f"  ← {c['source_label']} ({c['label']}){score}{conf}{src}")
 
     return "\n".join(lines)
 

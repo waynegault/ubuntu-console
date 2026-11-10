@@ -40,12 +40,7 @@ def generate_html(graph: dict, outpath: str) -> None:
     # The payload is embedded inside a <script> element.  Escape the
     # characters that could terminate that element (`</script>`, `<!--`);
     # the \uXXXX escapes keep the literal valid JSON for the JS parser.
-    payload = (
-        json.dumps(graph)
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-    )
+    payload = json.dumps(graph).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     html = HTML_TMPL.replace("%s", payload, 1)
     ensure_parent_dir(outpath)
     with open(outpath, "w", encoding="utf-8") as f:

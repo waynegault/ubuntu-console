@@ -36,23 +36,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-_DATE_STEM = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-_DATE_HEADING = re.compile(r'^#\s+(\d{4}-\d{2}-\d{2})\s*$')
-_PROJECT = re.compile(r'<!--\s*project:\s*(.*?)\s*-->')
-_HTML_TAG = re.compile(r'<[^>]+>')
+_DATE_STEM = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATE_HEADING = re.compile(r"^#\s+(\d{4}-\d{2}-\d{2})\s*$")
+_PROJECT = re.compile(r"<!--\s*project:\s*(.*?)\s*-->")
+_HTML_TAG = re.compile(r"<[^>]+>")
 
-SOURCE_KIND_MARKDOWN = 'markdown-memory'
-_CHUNK_ID_PREFIX = 'src-'
+SOURCE_KIND_MARKDOWN = "markdown-memory"
+_CHUNK_ID_PREFIX = "src-"
 _CHUNK_ID_CHARS = 20
 
 _SCHEMA = (
-    'CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY)',
-    'CREATE TABLE IF NOT EXISTS chunks ('
-    'id TEXT PRIMARY KEY, path TEXT NOT NULL, start_line INTEGER, end_line INTEGER, '
-    'text TEXT NOT NULL, embedding TEXT)',
-    'CREATE TABLE IF NOT EXISTS source_meta ('
-    'chunk_id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_date TEXT, '
-    'section TEXT, scope TEXT, metadata TEXT)',
+    "CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY)",
+    "CREATE TABLE IF NOT EXISTS chunks ("
+    "id TEXT PRIMARY KEY, path TEXT NOT NULL, start_line INTEGER, end_line INTEGER, "
+    "text TEXT NOT NULL, embedding TEXT)",
+    "CREATE TABLE IF NOT EXISTS source_meta ("
+    "chunk_id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_date TEXT, "
+    "section TEXT, scope TEXT, metadata TEXT)",
 )
 
 
@@ -105,7 +105,7 @@ class MarkdownMemorySource:
 
     def __init__(self, root: str, *, min_chars: int = 1) -> None:
         if min_chars < 0:
-            raise ValueError('min_chars must be non-negative')
+            raise ValueError("min_chars must be non-negative")
         self.root = os.path.abspath(os.path.expanduser(root))
         self.min_chars = min_chars
         if not os.path.exists(self.root):
@@ -114,7 +114,7 @@ class MarkdownMemorySource:
     def _paths(self) -> list[Path]:
         root = Path(self.root)
         if root.is_dir():
-            return sorted(root.glob('*.md'))
+            return sorted(root.glob("*.md"))
         return [root]
 
     def iter_records(self) -> Iterator[SourceRecord]:
@@ -122,7 +122,7 @@ class MarkdownMemorySource:
             yield from self._records_for(path)
 
     def _records_for(self, path: Path) -> Iterator[SourceRecord]:
-        lines = path.read_text(encoding='utf-8').splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         date = path.stem if _DATE_STEM.match(path.stem) else None
         for line in lines:
             match = _DATE_HEADING.match(line)
@@ -130,10 +130,10 @@ class MarkdownMemorySource:
                 date = match.group(1)
                 break
 
-        starts = [i for i, line in enumerate(lines) if line.startswith('## ')]
+        starts = [i for i, line in enumerate(lines) if line.startswith("## ")]
         if not starts:
-            body_start = 1 if lines and lines[0].startswith('# ') else 0
-            text = '\n'.join(lines[body_start:]).strip()
+            body_start = 1 if lines and lines[0].startswith("# ") else 0
+            text = "\n".join(lines[body_start:]).strip()
             if len(text) >= self.min_chars:
                 yield SourceRecord(
                     path=str(path),
@@ -142,7 +142,7 @@ class MarkdownMemorySource:
                     text=text,
                     source_kind=SOURCE_KIND_MARKDOWN,
                     source_date=date,
-                    scope='shared',
+                    scope="shared",
                 )
             return
 
@@ -150,12 +150,12 @@ class MarkdownMemorySource:
             end = starts[position + 1] - 1 if position + 1 < len(starts) else len(lines) - 1
             while end > start and not lines[end].strip():
                 end -= 1
-            text = '\n'.join(lines[start:end + 1]).strip()
+            text = "\n".join(lines[start : end + 1]).strip()
             if len(text) < self.min_chars:
                 continue
             heading = lines[start][3:].strip()
             project = _PROJECT.search(heading)
-            metadata = {'project': project.group(1)} if project else {}
+            metadata = {"project": project.group(1)} if project else {}
             yield SourceRecord(
                 path=str(path),
                 start_line=start + 1,
@@ -163,11 +163,10 @@ class MarkdownMemorySource:
                 text=text,
                 source_kind=SOURCE_KIND_MARKDOWN,
                 source_date=date,
-                section=_PROJECT.sub('', heading).strip(),
-                scope='shared',
+                section=_PROJECT.sub("", heading).strip(),
+                scope="shared",
                 metadata=metadata,
             )
-
 
 
 class DirectoryMemorySource:
@@ -181,13 +180,19 @@ class DirectoryMemorySource:
     layer/case provenance into the graph.
     """
 
-    def __init__(self, root: str, *, source_kind: str,
-                 patterns: tuple[str, ...] = ('*.md', '*.txt', '*.html'),
-                 min_chars: int = 1, scope: str | None = None) -> None:
+    def __init__(
+        self,
+        root: str,
+        *,
+        source_kind: str,
+        patterns: tuple[str, ...] = ("*.md", "*.txt", "*.html"),
+        min_chars: int = 1,
+        scope: str | None = None,
+    ) -> None:
         if min_chars < 0:
-            raise ValueError('min_chars must be non-negative')
+            raise ValueError("min_chars must be non-negative")
         if not source_kind.strip():
-            raise ValueError('source_kind must not be empty')
+            raise ValueError("source_kind must not be empty")
         self.root = os.path.abspath(os.path.expanduser(root))
         self.source_kind = source_kind.strip()
         self.patterns = patterns
@@ -207,10 +212,10 @@ class DirectoryMemorySource:
 
     def iter_records(self) -> Iterator[SourceRecord]:
         for path in self._paths():
-            text = path.read_text(encoding='utf-8', errors='replace')
-            if path.suffix.lower() in ('.html', '.htm'):
-                text = html.unescape(_HTML_TAG.sub(' ', text))
-            text = '\n'.join(line.rstrip() for line in text.splitlines()).strip()
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if path.suffix.lower() in (".html", ".htm"):
+                text = html.unescape(_HTML_TAG.sub(" ", text))
+            text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
             if len(text) < self.min_chars:
                 continue
             yield SourceRecord(
@@ -222,7 +227,6 @@ class DirectoryMemorySource:
                 section=path.stem,
                 scope=self.scope,
             )
-
 
 
 class ChromaMemorySource:
@@ -238,14 +242,20 @@ class ChromaMemorySource:
     ``4`` tag as the layer; supply the report at document grain instead.
     """
 
-    def __init__(self, dbpath: str, *, layer_values: tuple[str, ...],
-                 layer_key: str = 'mves_layer',
-                 source_kind_prefix: str = 'investigator-layer',
-                 limit: int = 0, scope: str | None = None) -> None:
+    def __init__(
+        self,
+        dbpath: str,
+        *,
+        layer_values: tuple[str, ...],
+        layer_key: str = "mves_layer",
+        source_kind_prefix: str = "investigator-layer",
+        limit: int = 0,
+        scope: str | None = None,
+    ) -> None:
         if not layer_values:
-            raise ValueError('layer_values must not be empty')
+            raise ValueError("layer_values must not be empty")
         if limit < 0:
-            raise ValueError('limit must be non-negative')
+            raise ValueError("limit must be non-negative")
         self.root = os.path.abspath(os.path.expanduser(dbpath))
         self.layer_values = layer_values
         self.layer_key = layer_key
@@ -256,7 +266,7 @@ class ChromaMemorySource:
             raise FileNotFoundError(self.root)
 
     def iter_records(self) -> Iterator[SourceRecord]:
-        conn = sqlite3.connect(f'file:{self.root}?mode=ro', uri=True)
+        conn = sqlite3.connect(f"file:{self.root}?mode=ro", uri=True)
         try:
             for layer in self.layer_values:
                 sql = (
@@ -285,24 +295,26 @@ class ChromaMemorySource:
                     sql += " LIMIT ?"
                     params.append(self.limit)
                 for row in conn.execute(sql, params):
-                    text = (row[8] or '').strip()
+                    text = (row[8] or "").strip()
                     if not text:
                         continue
-                    path = row[1] or row[2] or f'chroma:{row[0]}'
+                    path = row[1] or row[2] or f"chroma:{row[0]}"
                     metadata = {
-                        key: value for key, value in (
-                            ('document_id', row[2]),
-                            ('document_role', row[3]),
-                            ('page_number', row[5]),
-                            ('chunk_index', row[6]),
-                        ) if value
+                        key: value
+                        for key, value in (
+                            ("document_id", row[2]),
+                            ("document_role", row[3]),
+                            ("page_number", row[5]),
+                            ("chunk_index", row[6]),
+                        )
+                        if value
                     }
                     yield SourceRecord(
                         path=str(path),
                         start_line=1,
                         end_line=1,
                         text=text,
-                        source_kind=f'{self.source_kind_prefix}{layer}',
+                        source_kind=f"{self.source_kind_prefix}{layer}",
                         source_date=row[7] or None,
                         section=row[4] or None,
                         scope=self.scope,
@@ -313,10 +325,8 @@ class ChromaMemorySource:
 
 
 def _chunk_id(record: SourceRecord) -> str:
-    raw = (
-        f'{record.path}\x1f{record.start_line}\x1f{record.end_line}\x1f{record.text}'
-    )
-    digest = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:_CHUNK_ID_CHARS]
+    raw = f"{record.path}\x1f{record.start_line}\x1f{record.end_line}\x1f{record.text}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:_CHUNK_ID_CHARS]
     return _CHUNK_ID_PREFIX + digest
 
 
@@ -324,8 +334,9 @@ def _under(path: str, prefix: str) -> bool:
     return path == prefix or path.startswith(prefix + os.sep)
 
 
-def write_files_chunks(records: Iterable[SourceRecord], dbpath: str, *,
-                       prune_prefix: str | None = None) -> ImportResult:
+def write_files_chunks(
+    records: Iterable[SourceRecord], dbpath: str, *, prune_prefix: str | None = None
+) -> ImportResult:
     """Write *records* to the ``files``/``chunks`` store at *dbpath*.
 
     Idempotent: a path's previous chunks are replaced, so a re-import cannot
@@ -345,10 +356,7 @@ def write_files_chunks(records: Iterable[SourceRecord], dbpath: str, *,
     parent = os.path.dirname(dbpath)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    prefix = (
-        os.path.abspath(os.path.expanduser(prune_prefix))
-        if prune_prefix else None
-    )
+    prefix = os.path.abspath(os.path.expanduser(prune_prefix)) if prune_prefix else None
     paths = {record.path for record in rows}
 
     conn = sqlite3.connect(dbpath)
@@ -358,60 +366,47 @@ def write_files_chunks(records: Iterable[SourceRecord], dbpath: str, *,
                 conn.execute(statement)
 
             if prefix is not None:
-                for (path,) in conn.execute('SELECT DISTINCT path FROM chunks').fetchall():
+                for (path,) in conn.execute("SELECT DISTINCT path FROM chunks").fetchall():
                     if _under(path, prefix) and path not in paths:
                         _delete_path(conn, path)
-                for (path,) in conn.execute('SELECT path FROM files').fetchall():
+                for (path,) in conn.execute("SELECT path FROM files").fetchall():
                     if _under(path, prefix) and path not in paths:
-                        conn.execute('DELETE FROM files WHERE path=?', (path,))
+                        conn.execute("DELETE FROM files WHERE path=?", (path,))
 
             for path in paths:
                 _delete_path(conn, path)
-                conn.execute('INSERT OR IGNORE INTO files(path) VALUES (?)', (path,))
+                conn.execute("INSERT OR IGNORE INTO files(path) VALUES (?)", (path,))
 
             for record in rows:
                 chunk_id = _chunk_id(record)
                 conn.execute(
-                    'INSERT OR REPLACE INTO chunks'
-                    ' (id, path, start_line, end_line, text, embedding)'
-                    ' VALUES (?, ?, ?, ?, ?, NULL)',
-                    (chunk_id, record.path, record.start_line, record.end_line,
-                     record.text),
+                    "INSERT OR REPLACE INTO chunks"
+                    " (id, path, start_line, end_line, text, embedding)"
+                    " VALUES (?, ?, ?, ?, ?, NULL)",
+                    (chunk_id, record.path, record.start_line, record.end_line, record.text),
                 )
-                metadata = (
-                    json.dumps(record.metadata, sort_keys=True)
-                    if record.metadata else None
-                )
+                metadata = json.dumps(record.metadata, sort_keys=True) if record.metadata else None
                 conn.execute(
-                    'INSERT OR REPLACE INTO source_meta'
-                    ' (chunk_id, source_kind, source_date, section, scope, metadata)'
-                    ' VALUES (?, ?, ?, ?, ?, ?)',
-                    (chunk_id, record.source_kind, record.source_date,
-                     record.section, record.scope, metadata),
+                    "INSERT OR REPLACE INTO source_meta"
+                    " (chunk_id, source_kind, source_date, section, scope, metadata)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (chunk_id, record.source_kind, record.source_date, record.section, record.scope, metadata),
                 )
     finally:
         conn.close()
 
-    return ImportResult(dbpath=dbpath, files=len(paths), chunks=len(rows),
-                        skipped=skipped)
+    return ImportResult(dbpath=dbpath, files=len(paths), chunks=len(rows), skipped=skipped)
 
 
 def _delete_path(conn: sqlite3.Connection, path: str) -> None:
-    old_ids = [
-        str(row[0]) for row in conn.execute(
-            'SELECT id FROM chunks WHERE path=?', (path,)
-        ).fetchall()
-    ]
+    old_ids = [str(row[0]) for row in conn.execute("SELECT id FROM chunks WHERE path=?", (path,)).fetchall()]
     conn.executemany(
-        'DELETE FROM source_meta WHERE chunk_id=?',
+        "DELETE FROM source_meta WHERE chunk_id=?",
         [(chunk_id,) for chunk_id in old_ids],
     )
-    conn.execute('DELETE FROM chunks WHERE path=?', (path,))
+    conn.execute("DELETE FROM chunks WHERE path=?", (path,))
 
 
-def import_source(source: MemorySource, dbpath: str, *,
-                  prune_prefix: str | None = None) -> ImportResult:
+def import_source(source: MemorySource, dbpath: str, *, prune_prefix: str | None = None) -> ImportResult:
     """Collect *source* and write it to *dbpath*."""
-    return write_files_chunks(
-        source.iter_records(), dbpath, prune_prefix=prune_prefix
-    )
+    return write_files_chunks(source.iter_records(), dbpath, prune_prefix=prune_prefix)

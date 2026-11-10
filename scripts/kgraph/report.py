@@ -100,8 +100,8 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
     lines.append("|------|------|-----------|--------|-------------|-------------|")
     for idx, gn in enumerate(god_nodes[:10], 1):
         lines.append(
-            f'| {idx} | {gn["label"]} | {gn["composite_score"]:.3f} | '
-            f'{gn["degree"]} | {gn["betweenness"]:.4f} | {gn["eigenvector"]:.4f} |'
+            f"| {idx} | {gn['label']} | {gn['composite_score']:.3f} | "
+            f"{gn['degree']} | {gn['betweenness']:.4f} | {gn['eigenvector']:.4f} |"
         )
     lines.append("")
 
@@ -110,18 +110,18 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
         lines.append("## Community Structure")
         lines.append("")
         for c in communities:
-            lines.append(f'- **{c["label"]}** — {c["size"]} members')
+            lines.append(f"- **{c['label']}** — {c['size']} members")
             central = c.get("central_nodes") or []
             if central:
                 names = ", ".join(str(n.get("label", n.get("id", ""))) for n in central)
-                lines.append(f'  - central: {names}')
+                lines.append(f"  - central: {names}")
             bridging = c.get("god_nodes") or []
             if bridging:
                 names = ", ".join(str(n.get("label", n.get("id", ""))) for n in bridging)
-                lines.append(f'  - bridging (god nodes): {names}')
+                lines.append(f"  - bridging (god nodes): {names}")
             boundary_edge_count = c.get("boundary_edge_count")
             if boundary_edge_count:
-                lines.append(f'  - boundary edges: {boundary_edge_count}')
+                lines.append(f"  - boundary edges: {boundary_edge_count}")
         lines.append("")
 
     # ── Surprising connections ──
@@ -131,9 +131,9 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
         lines.append("These edges bridge disparate concepts or have unusually high centrality for their degree:")
         lines.append("")
         for s in surprising[:8]:
-            lines.append(f'- **{s["src_label"]}** → **{s["dst_label"]}** ({s["label"]})')
+            lines.append(f"- **{s['src_label']}** → **{s['dst_label']}** ({s['label']})")
             if s.get("reason"):
-                lines.append(f'  - {s["reason"]}')
+                lines.append(f"  - {s['reason']}")
         lines.append("")
 
     # ── Edge type distribution ──
@@ -159,10 +159,10 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
     if token_estimate:
         lines.append("## Token-Reduction Estimate")
         lines.append("")
-        lines.append(f'- Raw tokens (if every node/edge were a separate item): ~{token_estimate["raw_tokens"]}')
-        lines.append(f'- Graph-compressed tokens (using graph structure): ~{token_estimate["compressed_tokens"]}')
-        lines.append(f'- **Estimated savings: ~{token_estimate["savings_pct"]}%**')
-        lines.append(f'- Equivalent to ~{token_estimate["compressed_tokens"]} tokens for contextual retrieval')
+        lines.append(f"- Raw tokens (if every node/edge were a separate item): ~{token_estimate['raw_tokens']}")
+        lines.append(f"- Graph-compressed tokens (using graph structure): ~{token_estimate['compressed_tokens']}")
+        lines.append(f"- **Estimated savings: ~{token_estimate['savings_pct']}%**")
+        lines.append(f"- Equivalent to ~{token_estimate['compressed_tokens']} tokens for contextual retrieval")
         lines.append("")
 
     # ── Export ──
@@ -198,29 +198,33 @@ def _find_surprising_connections(graph: Graph, centralities: dict, god_nodes: li
                 f"Both endpoints have high betweenness ({src_btw:.3f}, {dst_btw:.3f}) "
                 f"but low eigenvector — this edge likely connects different communities."
             )
-            result.append({
-                "src": e.source,
-                "src_label": str(src_c.get("label", e.source)),
-                "dst": e.target,
-                "dst_label": str(dst_c.get("label", e.target)),
-                "label": e.label,
-                "reason": reason,
-                "score": (src_btw + dst_btw) * 2 - (src_eig + dst_eig),
-            })
+            result.append(
+                {
+                    "src": e.source,
+                    "src_label": str(src_c.get("label", e.source)),
+                    "dst": e.target,
+                    "dst_label": str(dst_c.get("label", e.target)),
+                    "label": e.label,
+                    "reason": reason,
+                    "score": (src_btw + dst_btw) * 2 - (src_eig + dst_eig),
+                }
+            )
         elif e.source in god_ids and e.target not in god_ids and src_eig > 0.05:
             reason = (
-                f'{src_c.get("label", e.source)} is a god node connecting to '
-                f'lower-centrality {dst_c.get("label", e.target)}.'
+                f"{src_c.get('label', e.source)} is a god node connecting to "
+                f"lower-centrality {dst_c.get('label', e.target)}."
             )
-            result.append({
-                "src": e.source,
-                "src_label": str(src_c.get("label", e.source)),
-                "dst": e.target,
-                "dst_label": str(dst_c.get("label", e.target)),
-                "label": e.label,
-                "reason": reason,
-                "score": src_btw + dst_btw,
-            })
+            result.append(
+                {
+                    "src": e.source,
+                    "src_label": str(src_c.get("label", e.source)),
+                    "dst": e.target,
+                    "dst_label": str(dst_c.get("label", e.target)),
+                    "label": e.label,
+                    "reason": reason,
+                    "score": src_btw + dst_btw,
+                }
+            )
 
     result.sort(key=lambda x: -x["score"])
     return result

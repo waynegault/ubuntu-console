@@ -24,11 +24,22 @@ from .models import ConfidenceLevel, Graph, GraphEdge
 # _CANONICAL_RELATION_LABELS), so editing one copy would have reclassified edges
 # here without touching projection.py or validate.py.
 
-_DIRECT_MEMORY_LABELS = frozenset({
-    "covers topic", "mentions actor", "authored by", "references file",
-    "contains chunk", "has project", "has decision", "has issue",
-    "has outcome", "has person", "has organization", "has place",
-})
+_DIRECT_MEMORY_LABELS = frozenset(
+    {
+        "covers topic",
+        "mentions actor",
+        "authored by",
+        "references file",
+        "contains chunk",
+        "has project",
+        "has decision",
+        "has issue",
+        "has outcome",
+        "has person",
+        "has organization",
+        "has place",
+    }
+)
 
 # ── UN-CALIBRATED classification thresholds (GRAPHRAG-JEV-005) ─────────
 # REF: "GraphRAG with TypeSafe Jev: A System One Approach to Scalable Knowledge
