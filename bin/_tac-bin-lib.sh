@@ -16,6 +16,9 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 18
+#   v18 (2026-11-10): _tac_cuda_server_pids excludes CPU heartbeat servers (build-cpu),
+#     preventing llama-cpu-heartbeat from being flagged as an unlisted CUDA holder.
 # Module Version: 17
 #   v17 (2026-11-10): _tac_cuda_server_pids excludes the Xe fleet (build-opencl),
 #     the rule scripts/11d already applied.  The two copies disagreed, so the same
@@ -637,7 +640,7 @@ _tac_cuda_server_pids() {
         _exe="$(readlink -f "$_d/exe" 2>/dev/null)" || continue
         _exe="${_exe% (deleted)}"
         [[ "${_exe##*/}" == "llama-server" ]] || continue
-        [[ "$_exe" == */llama.cpp/build-opencl* ]] && continue
+        [[ "$_exe" == */llama.cpp/build-opencl* || "$_exe" == *build-cpu* ]] && continue
         printf '%s\n' "${_d#/proc/}"
     done
 }

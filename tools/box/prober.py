@@ -254,7 +254,7 @@ def discover_wsl2_gpu_processes(executable_filter: str = "llama-server") -> list
             exe = os.readlink(f"/proc/{pid}/exe")
         except OSError:
             pass
-        if "build-opencl" in exe:
+        if "build-opencl" in exe or "build-cpu" in exe:
             continue
         comm = _read_proc_comm(pid)
         argv = _read_proc_cmdline(pid)

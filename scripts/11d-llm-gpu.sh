@@ -1,6 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 52
+#   v52 (2026-11-10): exclude CPU heartbeat servers (build-cpu) from CUDA process discovery
+#     and reap, matching _tac_cuda_server_pids.
 # Module Version: 51
 #   v51 (2026-11-10): __calc_ctx_size respects shared-memory host context ceiling
 #     (LLAMA_MAX_CTX_SIZE / 262144 on unified-memory boxes) instead of hardcoding 65536.
@@ -631,7 +634,7 @@ function __llm_cuda_server_pids() {
         # swallow-ok: a process that exits mid-scan has no exe link; it is not a candidate
         _exe="$(readlink -f "$_d/exe" 2>/dev/null)" || continue
         case "$_exe" in
-            */llama.cpp/build-opencl*/bin/llama-server) continue ;;
+            */llama.cpp/build-opencl*/bin/llama-server|*/build-cpu*/bin/llama-server) continue ;;
             */llama.cpp/build*/bin/llama-server) printf '%s\n' "${_d#/proc/}" ;;
             *) ;;   # any other executable: not a candidate
         esac
@@ -713,8 +716,8 @@ function __llm_kill_cuda_llama_servers() {
         # instead: the CUDA trees vs build-opencl.
         _exe=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || echo "")
         case "$_exe" in
-            */llama.cpp/build-opencl*/bin/llama-server)
-                continue ;;   # the Xe / embed fleet — never touched
+            */llama.cpp/build-opencl*/bin/llama-server|*/build-cpu*/bin/llama-server)
+                continue ;;   # the Xe / CPU fleet — never touched
             */llama.cpp/build*/bin/llama-server)
                 _cuda_pids+=("$_pid") ;;
             *)
