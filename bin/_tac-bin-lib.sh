@@ -16,7 +16,10 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-11-10): _tac_cuda_server_pids excludes the Xe fleet (build-opencl),
+#     the rule scripts/11d already applied.  The two copies disagreed, so the same
+#     Xe embed process was a card holder for one consumer and not for the other.
 #   v16 (2026-11-10): _tac_retired_reason — the tombstone's recorded WHY, not just yes/no.
 #     autotune-rows honours an explicitly named row on purpose (the documented override), and
 #     that override used to print nothing: measured 00:53 today, a row named by NUMBER after
@@ -615,11 +618,17 @@ _tac_cgroup_unit() {
     printf '%s\n' "$_u"
 }
 
-# _tac_cuda_server_pids — pids whose /proc/PID/exe names llama-server, one per line.
+# _tac_cuda_server_pids — pids whose /proc/PID/exe names a CUDA llama-server.
 #
-# ANY build path matches, so a foreign server from another tree is seen and can be
+# ONE definition (scripts/11d's __llm_cuda_server_pids is now a delegate), because
+# the two copies disagreed: this one matched ANY llama-server, including the Xe
+# embed lane built under build-opencl, while 11d's excluded it — so the same Xe
+# process was a card holder for one consumer and not for the other.
+#
+# The Xe fleet is excluded BY BUILD PATH: a server built under build-opencl belongs
+# to the Intel iGPU.  A foreign server from another tree is still seen and can be
 # refused.  Identity is the exe, never argv: `exec -a` can forge a command line and
-# cannot forge /proc/PID/exe (the discriminator bin/gpu-busy.sh also uses).
+# cannot forge /proc/PID/exe.
 _tac_cuda_server_pids() {
     local _d _exe
     for _d in /proc/[0-9]*
@@ -628,6 +637,7 @@ _tac_cuda_server_pids() {
         _exe="$(readlink -f "$_d/exe" 2>/dev/null)" || continue
         _exe="${_exe% (deleted)}"
         [[ "${_exe##*/}" == "llama-server" ]] || continue
+        [[ "$_exe" == */llama.cpp/build-opencl* ]] && continue
         printf '%s\n' "${_d#/proc/}"
     done
 }

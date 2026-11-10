@@ -1,7 +1,21 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 45
+# Module Version: 47
+#   v47 (2026-11-10): __llm_restore_stopped_lanes — the run that stands a lane down puts it
+#     back itself.  The watchdog's recover() DEFERS while a heavy job holds the box
+#     (LLAMA-LANE-CONTENTION-001) and a `model autotune` run IS that heavy job, so when such
+#     a run ended nothing restarted the lane until the next tick — up to five minutes — and
+#     a stop that escalated to SIGKILL left the unit `failed` on top of that.  Measured
+#     09:16 today: the chat lane sat `failed`, /health dead, from 09:16:17 until a hand
+#     start, while the watchdog's 09:19 tick logged `suspend: NOT HELD` and finished without
+#     touching it.  The stand-down now records what it stopped, and the restore clears
+#     `failed` before starting.
+# Module Version: 46
+#   v46 (2026-11-10): __llm_cuda_server_pids delegates its /proc walk to the shared
+#     _tac_cuda_server_pids (bin/_tac-bin-lib.sh) now that the two copies agree on
+#     the build-opencl exclusion; the local walk stays as a fallback for callers
+#     that source this module without the bin library.
 #   v45 (2026-11-10): removed __llm_train_lane_busy — the predicate form had no
 #     caller (every consumer calls __llm_train_lane_holder directly).
 #   v44 (2026-11-10): the stale-lock reaper reads model-shell PID files from
@@ -585,6 +599,14 @@ function __llm_cuda_server_pids() {
             return 0
         fi
     fi
+    # The /proc walk is the SHARED helper (bin/_tac-bin-lib.sh, sourced by the
+    # bin/ scripts): two copies of this rule had already drifted, and the Xe
+    # exclusion must be the same everywhere.
+    if declare -f _tac_cuda_server_pids >/dev/null 2>&1
+    then
+        _tac_cuda_server_pids
+        return 0
+    fi
     for _d in /proc/[0-9]*
     do
         # swallow-ok: a process that exits mid-scan has no exe link; it is not a candidate
@@ -794,6 +816,10 @@ warn() { printf '%s\n' "$*" >&2; }
 # Prints one line per lane stopped.  Always returns 0 — the caller's VRAM baseline gate is
 # the thing that decides whether the card is clear, and it fails closed.
 # ---------------------------------------------------------------------------
+# The lanes THIS run stood down, so __llm_restore_stopped_lanes can put them back.  Declared
+# here rather than inside the function: both the recorder and the restorer are file-scope.
+__LLM_LANES_STOPPED=()
+
 function __llm_stand_down_cuda_lanes() {
     if __llm_gpu_foreign_owner
     then
@@ -869,6 +895,13 @@ function __llm_stand_down_cuda_lanes() {
         __tac_info "Lanes" \
             "stopping $_unit (pid $_pid${_mib:+, ${_mib} MiB CUDA}) to clear the VRAM baseline" \
             "$C_Warning"
+        # REMEMBER what this run stands down, so it can put it back itself.  Measured
+        # 2026-11-10 09:16: the stop escalated to SIGKILL (a request was in flight, so the
+        # server outran its stop budget), systemd recorded `failed`, and the watchdog —
+        # the only other restorer — DEFERS while a heavy job holds the box, which this run
+        # does.  The chat lane therefore stayed down from 09:16:17 until someone looked,
+        # with the next watchdog tick up to five minutes away.
+        __LLM_LANES_STOPPED+=("$_unit")
         # swallow-ok: a stop that fails is reported by the bounded is-active poll below, which refuses the baseline
         systemctl --user stop "$_unit" 2>/dev/null || true
         _waited=0
@@ -887,6 +920,36 @@ function __llm_stand_down_cuda_lanes() {
             echo "[lanes] stopped $_unit after ${_waited}s${_mib:+ (${_mib} MiB released)}"
         fi
     done <<< "${LLAMA_LANE_SPECS:-}"
+    return 0
+}
+
+# __llm_restore_stopped_lanes — put back the lanes THIS run stood down.
+#
+# The stand-down's own caller is the only restorer that can act promptly: the watchdog's
+# recover() DEFERS while a heavy job holds the box (LLAMA-LANE-CONTENTION-001), and a
+# `model autotune` run IS that heavy job.  So when such a run ends, nothing restarts the
+# lane until the next watchdog tick — up to five minutes — and if the stop escalated to
+# SIGKILL the unit reads `failed` on top of that.  Measured 2026-11-10 09:16: the chat lane
+# sat `failed` from 09:16:17 with /health dead until a hand start, while the watchdog's
+# 09:19 tick logged `suspend: NOT HELD` and finished without touching it.
+#
+# reset-failed FIRST: a SIGKILLed lane is `failed`, and that is exactly the state the
+# stop left behind when a request was in flight and the server outran its stop budget.
+function __llm_restore_stopped_lanes() {
+    local _unit
+    (( ${#__LLM_LANES_STOPPED[@]} > 0 )) || return 0
+    for _unit in "${__LLM_LANES_STOPPED[@]}"
+    do
+        # swallow-ok: reset-failed exits non-zero for a unit that is not failed, which is the good case
+        systemctl --user reset-failed "$_unit" >/dev/null 2>&1 || true
+        if systemctl --user start "$_unit" >/dev/null 2>&1
+        then
+            warn "[lanes] restored $_unit"
+        else
+            warn "[lanes] FAILED to restart $_unit — start it by hand: systemctl --user start $_unit"
+        fi
+    done
+    __LLM_LANES_STOPPED=()
     return 0
 }
 
