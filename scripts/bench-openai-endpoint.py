@@ -23,9 +23,11 @@ Usage:
 
 Exit: 0 measured; 1 the endpoint could not be used; 2 usage error.
 """
+
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import statistics
 import sys
@@ -33,7 +35,14 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+_fsutil = importlib.import_module("tools.fsutil")
+atomic_write_text = _fsutil.atomic_write_text
 
 UA = "bench-openai-endpoint/1"
 
@@ -60,9 +69,7 @@ def now() -> str:
 
 def post_json(url: str, body: dict, timeout: float) -> dict[str, Any]:
     data = json.dumps(body).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json", "User-Agent": UA}
-    )
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
@@ -73,9 +80,10 @@ def get_json(url: str, timeout: float = 20) -> dict[str, Any]:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
-def resolve_model(base_url: str, explicit: str | None) -> str:
+def resolve_model(base_url: str, explicit: str | None) -> tuple[str, bool]:
+    """The model to bench, and whether the caller PINNED it."""
     if explicit:
-        return explicit
+        return explicit, True
     try:
         data = get_json(base_url.rstrip("/") + "/models")
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
@@ -83,7 +91,11 @@ def resolve_model(base_url: str, explicit: str | None) -> str:
     items = data.get("data") or []
     if not items:
         raise SystemExit(f"{base_url}/models returned no models; pass --model")
-    return items[0]["id"]
+    first = items[0]
+    model = first.get("id") if isinstance(first, dict) else None
+    if not model:
+        raise SystemExit(f"{base_url}/models did not name an id; pass --model")
+    return str(model), False
 
 
 def one_request(base_url, model, prompt, max_tokens, temperature, seed, timeout):
@@ -112,16 +124,19 @@ def bench_single(args, model):
     total = args.runs + args.warmup
     for i in range(total):
         ct, pt, secs = one_request(
-            args.base_url, model, prompt, args.max_tokens,
-            args.temperature, args.seed, args.timeout,
+            args.base_url,
+            model,
+            prompt,
+            args.max_tokens,
+            args.temperature,
+            args.seed,
+            args.timeout,
         )
         tps = ct / secs
-        runs.append({"run": i + 1, "tokens": ct, "prompt_tokens": pt,
-                     "seconds": round(secs, 3), "tps": round(tps, 2)})
+        runs.append({"run": i + 1, "tokens": ct, "prompt_tokens": pt, "seconds": round(secs, 3), "tps": round(tps, 2)})
         tag = "warmup (discarded)" if i < args.warmup else "measured"
-        print(f"  single {i + 1:>2}/{total}  {tag:<18} "
-              f"{secs:6.2f}s  {ct:>4} tok  {tps:6.2f} tok/s", flush=True)
-    measured = [r["tps"] for r in runs[args.warmup:]]
+        print(f"  single {i + 1:>2}/{total}  {tag:<18} {secs:6.2f}s  {ct:>4} tok  {tps:6.2f} tok/s", flush=True)
+    measured = [r["tps"] for r in runs[args.warmup :]]
     return {
         "prompt": args.prompt,
         "runs": runs,
@@ -144,8 +159,13 @@ def bench_concurrent(args, model, concurrency: int):
     def worker(idx: int) -> None:
         try:
             ct, _pt, secs = one_request(
-                args.base_url, model, prompt, args.max_tokens,
-                args.temperature, args.seed, args.timeout,
+                args.base_url,
+                model,
+                prompt,
+                args.max_tokens,
+                args.temperature,
+                args.seed,
+                args.timeout,
             )
             with lock:
                 results.append({"i": idx, "tokens": ct, "seconds": secs, "ok": True})
@@ -168,16 +188,24 @@ def bench_concurrent(args, model, concurrency: int):
         agg = tokens / wall if wall > 0 else 0.0
         lats = sorted(x["seconds"] for x in ok)
         p90 = lats[int(len(lats) * 0.9) - 1] if lats else None
-        per_round.append({
-            "round": r + 1, "wall_s": round(wall, 3), "completed": len(ok),
-            "failed": len(results) - len(ok), "total_tokens": tokens,
-            "aggregate_tps": round(agg, 2),
-            "median_latency_s": round(statistics.median(lats), 3) if lats else None,
-            "p90_latency_s": round(p90, 3) if p90 is not None else None,
-        })
-        print(f"  conc {concurrency:>2}  round {r + 1}/{rounds}  wall {wall:6.2f}s  "
-              f"{tokens:>6} tok  {agg:7.2f} tok/s aggregate  "
-              f"{len(ok)}/{concurrency} ok", flush=True)
+        per_round.append(
+            {
+                "round": r + 1,
+                "wall_s": round(wall, 3),
+                "completed": len(ok),
+                "failed": len(results) - len(ok),
+                "total_tokens": tokens,
+                "aggregate_tps": round(agg, 2),
+                "median_latency_s": round(statistics.median(lats), 3) if lats else None,
+                "p90_latency_s": round(p90, 3) if p90 is not None else None,
+            }
+        )
+        print(
+            f"  conc {concurrency:>2}  round {r + 1}/{rounds}  wall {wall:6.2f}s  "
+            f"{tokens:>6} tok  {agg:7.2f} tok/s aggregate  "
+            f"{len(ok)}/{concurrency} ok",
+            flush=True,
+        )
     aggs = [x["aggregate_tps"] for x in per_round]
     return {
         "concurrency": concurrency,
@@ -211,25 +239,32 @@ def main() -> int:
         return 2
 
     try:
-        model = resolve_model(args.base_url, args.model)
+        model, model_pinned = resolve_model(args.base_url, args.model)
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
     print(f"bench: {args.label}")
     print(f"  endpoint {args.base_url}  model {model}")
-    print(f"  prompt={args.prompt} max_tokens={args.max_tokens} "
-          f"temperature={args.temperature} seed={args.seed}  as at {now()}")
+    print(
+        f"  prompt={args.prompt} max_tokens={args.max_tokens} "
+        f"temperature={args.temperature} seed={args.seed}  as at {now()}"
+    )
 
     result: dict[str, Any] = {
         "label": args.label,
         "base_url": args.base_url,
         "model": model,
+        "model_pinned": model_pinned,
         "started_at": now(),
         "settings": {
-            "prompt": args.prompt, "max_tokens": args.max_tokens,
-            "temperature": args.temperature, "seed": args.seed,
-            "runs": args.runs, "warmup": args.warmup, "rounds": args.rounds,
+            "prompt": args.prompt,
+            "max_tokens": args.max_tokens,
+            "temperature": args.temperature,
+            "seed": args.seed,
+            "runs": args.runs,
+            "warmup": args.warmup,
+            "rounds": args.rounds,
         },
     }
 
@@ -237,8 +272,13 @@ def main() -> int:
     # and its failure is reported as a failure rather than as zero tokens.
     try:
         ct, pt, secs = one_request(
-            args.base_url, model, PROMPTS[args.prompt], 16,
-            args.temperature, args.seed, args.timeout,
+            args.base_url,
+            model,
+            PROMPTS[args.prompt],
+            16,
+            args.temperature,
+            args.seed,
+            args.timeout,
         )
         print(f"  preflight ok: {ct} tok in {secs:.2f}s (prompt {pt} tok)")
     except Exception as exc:
@@ -262,8 +302,7 @@ def main() -> int:
         result["error"] = f"{type(exc).__name__}: {exc}"
         result["finished_at"] = now()
         if args.json:
-            with open(args.json, "w", encoding="utf-8") as fh:
-                json.dump(result, fh, indent=2)
+            atomic_write_text(args.json, json.dumps(result, indent=2) + "\n")
         return 1
 
     result["finished_at"] = now()
@@ -273,16 +312,19 @@ def main() -> int:
     print(f"  {args.label}  ({model})")
     if "single" in result:
         s = result["single"]
-        print(f"  single-stream median {s['median_tps']:.2f} tok/s "
-              f"(min {s['min_tps']:.2f}, max {s['max_tps']:.2f}, n={s['measured_count']})")
+        print(
+            f"  single-stream median {s['median_tps']:.2f} tok/s "
+            f"(min {s['min_tps']:.2f}, max {s['max_tps']:.2f}, n={s['measured_count']})"
+        )
     for row in result.get("concurrency", []):
-        print(f"  c={row['concurrency']:<3} median aggregate "
-              f"{row['median_aggregate_tps']:.2f} tok/s   "
-              f"failed {row['total_failed']}")
+        print(
+            f"  c={row['concurrency']:<3} median aggregate "
+            f"{row['median_aggregate_tps']:.2f} tok/s   "
+            f"failed {row['total_failed']}"
+        )
 
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=2)
+        atomic_write_text(args.json, json.dumps(result, indent=2) + "\n")
         print(f"  json -> {args.json}")
     return 0
 
