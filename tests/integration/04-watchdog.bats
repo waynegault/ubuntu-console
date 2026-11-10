@@ -83,6 +83,21 @@ then
     [[ -f "$SYSTEMCTL_MOCK_STATE/healthy" ]] && exit 0
     exit 22
 fi
+# /slots: llama.cpp's own slot accounting, read by stop_cost to say what a stop cuts.
+# Three shapes, because the case that matters is the one where we CANNOT measure: a
+# mock that always answered would make "0" and "unmeasured" indistinguishable.
+if [[ "$*" == *"/slots"* ]]
+then
+    if [[ -f "$SYSTEMCTL_MOCK_STATE/slots_unreadable" ]]; then
+        exit 22
+    fi
+    if [[ -f "$SYSTEMCTL_MOCK_STATE/slots_busy" ]]; then
+        printf '[{"id":0,"is_processing":true},{"id":1,"is_processing":true},{"id":2,"is_processing":false}]\n'
+        exit 0
+    fi
+    printf '[{"id":0,"is_processing":false},{"id":1,"is_processing":false}]\n'
+    exit 0
+fi
 exit 22
 MOCK
     chmod +x "$WATCHDOG_MOCK_BIN/curl"
@@ -431,6 +446,84 @@ setup() {
     grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
     grep -qv "stop llama-xe-minicpm5-1b-chat.service" "$SYSTEMCTL_MOCK_LOG"
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+}
+
+@test "integration: a suspend stop records how many in-flight turns it cuts" {
+    # Card 55a6fe89. The stop is correct policy; its COST was invisible. Measured
+    # 2026-11-04T00:46:03Z: one suspend cut three live turns and a session, and the only
+    # trace was a gate block naming one unit. The line is the measurement, so assert the
+    # NUMBER and that it is logged BEFORE the stop it describes.
+    touch "$SYSTEMCTL_MOCK_STATE/healthy"
+    touch "$SYSTEMCTL_MOCK_STATE/slots_busy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner: an empty marker is NOT held since v5
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"stop cost: 2 in-flight request(s)"* ]]
+    [[ "$output" == *"will be cut by this stop"* ]]
+    # Ordering is the claim: a count taken after the stop would describe a lane with no
+    # turns left on it, and would always read 0.
+    # The line belongs to the ACT, not to the state: the next tick finds the lane already
+    # down, says so, and must not re-print a cost for a stop it did not perform. A count
+    # logged on every suspended tick would be a number about nothing.
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"CUDA lane suspended — held by live pid"* ]]
+    [[ "$output" != *"stop cost:"* ]]
+}
+
+@test "integration: a stop on an idle lane says 0, not UNMEASURED" {
+    # The control for the arm above: the same code path must still be able to report a
+    # stop that cut nothing. Without this, "2" could be a constant.
+    touch "$SYSTEMCTL_MOCK_STATE/healthy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"stop cost: 0 in-flight requests"* ]]
+    [[ "$output" == *"no live turn is cut by this stop"* ]]
+}
+
+@test "integration: an unreadable /slots reports UNMEASURED, never 0" {
+    # "could not tell" and "nothing was cut" must not read alike. This fleet has already
+    # paid for the other choice (v24: an unreadable nvidia-smi read as "busy" parked a
+    # healthy lane for a morning). The stop still happens -- this records, it never vetoes.
+    touch "$SYSTEMCTL_MOCK_STATE/healthy"
+    touch "$SYSTEMCTL_MOCK_STATE/slots_unreadable"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"stop cost: UNMEASURED"* ]]
+    [[ "$output" == *"UNKNOWN (not zero)"* ]]
+    [[ "$output" != *"stop cost: 0 in-flight"* ]]
+    grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+}
+
+@test "integration: the GPU-busy stop records its in-flight cost too" {
+    # The other stop site. A busy card is a different reason for the same kill, and the
+    # cost is identical -- so it must not be the one path that stays silent.
+    touch "$SYSTEMCTL_MOCK_STATE/healthy"
+    touch "$SYSTEMCTL_MOCK_STATE/slots_busy"
+    touch "$SYSTEMCTL_MOCK_STATE/busy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+    [[ "$output" == *"stop cost: 2 in-flight request(s)"* ]]
 }
 
 @test "integration: CUDA suspend does NOT suppress Xe recovery (unlike bench_lock)" {

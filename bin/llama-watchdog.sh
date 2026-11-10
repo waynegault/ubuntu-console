@@ -148,7 +148,17 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-11-10, card 55a6fe89 LLAMA-SUSPEND-INFLIGHT-001): a deliberate stop SIGKILLs a
+#     server that cannot drain, so every turn queued on it dies mid-request — and nothing in
+#     the record said so. Measured 2026-11-04T00:46:03Z: one suspend, three live turns cut
+#     mid-request (jarvis 231s, hal 175s, vigil) plus a marlowe session, while the gate block
+#     named ONE unit. The stop itself is correct policy; its cost was simply invisible. Both
+#     CUDA stop sites now log a `stop cost:` line measured from the lane's own /slots at the
+#     instant of the stop, and failed-user-units-check.py quotes it in the PREEMPTED reason so
+#     the alert carries the number. A /slots that does not answer prints UNMEASURED, never 0:
+#     "no in-flight turns" and "could not tell" must not read alike. NOT a deferral — the drop-in
+#     measured that this process cannot drain, and re-litigating that needs a new measurement.
 #   v30 (2026-11-10, card c7e15c7a GPU-WEDGE-ESCALATION-001): the driver-fail-closed log line
 #     named a host fix for EVERY unavailable state. Measured 2026-11-02: a loader-order fault
 #     (native libcuda ahead of /usr/lib/wsl/lib) was logged as "passthrough is BROKEN ... the
@@ -245,7 +255,7 @@
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.18"
+VERSION="3.19"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -371,6 +381,60 @@ health() {
         503) return 2 ;;
         *)   curl -sf --max-time 5 "http://127.0.0.1:${port}/v1/models" >/dev/null 2>&1 && return 0 || return 1 ;;
     esac
+}
+
+# inflight_count — how many slots on this lane are processing RIGHT NOW, or non-zero exit
+# when that cannot be measured.
+#
+# WHY THIS EXISTS (2026-11-10, card 55a6fe89).  A stop on this lane is a SIGKILL: the drop-in
+# measured four times that the process cannot drain, so a turn that is mid-prefill when the
+# watchdog decides to free the card is destroyed, not finished.  That is the correct trade — the
+# bench needs the VRAM — but until now NOTHING recorded how much it cost.  Measured
+# 2026-11-04T00:46:03Z: one suspend cut three live turns (jarvis run 17c3def8, 231s in, which
+# failed over to deepseek-flash; hal run ed7399fa, 175s; vigil run 55737857) and a marlowe
+# session, and the only trace was a gate block naming one unit.  The cost was real and
+# unattributable, so the next reader could not tell a stop that cut nothing from one that cut four.
+#
+# /slots is llama.cpp's own accounting of its slots, so this reads the server's answer about
+# itself rather than inferring from CPU or the card.  It answers 200 only once the model is
+# loaded; before that there is nothing to cut and this returns "cannot measure", not zero.
+#
+# Deliberately NOT a deferral and NOT a veto: this only RECORDS.  Refusing the stop would hand
+# the card back to the lane at the bench's expense, and the drain question is settled.
+inflight_count() {
+    local port="$1" body n
+    # swallow-ok: curl failure or timeout reaching an inactive or loading server is handled by returning 1
+    body=$(curl -s --max-time 5 "http://127.0.0.1:${port}/slots" 2>/dev/null) || return 1
+    [[ -n "$body" ]] || return 1
+    # grep exits 1 when it matches nothing, and this file runs `set -o pipefail`, so the obvious
+    # one-liner reports a FAILED measurement for a lane with zero in-flight turns — "could not
+    # tell" wearing the answer "nothing was cut". The count comes from wc; the match status is
+    # discarded on purpose, and the padding wc adds when it writes to a pipe is stripped.
+    n=$(printf '%s' "$body" | grep -o '"is_processing":[[:space:]]*true' | wc -l)
+    n=${n//[[:space:]]/}
+    printf '%s' "${n:-0}"
+}
+
+# stop_cost — say, in the journal, what this stop is about to cut.  Call it IMMEDIATELY before
+# stopping the CUDA lane, because the number is only true of that instant.
+#
+# Three outcomes, and the middle one is the point: a count that could not be taken says
+# UNMEASURED and never prints 0.  "no turn was cut" and "we could not tell" are different facts,
+# and this fleet has already paid for a gate that read a missing instrument as a clean answer
+# (v24, 2026-11-02: nvidia-smi unreadable read as "busy" and parked a healthy lane).
+stop_cost() {
+    local n
+    if ! n=$(inflight_count "$CUDA_PORT"); then
+        log "stop cost: UNMEASURED — /slots on :${CUDA_PORT} did not answer, so" \
+            "how many in-flight turns this stop cuts is UNKNOWN (not zero)"
+        return 0
+    fi
+    if (( n > 0 )); then
+        log "stop cost: $n in-flight request(s) on :${CUDA_PORT} will be cut by" \
+            "this stop — a turn already running cannot finish, it fails over"
+    else
+        log "stop cost: 0 in-flight requests on :${CUDA_PORT} — no live turn is cut by this stop"
+    fi
 }
 
 # Window invariant (2026-09-14).  The window a request actually gets must equal
@@ -968,6 +1032,7 @@ supervise_cuda_lane() {
         # was deliberately stopped.
         if [[ "$cuda_state" == "active" ]]; then
             log "CUDA lane suspended — stopping $CUDA_UNIT (a deliberate suspend, not a fault)"
+            stop_cost
             if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
             then
                 log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
@@ -1041,6 +1106,7 @@ supervise_cuda_lane() {
         else
             if [[ "$cuda_state" == "active" ]]; then
                 log "GPU busy — stopping $CUDA_UNIT to free VRAM for the declared workload${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
+                stop_cost
                 if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
                 then
                     log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
