@@ -20,6 +20,15 @@
 #   * a switch that fails must not leave a saved value behind, because that saved value
 #     would be "restored" later over a primary that was never changed.
 #
+# AND THE RETURN DEPENDS ENTIRELY ON THE SLOT (card FLEET-MODEL-SAVED-SLOT-EMPTY-001,
+# bin/fleet-model.sh v7).  2026-11-10T00:53Z: a sweep wrote a 0-byte slot, `restore`
+# correctly refused, and the fleet stayed on the paid lane for hours while the local CUDA
+# lane sat up and serving.  So the slot's own write is pinned here: it is atomic (a
+# symlinked slot is REPLACED, never written through), it is verified before the switch,
+# and a save that cannot be verified must refuse the switch rather than strand the fleet.
+# A broken slot must also be LOUD: `restore` names the ruled baseline and exits 2, and
+# `status` reports the unrecoverable state as RED with exit 1.
+#
 # No real config is written and no real lane is touched: OPENCLAW_CONFIG points at a
 # temp JSON and a stub `openclaw` on PATH performs the models-set write.
 # ==============================================================================
@@ -29,6 +38,9 @@ SRC="$REPO_ROOT/bin/fleet-model.sh"
 # The sweep lane, from Wayne's 2026-11-08 ruling (bin/fleet-model.sh v5).  One place, so
 # the next refinement is one edit rather than four assertions drifting apart.
 SWEEP_MODEL="cheaper-inference/deepseek-v4.1-flash-1017"
+# The ruled baseline (workspace/policies/heartbeat-policy.md:32, Wayne 2026-11-07): the
+# model a human is told to set when the slot cannot answer.  Pinned from that ruling.
+BASELINE_MODEL="cuda-qwen3coder-30b/qwen3-coder-30b-gpu"
 
 setup() {
     TMP="$(mktemp -d)"
@@ -155,6 +167,67 @@ primary() {
     run bash "$SRC" status
     [[ "$output" == *"primary=$SWEEP_MODEL"* ]]
     [[ "$output" == *"saved=cuda-qwen3coder-30b/qwen3-coder-30b-gpu"* ]]
+}
+
+# ── the slot itself: durable, atomic, verified (card FLEET-MODEL-SAVED-SLOT-EMPTY-001) ──
+
+@test "the saved slot holds exactly the previous primary and leaves no temp file behind" {
+    run bash "$SRC" sweep
+    [ "$status" -eq 0 ]
+    [ "$(cat "$TAC_STATE_DIR/fleet-model.saved")" = "$BASELINE_MODEL" ]
+    # One line: the model id and its terminator, nothing else.
+    [ "$(wc -l < "$TAC_STATE_DIR/fleet-model.saved")" -eq 1 ]
+    # The atomic writer's temp file is renamed away, never left beside the slot.
+    run find "$TAC_STATE_DIR" -name '*.tmp' -print
+    [ -z "$output" ]
+}
+
+@test "the saved slot is replaced, not written through — a symlinked slot leaves its target untouched" {
+    # The repo rule (AGENTS.md §3) is atomic_write_text: fsync, then os.replace.  An
+    # in-place `printf > "$STATE"` would follow this symlink and write into the target,
+    # which is the truncating write the incident's 0-byte slot is consistent with.
+    mkdir -p "$TAC_STATE_DIR"
+    : > "$TMP/symlink-target"
+    ln -s "$TMP/symlink-target" "$TAC_STATE_DIR/fleet-model.saved"
+    run bash "$SRC" sweep
+    [ "$status" -eq 0 ]
+    [ ! -s "$TMP/symlink-target" ]
+    [ ! -L "$TAC_STATE_DIR/fleet-model.saved" ]
+    [ "$(cat "$TAC_STATE_DIR/fleet-model.saved")" = "$BASELINE_MODEL" ]
+}
+
+@test "a save that cannot be verified refuses the switch and leaves the primary unchanged" {
+    # The state dir's parent is a REGULAR FILE, so the slot cannot be created and the
+    # write cannot be read back.  A save reported as successful here would switch the
+    # fleet to the paid lane with nothing to restore — the 2026-11-10T00:53Z incident.
+    : > "$TMP/not-a-directory"
+    export TAC_STATE_DIR="$TMP/not-a-directory/state"
+    run bash "$SRC" sweep
+    [ "$status" -eq 2 ]
+    [ "$(primary)" = "$BASELINE_MODEL" ]
+    [ ! -f "$STUB_LOG" ] || [ ! -s "$STUB_LOG" ]
+    [ ! -e "$TAC_STATE_DIR/fleet-model.saved" ]
+}
+
+@test "restore on an empty slot names the ruled baseline and exits 2" {
+    mkdir -p "$TAC_STATE_DIR"
+    : > "$TAC_STATE_DIR/fleet-model.saved"
+    run bash "$SRC" restore
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"openclaw models set $BASELINE_MODEL"* ]]
+    [ "$(primary)" = "$BASELINE_MODEL" ]
+}
+
+@test "status is RED with exit 1 on an empty slot over the sweep model, and 0 when idle" {
+    run bash "$SRC" status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"saved=none"* ]]
+    bash "$SRC" sweep
+    : > "$TAC_STATE_DIR/fleet-model.saved"     # the incident, reproduced exactly
+    run bash "$SRC" status
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RED"* ]]
+    [[ "$output" == *"openclaw models set $BASELINE_MODEL"* ]]
 }
 
 @test "an unknown verb is a usage error, not a silent success" {
