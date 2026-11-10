@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 21
+#   v21 (2026-11-10): an EXPLICIT row's tombstone override is now LOUD.  Naming a row stays a
+#       deliberate override (the documented contract), but it used to say nothing about the
+#       retirement: measured 00:53 today, `autotune-rows.sh 5` ran
+#       Qwen3.8-Flash-Next-Coder-cut240 — retired as "qwen4exp.expert_count is an array, the
+#       loader reads u32 — re-convert" — because the registry had been RENUMBERED at 00:11 and
+#       row 5 now names a different model.  The run cost its staging time and said nothing.
+#       The reason now prints before the quiet gate, and a row NUMBER is resolved to its FILE
+#       through the registry, so the warning names the artefact the tombstone lists.
 # Module Version: 20
 #   v20 (2026-11-07): §18.3 10.7 — one `warn` helper replaces all ten hand-written `>&2`
 #       sites, so every refusal and warning has the same shape.  And the clean-room's
@@ -171,6 +180,28 @@ then
         _tac_is_retired "$_r" || _kept+=("$_r")
     done
     ROWS=("${_kept[@]}")
+fi
+# AN EXPLICIT ROW IS HONOURED (the documented override) BUT NEVER SILENTLY.  A retirement is a
+# decision with a reason — a GGUF the loader cannot read, weights at 4 tps — and the operator
+# naming a row deserves that reason before the card is taken.  Measured 2026-11-10 00:53: the
+# registry was renumbered at 00:11, `autotune-rows.sh 5` therefore named a DIFFERENT model than
+# the plan meant, and the run staged a retired artefact while saying nothing about it.
+if [[ "$DERIVED" != 1 ]]
+then
+    for _r in "${ROWS[@]}"
+    do
+        _rfile="$_r"
+        if [[ "$_r" =~ ^[0-9]+$ ]]
+        then
+            _rfile="$(awk -F'|' -v n="$_r" '$1 == n {print $3; exit}' "$REGISTRY")"
+        fi
+        if _rwhy="$(_tac_retired_reason "$_rfile")"
+        then
+            warn "row '$_r' is RETIRED: ${_rwhy:-no reason recorded}"
+            warn "  running it because you named it explicitly; a derived scope needs"
+            warn "  TAC_RESUME_INCLUDE_RETIRED=1 to re-add a retired row instead"
+        fi
+    done
 fi
 if (( ${#ROWS[@]} == 0 )); then
     warn "autotune-rows: no rows selected — nothing to do"

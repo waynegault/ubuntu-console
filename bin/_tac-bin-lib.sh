@@ -16,6 +16,13 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 16
+#   v16 (2026-11-10): _tac_retired_reason — the tombstone's recorded WHY, not just yes/no.
+#     autotune-rows honours an explicitly named row on purpose (the documented override), and
+#     that override used to print nothing: measured 00:53 today, a row named by NUMBER after
+#     the registry was renumbered ran `Qwen3.8-Flash-Next-Coder-cut240 …` — retired as
+#     "qwen4exp.expert_count is an array, the loader reads u32 — re-convert" — and the run's
+#     only word about it was silence.  The reason is what the operator's decision needs.
 # Module Version: 15
 #   v15 (2026-11-08): _tac_heavy_job_busy_from / _tac_heavy_job_busy — is a heavy job holding
 #     the box?  LLAMA-LANE-CONTENTION-001 needs the watchdog to ask before it restarts a lane
@@ -790,6 +797,22 @@ _tac_is_retired() {
     awk -F'|' -v f="$_f" '
         /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
         $1 == f { found = 1; exit }
+        END { exit(found ? 0 : 1) }
+    ' "$_list"
+}
+
+# _tac_retired_reason <model-file> — the tombstone's recorded reason, and 0, when it lists the
+# file; non-zero with no output when it does not.  Separate from _tac_is_retired because the
+# reason is what an EXPLICIT override has to show: autotune-rows honours a named row on purpose,
+# and a deliberate override that prints nothing is the silent-bypass shape.
+_tac_retired_reason() {
+    local _f="${1:-}" _list
+    [[ -n "$_f" ]] || return 1
+    _list="$(_tac_autotune_retired_file)"
+    [[ -r "$_list" ]] || return 1
+    awk -F'|' -v f="$_f" '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        $1 == f { sub(/^[^|]*[|]/, ""); print; found = 1; exit }
         END { exit(found ? 0 : 1) }
     ' "$_list"
 }

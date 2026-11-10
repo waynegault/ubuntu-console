@@ -159,6 +159,41 @@ BINLIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
 }
 
 
+@test "tombstone: an explicit override can read WHY the row was retired" {
+    # Measured 2026-11-10 00:53 — the registry was renumbered at 00:11, so `autotune-rows.sh 5`
+    # named a DIFFERENT model than the plan meant and staged Qwen3.8-Flash-Next-Coder-cut240,
+    # retired as "qwen4exp.expert_count is an array, the loader reads u32 — re-convert".  The
+    # run said nothing.  Naming a row is a deliberate override and stays honoured; what it must
+    # no longer do is stay silent about the retirement.
+    printf '# c\n\na.gguf|wrong artefact — re-convert\nb.gguf|no reason given\n' > "$BATS_TEST_TMPDIR/ret2"
+    run env TAC_RESUME_RETIRED="$BATS_TEST_TMPDIR/ret2" \
+        bash -c 'source "$1"; _tac_retired_reason a.gguf' _ "$BINLIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "wrong artefact — re-convert" ]
+    # An unlisted file answers nothing and says so through its status, so a caller cannot
+    # mistake "no reason recorded" for "not retired".
+    run env TAC_RESUME_RETIRED="$BATS_TEST_TMPDIR/ret2" \
+        bash -c 'source "$1"; _tac_retired_reason c.gguf; echo "rc=$?"' _ "$BINLIB"
+    [ "$output" = "rc=1" ]
+}
+
+@test "tombstone: the caller WARNS on an explicitly named retired row" {
+    # The call-site half. The helper above cannot see whether autotune-rows asks it, so this
+    # pins the caller: the warning must name the row and carry the recorded reason, and it must
+    # be emitted BEFORE the lock is taken.
+    local src="$REPO_ROOT/bin/autotune-rows.sh"
+    grep -q '_tac_retired_reason "\$_rfile"' "$src" \
+        || { echo "autotune-rows no longer asks for the retirement reason"; return 1; }
+    grep -q "row '\$_r' is RETIRED" "$src" \
+        || { echo "the explicit-override warning is gone"; return 1; }
+    # ...and it sits above the quiet gate, which is where the run stops mattering.
+    local warn_n gate_n
+    warn_n=$(grep -n "row '\$_r' is RETIRED" "$src" | head -1 | cut -d: -f1)
+    gate_n=$(grep -n 'AUTOTUNE_QUIET_GATE:-' "$src" | head -1 | cut -d: -f1)
+    [ -n "$warn_n" ] && [ -n "$gate_n" ] && [ "$warn_n" -lt "$gate_n" ] \
+        || { echo "the warning must precede the quiet gate ($warn_n vs $gate_n)"; return 1; }
+}
+
 # ── The CUDA reap's attribution, and its selftest guard ───────────────────────
 # nvidia-smi lists NO compute app on this box even at 73 GiB used, so the reaper
 # killed nothing and a non-systemd server survived to refuse the census.  The
