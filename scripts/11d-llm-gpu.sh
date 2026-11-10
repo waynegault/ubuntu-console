@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 47
+# Module Version: 48
+#   v48 (2026-11-10): __llm_cuda_server_pids delegates its /proc walk to the shared
+#     _tac_cuda_server_pids; the lanes-stopped declaration moved above the function's
+#     doc block so §18.3 9.5's comment is directly above __llm_stand_down_cuda_lanes.
 #   v47 (2026-11-10): __llm_restore_stopped_lanes — the run that stands a lane down puts it
 #     back itself.  The watchdog's recover() DEFERS while a heavy job holds the box
 #     (LLAMA-LANE-CONTENTION-001) and a `model autotune` run IS that heavy job, so when such
@@ -11,7 +14,6 @@
 #     start, while the watchdog's 09:19 tick logged `suspend: NOT HELD` and finished without
 #     touching it.  The stand-down now records what it stopped, and the restore clears
 #     `failed` before starting.
-# Module Version: 46
 #   v46 (2026-11-10): __llm_cuda_server_pids delegates its /proc walk to the shared
 #     _tac_cuda_server_pids (bin/_tac-bin-lib.sh) now that the two copies agree on
 #     the build-opencl exclusion; the local walk stays as a fallback for callers
@@ -813,13 +815,13 @@ function __llm_vram_holder_report() {
 # messages one shape.
 warn() { printf '%s\n' "$*" >&2; }
 
-# Prints one line per lane stopped.  Always returns 0 — the caller's VRAM baseline gate is
-# the thing that decides whether the card is clear, and it fails closed.
-# ---------------------------------------------------------------------------
 # The lanes THIS run stood down, so __llm_restore_stopped_lanes can put them back.  Declared
 # here rather than inside the function: both the recorder and the restorer are file-scope.
 __LLM_LANES_STOPPED=()
 
+# Prints one line per lane stopped.  Always returns 0 — the caller's VRAM baseline gate is
+# the thing that decides whether the card is clear, and it fails closed.
+# ---------------------------------------------------------------------------
 function __llm_stand_down_cuda_lanes() {
     if __llm_gpu_foreign_owner
     then
