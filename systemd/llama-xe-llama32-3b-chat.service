@@ -21,6 +21,9 @@ StartLimitIntervalSec=600
 StartLimitBurst=6
 
 [Service]
+# CARD DECLARATION (AUTOTUNE-CARD-ATTR-003): the card this lane runs on, asserted
+# by its launcher against the build it execs.  A unit name is not evidence of a card.
+Environment=LLAMA_GPU=xe
 Environment=LD_LIBRARY_PATH=%h/llama.cpp/build-opencl/bin
 Environment=GGML_OPENCL_PLATFORM=0
 Environment=GGML_OPENCL_DEVICE=0

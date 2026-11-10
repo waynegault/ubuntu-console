@@ -21,6 +21,22 @@ _say() {
     printf '%s\n' "$*" >&2
 }
 
+# ── CARD DECLARATION (AUTOTUNE-CARD-ATTR-003) ────────────────────────────────
+# A lane unit states its card with Environment=LLAMA_GPU=...  This launcher IS the
+# Xe card's launcher, so a unit that declares anything else is contradicted by the
+# line it is starting.  The check sits BEFORE the architecture check: a unit whose
+# declaration is wrong is wrong on every host, and saying so is more useful than
+# "wrong computer".  Unset keeps the historical behaviour (this launcher's card).
+_declared="${LLAMA_GPU:-xe}"
+case "${_declared,,}" in
+    xe|opencl) ;;
+    *)
+        _say "llama-xe-server: REFUSING: the unit declares LLAMA_GPU=${_declared} but starts the Xe launcher"
+        _say "llama-xe-server: a declaration that disagrees with the executable is the AUTOTUNE-CARD-ATTR-003 defect; fix the unit"
+        exit 1
+        ;;
+esac
+
 # Keep this default in step with LLAMA_XE_SERVER_BIN in scripts/01-constants.sh.
 # Repeated rather than sourced on purpose — see llama-cuda-server.
 _bin="${LLAMA_XE_SERVER_BIN:-/home/wayne/llama.cpp/build-opencl/bin/llama-server}"
@@ -38,6 +54,16 @@ if [[ ! -x "$_bin" ]]; then
     _say "llama-xe-server: Xe build not executable: $_bin"
     exit 1
 fi
+
+# The DECLARATION is not the evidence; the path is.  A unit that claims Xe while
+# running a CUDA/CPU binary is refused here, at start.
+_self_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -x "$_self_dir/llama-card-assert" ]]; then
+    _say "llama-xe-server: REFUSING: llama-card-assert is not installed beside this launcher ($_self_dir)"
+    _say "llama-xe-server: cannot prove $_bin serves the Xe card; re-run install.sh"
+    exit 1
+fi
+"$_self_dir/llama-card-assert" xe "$_bin" "llama-xe-server" || exit 1
 
 # ---------------------------------------------------------------------------
 # NEO per-allocation ceiling — fail-safe normalisation (2026-09-29).

@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# llama-card-assert — refuse a lane whose DECLARED card and the binary it execs disagree.
+#
+# CARD: none   PURPOSE: make "which card does this lane run on?" a checked fact
+#
+# WHY (AUTOTUNE-CARD-ATTR-003).  A lane was documented as an Xe lane and ran on the
+# CUDA card: the autotuner spared a tenant because of a belief about which card it was
+# on, and nothing could contradict the belief.  A unit name is not evidence of a card,
+# and neither is a comment.  The declaration is `Environment=LLAMA_GPU=cuda|xe|none`
+# in the unit; this program is the assertion that the declaration and the executable
+# agree.  It is called by each lane launcher BEFORE it execs the server, so a unit that
+# claims one card while starting the other's build fails at start, loudly, instead of
+# serving and being believed.
+#
+# Usage: llama-card-assert <declared> <binary> [<lane-label>]
+#   declared   cuda | xe | none (cpu is accepted as a synonym for none)
+#   binary     the resolved llama-server path the lane will exec
+#   lane-label optional, for the message (defaults to this program's name)
+#
+# Exit: 0 agreement; 1 contradiction (the lane must not start); 2 usage/unknown card.
+#
+# The card is derived from the BUILD TREE, the same identity the GPU collectors use:
+# `_tac_cuda_server_pids` excludes */llama.cpp/build-opencl* by /proc/PID/exe, because
+# an exe path cannot be forged by `exec -a`.  This program applies the same rule to
+# the path a launcher is about to exec.
+
+set -uo pipefail
+
+_declared="${1:-}"
+_bin="${2:-}"
+_lane="${3:-${0##*/}}"
+
+_say() {
+    printf 'llama-card-assert: %s\n' "$*" >&2
+}
+
+case "${_declared,,}" in
+    cuda)             _want=cuda ;;
+    xe|opencl)        _want=xe ;;
+    none|cpu)         _want=none ;;
+    "")
+        _say "no card declared (usage: llama-card-assert <cuda|xe|none> <binary> [lane])"
+        exit 2
+        ;;
+    *)
+        _say "unknown declared card '${_declared}' (want cuda|xe|none)"
+        exit 2
+        ;;
+esac
+
+if [[ -z "$_bin" ]]; then
+    _say "no binary named (usage: llama-card-assert <cuda|xe|none> <binary> [lane])"
+    exit 2
+fi
+
+case "$_want" in
+    cuda)
+        # The CUDA tree is build-cuda/ on this box and build/ on the older one; both
+        # are CUDA.  What must never appear is the other card's build.
+        case "$_bin" in
+            */build-opencl*/*|*/build-xe*/*)
+                _say "REFUSING: $_lane declares CUDA but execs the OpenCL/Xe build $_bin"
+                _say "         a declaration that disagrees with the executable is the AUTOTUNE-CARD-ATTR-003 defect"
+                exit 1
+                ;;
+            */build-cpu/*)
+                _say "REFUSING: $_lane declares CUDA but execs the CPU build $_bin"
+                exit 1
+                ;;
+        esac
+        ;;
+    xe)
+        case "$_bin" in
+            */build-cuda*/*|*/build-cpu/*)
+                _say "REFUSING: $_lane declares Xe but execs $_bin"
+                _say "         a unit that claims Xe while running a CUDA/CPU binary is the AUTOTUNE-CARD-ATTR-003 defect"
+                exit 1
+                ;;
+            */build-opencl*/*|*/build-xe*/*)
+                ;;
+            *)
+                _say "REFUSING: $_lane declares Xe but $_bin is not an OpenCL build"
+                exit 1
+                ;;
+        esac
+        ;;
+    none)
+        case "$_bin" in
+            */build-cuda*/*|*/build-opencl*/*|*/build-xe*/*)
+                _say "REFUSING: $_lane declares no card but execs a GPU build: $_bin"
+                exit 1
+                ;;
+        esac
+        ;;
+esac
+
+exit 0
+
+# end of file

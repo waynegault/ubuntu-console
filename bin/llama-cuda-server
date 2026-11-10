@@ -29,6 +29,21 @@ _historical=/home/wayne/llama.cpp/build/bin/llama-server
 # §18.3 item 10.7: diagnostics go to stderr through ONE helper, not ad-hoc redirects.
 _note() { printf 'llama-cuda-server: %s\n' "$*" >&2; }
 
+# ── CARD DECLARATION (AUTOTUNE-CARD-ATTR-003) ────────────────────────────────
+# A lane unit states its card with Environment=LLAMA_GPU=...  This launcher IS the
+# CUDA card's launcher, so a unit that declares anything else is contradicted by the
+# line it is starting.  Unset keeps the historical behaviour (this launcher's card);
+# the fleet test in tests/unit/85 requires every lane unit to declare one anyway.
+_declared="${LLAMA_GPU:-cuda}"
+case "${_declared,,}" in
+    cuda) ;;
+    *)
+        _note "REFUSING: the unit declares LLAMA_GPU=${_declared} but starts the CUDA launcher"
+        _note "a declaration that disagrees with the executable is the AUTOTUNE-CARD-ATTR-003 defect; fix the unit"
+        exit 1
+        ;;
+esac
+
 # Fall back to the historical tree only when the caller named no binary, and
 # SAY SO: a launcher that quietly serves a build other than the one it names is
 # what made "which build serves this card?" unanswerable before.
@@ -43,6 +58,17 @@ if [[ ! -x "$_bin" ]]; then
     _note "looked for: /home/wayne/llama.cpp/build-cuda/bin/llama-server, $_historical"
     exit 1
 fi
+
+# The DECLARATION is not the evidence; the path is.  A cuda unit whose build resolves
+# to build-opencl (or build-cpu) is refused here, at start, rather than serving the
+# other card while every reader believes the declaration.
+_self_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -x "$_self_dir/llama-card-assert" ]]; then
+    _note "REFUSING: llama-card-assert is not installed beside this launcher ($_self_dir)"
+    _note "cannot prove $_bin serves the CUDA card; re-run install.sh"
+    exit 1
+fi
+"$_self_dir/llama-card-assert" cuda "$_bin" "llama-cuda-server" || exit 1
 
 exec "$_bin" "$@"
 
