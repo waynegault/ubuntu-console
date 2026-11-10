@@ -44,6 +44,20 @@ llama-cpu-qwen25-3b-chat.service|18084"
     export LLAMA_WATCHDOG_CUDA_LANE_UNIT="llama-cuda-llama32-3b-chat.service"
     mkdir -p "$WATCHDOG_MOCK_BIN" "$WATCHDOG_MOCK_STATE" "$WATCHDOG_MOCK_HOME/.local/bin"
 
+    # The heavy-job seam.  recover() DEFERS while a heavy job holds the box
+    # (LLAMA-LANE-CONTENTION-001), and _tac_heavy_job_busy reads the LIVE lock unless this
+    # points elsewhere.  Measured 2026-11-10: this suite takes heavy-job itself at
+    # collection (conftest, for the BATS bridge), so recover() read BUSY, deferred, and all
+    # eight "restarts / resets a failed unit" cases went red together with nothing wrong in
+    # the watchdog.  A stub that answers FREE makes them hermetic; no case here is about the
+    # deferral itself.
+    cat > "$WATCHDOG_MOCK_BIN/heavy-job" <<'MOCK'
+#!/usr/bin/env bash
+printf 'heavy-job: free\n'
+MOCK
+    chmod +x "$WATCHDOG_MOCK_BIN/heavy-job"
+    export HEAVY_JOB_BIN="$WATCHDOG_MOCK_BIN/heavy-job"
+
     # v3.0 resolves gpu-busy.sh as $HOME/.local/bin/gpu-busy.sh (GPU_BUSY_SH is
     # no longer honoured), so point HOME at the sandbox and drop the mock there.
     export HOME="$WATCHDOG_MOCK_HOME"

@@ -27,8 +27,13 @@ setup() {
     export TOOL
     # The tool is a WRAPPER plus its program module now (card dd96b63f): the wrapper
     # execs the ratchet_check.py that sits beside it, so a fixture that copies the
-    # tool must copy both files or the copy cannot run.
-    cp "$REPO_ROOT/tools/count-ratchet.sh" "$REPO_ROOT/tools/ratchet_check.py" "$SANDBOX/tools/"
+    # tool must copy both files or the copy cannot run.  It also sources the shared
+    # interpreter resolver and imports the shared atomic-write helper, so BOTH support
+    # files travel with it — measured 2026-11-10, when those dependencies landed and
+    # these three cases went red together: first "tools/python-runtime.sh: No such file
+    # or directory", then "No module named 'fsutil'".
+    cp "$REPO_ROOT/tools/count-ratchet.sh" "$REPO_ROOT/tools/ratchet_check.py" \
+       "$REPO_ROOT/tools/python-runtime.sh" "$REPO_ROOT/tools/fsutil.py" "$SANDBOX/tools/"
     BASELINE="$SANDBOX/tools/ratchet-baseline.tsv"
     export BASELINE
 
