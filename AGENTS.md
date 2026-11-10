@@ -63,3 +63,13 @@ Before completing any task that modifies repository files:
    - `tools/check-repo-boundaries.sh && tools/check-contracts.sh && tools/count-ratchet.sh && tools/check-module-versions.sh`
    - `.venv/bin/python3 -m pytest -W error -m "not bats" --ignore=tests/e2e -q`
    - `.venv/bin/python3 tests/e2e/runner.py -q`
+
+---
+
+## 6. Standing Engineering Rules
+
+- **Never Silence a Warning**: Do not use blanket `filterwarnings`, `-W ignore`, `# noqa`, or unannotated `# type: ignore`. When `# type: ignore` is unavoidable due to third-party typing limitations, document the exact reason inline.
+- **Omitted Arguments are Unmade Decisions**: Explicitly pass critical parameters (`timeout`, `shell=False`, `encoding="utf-8"`, `errors="strict"`) rather than relying on silent defaults.
+- **Verify Effects, Not Returns**: Use read-back witnesses and verify persistent state changes rather than relying solely on function return codes.
+- **Operational Issues Solved in Code**: Fix root causes in code rather than recording manual operational workarounds.
+- **Timezone Discipline**: Human-facing timestamps and diagnostic logs must be formatted in ISO 8601 UTC or `Europe/London` (GMT/BST).
