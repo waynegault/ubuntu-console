@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 127
+#   v127 (2026-11-10): the EXIT trap puts back the lanes this run stood down.  The watchdog
+#     cannot: its recover() DEFERS while a heavy job holds the box (LLAMA-LANE-CONTENTION-001)
+#     and `model autotune` IS that job, so on exit nothing restarted the lane until the next
+#     tick — up to five minutes — and a stop that escalated to SIGKILL left the unit `failed`
+#     too.  Measured 09:16 today: the chat lane sat `failed`, /health dead, from 09:16:17
+#     until a hand start; the watchdog's 09:19 tick logged `suspend: NOT HELD` and finished
+#     without touching it.
 # Module Version: 126
 #   v126 (2026-11-09): the refusal names the term that refused.  v125's call site read the
 #     verdict through `$( )`, so __AUTOTUNE_VERDICT_REASON — script-scope state by design —
@@ -635,6 +643,14 @@ __autotune_exit_trap() {
     if [[ -n "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_release &>/dev/null; then
         # swallow-ok: release is owner-checked and idempotent; a failed release leaves a marker the reader treats as NOT HELD
         _tac_suspend_release "${_LANE_SUSPEND:-}" 2>/dev/null || true
+    fi
+    # Put back the lanes this run stood down (v127).  The watchdog is not a substitute: its
+    # recover() DEFERS while a heavy job holds the box, and this run IS that job — so when it
+    # ends nothing restarts the lane until the next tick, up to five minutes, and a stop that
+    # escalated to SIGKILL leaves the unit `failed` as well.  Measured 2026-11-10 09:16: the
+    # chat lane sat `failed` with /health dead from 09:16:17 until a hand start.
+    if declare -f __llm_restore_stopped_lanes &>/dev/null; then
+        __llm_restore_stopped_lanes
     fi
     # swallow-ok: the result file is a report; a run that cannot write it has already reported on stderr
     __autotune_write_result "$_rc" 2>/dev/null || true

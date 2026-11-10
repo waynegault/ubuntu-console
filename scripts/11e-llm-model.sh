@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 114
+#   v114 (2026-11-10): `model autotune <row>` names a RETIRED row's reason before it runs it.
+#     bin/autotune-rows.sh has warned since v21 of that file, but this path calls
+#     autotune-model.sh directly and so said nothing: measured 09:16 today, `model autotune 5`
+#     stopped the chat lane and staged Qwen3.8-Flash-Next-Coder-cut240 — retired as
+#     "qwen4exp.expert_count is an array, the loader reads u32 — re-convert" — without a word.
+#     The row is still honoured (the documented explicit override); it is just no longer silent.
 # Module Version: 113
 #   v113 (2026-11-10): `model default` reports FAILURE when the default-model write
 #     fails.  It printed [SET TO: …] unconditionally after an unchecked redirect, so
@@ -5146,6 +5153,26 @@ function model() {
             fi
             # Route to the standalone autotune script (proven, no --fit bug).
             # Forward all remaining args so flags like --workload reach it.
+            # A RETIRED row is still honoured when named explicitly — that is the documented
+            # override — but it must never be silent (v114).  The tombstone records WHY, and
+            # this path bypassed the warning that bin/autotune-rows.sh already prints, so
+            # `model autotune 5` stopped the chat lane and staged a retired artefact without a
+            # word (measured 2026-11-10 09:16).  Row numbers are not identities: resolve the
+            # number to its FILE through the registry before asking.
+            _at_row="${1:-}"
+            if [[ -n "$_at_row" && "$_at_row" != -* ]]
+            then
+                _at_file="$_at_row"
+                if [[ "$_at_row" =~ ^[0-9]+$ && -n "${LLM_REGISTRY:-}" ]]
+                then
+                    _at_file="$(awk -F'|' -v n="$_at_row" '$1 == n {print $3; exit}' "$LLM_REGISTRY")"
+                fi
+                if _at_why="$(_tac_retired_reason "$_at_file")"
+                then
+                    __tac_info "Autotune" "[RETIRED row — ${_at_why}]" "$C_Warning"
+                    __tac_info "Autotune" "[running it because you named it explicitly; a sweep skips it]" "$C_Warning"
+                fi
+            fi
             bash "$(__autotune_script_path)" "$@" 2>&1
             ;;
 

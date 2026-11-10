@@ -28,6 +28,55 @@ teardown() {
     rm -rf "$TMPDIR_BATS"
 }
 
+@test "autotune-127: the run puts back the lane it stood down, clearing a SIGKILLed 'failed'" {
+    # Measured 2026-11-10 09:16 — `model autotune 5` stopped the chat lane to clear the VRAM
+    # baseline; the server was mid-request, the stop outran its budget and systemd SIGKILLed
+    # it, so the unit read `failed` rather than inactive.  The watchdog could not help: its
+    # recover() DEFERS while a heavy job holds the box, and this run IS that job — its 09:19
+    # tick logged `suspend: NOT HELD` and finished without touching the lane, which stayed
+    # down (no /health) until a hand start.  Catches: a run that stops a lane and leaves the
+    # restart to a watchdog that is, by design, standing down.
+    local stub="$TMPDIR_BATS/bin" log="$TMPDIR_BATS/systemctl.log"
+    mkdir -p "$stub"
+    cat > "$stub/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_LOG"
+case "$*" in
+    *reset-failed*) exit 0 ;;
+    *" start "*)    exit 0 ;;
+esac
+exit 0
+STUB
+    chmod +x "$stub/systemctl"
+    : > "$log"
+    # The recorder and the restorer, driven directly: the stand-down needs a live card, the
+    # restore must not.
+    run env PATH="$stub:$PATH" STUB_LOG="$log" bash -c '
+        source "$1/scripts/01-constants.sh" >/dev/null 2>&1
+        source "$1/scripts/11d-llm-gpu.sh" >/dev/null 2>&1
+        warn() { printf "%s\n" "$*" >&2; }
+        __LLM_LANES_STOPPED=("llama-cuda-chat.service")
+        __llm_restore_stopped_lanes' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    # reset-failed BEFORE start, or the rate-limited/failed unit refuses the start.
+    local reset_line start_line
+    reset_line=$(grep -n 'reset-failed llama-cuda-chat.service' "$log" | cut -d: -f1 | head -1)
+    start_line=$(grep -n ' start llama-cuda-chat.service' "$log" | cut -d: -f1 | head -1)
+    [ -n "$reset_line" ] && [ -n "$start_line" ] && [ "$reset_line" -lt "$start_line" ] \
+        || { echo "reset-failed must precede start (log: $(tr '\n' ';' < "$log"))"; return 1; }
+    [[ "$output" == *"restored llama-cuda-chat.service"* ]]
+    # An empty record is a no-op: a run that stood nothing down must not start anything.
+    : > "$log"
+    run env PATH="$stub:$PATH" STUB_LOG="$log" bash -c '
+        source "$1/scripts/01-constants.sh" >/dev/null 2>&1
+        source "$1/scripts/11d-llm-gpu.sh" >/dev/null 2>&1
+        warn() { printf "%s\n" "$*" >&2; }
+        __LLM_LANES_STOPPED=()
+        __llm_restore_stopped_lanes' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ ! -s "$log" ]
+}
+
 @test "autotune-001: prompt sets resolve per workload (shared with spec-decode-bench)" {
     __resolve_prompt_set legal
     [[ "${#PROMPTS[@]}" -eq 5 ]]
