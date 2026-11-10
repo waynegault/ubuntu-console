@@ -19,7 +19,7 @@ from .constants import (
     VOCABULARY_VERSION,
 )
 from .html import ensure_parent_dir
-from .models import Graph, GraphBuilder
+from .models import Graph, GraphBuilder, dangling_edges
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +209,9 @@ def load_from_graph_db(dbpath: str) -> Graph:
         logger.warning(
             "Graph %s was built under vocabulary %s, current is %s — labels may not "
             "match the current projection/confidence rules; rebuild to restamp",
-            path, stamped if stamped is not None else "unstamped", VOCABULARY_VERSION,
+            path,
+            stamped if stamped is not None else "unstamped",
+            VOCABULARY_VERSION,
         )
 
     # Same question for lineage: elements written before the field existed read
@@ -221,11 +223,28 @@ def load_from_graph_db(dbpath: str) -> Graph:
         logger.warning(
             "Graph %s carries no source lineage (stamp %s, current %s) — rebuild "
             "(kgraph update) so edges can be cited and removed by source",
-            path, sources_stamp if sources_stamp is not None else "unstamped",
+            path,
+            sources_stamp if sources_stamp is not None else "unstamped",
             SOURCES_VERSION,
         )
 
-    graph = builder.build()
+    # Build without the strict check so a graph written before the invariant
+    # existed can still be READ; repair it here, naming what was dropped.  A
+    # dangling edge is not data — no endpoint-resolving view can use it — but a
+    # silent drop would hide a writer that is still producing them.
+    graph = builder.build(strict_endpoints=False)
+    missing = dangling_edges(graph.nodes, graph.edges)
+    if missing:
+        sample = "; ".join(f"{e.source} -> {e.target} [{e.label}]" for e in missing[:5])
+        more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+        logger.warning(
+            "Dropped %d dangling edge(s) from %s: %s%s — rebuild to repair the source",
+            len(missing),
+            path,
+            sample,
+            more,
+        )
+        graph = Graph(nodes=list(graph.nodes), edges=[e for e in graph.edges if e not in missing], meta=graph.meta)
 
     # Cached community digest — read, not computed.  Absent is not an error (a
     # small graph has no communities), so it is logged at DEBUG; a digest written
@@ -237,7 +256,9 @@ def load_from_graph_db(dbpath: str) -> Graph:
         logger.warning(
             "Cached community digest in %s is version %s, current is %s — community "
             "answers may be stale; rebuild to redigest",
-            path, digest.get("version"), COMMUNITY_DIGEST_VERSION,
+            path,
+            digest.get("version"),
+            COMMUNITY_DIGEST_VERSION,
         )
     else:
         graph.meta.community_method = str(digest.get("method") or "")
@@ -247,9 +268,17 @@ def load_from_graph_db(dbpath: str) -> Graph:
 
 
 def save_to_graph_db(dbpath: str, graph: Graph | dict) -> None:
-    """Persist a ``Graph`` (or legacy dict) to the SQLite graph database."""
+    """Persist a ``Graph`` (or legacy dict) to the SQLite graph database.
+
+    Refuses a graph with a dangling edge BEFORE the destructive delete-and-insert,
+    so a bad write cannot replace a good graph with one no view can traverse.
+    """
     if isinstance(graph, dict):
         graph = Graph.from_dict(graph)
+    missing = dangling_edges(graph.nodes, graph.edges)
+    if missing:
+        sample = "; ".join(f"{e.source} -> {e.target} [{e.label}]" for e in missing[:5])
+        raise ValueError(f"refusing to save {len(missing)} dangling edge(s): {sample}")
 
     init_graph_db(dbpath)
     path = os.path.expanduser(dbpath)
@@ -261,9 +290,7 @@ def save_to_graph_db(dbpath: str, graph: Graph | dict) -> None:
 
         for node in graph.nodes:
             payload = {
-                k: v
-                for k, v in node.model_dump(mode="json", exclude_none=True).items()
-                if k not in ("id", "label")
+                k: v for k, v in node.model_dump(mode="json", exclude_none=True).items() if k not in ("id", "label")
             }
             cur.execute(
                 "INSERT OR REPLACE INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)",
@@ -305,11 +332,15 @@ def save_to_graph_db(dbpath: str, graph: Graph | dict) -> None:
         if communities:
             cur.execute(
                 "INSERT OR REPLACE INTO graph_meta(key, value) VALUES ('community_digest', ?)",
-                (json.dumps({
-                    "version": COMMUNITY_DIGEST_VERSION,
-                    "method": graph.meta.community_method,
-                    "communities": communities,
-                }),),
+                (
+                    json.dumps(
+                        {
+                            "version": COMMUNITY_DIGEST_VERSION,
+                            "method": graph.meta.community_method,
+                            "communities": communities,
+                        }
+                    ),
+                ),
             )
         else:
             cur.execute("DELETE FROM graph_meta WHERE key = 'community_digest'")

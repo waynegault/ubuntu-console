@@ -67,9 +67,7 @@ def entry(
     workflow: str, *, expiry: date, owner: str = "wayne", card: str = "CI-WATCH-CONSOLE-001"
 ) -> mod.BaselineEntry:
     """Build a baseline exemption."""
-    return mod.BaselineEntry(
-        workflow=workflow, owner=owner, card=card, expiry=expiry, reason="test", lineno=1
-    )
+    return mod.BaselineEntry(workflow=workflow, owner=owner, card=card, expiry=expiry, reason="test", lineno=1)
 
 
 def evaluate(
@@ -99,11 +97,7 @@ def evaluate(
 
 class ParseBaselineTests(unittest.TestCase):
     def test_parses_a_governed_entry(self) -> None:
-        text = (
-            "# a comment\n"
-            "\n"
-            "workflow=CI | owner=wayne | card=CI-WATCH-CONSOLE-001 | expiry=2099-01-01 | flaky\n"
-        )
+        text = "# a comment\n\nworkflow=CI | owner=wayne | card=CI-WATCH-CONSOLE-001 | expiry=2099-01-01 | flaky\n"
         (parsed,) = mod.parse_baseline(text)
         self.assertEqual(parsed.workflow, "CI")
         self.assertEqual(parsed.owner, "wayne")
@@ -125,15 +119,11 @@ class ParseBaselineTests(unittest.TestCase):
             mod.parse_baseline("CI | owner=w | card=C | expiry=2099-01-01 | reason\n")
 
     def test_expired_entry_reports_expired(self) -> None:
-        (parsed,) = mod.parse_baseline(
-            "workflow=CI | owner=w | card=C | expiry=2000-01-01 | old\n"
-        )
+        (parsed,) = mod.parse_baseline("workflow=CI | owner=w | card=C | expiry=2000-01-01 | old\n")
         self.assertTrue(parsed.expired)
 
     def test_live_entry_is_not_expired(self) -> None:
-        (parsed,) = mod.parse_baseline(
-            "workflow=CI | owner=w | card=C | expiry=2099-01-01 | live\n"
-        )
+        (parsed,) = mod.parse_baseline("workflow=CI | owner=w | card=C | expiry=2099-01-01 | live\n")
         self.assertFalse(parsed.expired)
 
 
@@ -181,6 +171,36 @@ class NewestPerWorkflowTests(unittest.TestCase):
         self.assertTrue(status.pending)
         self.assertEqual(status.head_sha, OTHER)
         self.assertEqual(status.conclusion, "success")
+
+    def test_an_unparseable_timestamp_cannot_displace_a_known_verdict(self) -> None:
+        """A malformed createdAt must not make an older run look like the newest.
+
+        The failure this catches: `_parse_ts` returns None, and the old comparison
+        treated that as "not older", so the malformed row overwrote a real verdict.
+        A red run with a corrupt timestamp could then be reported as the tip's
+        conclusion — or hide one.
+        """
+        malformed = run_row("CI", "failure", NOW, sha=OTHER)
+        malformed["createdAt"] = "not-a-timestamp"
+        runs = [
+            run_row("CI", "success", NOW - timedelta(hours=1), sha=TIP),
+            malformed,
+        ]
+        (status,) = mod.newest_per_workflow(runs)
+        self.assertEqual(status.conclusion, "success")
+        self.assertEqual(status.head_sha, TIP)
+
+    def test_a_known_timestamp_replaces_a_verdict_with_unknown_time(self) -> None:
+        """The inverse ordering: a timed run outranks one that cannot be placed."""
+        malformed = run_row("CI", "success", NOW, sha=OTHER)
+        malformed["createdAt"] = "not-a-timestamp"
+        runs = [
+            malformed,
+            run_row("CI", "failure", NOW - timedelta(hours=1), sha=TIP),
+        ]
+        (status,) = mod.newest_per_workflow(runs)
+        self.assertEqual(status.conclusion, "failure")
+        self.assertEqual(status.head_sha, TIP)
 
 
 class EvaluateRedTests(unittest.TestCase):
@@ -451,9 +471,7 @@ class TestMainUnknown:
 class TestCachedReplay:
     """A replayed probe must not invent a verdict the live one did not have."""
 
-    def test_a_cached_probe_does_not_claim_green_for_an_unfinished_tip(
-        self, monkeypatch, tmp_path, capsys
-    ) -> None:
+    def test_a_cached_probe_does_not_claim_green_for_an_unfinished_tip(self, monkeypatch, tmp_path, capsys) -> None:
         # Found live on 2026-09-26: the cache stored only red/exempted, so a replay for a tip
         # whose run had not finished reported green: true.  The exit code was unaffected
         # (`failing` drives it), but the claim was wrong, so pending/superseded are cached now.
@@ -485,9 +503,7 @@ class TestCachedReplay:
         ]
         assert payload["green"] is False
 
-    def test_a_cached_probe_does_not_replay_a_stale_awaiting_push(
-        self, monkeypatch, tmp_path, capsys
-    ) -> None:
+    def test_a_cached_probe_does_not_replay_a_stale_awaiting_push(self, monkeypatch, tmp_path, capsys) -> None:
         # Criterion: card CI-STATUS-CACHE-001 (measured 2026-10-24) — after a successful
         # push the cached probe still printed "local HEAD … is not the pushed tip …",
         # while `git rev-list --left-right --count origin/main...HEAD` was `0 0`.  The
@@ -522,9 +538,7 @@ class TestCachedReplay:
         assert stale_reason not in out
         assert "awaiting push   : not re-checked" in out
 
-    def test_a_cached_replay_reports_awaiting_push_as_unverified_in_json(
-        self, monkeypatch, tmp_path, capsys
-    ) -> None:
+    def test_a_cached_replay_reports_awaiting_push_as_unverified_in_json(self, monkeypatch, tmp_path, capsys) -> None:
         cache = tmp_path / "ci.json"
         cache.write_text(
             json.dumps(
@@ -540,9 +554,7 @@ class TestCachedReplay:
                     "dark_reason": "",
                     "newest_push_run_at": NOW.isoformat(),
                     "local_sha": TIP,
-                    "awaiting_push_reason": (
-                        f"local HEAD {TIP[:12]} is not the pushed tip {OTHER[:12]}"
-                    ),
+                    "awaiting_push_reason": (f"local HEAD {TIP[:12]} is not the pushed tip {OTHER[:12]}"),
                 }
             )
         )
@@ -572,9 +584,7 @@ class TestMainMutationProof:
         monkeypatch.setattr(mod, "pushed_tip", lambda slug, branch: (TIP, NOW))
         monkeypatch.setattr(mod, "_run_gh", lambda args, *, timeout: list(runs))
 
-    def test_the_same_fixture_is_green_then_red_by_one_field(
-        self, monkeypatch, tmp_path
-    ) -> None:
+    def test_the_same_fixture_is_green_then_red_by_one_field(self, monkeypatch, tmp_path) -> None:
         runs = [run_row("CI", "success", NOW)]
         self._patch(monkeypatch, tmp_path, runs)
         assert mod.main(["--fail"]) == 0
@@ -618,9 +628,7 @@ class TestMainMutationProof:
 class TestCLISurface:
     def test_print_baseline_shows_the_format(self, capsys) -> None:
         assert mod.main(["--print-baseline"]) == 0
-        assert "workflow=<name> | owner=<owner> | card=<card> | expiry=YYYY-MM-DD" in (
-            capsys.readouterr().out
-        )
+        assert "workflow=<name> | owner=<owner> | card=<card> | expiry=YYYY-MM-DD" in (capsys.readouterr().out)
 
 
 class TestGhResolutionOrder:
@@ -668,9 +676,7 @@ class TestGhResolutionOrder:
         linuxbrew_dir.mkdir()
         real = self._script(linuxbrew_dir / "gh", "fallback")
         repo_shim.write_text(
-            "#!/bin/sh\n"
-            f'case "$PATH" in "{real.parent}":*) printf \'{{"used": "shim"}}\\n\' ;; '
-            "*) exit 91 ;; esac\n",
+            f'#!/bin/sh\ncase "$PATH" in "{real.parent}":*) printf \'{{"used": "shim"}}\\n\' ;; *) exit 91 ;; esac\n',
             encoding="utf-8",
         )
         repo_shim.chmod(0o755)
@@ -680,9 +686,7 @@ class TestGhResolutionOrder:
         path_shim.symlink_to(repo_shim)
         monkeypatch.setattr(mod, "REPO_DIR", repo)
         monkeypatch.setattr(mod, "shutil", SimpleNamespace(which=lambda name: str(path_shim)))
-        monkeypatch.setattr(
-            mod, "GH_FALLBACKS", (str(path_shim), str(real))
-        )
+        monkeypatch.setattr(mod, "GH_FALLBACKS", (str(path_shim), str(real)))
         assert mod._gh_json([], timeout=30) == {"used": "shim"}
 
     def test_a_fallback_is_used_when_which_finds_nothing(self, tmp_path, monkeypatch) -> None:
@@ -697,9 +701,7 @@ class TestGhResolutionOrder:
         present_but_not_executable.write_text("#!/bin/sh\necho '{}'\n", encoding="utf-8")
         usable = self._script(tmp_path / "gh-usable", "fallback")
         self._which_finds_nothing(monkeypatch)
-        monkeypatch.setattr(
-            mod, "GH_FALLBACKS", (str(present_but_not_executable), str(usable))
-        )
+        monkeypatch.setattr(mod, "GH_FALLBACKS", (str(present_but_not_executable), str(usable)))
         assert mod._gh_json([], timeout=30) == {"used": "fallback"}
 
     def test_nothing_resolvable_raises_unknown(self, tmp_path, monkeypatch) -> None:
@@ -725,9 +727,7 @@ class TestRetryBackoff:
         # A cache with ONLY the high-water mark is stale (no checked_at), so it
         # supplies the watermark for the backwards check without short-circuiting.
         cache = tmp_path / "ci.json"
-        cache.write_text(
-            json.dumps({"newest_push_run_at": watermark.isoformat()}), encoding="utf-8"
-        )
+        cache.write_text(json.dumps({"newest_push_run_at": watermark.isoformat()}), encoding="utf-8")
         monkeypatch.setattr(mod, "CACHE_FILE", cache)
         monkeypatch.setattr(mod, "BASELINE_FILE", tmp_path / "no-baseline.txt")
         monkeypatch.setattr(mod, "repo_slug", lambda: "owner/name")
@@ -739,13 +739,11 @@ class TestRetryBackoff:
         monkeypatch.setattr(mod, "_sleep", sleeps.append)
         return sleeps
 
-    def test_a_stale_window_clears_on_the_retry_and_a_backoff_is_taken(
-        self, monkeypatch, tmp_path
-    ) -> None:
+    def test_a_stale_window_clears_on_the_retry_and_a_backoff_is_taken(self, monkeypatch, tmp_path) -> None:
         watermark = NOW + timedelta(minutes=5)
         attempts = [
-            [run_row("CI", "success", NOW - timedelta(hours=3))],   # backwards -> stale
-            [run_row("CI", "success", watermark)],                   # forward -> fresh
+            [run_row("CI", "success", NOW - timedelta(hours=3))],  # backwards -> stale
+            [run_row("CI", "success", watermark)],  # forward -> fresh
         ]
         seen = {"n": 0}
 
@@ -771,9 +769,7 @@ class TestRetryBackoff:
         assert seen["n"] == mod._NETWORK_ATTEMPTS
         assert sleeps == [mod._RETRY_BACKOFF_S] * (mod._NETWORK_ATTEMPTS - 1)
 
-    def test_a_persistent_stale_window_gets_the_stale_cap_and_fails_closed(
-        self, monkeypatch, tmp_path
-    ) -> None:
+    def test_a_persistent_stale_window_gets_the_stale_cap_and_fails_closed(self, monkeypatch, tmp_path) -> None:
         seen = {"n": 0}
 
         def run_gh(args, *, timeout):

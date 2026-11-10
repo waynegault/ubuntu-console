@@ -23,7 +23,8 @@ class TestMemoryImportConnection(unittest.TestCase):
         with (
             mock.patch.object(memory_import, "sqlite3", fake_sqlite),
             mock.patch.object(
-                memory_import, "_load_from_memory_db_conn",
+                memory_import,
+                "_load_from_memory_db_conn",
                 side_effect=RuntimeError("boom"),
             ),
             self.assertRaises(RuntimeError),
@@ -38,18 +39,43 @@ class TestMemoryImportConnection(unittest.TestCase):
 # last two entries prove non-entity types and sub-3-char aliases never become
 # canonical entity patterns.
 _LIFE_INDEX = {
-    "by_slug": {}, "by_type": {}, "records": [], "title_aliases": {},
+    "by_slug": {},
+    "by_type": {},
+    "records": [],
+    "title_aliases": {},
     "aliases": {
-        "openclaw": {"slug": "openclaw", "title": "OpenClaw", "type": "organization",
-                     "path": "/life/organizations/openclaw.md", "aliases": [], "status": "active"},
-        "gateway token rotation": {"slug": "gateway-token-rotation",
-                                   "title": "Gateway Token Rotation", "type": "system",
-                                   "path": "/life/systems/gateway-token-rotation.md",
-                                   "aliases": [], "status": "active"},
-        "notes": {"slug": "notes", "title": "Notes", "type": "note",
-                  "path": "/life/notes/notes.md", "aliases": [], "status": "active"},
-        "gw": {"slug": "gw", "title": "Gateway Watch", "type": "system",
-               "path": "/life/systems/gateway-watch.md", "aliases": [], "status": "active"},
+        "openclaw": {
+            "slug": "openclaw",
+            "title": "OpenClaw",
+            "type": "organization",
+            "path": "/life/organizations/openclaw.md",
+            "aliases": [],
+            "status": "active",
+        },
+        "gateway token rotation": {
+            "slug": "gateway-token-rotation",
+            "title": "Gateway Token Rotation",
+            "type": "system",
+            "path": "/life/systems/gateway-token-rotation.md",
+            "aliases": [],
+            "status": "active",
+        },
+        "notes": {
+            "slug": "notes",
+            "title": "Notes",
+            "type": "note",
+            "path": "/life/notes/notes.md",
+            "aliases": [],
+            "status": "active",
+        },
+        "gw": {
+            "slug": "gw",
+            "title": "Gateway Watch",
+            "type": "system",
+            "path": "/life/systems/gateway-watch.md",
+            "aliases": [],
+            "status": "active",
+        },
     },
 }
 
@@ -130,8 +156,7 @@ def _create_store_db(path):
     try:
         cur = conn.cursor()
         cur.execute("CREATE TABLE files (path TEXT)")
-        cur.execute("CREATE TABLE chunks (id TEXT, path TEXT, start_line INT,"
-                    " end_line INT, text TEXT, embedding TEXT)")
+        cur.execute("CREATE TABLE chunks (id TEXT, path TEXT, start_line INT, end_line INT, text TEXT, embedding TEXT)")
         cur.executemany("INSERT INTO files VALUES (?)", [(p,) for p in _STORE_FILES])
         cur.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?)", _STORE_CHUNKS)
         conn.commit()
@@ -174,9 +199,10 @@ class TestMemoryImportStore(unittest.TestCase):
 
         edges = {(e.source, e.target, e.label): e for e in graph.edges}
         # A file-level roll-up carries both the file and the chunk that asserted it.
-        self.assertEqual(sorted(edges[("file:memory/notes.md", "chunk:c1",
-                                       "contains chunk")].sources),
-                         ["chunk:c1", "file:memory/notes.md"])
+        self.assertEqual(
+            sorted(edges[("file:memory/notes.md", "chunk:c1", "contains chunk")].sources),
+            ["chunk:c1", "file:memory/notes.md"],
+        )
         # A chunk-anchored edge is asserted by that chunk (and, for the chunk-to-
         # chunk similarity edges, by the other chunk it joins as well).
         chunk_edges = [e for (src, _dst, _lbl), e in edges.items() if src == "chunk:c1"]
@@ -239,8 +265,17 @@ class TestMemoryImportStore(unittest.TestCase):
         # Types whose label cannot reconstruct their content (file paths, ids,
         # slugs, display names, short editorial titles).
         label_is_not_content = {
-            "actor", "chunk", "decision", "file", "issue", "organization",
-            "outcome", "person", "project", "system", "topic",
+            "actor",
+            "chunk",
+            "decision",
+            "file",
+            "issue",
+            "organization",
+            "outcome",
+            "person",
+            "project",
+            "system",
+            "topic",
         }
 
         # The known content-derived types must stay redacted, and the two
@@ -249,13 +284,11 @@ class TestMemoryImportStore(unittest.TestCase):
         self.assertIn("summary", redacted)
         self.assertEqual(redacted & label_is_not_content, set())
 
-        emitted = {
-            str(getattr(n, "type", "") or "").lower()
-            for n in self._graph(include_all=True).nodes
-        }
+        emitted = {str(getattr(n, "type", "") or "").lower() for n in self._graph(include_all=True).nodes}
         unclassified = sorted(emitted - redacted - label_is_not_content)
         self.assertEqual(
-            unclassified, [],
+            unclassified,
+            [],
             "importer node type(s) not classified for label redaction: "
             f"{unclassified} — add to server._REDACTED_LABEL_TYPES if the label "
             "is content-derived, otherwise to label_is_not_content here",
@@ -288,15 +321,19 @@ class TestMemoryImportStore(unittest.TestCase):
         self.assertEqual(gw.type_confidence, 0.96)
         # Pipe alternatives, morphological flattening, stopword stripping,
         # 4-word truncation, and heading-derived topic nodes.
-        for present in ("decision:resolve-by-rotation", "issue:deduplication-nodes-in-graph",
-                        "decision:keep-the-naming", "issue:shallow-topic-naming",
-                        "decision:alpha-bravo-charlie-delta", "topic:project-launcher-reliability"):
+        for present in (
+            "decision:resolve-by-rotation",
+            "issue:deduplication-nodes-in-graph",
+            "decision:keep-the-naming",
+            "issue:shallow-topic-naming",
+            "decision:alpha-bravo-charlie-delta",
+            "topic:project-launcher-reliability",
+        ):
             self.assertIn(present, ids)
         self.assertNotIn("topic:a", ids)  # 1-char heading produces no topic
         # Rejected: scaffolding, file/date labels, numeric-only labels, low-value
         # concepts, and aliases excluded from entity patterns by type/length.
-        for absent in ("issue:gateway", "decision:raw", "decision:1-2-3-4",
-                       "note:notes", "system:gateway-watch"):
+        for absent in ("issue:gateway", "decision:raw", "decision:1-2-3-4", "note:notes", "system:gateway-watch"):
             self.assertNotIn(absent, ids)
         labels = {n.label for n in graph.nodes}
         for rejected in ("status", "results", "gateway", "profile.md", "2026-01-02"):
@@ -320,16 +357,19 @@ class TestMemoryImportStore(unittest.TestCase):
         self.assertIn("summarizes project", {e.label for e in summary_edges})
         self.assertTrue(all(e.visibility == "semantic" for e in summary_edges))
         semantic = [e for e in graph.edges if e.source == "chunk:c1" and e.label == "semantic summary"]
-        self.assertEqual([(e.visibility, e.quality_tier) for e in semantic],
-                         [("semantic", "semantic")])
+        self.assertEqual([(e.visibility, e.quality_tier) for e in semantic], [("semantic", "semantic")])
         # Fallback path: an actor-only chunk still summarises from its actor.
         fallback = [n for n in graph.nodes if n.id.startswith("summary:c3:")]
         self.assertEqual([n.label for n in fallback], ["vigil"])
         # A single co-occurrence of strongly-linked types is scored and kept.
-        scored = [e for e in graph.edges if e.source == "decision:resolve-by-rotation"
-                  and e.target == "project:launcher-reliability"]
-        self.assertEqual([(e.label, e.semantic_score, e.cooccurrence_count) for e in scored],
-                         [("project decision", 0.85, 1)])
+        scored = [
+            e
+            for e in graph.edges
+            if e.source == "decision:resolve-by-rotation" and e.target == "project:launcher-reliability"
+        ]
+        self.assertEqual(
+            [(e.label, e.semantic_score, e.cooccurrence_count) for e in scored], [("project decision", 0.85, 1)]
+        )
         # label_visibility is a declared GraphEdge field now (card d25d3b8b).
         self.assertEqual(scored[0].label_visibility, "hover")
 
@@ -347,8 +387,9 @@ class TestMemoryImportStore(unittest.TestCase):
         # ('[]'), zero-magnitude and mismatched-dimension vectors are skipped
         # without aborting the import.
         skipped = {"chunk:c5", "chunk:c6", "chunk:c7", "chunk:c8", "chunk:c9", "chunk:c10"}
-        similarity = [e for e in graph.edges if e.label.startswith("related (")
-                      and (e.source in skipped or e.target in skipped)]
+        similarity = [
+            e for e in graph.edges if e.label.startswith("related (") and (e.source in skipped or e.target in skipped)
+        ]
         self.assertEqual(similarity, [])
         self.assertIn("chunk:c8", _node_ids(graph))
 
@@ -371,10 +412,8 @@ class TestMemoryImportStore(unittest.TestCase):
                 graph = memory_import.load_from_memory_db(db)
         self.assertEqual(graph.nodes, [])
         self.assertEqual(graph.edges, [])
-        self.assertTrue(any("Failed to read 'files' table" in line for line in logs.output),
-                        logs.output)
-        self.assertTrue(any("Failed to import chunks" in line for line in logs.output),
-                        logs.output)
+        self.assertTrue(any("Failed to read 'files' table" in line for line in logs.output), logs.output)
+        self.assertTrue(any("Failed to import chunks" in line for line in logs.output), logs.output)
 
 
 class TestMemoryImportPhases(unittest.TestCase):
@@ -391,6 +430,7 @@ class TestMemoryImportPhases(unittest.TestCase):
         from kgraph import memory_import
 
         with tempfile.TemporaryDirectory() as td:
+
             def schema_for(name, ddl):
                 db = os.path.join(td, name)
                 conn = sqlite3.connect(db)
@@ -403,13 +443,15 @@ class TestMemoryImportPhases(unittest.TestCase):
                     conn.close()
 
             self.assertEqual(
-                schema_for("store.db", ["CREATE TABLE files (path TEXT)",
-                                        "CREATE TABLE chunks (id TEXT)"]),
-                "files-chunks")
+                schema_for("store.db", ["CREATE TABLE files (path TEXT)", "CREATE TABLE chunks (id TEXT)"]),
+                "files-chunks",
+            )
             self.assertEqual(
-                schema_for("registry.db", ["CREATE TABLE memories (id TEXT)",
-                                           "CREATE TABLE memory_entities (entity_id TEXT)"]),
-                "registry")
+                schema_for(
+                    "registry.db", ["CREATE TABLE memories (id TEXT)", "CREATE TABLE memory_entities (entity_id TEXT)"]
+                ),
+                "registry",
+            )
             self.assertEqual(schema_for("other.db", ["CREATE TABLE notes (x TEXT)"]), "unknown")
             # Half a pair is NOT a schema: a probe that keyed on one table would
             # send that branch's SQL at the other schema's columns.
@@ -429,8 +471,7 @@ class TestMemoryImportPhases(unittest.TestCase):
             conn = sqlite3.connect(db)
             try:
                 conn.execute("CREATE TABLE files (path TEXT)")
-                conn.executemany("INSERT INTO files VALUES (?)",
-                                 [("memory/notes.md",), (None,), ("",)])
+                conn.executemany("INSERT INTO files VALUES (?)", [("memory/notes.md",), (None,), ("",)])
                 conn.commit()
                 with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
                     ingest = memory_import._MemoryStoreIngest(GraphBuilder())
@@ -449,8 +490,10 @@ class TestMemoryImportPhases(unittest.TestCase):
                     "notes.md",
                     file_node_ids=ingest.file_node_ids,
                     file_paths=ingest.file_paths,
-                    file_path_by_basename=ingest.file_path_by_basename),
-                "memory/notes.md")
+                    file_path_by_basename=ingest.file_path_by_basename,
+                ),
+                "memory/notes.md",
+            )
 
     def test_ingest_chunks_emits_the_chunk_node_its_containment_edge_and_a_topic(self):
         """Catches dropped chunk outputs and concept-pass ordering/link regressions."""
@@ -463,12 +506,20 @@ class TestMemoryImportPhases(unittest.TestCase):
             db = os.path.join(td, "chunks.db")
             conn = sqlite3.connect(db)
             try:
-                conn.execute("CREATE TABLE chunks (id TEXT, path TEXT, start_line INT,"
-                             " end_line INT, text TEXT, embedding TEXT)")
-                conn.execute("INSERT INTO chunks VALUES (?,?,?,?,?,?)",
-                             ("c1", "/docs/notes.md", 1, 2,
-                              "## Project: Launcher reliability\nProject: Launcher reliability\n",
-                              "[1.0, 0.0]"))
+                conn.execute(
+                    "CREATE TABLE chunks (id TEXT, path TEXT, start_line INT, end_line INT, text TEXT, embedding TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO chunks VALUES (?,?,?,?,?,?)",
+                    (
+                        "c1",
+                        "/docs/notes.md",
+                        1,
+                        2,
+                        "## Project: Launcher reliability\nProject: Launcher reliability\n",
+                        "[1.0, 0.0]",
+                    ),
+                )
                 conn.commit()
                 with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
                     ingest = memory_import._MemoryStoreIngest(GraphBuilder())
@@ -487,57 +538,66 @@ class TestMemoryImportPhases(unittest.TestCase):
             self.assertIn("topic:project-launcher-reliability", ids)
             self.assertIn("project:launcher-reliability", ids)
             # The vector is COLLECTED for the similarity pass, not dropped.
-            self.assertEqual([(cid, vec) for cid, _path, vec, _mag in embeddings],
-                             [("chunk:c1", [1.0, 0.0])])
+            self.assertEqual([(cid, vec) for cid, _path, vec, _mag in embeddings], [("chunk:c1", [1.0, 0.0])])
 
             # The concept phase is also callable by itself; its order is part of
             # semantic pair scoring, and named entities intentionally skip file links.
             concept_builder = GraphBuilder()
             with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
                 concept_ingest = memory_import._MemoryStoreIngest(concept_builder)
+            # The chunk phase is called directly here, so the nodes ingest_chunks
+            # would have created are added explicitly — the concept phase links
+            # to them, and a link to a missing node is now a build error.
+            concept_builder.add_node({"id": "chunk:fixture", "label": "fixture", "type": "chunk"})
+            concept_builder.add_node({"id": "file:memory/notes.md", "label": "notes.md", "type": "file"})
             concepts: list[str] = []
             concept_ingest._ingest_chunk_concepts(
                 "fixture",
                 "memory/notes.md",
-                "\n".join((
-                    "## Project: Atlas",
-                    "## Notes on cache migration",
-                    "Decision: maintain archive logic",
-                    "We decided to keep the archive guard.",
-                    "# Sarah-Activate Report",
-                    "OpenClaw runs on Windows.",
-                )),
+                "\n".join(
+                    (
+                        "## Project: Atlas",
+                        "## Notes on cache migration",
+                        "Decision: maintain archive logic",
+                        "We decided to keep the archive guard.",
+                        "# Sarah-Activate Report",
+                        "OpenClaw runs on Windows.",
+                    )
+                ),
                 concepts,
             )
-            self.assertEqual(concepts, [
-                "topic:project-atlas",
-                "topic:notes-on-cache-migration",
-                "project:atlas",
-                "decision:maintain-archive-logic",
-                "decision:keep-the-archive-guard",
-                "actor:sarah",
-                "person:sarah",
-                "organization:openclaw",
-            ])
+            self.assertEqual(
+                concepts,
+                [
+                    "topic:project-atlas",
+                    "topic:notes-on-cache-migration",
+                    "project:atlas",
+                    "decision:maintain-archive-logic",
+                    "decision:keep-the-archive-guard",
+                    "actor:sarah",
+                    "person:sarah",
+                    "organization:openclaw",
+                ],
+            )
             concept_graph = concept_builder.build()
             concept_edges = [
-                (edge.target, edge.label)
-                for edge in concept_graph.edges
-                if edge.source == "chunk:fixture"
+                (edge.target, edge.label) for edge in concept_graph.edges if edge.source == "chunk:fixture"
             ]
-            self.assertEqual(concept_edges, [
-                ("topic:project-atlas", "covers topic"),
-                ("topic:notes-on-cache-migration", "covers topic"),
-                ("project:atlas", "has project"),
-                ("decision:maintain-archive-logic", "has decision"),
-                ("decision:keep-the-archive-guard", "has decision"),
-                ("actor:sarah", "authored by"),
-                ("person:sarah", "has person"),
-                ("organization:openclaw", "has organization"),
-            ])
+            self.assertEqual(
+                concept_edges,
+                [
+                    ("topic:project-atlas", "covers topic"),
+                    ("topic:notes-on-cache-migration", "covers topic"),
+                    ("project:atlas", "has project"),
+                    ("decision:maintain-archive-logic", "has decision"),
+                    ("decision:keep-the-archive-guard", "has decision"),
+                    ("actor:sarah", "authored by"),
+                    ("person:sarah", "has person"),
+                    ("organization:openclaw", "has organization"),
+                ],
+            )
             entity_edges = [
-                edge for edge in concept_graph.edges
-                if edge.target in {"person:sarah", "organization:openclaw"}
+                edge for edge in concept_graph.edges if edge.target in {"person:sarah", "organization:openclaw"}
             ]
             self.assertEqual([edge.source for edge in entity_edges], ["chunk:fixture"] * 2)
 
@@ -548,10 +608,12 @@ class TestMemoryImportPhases(unittest.TestCase):
         from kgraph.models import GraphBuilder
 
         builder = GraphBuilder()
-        for node_id, ntype in (("decision:rotate-token", "decision"),
-                               ("project:launcher", "project"),
-                               ("topic:shallow-labels", "topic"),
-                               ("outcome:validated", "outcome")):
+        for node_id, ntype in (
+            ("decision:rotate-token", "decision"),
+            ("project:launcher", "project"),
+            ("topic:shallow-labels", "topic"),
+            ("outcome:validated", "outcome"),
+        ):
             builder.add_node({"id": node_id, "label": node_id, "type": ntype})
 
         with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
@@ -561,10 +623,10 @@ class TestMemoryImportPhases(unittest.TestCase):
         ingest.emit_semantic_edges()
 
         graph = builder.build()
-        scored = next(e for e in graph.edges
-                      if e.source == "decision:rotate-token" and e.target == "project:launcher")
-        self.assertEqual((scored.label, scored.semantic_score, scored.cooccurrence_count),
-                         ("project decision", 0.85, 1))
+        scored = next(e for e in graph.edges if e.source == "decision:rotate-token" and e.target == "project:launcher")
+        self.assertEqual(
+            (scored.label, scored.semantic_score, scored.cooccurrence_count), ("project decision", 0.85, 1)
+        )
         # label_visibility is a declared GraphEdge field now (card d25d3b8b).
         self.assertEqual(scored.label_visibility, "hover")
         # A single weak co-occurrence (weight 0.5) does not clear the cut.
@@ -619,10 +681,8 @@ class TestMemoryImportSchemaDetection(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             for name, ddl, insert in (
-                ("only_files.db", "CREATE TABLE files (path TEXT)",
-                 "INSERT INTO files VALUES ('memory/notes.md')"),
-                ("only_chunks.db", "CREATE TABLE chunks (id TEXT)",
-                 "INSERT INTO chunks VALUES ('c1')"),
+                ("only_files.db", "CREATE TABLE files (path TEXT)", "INSERT INTO files VALUES ('memory/notes.md')"),
+                ("only_chunks.db", "CREATE TABLE chunks (id TEXT)", "INSERT INTO chunks VALUES ('c1')"),
             ):
                 db = os.path.join(td, name)
                 conn = sqlite3.connect(db)
@@ -638,8 +698,14 @@ class TestMemoryImportSchemaDetection(unittest.TestCase):
 class TestMemoryImportConceptConfig(unittest.TestCase):
     """_load_concept_config() must warn loudly, not fail silently."""
 
-    def test_unreadable_or_malformed_config_warns_and_disables_filtering(self):
+    def test_unreadable_or_malformed_config_refuses_to_import(self):
+        """A missing taxonomy must STOP, not silently disable every filter.
+
+        The old behaviour returned {} and logged one warning; the graph then
+        imported every scaffolding label, alias and low-value term as a concept.
+        """
         from kgraph import memory_import
+        from kgraph.constants import ConceptConfigError
 
         with tempfile.TemporaryDirectory() as td:
             bad = os.path.join(td, "concept-aliases.json")
@@ -647,25 +713,16 @@ class TestMemoryImportConceptConfig(unittest.TestCase):
                 fh.write('{"scaffolding_labels": [')
             for path in (os.path.join(td, "absent.json"), bad):
                 with (
-                    # The loader now lives in constants.py, which owns the single
-                    # source for concept classification (item 11.14) — so the path
-                    # to patch and the logger to watch moved there with it.
-                    # The loader tries THREE candidates (the package copy, this
-                    # path, <sys.prefix>/config).  Patch the package copy's
-                    # location too, or a valid package file masks the failure and
-                    # the case proves nothing.
-                    mock.patch("kgraph.constants.__file__",
-                               os.path.join(td, "kgraph", "constants.py")),
+                    # The loader tries THREE candidates (the package copy, the repo
+                    # path, <sys.prefix>/config).  Patch the package copy's location
+                    # too, or a valid package file masks the failure.
+                    mock.patch("kgraph.constants.__file__", os.path.join(td, "kgraph", "constants.py")),
                     mock.patch("kgraph.constants._CONCEPT_CONFIG_PATH", path),
-                    # The THIRD candidate is <sys.prefix>/config/concept-aliases.json and
-                    # was NOT patched, so an interpreter whose prefix carries a real file
-                    # (the installed layout the loader's own comment describes) satisfied
-                    # the load and the case proved nothing. Point the prefix at the temp
-                    # dir so the malformed file is the only readable candidate.
                     mock.patch("kgraph.constants.sys.prefix", td),
-                    self.assertLogs("kgraph.constants", level="WARNING") as logs,
+                    self.assertLogs("kgraph.constants", level="ERROR") as logs,
                 ):
-                    self.assertEqual(memory_import._load_concept_config(), {})
+                    with self.assertRaises(ConceptConfigError):
+                        memory_import._load_concept_config()
                 self.assertIn("concept config unavailable", logs.output[0])
 
 
@@ -687,55 +744,183 @@ _REGISTRY_DDL = [
 
 
 _REGISTRY_ROWS: list[tuple[str, list[tuple]]] = [
-    ("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
-        ("mem-1", "FACT", "Live memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "active"),
-        ("mem-2", "FACT", "Archived memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "archived"),
-        ("mem-3", "FACT", "Odd score memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, "high", None, "registry", "active"),
-        ("mem-4", "FACT", None, "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "active"),
-        ("mem-5", "FACT", "Low value memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, 0.3, None, "registry", "active"),
-        ("mem-6", "FACT", _LONG_MEMORY_CONTENT, "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "active"),
-    ]),
-    ("INSERT INTO memory_native_chunks VALUES (?,?,?,?,?,?,?,?,?)", [
-        ("chunk-1", "/mem/MEMORY.md", "memory_md", "KG", "4", "4", "Native fact", "profile:main", "active"),
-        ("chunk-2", "/mem/MEMORY.md", "memory_md", "KG", "5", "5", "Archived native fact", "profile:main", "archived"),
-        ("chunk-3", "/mem/MEMORY.md", "memory_md", "KG", "6", "6", "Live memory", "profile:main", "active"),
-    ]),
-    ("INSERT INTO memory_entities VALUES (?,?,?,?,?,?,?)", [
-        ("e-blank", "person", None, "blank", "active", 0.5, "[]"),
-        ("e-1", "person", "Rook", "rook", "active", 0.9, "[]"),
-    ]),
-    ("INSERT INTO memory_entity_mentions VALUES (?,?,?,?,?,?)", [
-        (None, None, None, "general", 0.8, "profile:main"),
-        ("mem-1", "database", "database", "general", 0.8, "profile:main"),
-        ("mem-1", "rook", "Rook", "general", 0.9, "profile:main"),
-        ("mem-1", "vigil", "Vigil", "general", 0.9, "profile:main"),
-        ("native:chunk-1", "juno", "Juno", "general", 0.9, "profile:main"),
-    ]),
-    ("INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)", [
-        ("a", "b", "depends_on", 2, '["mem-1"]', 0.8),
-        (None, "b", "depends_on", 1, None, 0.5),
-        ("c", None, "depends_on", 1, None, 0.5),
-    ]),
-    ("INSERT INTO memory_syntheses VALUES (?,?,?,?,?,?,?,?)", [
-        ("synth-ok", "current_state", "global", "global", "Current State", 0, 0.9, "2026-04-01"),
-        ("synth-stale", "old_report", "global", "global", "Old", 1, 0.8, "2026-04-01"),
-    ]),
-    ("INSERT INTO memory_claims VALUES (?,?,?,?,?,?)", [
-        ("mem-1", "durable", "slot-1", "op", 0.9, "Claim text"),
-        ("mem-missing", "durable", "slot-2", "op", 0.9, None),
-    ]),
-    ("INSERT INTO memory_beliefs VALUES (?,?,?,?,?,?,?,?)", [
-        ("bel-1", "e-1", "fact", "Live belief", "current", 0.9, "mem-1", "registry"),
-        ("bel-2", "e-1", "fact", "Superseded belief", "superseded", 0.9, "mem-1", "registry"),
-    ]),
-    ("INSERT INTO memory_open_loops VALUES (?,?,?,?,?,?)", [
-        ("loop-1", "followup", "Rotate gateway token", "open", "high", None),
-        ("loop-2", "followup", "Old closed item", "closed", "low", None),
-    ]),
-    ("INSERT INTO memory_events VALUES (?,?,?,?,?,?,?)", [
-        ("evt-1", "2026-04-01", "capture", "capture_inserted", "[]", "mem-1", "{}"),
-        ("evt-2", "2026-04-01", "capture", "capture_inserted", "[]", "mem-1", "{}"),
-    ]),
+    (
+        "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            (
+                "mem-1",
+                "FACT",
+                "Live memory",
+                "jarvis",
+                "jarvis",
+                "[]",
+                0.9,
+                "2026-04-01",
+                None,
+                None,
+                None,
+                "registry",
+                "active",
+            ),
+            (
+                "mem-2",
+                "FACT",
+                "Archived memory",
+                "jarvis",
+                "jarvis",
+                "[]",
+                0.9,
+                "2026-04-01",
+                None,
+                None,
+                None,
+                "registry",
+                "archived",
+            ),
+            (
+                "mem-3",
+                "FACT",
+                "Odd score memory",
+                "jarvis",
+                "jarvis",
+                "[]",
+                0.9,
+                "2026-04-01",
+                None,
+                "high",
+                None,
+                "registry",
+                "active",
+            ),
+            (
+                "mem-4",
+                "FACT",
+                None,
+                "jarvis",
+                "jarvis",
+                "[]",
+                0.9,
+                "2026-04-01",
+                None,
+                None,
+                None,
+                "registry",
+                "active",
+            ),
+            (
+                "mem-5",
+                "FACT",
+                "Low value memory",
+                "jarvis",
+                "jarvis",
+                "[]",
+                0.9,
+                "2026-04-01",
+                None,
+                0.3,
+                None,
+                "registry",
+                "active",
+            ),
+            (
+                "mem-6",
+                "FACT",
+                _LONG_MEMORY_CONTENT,
+                "jarvis",
+                "jarvis",
+                "[]",
+                0.9,
+                "2026-04-01",
+                None,
+                None,
+                None,
+                "registry",
+                "active",
+            ),
+        ],
+    ),
+    (
+        "INSERT INTO memory_native_chunks VALUES (?,?,?,?,?,?,?,?,?)",
+        [
+            ("chunk-1", "/mem/MEMORY.md", "memory_md", "KG", "4", "4", "Native fact", "profile:main", "active"),
+            (
+                "chunk-2",
+                "/mem/MEMORY.md",
+                "memory_md",
+                "KG",
+                "5",
+                "5",
+                "Archived native fact",
+                "profile:main",
+                "archived",
+            ),
+            ("chunk-3", "/mem/MEMORY.md", "memory_md", "KG", "6", "6", "Live memory", "profile:main", "active"),
+        ],
+    ),
+    (
+        "INSERT INTO memory_entities VALUES (?,?,?,?,?,?,?)",
+        [
+            ("e-blank", "person", None, "blank", "active", 0.5, "[]"),
+            ("e-1", "person", "Rook", "rook", "active", 0.9, "[]"),
+            # The UUIDs the relationship rows below name.  A relationship resolves
+            # through this column; without these rows its endpoints have no node.
+            ("a", "person", "Alpha", "alpha", "active", 0.9, "[]"),
+            ("b", "person", "Beta", "beta", "active", 0.9, "[]"),
+        ],
+    ),
+    (
+        "INSERT INTO memory_entity_mentions VALUES (?,?,?,?,?,?)",
+        [
+            (None, None, None, "general", 0.8, "profile:main"),
+            ("mem-1", "database", "database", "general", 0.8, "profile:main"),
+            ("mem-1", "rook", "Rook", "general", 0.9, "profile:main"),
+            ("mem-1", "vigil", "Vigil", "general", 0.9, "profile:main"),
+            ("native:chunk-1", "juno", "Juno", "general", 0.9, "profile:main"),
+        ],
+    ),
+    (
+        "INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)",
+        [
+            ("a", "b", "depends_on", 2, '["mem-1"]', 0.8),
+            (None, "b", "depends_on", 1, None, 0.5),
+            ("c", None, "depends_on", 1, None, 0.5),
+        ],
+    ),
+    (
+        "INSERT INTO memory_syntheses VALUES (?,?,?,?,?,?,?,?)",
+        [
+            ("synth-ok", "current_state", "global", "global", "Current State", 0, 0.9, "2026-04-01"),
+            ("synth-stale", "old_report", "global", "global", "Old", 1, 0.8, "2026-04-01"),
+        ],
+    ),
+    (
+        "INSERT INTO memory_claims VALUES (?,?,?,?,?,?)",
+        [
+            ("mem-1", "durable", "slot-1", "op", 0.9, "Claim text"),
+            ("mem-missing", "durable", "slot-2", "op", 0.9, None),
+        ],
+    ),
+    (
+        "INSERT INTO memory_beliefs VALUES (?,?,?,?,?,?,?,?)",
+        [
+            ("bel-1", "e-1", "fact", "Live belief", "current", 0.9, "mem-1", "registry"),
+            ("bel-2", "e-1", "fact", "Superseded belief", "superseded", 0.9, "mem-1", "registry"),
+        ],
+    ),
+    (
+        "INSERT INTO memory_open_loops VALUES (?,?,?,?,?,?)",
+        [
+            ("loop-1", "followup", "Rotate gateway token", "open", "high", None),
+            ("loop-2", "followup", "Old closed item", "closed", "low", None),
+        ],
+    ),
+    (
+        "INSERT INTO memory_events VALUES (?,?,?,?,?,?,?)",
+        [
+            ("evt-1", "2026-04-01", "capture", "capture_inserted", "[]", "mem-1", "{}"),
+            ("evt-2", "2026-04-01", "capture", "capture_inserted", "[]", "mem-1", "{}"),
+        ],
+    ),
 ]
 
 
@@ -776,13 +961,28 @@ class TestMemoryImportRegistryRows(unittest.TestCase):
         # status != 'active' drops memories and native chunks; a native chunk
         # duplicating an imported memory is suppressed; low value_score drops;
         # stale syntheses, superseded beliefs and closed loops drop.
-        for present in ("memory:mem-1", "memory:native:chunk-1", "memory:mem-3",
-                        "synthesis:synth-ok", "belief:bel-1", "open_loop:loop-1"):
+        for present in (
+            "memory:mem-1",
+            "memory:native:chunk-1",
+            "synthesis:synth-ok",
+            "belief:bel-1",
+            "open_loop:loop-1",
+        ):
             self.assertIn(present, ids)
-        for absent in ("memory:mem-2", "memory:native:chunk-2", "memory:native:chunk-3",
-                       "memory:mem-5", "synthesis:synth-stale", "belief:bel-2",
-                       "open_loop:loop-2"):
+        for absent in (
+            "memory:mem-2",
+            "memory:native:chunk-2",
+            "memory:native:chunk-3",
+            "memory:mem-3",
+            "memory:mem-5",
+            "synthesis:synth-stale",
+            "belief:bel-2",
+            "open_loop:loop-2",
+        ):
             self.assertNotIn(absent, ids)
+        # A non-numeric value_score is FAIL CLOSED: the row is unscoreable, so
+        # it is not evidence that it is live, and the drop is named.
+        self.assertTrue(any("non-numeric value_score" in line for line in logs.output), logs.output)
         # Blank content becomes an empty label without crashing.
         self.assertEqual(_node(graph, "memory:mem-4").label, "")
         # Long content is truncated to 72 chars including the ellipsis.
@@ -795,8 +995,14 @@ class TestMemoryImportRegistryRows(unittest.TestCase):
         graph = self._graph(include_all=True)
         ids = _node_ids(graph)
 
-        for node_id in ("memory:mem-2", "memory:mem-5", "memory:native:chunk-2",
-                        "synthesis:synth-stale", "belief:bel-2", "open_loop:loop-2"):
+        for node_id in (
+            "memory:mem-2",
+            "memory:mem-5",
+            "memory:native:chunk-2",
+            "synthesis:synth-stale",
+            "belief:bel-2",
+            "open_loop:loop-2",
+        ):
             self.assertIn(node_id, ids)
         # Promoted-content suppression is unconditional, not a status filter.
         self.assertNotIn("memory:native:chunk-3", ids)
@@ -812,18 +1018,27 @@ class TestMemoryImportRegistryRows(unittest.TestCase):
         self.assertIn("entity:person:rook", ids)
         self.assertNotIn("entity:database", ids)
         mentions = sorted((e.source, e.target) for e in graph.edges if e.label == "mentions")
-        self.assertEqual(mentions, [("memory:mem-1", "entity:person:rook"),
-                                    ("memory:mem-1", "entity:vigil"),
-                                    ("memory:native:chunk-1", "entity:juno")])
-        # Relationships with a missing endpoint are skipped.
+        self.assertEqual(
+            mentions,
+            [
+                ("memory:mem-1", "entity:person:rook"),
+                ("memory:mem-1", "entity:vigil"),
+                ("memory:native:chunk-1", "entity:juno"),
+            ],
+        )
+        # A relationship resolves entity UUIDs to the entity NODES they name;
+        # rows with a NULL endpoint are skipped, so no edge dangles.
         rel = [(e.source, e.target) for e in graph.edges if e.label == "depends_on"]
-        self.assertEqual(rel, [("entity:a", "entity:b")])
+        self.assertEqual(rel, [("entity:person:alpha", "entity:person:beta")])
+        node_ids = {n.id for n in graph.nodes}
+        for edge in graph.edges:
+            self.assertIn(edge.source, node_ids, f"dangling edge source {edge.source!r}")
+            self.assertIn(edge.target, node_ids, f"dangling edge target {edge.target!r}")
         # Claims link to their source memory when it survived the filter, and
         # fall back to a slot label when no surface candidate exists.
         self.assertIn(("memory:mem-1", "claim:mem-1:slot-1", "claims"), _edge_keys(graph))
         self.assertEqual(_node(graph, "claim:mem-missing:slot-2").label, "claim slot-2")
-        self.assertNotIn(("memory:mem-missing", "claim:mem-missing:slot-2", "claims"),
-                         _edge_keys(graph))
+        self.assertNotIn(("memory:mem-missing", "claim:mem-missing:slot-2", "claims"), _edge_keys(graph))
 
     def test_registry_provenance_follows_db_path(self):
         home_node = _node(self._graph(), "memory:mem-1")
@@ -856,6 +1071,59 @@ class TestMemoryImportRegistryRows(unittest.TestCase):
                 graph = memory_import.load_from_memory_db(db)
         self.assertIn("memory:mem-1", _node_ids(graph))
         self.assertTrue(any("-1 events skipped" in line for line in logs.output), logs.output)
+
+    def test_nullable_columns_do_not_abort_the_registry_import(self):
+        """A SQL NULL in a strict ``str`` field must not drop the whole registry.
+
+        The failure this catches: the adapters passed ``None`` straight into
+        ``GraphNode`` fields declared as plain ``str`` under ``strict=True``.  The
+        schema declares none of those columns NOT NULL, so one NULL raised
+        ValidationError out of the import and ``update.py`` logged "Memory DB import
+        failed" — the registry contributed NOTHING, with a warning as the only trace.
+        """
+        import sqlite3
+
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "registry.db")
+            _create_registry_db(db)
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute(
+                    "UPDATE memory_entities SET status=NULL, confidence=NULL, aliases=NULL WHERE entity_id='e-1'"
+                )
+                conn.execute("UPDATE memory_entity_mentions SET role=NULL WHERE entity_key='rook'")
+                conn.execute(
+                    "UPDATE memory_syntheses SET confidence=NULL, generated_at=NULL,"
+                    " subject_type=NULL, subject_id=NULL WHERE synthesis_id='synth-ok'"
+                )
+                conn.execute(
+                    "UPDATE memory_claims SET memory_tier=NULL, consolidation_op=NULL WHERE claim_slot='slot-1'"
+                )
+                conn.execute(
+                    "UPDATE memory_beliefs SET entity_id=NULL, type=NULL, source_memory_id=NULL WHERE belief_id='bel-1'"
+                )
+                conn.execute("UPDATE memory_open_loops SET kind=NULL, status=NULL WHERE loop_id='loop-1'")
+                conn.commit()
+            finally:
+                conn.close()
+            with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+                graph = memory_import.load_from_memory_db(db)
+
+        ids = _node_ids(graph)
+        for node_id in (
+            "memory:mem-1",
+            "entity:person:rook",
+            "synthesis:synth-ok",
+            "claim:mem-1:slot-1",
+            "belief:bel-1",
+            "open_loop:loop-1",
+        ):
+            self.assertIn(node_id, ids)
+        # NULL is the model's empty string, not a second optional representation.
+        self.assertEqual(_node(graph, "entity:person:rook").confidence, "")
+        self.assertEqual(_node(graph, "claim:mem-1:slot-1").memory_tier, "")
 
 
 if __name__ == "__main__":

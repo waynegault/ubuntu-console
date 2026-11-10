@@ -377,15 +377,12 @@ def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, o
                 ),
                 "details": details,
             }
-        bound_note = (
-            f"listener bound {bind_age}s ago" if bind_age is not None else "port bound"
-        )
+        bound_note = f"listener bound {bind_age}s ago" if bind_age is not None else "port bound"
         return {
             "name": "gateway_health",
             "status": "starting",
             "message": (
-                f"gateway starting: {bound_note}, not serving yet "
-                f"(post-bind grace {GATEWAY_POST_BIND_GRACE_S}s)"
+                f"gateway starting: {bound_note}, not serving yet (post-bind grace {GATEWAY_POST_BIND_GRACE_S}s)"
             ),
             "details": details,
         }
@@ -434,6 +431,16 @@ def _check_gateway_health(port: int) -> dict[str, object]:
             "name": "gateway_health",
             "status": "warn",
             "message": "health response is not valid JSON",
+            "details": {"url": url, "response_ms": elapsed_ms, "body": body[:240]},
+        }
+    if not isinstance(payload, dict):
+        # A health endpoint that answers with an array or scalar is misconfigured,
+        # not healthy.  Without this guard the `.get` below raises AttributeError and
+        # the whole report dies with a traceback instead of naming the bad response.
+        return {
+            "name": "gateway_health",
+            "status": "warn",
+            "message": f"health response is {type(payload).__name__}, not a JSON object",
             "details": {"url": url, "response_ms": elapsed_ms, "body": body[:240]},
         }
 

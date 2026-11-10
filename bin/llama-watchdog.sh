@@ -148,7 +148,10 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-11-10): the comment below named bin/gpu-passthrough-watch.sh, which is
+#     not tracked and not installed; gpu-passthrough-check.sh is the observe-only
+#     checker that exists.  Comment only — no behaviour change.
 #   v28 (2026-11-09): the busy gate no longer stops a lane that is still LOADING.  Measured at
 #     boot 18:34:31: the chat lane started at :29, began loading a 17.7 GiB model at :30, and
 #     the next tick read `util=30%>=15%` — the lane's OWN load — and stopped it mid-load, so
@@ -599,7 +602,7 @@ gpu_busy() {
 # i.e. every 5 minutes again, which is the hammering this exists to stop.  A
 # persistently broken GPU is therefore probed twice an hour, not twelve times.
 #
-# ACTUATION STAYS HERE.  bin/gpu-passthrough-watch.sh is an observe-only observer
+# ACTUATION STAYS HERE.  bin/gpu-passthrough-check.sh is an observe-only checker
 # (it never starts or stops a lane) and this probe is read-only (`nvidia-smi -L`):
 # nothing in this path touches a lane, so the watchdog remains the single owner of
 # lane actuation.

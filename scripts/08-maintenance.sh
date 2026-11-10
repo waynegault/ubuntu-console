@@ -2,7 +2,9 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 81
+# Module Version: 82
+#   v82 (2026-11-10): removed __plugin_drift_check — it outlived its only caller
+#     when path-installed plugins were retired; __up_oc_plugins no longer calls it.
 #   v81 (2026-11-01): the R step feeds Rscript via stdin (`-`) instead of a multi-line
 #   `-e` argument (WSL interop drops a multi-line arg to a Windows .exe — Rscript exits
 #   5, no output — so the step read [FAILED] every run); and the plugin updater drops its
@@ -1023,35 +1025,6 @@ function __update_plugin() {
 
     __update_plugin_pull "$_path" "$_status_line"
     return $?
-}
-
-# __plugin_drift_check <script> <errcount nameref> — run the
-# post-update drift check after a plugin changed, and report it in the [10/20] row.
-# Extracted from __up_oc_plugins (2026-09-24), which drops that step from 92 to 71 code
-# lines — measured, NOT because it was over §18.3's 100-line mark (excluding comments had
-# already taken it under).  A failure here is an ISSUE for the run, so it takes the
-# caller's errCount by nameref, the idiom the __up_* steps already use.
-# ---------------------------------------------------------------------------
-function __plugin_drift_check() {
-    local _script="$1"
-    local -n _pd_err="$2"
-    if [[ ! -x "$_script" ]]
-    then
-        __tac_line "[10/20] Post-Update Drift" "[SKIP - drift checker missing]" "$C_Dim"
-        return 0
-    fi
-    if "$_script" >/dev/null 2>&1
-    then
-        __tac_line "[10/20] Post-Update Drift" "[CLEAN]" "$C_Success"
-        return 0
-    fi
-    if "$_script" --fix >/dev/null 2>&1
-    then
-        __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED]" "$C_Success"
-        return 0
-    fi
-    __tac_line "[10/20] Post-Update Drift" "[FIX FAILED - run post-update-drift-check.sh --fix]" "$C_Warning"
-    _pd_err=$(( _pd_err + 1 ))
 }
 
 # ---------------------------------------------------------------------------

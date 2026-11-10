@@ -68,8 +68,7 @@ def _scan_dangerous(value: object) -> bool:
 def _check_xss(data: dict) -> list[dict]:
     """Scan node/edge string values, including nested ones, for dangerous patterns."""
     errors: list[dict] = []
-    for kind, items in (("nodes", data.get("nodes", [])),
-                        ("edges", data.get("edges", []))):
+    for kind, items in (("nodes", data.get("nodes", [])), ("edges", data.get("edges", []))):
         if not isinstance(items, list):
             # A non-list nodes/edges value is already reported by
             # validate_graph; skip the scan instead of raising TypeError
@@ -83,12 +82,14 @@ def _check_xss(data: dict) -> list[dict]:
                 # summary_labels, …) — scanning only top-level strings let a
                 # dangerous value one level down pass validation.
                 if _scan_dangerous(value):
-                    errors.append({
-                        "severity": "error",
-                        "message": f"{kind}[{idx}]: field '{key}' contains dangerous patterns",
-                        f"{kind[:-1]}_idx": idx,
-                        "field": key,
-                    })
+                    errors.append(
+                        {
+                            "severity": "error",
+                            "message": f"{kind}[{idx}]: field '{key}' contains dangerous patterns",
+                            f"{kind[:-1]}_idx": idx,
+                            "field": key,
+                        }
+                    )
     return errors
 
 
@@ -134,14 +135,16 @@ def _check_vocabulary(graph: dict) -> list[dict]:
                 continue
             counts[value] = counts.get(value, 0) + 1
         for value, count in sorted(counts.items()):
-            findings.append({
-                "severity": "warning",
-                "message": (
-                    f"{collection}[{field}] '{value}' ({count}x) is not in the "
-                    f"declared vocabulary v{VOCABULARY_VERSION} — no projection "
-                    f"or confidence rule will match it"
-                ),
-            })
+            findings.append(
+                {
+                    "severity": "warning",
+                    "message": (
+                        f"{collection}[{field}] '{value}' ({count}x) is not in the "
+                        f"declared vocabulary v{VOCABULARY_VERSION} — no projection "
+                        f"or confidence rule will match it"
+                    ),
+                }
+            )
     return findings
 
 
@@ -172,8 +175,7 @@ def _check_community_digest(graph: dict) -> list[dict]:
         return []
 
     node_ids = {
-        str(item.get("id")) for item in graph.get("nodes", [])
-        if isinstance(item, dict) and item.get("id") is not None
+        str(item.get("id")) for item in graph.get("nodes", []) if isinstance(item, dict) and item.get("id") is not None
     }
 
     findings: list[dict] = []
@@ -188,14 +190,16 @@ def _check_community_digest(graph: dict) -> list[dict]:
             continue
         shown = ", ".join(sorted(missing)[:3])
         more = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
-        findings.append({
-            "severity": "warning",
-            "message": (
-                f"meta.communities[{idx}] '{community.get('id', '?')}' lists "
-                f"{len(missing)} member(s) absent from the graph: {shown}{more} — "
-                f"the cached digest is stale; rebuild (kgraph update) to redigest"
-            ),
-        })
+        findings.append(
+            {
+                "severity": "warning",
+                "message": (
+                    f"meta.communities[{idx}] '{community.get('id', '?')}' lists "
+                    f"{len(missing)} member(s) absent from the graph: {shown}{more} — "
+                    f"the cached digest is stale; rebuild (kgraph update) to redigest"
+                ),
+            }
+        )
     return findings
 
 
@@ -217,10 +221,12 @@ def validate_graph(graph: object) -> list[dict]:
     # Nesting check
     depth = _json_depth(graph)
     if depth > MAX_JSON_DEPTH:
-        errors.append({
-            "severity": "error",
-            "message": f"Excessive nesting depth ({depth}, max {MAX_JSON_DEPTH})",
-        })
+        errors.append(
+            {
+                "severity": "error",
+                "message": f"Excessive nesting depth ({depth}, max {MAX_JSON_DEPTH})",
+            }
+        )
         return errors
 
     nodes = graph.get("nodes", [])
@@ -251,10 +257,12 @@ def validate_graph(graph: object) -> list[dict]:
     except ValidationError as exc:
         for err in exc.errors():
             loc = " → ".join(str(part) for part in err["loc"])
-            errors.append({
-                "severity": "error",
-                "message": f"Schema: {loc}: {err['msg']}",
-            })
+            errors.append(
+                {
+                    "severity": "error",
+                    "message": f"Schema: {loc}: {err['msg']}",
+                }
+            )
 
     return errors
 
@@ -268,7 +276,12 @@ def validate_graph_file(filepath: str) -> list[dict]:
         with open(filepath, "r", encoding="utf-8") as f:
             graph = json.load(f)
     except json.JSONDecodeError as e:
-        return [{"severity": "error", "message": f"JSON parse error in {filepath} at line {e.lineno}, col {e.colno}: {e.msg}"}]
+        return [
+            {
+                "severity": "error",
+                "message": f"JSON parse error in {filepath} at line {e.lineno}, col {e.colno}: {e.msg}",
+            }
+        ]
     except RecursionError:
         return [{"severity": "error", "message": f"JSON nesting exceeds parser limit in {filepath}"}]
     except OSError as e:
@@ -313,6 +326,7 @@ def main(reporter: Callable[[str], None] | None = None) -> None:
     Output goes through *reporter* when one is given (the ``__main__`` block
     passes ``print``); this module never writes to stdout itself.
     """
+
     def _say(message: str) -> None:
         if reporter is not None:
             reporter(message)
@@ -321,16 +335,23 @@ def main(reporter: Callable[[str], None] | None = None) -> None:
         _say("Usage: python -m kgraph.validate <graph.json>")
         sys.exit(1)
     fp = sys.argv[1]
-    errors = validate_graph_file(fp)
-    if errors:
-        _say(f"Validation: {len(errors)} issue(s)")
-        for err in errors:
-            ref = err.get("file", "")
-            sev = err.get("severity", "error")
-            _say(f"  [{sev}] {ref}: {err.get('message', '')}")
+    findings = validate_graph_file(fp)
+    if findings:
+        _say(f"Validation: {len(findings)} issue(s)")
+        for finding in findings:
+            ref = finding.get("file", "")
+            sev = finding.get("severity", "error")
+            _say(f"  [{sev}] {ref}: {finding.get('message', '')}")
+    # Only ERRORs block.  Warnings are the vocabulary/digest drift reports the
+    # checks explicitly document as "reported at WARNING ... failing here would
+    # reject an otherwise valid graph" — and the CLI used to exit 1 on ANY list
+    # entry, so `kgraph validate` rejected graphs kgraph itself had just produced.
+    blocking = [f for f in findings if f.get("severity") == "error"]
+    if blocking:
         sys.exit(1)
-    else:
-        _say(f"{fp}: validation PASSED")
+    warnings = len(findings) - len(blocking)
+    suffix = f" with {warnings} warning(s)" if warnings else ""
+    _say(f"{fp}: validation PASSED{suffix}")
 
 
 if __name__ == "__main__":

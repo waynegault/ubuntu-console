@@ -78,11 +78,10 @@ if _t.TYPE_CHECKING:
     )
     from .report import generate_report
     from .server import resolve_serve_target, serve_file
-    from .update import incremental_update, merge_graphs, start_watch
+    from .update import UpdateError, incremental_update, merge_graphs, start_watch
     from .validate import validate_graph_payload
 
-_MODULES: dict[str,
-                 _t.Callable[[], object]] = {}
+_MODULES: dict[str, _t.Callable[[], object]] = {}
 
 
 def __getattr__(name: str) -> object:
@@ -100,8 +99,10 @@ def __getattr__(name: str) -> object:
 def _lazy(mod_path: str, attrs: list[str]) -> None:
     """Register a lazy loader for *attrs* that imports *mod_path*."""
     for a in attrs:
+
         def _loader(mp: str = mod_path, al: str = a) -> object:
             return _import_one(mp, al)
+
         _MODULES[a] = _memo(_loader)
 
 
@@ -111,6 +112,7 @@ _imported_cache: dict[str, object] = {}
 def _import_one(mod_path: str, attr: str) -> object:
     if attr not in _imported_cache:
         import importlib
+
         _imported_cache[attr] = getattr(importlib.import_module(mod_path, package="kgraph"), attr)
     return _imported_cache[attr]
 
@@ -125,38 +127,72 @@ def _memo(fn: _t.Callable[[], object]) -> _t.Callable[[], object]:
         if val is sentinel:
             val = fn()
         return val
+
     return wrapper
 
 
 # ── Register lazy loaders ─────────────────────────────────────────────
-_lazy(".models", [
-    "ConfidenceLevel", "GraphNode", "GraphEdge", "GraphMeta", "Graph",
-    "GraphBuilder", "slugify", "estimate_tokens",
-])
-_lazy(".constants", [
-    "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
-    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "normalize_canonical_name",
-])
+_lazy(
+    ".models",
+    [
+        "ConfidenceLevel",
+        "GraphNode",
+        "GraphEdge",
+        "GraphMeta",
+        "Graph",
+        "GraphBuilder",
+        "slugify",
+        "estimate_tokens",
+    ],
+)
+_lazy(
+    ".constants",
+    [
+        "MEMORY_DB_CANDIDATES",
+        "GRAPH_DB_DEFAULT",
+        "LIFE_ROOT_DEFAULT",
+        "CANONICAL_CONCEPTS_DEFAULT",
+        "SAMPLE_GRAPH",
+        "normalize_canonical_name",
+    ],
+)
 _lazy(".html", ["HTML_TMPL", "ensure_parent_dir", "generate_html"])
 _lazy(".projection", ["project_graph"])
 _lazy(".life_index", ["resolve_life_root", "load_life_index", "load_relations", "merge_relations"])
 _lazy(".graph_db", ["resolve_memory_db_path", "init_graph_db", "load_from_graph_db", "save_to_graph_db"])
 _lazy(".server", ["resolve_serve_target", "serve_file"])
 _lazy(".memory_import", ["load_from_memory_db"])
-_lazy(".source_import", [
-    "ChromaMemorySource", "DirectoryMemorySource", "ImportResult", "MarkdownMemorySource", "MemorySource", "SourceRecord",
-    "import_source", "write_files_chunks",
-])
+_lazy(
+    ".source_import",
+    [
+        "ChromaMemorySource",
+        "DirectoryMemorySource",
+        "ImportResult",
+        "MarkdownMemorySource",
+        "MemorySource",
+        "SourceRecord",
+        "import_source",
+        "write_files_chunks",
+    ],
+)
 _lazy(".ast_extractor", ["ast_available", "extract_repo_graph"])
-_lazy(".community", ["communities_available", "detect_communities", "compute_centrality",
-                     "find_god_nodes", "digest_communities", "community_for_node",
-                     "community_view"])
+_lazy(
+    ".community",
+    [
+        "communities_available",
+        "detect_communities",
+        "compute_centrality",
+        "find_god_nodes",
+        "digest_communities",
+        "community_for_node",
+        "community_view",
+    ],
+)
 _lazy(".confidence", ["tag_confidence", "confidence_stats"])
 _lazy(".report", ["generate_report"])
-_lazy(".query", ["query_nodes", "find_path", "find_path_result", "explain_node",
-                 "format_explain", "format_path"])
+_lazy(".query", ["query_nodes", "find_path", "find_path_result", "explain_node", "format_explain", "format_path"])
 _lazy(".call_flow", ["generate_call_flow_mermaid", "generate_call_flow_html"])
-_lazy(".update", ["incremental_update", "start_watch", "merge_graphs"])
+_lazy(".update", ["UpdateError", "incremental_update", "start_watch", "merge_graphs"])
 _lazy(".mcp_server", ["serve_mcp"])
 _lazy(".validate", ["validate_graph_payload"])
 _lazy(".pr_dashboard", ["generate_pr_dashboard"])
@@ -165,32 +201,71 @@ _lazy(".cli", ["main"])
 
 __all__ = [
     "__version__",
-    "ConfidenceLevel", "GraphNode", "GraphEdge", "GraphMeta", "Graph",
-    "GraphBuilder", "slugify", "estimate_tokens",
-    "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
-    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "normalize_canonical_name",
-    "HTML_TMPL", "ensure_parent_dir", "generate_html",
+    "ConfidenceLevel",
+    "GraphNode",
+    "GraphEdge",
+    "GraphMeta",
+    "Graph",
+    "GraphBuilder",
+    "slugify",
+    "estimate_tokens",
+    "MEMORY_DB_CANDIDATES",
+    "GRAPH_DB_DEFAULT",
+    "LIFE_ROOT_DEFAULT",
+    "CANONICAL_CONCEPTS_DEFAULT",
+    "SAMPLE_GRAPH",
+    "normalize_canonical_name",
+    "HTML_TMPL",
+    "ensure_parent_dir",
+    "generate_html",
     "project_graph",
-    "resolve_life_root", "load_life_index", "load_relations", "merge_relations",
-    "resolve_memory_db_path", "init_graph_db", "load_from_graph_db", "save_to_graph_db",
-    "resolve_serve_target", "serve_file",
+    "resolve_life_root",
+    "load_life_index",
+    "load_relations",
+    "merge_relations",
+    "resolve_memory_db_path",
+    "init_graph_db",
+    "load_from_graph_db",
+    "save_to_graph_db",
+    "resolve_serve_target",
+    "serve_file",
     "load_from_memory_db",
-    "ChromaMemorySource", "DirectoryMemorySource", "ImportResult", "MarkdownMemorySource",
+    "ChromaMemorySource",
+    "DirectoryMemorySource",
+    "ImportResult",
+    "MarkdownMemorySource",
     "MemorySource",
     "SourceRecord",
-    "import_source", "write_files_chunks",
+    "import_source",
+    "write_files_chunks",
     "main",
-    "ast_available", "extract_repo_graph",
-    "communities_available", "detect_communities", "compute_centrality", "find_god_nodes",
-    "digest_communities", "community_for_node", "community_view",
-    "tag_confidence", "confidence_stats",
+    "ast_available",
+    "extract_repo_graph",
+    "communities_available",
+    "detect_communities",
+    "compute_centrality",
+    "find_god_nodes",
+    "digest_communities",
+    "community_for_node",
+    "community_view",
+    "tag_confidence",
+    "confidence_stats",
     "generate_report",
-    "query_nodes", "find_path", "find_path_result", "explain_node", "format_explain",
+    "query_nodes",
+    "find_path",
+    "find_path_result",
+    "explain_node",
+    "format_explain",
     "format_path",
-    "generate_call_flow_mermaid", "generate_call_flow_html",
-    "incremental_update", "start_watch", "merge_graphs",
+    "generate_call_flow_mermaid",
+    "generate_call_flow_html",
+    "UpdateError",
+    "incremental_update",
+    "start_watch",
+    "merge_graphs",
     "serve_mcp",
     "validate_graph_payload",
     "generate_pr_dashboard",
-    "benchmark_graph_vs_raw", "format_benchmark",
+    "benchmark_graph_vs_raw",
+    "format_benchmark",
 ]

@@ -28,6 +28,7 @@ module up (the name matches ``test*.py``), so a bare discover runs the suites as
 select a single one with ``python -m unittest test_bats_unittest.BatsSuites.<method>``
 from the tests/ directory.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,10 +40,17 @@ import unittest
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 import _bats_suites
 
 REPO_ROOT = _bats_suites.REPO_ROOT
-BATS_EXECUTABLE = "bats"
+BATS_EXECUTABLE = _bats_suites.resolve_bats()
+
+# Host-coupled: these cases run the shell suites against this box's live services
+# and filesystem.  The push lane runs `-m "not host_coupled"`; PR/dispatch and the
+# nightly BATS lane run them in full.
+pytestmark = pytest.mark.host_coupled
 TESTS_DIR = REPO_ROOT / "tests"
 # Set to 1 to run the suites that are excluded by default (see the module docstring).
 RUN_ALL_ENV = "TAC_UNITTEST_ALL"

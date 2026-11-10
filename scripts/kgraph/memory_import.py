@@ -83,6 +83,19 @@ def _detect_schema(cur: sqlite3.Cursor) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 # Shared text helpers
 # ══════════════════════════════════════════════════════════════════════════════
+def _text(value: Any) -> str:
+    """A SQLite value as a strict non-optional ``str`` field expects it.
+
+    Registry columns that ``GraphNode`` declares as plain ``str`` are nullable in
+    the schema (nothing declares them NOT NULL).  ``GraphNode`` is strict, so a
+    raw ``None`` raises ValidationError — and because these adapters have no
+    per-row guard, one NULL aborted the ENTIRE registry import.  The model's own
+    convention for "absent" here is the empty string (``confidence: str = ""``),
+    so NULL maps to that rather than to a second, optional representation.
+    """
+    return "" if value is None else str(value)
+
+
 def _preview_text(value: Any, limit: int = 72) -> str:
     """Whitespace-collapsed preview, ellipsised at *limit*.
 
@@ -426,6 +439,10 @@ class _MemoryStoreIngest:
 
     # ── emitters ───────────────────────────────────────────────────────
     def add_node(self, node: dict) -> None:
+        # Mark the ownership of a memory-store node so a later update can prune
+        # and re-read it.  Without the marker an edited memory keeps its old
+        # label (GraphBuilder keeps the first node) and a deleted one never goes.
+        node.setdefault("origin", "memory_db")
         self.builder.add_node(node)
 
     def add_edge(self, edge: dict) -> None:
@@ -1933,7 +1950,12 @@ def _registry_row_is_live(row: dict, include_all: bool) -> bool:
             if float(vs) < 0.5:
                 return False
         except TypeError, ValueError:
-            pass
+            # A non-numeric score cannot be compared to the 0.5 floor.  FAIL
+            # CLOSED: an unscoreable row is not evidence that it is live, and
+            # importing it hid a corrupt registry cell.  Name the row so the
+            # source can be repaired.
+            logger.warning("registry row %r dropped: non-numeric value_score %r", row.get("id"), vs, exc_info=True)
+            return False
     return True
 
 
@@ -1978,7 +2000,7 @@ def _import_registry_memories(cur: sqlite3.Cursor, sink: _RegistrySink, registry
                 "content": d.get("content"),
                 "source_agent": d.get("source_agent"),
                 "tags": d.get("tags"),
-                "confidence": str(d.get("confidence")) if d.get("confidence") is not None else None,
+                "confidence": _text(d.get("confidence")),
                 "created_at": d.get("created_at"),
                 "concept": d.get("concept"),
                 "value_score": d.get("value_score"),
@@ -2046,11 +2068,18 @@ def _import_registry_entities(cur: sqlite3.Cursor, sink: _RegistrySink, registry
                 "registry": registry,
                 "row_scope": None,
                 "kind": kind,
-                "aliases": d.get("aliases"),
-                "confidence": str(d.get("confidence")) if d.get("confidence") is not None else None,
-                "status": d.get("status"),
+                "aliases": _text(d.get("aliases")),
+                "confidence": _text(d.get("confidence")),
+                "status": _text(d.get("status")),
             }
         )
+        # Two identities in one map: the UUID a relationship row names, and the
+        # normalised name a mention row names.  Relationships MUST resolve through
+        # the UUID; emitting `entity:<uuid>` produced edges whose endpoints no node
+        # had, so every relationship vanished from any endpoint-resolving view.
+        row_id = str(d.get("entity_id") or "").strip()
+        if row_id:
+            entity_row_ids[row_id] = nid
         key = normalize_canonical_name(d.get("normalized_name") or display)
         entity_row_ids.setdefault(key, nid)
     return entity_row_ids
@@ -2091,7 +2120,7 @@ def _import_registry_mentions(
                     "registry": registry,
                     "row_scope": d.get("scope"),
                     "kind": "mention-derived",
-                    "role": str(d.get("role")) if d.get("role") is not None else None,
+                    "role": _text(d.get("role")),
                 }
             )
         # Resolve source memory id: native:{chunk_id} → memory:native:{chunk_id}
@@ -2103,6 +2132,11 @@ def _import_registry_mentions(
         else:
             src = f"memory:{mem_id}"
             mention_source = source_key("memory", mem_id)
+        if not sink.builder.has_node(src) or not sink.builder.has_node(ent_id):
+            # A mention of a row the liveness filter removed has no source node.
+            # Emitting it would create a dangling edge that no view can resolve.
+            logger.debug("mention %s -> %s skipped: endpoint not in the graph", src, ent_id)
+            continue
         sink.add_edge(
             {
                 "from": src,
@@ -2112,29 +2146,46 @@ def _import_registry_mentions(
                 # The memory (or native chunk) whose text mentioned the entity.
                 "sources": [mention_source],
                 "registry": registry,
-                "role": d.get("role"),
+                "role": _text(d.get("role")),
                 "metadata": {"confidence": d.get("confidence")},
             }
         )
 
 
-def _import_registry_relationships(cur: sqlite3.Cursor, sink: _RegistrySink, registry: str) -> None:
-    """Phase: memory_entity_relationships → entity→entity edges."""
+def _import_registry_relationships(
+    cur: sqlite3.Cursor, sink: _RegistrySink, registry: str, entity_ids: dict[str, str]
+) -> None:
+    """Phase: memory_entity_relationships → entity→entity edges.
+
+    ``entity_id_a``/``_b`` are the registry's entity UUIDs; the node identity is
+    ``entity:{kind}:{slug}``.  ``entity_ids`` is the UUID→node map built by
+    ``_import_registry_entities``.  An endpoint that does not resolve is SKIPPED
+    and named: an edge to a node that does not exist is not a relationship, and
+    silently emitting one made every relationship invisible to endpoint-resolving
+    views while still inflating the edge count.
+    """
     for row in cur.execute(
         "SELECT entity_id_a, entity_id_b, relationship_type, evidence_count,"
         "       source_memory_ids, confidence"
         "  FROM memory_entity_relationships"
     ):
         d = dict(row)
-        src = d.get("entity_id_a") or ""
-        tgt = d.get("entity_id_b") or ""
+        raw_src = str(d.get("entity_id_a") or "").strip()
+        raw_tgt = str(d.get("entity_id_b") or "").strip()
         rel = str(d.get("relationship_type") or "").strip() or "related"
+        src = entity_ids.get(raw_src)
+        tgt = entity_ids.get(raw_tgt)
         if not src or not tgt:
+            logger.warning(
+                "relationship %r -> %r skipped: endpoint has no entity node",
+                raw_src,
+                raw_tgt,
+            )
             continue
         sink.add_edge(
             {
-                "from": f"entity:{src}",
-                "to": f"entity:{tgt}",
+                "from": src,
+                "to": tgt,
                 "label": rel,
                 "origin": "memory_db",
                 # The relationship row names its own evidence in
@@ -2178,11 +2229,11 @@ def _import_registry_syntheses(cur: sqlite3.Cursor, sink: _RegistrySink, registr
                 "origin": "memory_db",
                 "registry": registry,
                 "kind": kind,
-                "subject_type": d.get("subject_type"),
-                "subject_id": d.get("subject_id"),
+                "subject_type": _text(d.get("subject_type")),
+                "subject_id": _text(d.get("subject_id")),
                 "content": d.get("content"),
-                "confidence": str(d.get("confidence")) if d.get("confidence") is not None else None,
-                "generated_at": d.get("generated_at"),
+                "confidence": _text(d.get("confidence")),
+                "generated_at": _text(d.get("generated_at")),
                 "stale": d.get("stale"),
             }
         )
@@ -2213,8 +2264,8 @@ def _import_registry_claims(cur: sqlite3.Cursor, sink: _RegistrySink, registry: 
                 # the document that asserts it.
                 "sources": [source_key("memory", mem_id)],
                 "registry": registry,
-                "memory_tier": d.get("memory_tier"),
-                "consolidation_op": d.get("consolidation_op"),
+                "memory_tier": _text(d.get("memory_tier")),
+                "consolidation_op": _text(d.get("consolidation_op")),
                 "source_strength": d.get("source_strength"),
             }
         )
@@ -2256,10 +2307,10 @@ def _import_registry_beliefs(cur: sqlite3.Cursor, sink: _RegistrySink, registry:
                 # lineage when it is present, and nothing when it is NULL.
                 "sources": ([_memory_source_key(d["source_memory_id"])] if d.get("source_memory_id") else []),
                 "registry": registry,
-                "entity_id": d.get("entity_id"),
-                "belief_type": d.get("type"),
-                "confidence": str(d.get("confidence")) if d.get("confidence") is not None else None,
-                "source_memory_id": d.get("source_memory_id"),
+                "entity_id": _text(d.get("entity_id")),
+                "belief_type": _text(d.get("type")),
+                "confidence": _text(d.get("confidence")),
+                "source_memory_id": _text(d.get("source_memory_id")),
                 "source_layer": d.get("source_layer"),
             }
         )
@@ -2278,8 +2329,8 @@ def _import_registry_open_loops(cur: sqlite3.Cursor, sink: _RegistrySink, regist
                 "type": "open_loop",
                 "origin": "memory_db",
                 "registry": registry,
-                "kind": d.get("kind"),
-                "status": d.get("status"),
+                "kind": _text(d.get("kind")),
+                "status": _text(d.get("status")),
                 "priority": d.get("priority"),
                 "related_entity_id": d.get("related_entity_id"),
             }
@@ -2340,7 +2391,7 @@ def _load_from_registry_db(
         _import_registry_mentions(cur, sink, registry, entity_row_ids)
 
     if _has_table(cur, "memory_entity_relationships"):
-        _import_registry_relationships(cur, sink, registry)
+        _import_registry_relationships(cur, sink, registry, entity_row_ids)
 
     if _has_table(cur, "memory_syntheses"):
         _import_registry_syntheses(cur, sink, registry, include_all)

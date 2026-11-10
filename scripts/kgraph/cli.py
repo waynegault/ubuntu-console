@@ -45,14 +45,12 @@ from .query import (
     query_nodes,
 )
 from .call_flow import generate_call_flow_html, generate_call_flow_mermaid
-from .update import incremental_update, start_watch
+from .update import UpdateError, incremental_update, start_watch
 from .models import Graph
 
 logger = logging.getLogger(__name__)
 
-_DESCRIPTION = (
-    "Knowledge graph — server, AST extraction, community detection, MCP, and CLI tools"
-)
+_DESCRIPTION = "Knowledge graph — server, AST extraction, community detection, MCP, and CLI tools"
 
 # The marker an installed hook must carry for --uninstall-hook to remove it (and
 # for --install-hook to rewrite it rather than refuse).
@@ -62,8 +60,8 @@ _KGRAPH_HOOK_MARKER = "kgraph auto-rebuild"
 _KGRAPH_HOOK_BODY = (
     "#!/bin/bash\n"
     "# kgraph auto-rebuild post-commit hook\n"
-    'if command -v kgraph &>/dev/null; then\n'
-    '    kgraph update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | sed \'s/^/[kgraph] /\'\n'
+    "if command -v kgraph &>/dev/null; then\n"
+    "    kgraph update --source-dir \"$(git rev-parse --show-toplevel)\" 2>&1 | sed 's/^/[kgraph] /'\n"
     "fi\n"
 )
 
@@ -145,38 +143,50 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
 
     # Query tools
     parser.add_argument("--query", help="Search nodes matching a pattern")
-    parser.add_argument("--path", nargs=2, metavar=("SOURCE", "TARGET"),
-                        help="Path between two nodes (see --path-mode)")
-    parser.add_argument("--path-mode", choices=[PATH_MODE_BFS, PATH_MODE_STRONGEST],
-                        default=PATH_MODE_BFS,
-                        help="'bfs' (default): fewest hops. 'strongest': maximize the "
-                             "product of the edges' semantic_score strengths")
+    parser.add_argument(
+        "--path", nargs=2, metavar=("SOURCE", "TARGET"), help="Path between two nodes (see --path-mode)"
+    )
+    parser.add_argument(
+        "--path-mode",
+        choices=[PATH_MODE_BFS, PATH_MODE_STRONGEST],
+        default=PATH_MODE_BFS,
+        help="'bfs' (default): fewest hops. 'strongest': maximize the product of the edges' semantic_score strengths",
+    )
     parser.add_argument("--explain", help="Describe a node and its graph connections")
 
     # Shared I/O
     parser.add_argument("--output", "-o", help="Output file path")
     parser.add_argument("--graph", help="Path to graph JSON file")
     parser.add_argument("--store", help="Path to persistent graph JSON store")
-    parser.add_argument("--graph-db", default=GRAPH_DB_DEFAULT, help=f"SQLite graph DB path (default: {GRAPH_DB_DEFAULT})")
+    parser.add_argument(
+        "--graph-db", default=GRAPH_DB_DEFAULT, help=f"SQLite graph DB path (default: {GRAPH_DB_DEFAULT})"
+    )
     parser.add_argument("--import-db", help="Memory SQLite DB path (overrides auto-detect)")
-    parser.add_argument("--source", choices=("markdown", "directory", "chroma"), default="markdown",
-                        help="Memory source adapter for import-source")
-    parser.add_argument("--source-kind", default="directory",
-                        help="source_kind label for the directory adapter (e.g. investigator-layer3)")
-    parser.add_argument("--layer-key", default="mves_layer",
-                        help="Chroma metadata key for the layer filter (default: mves_layer)")
-    parser.add_argument("--layer-values", default="1,2,3,5",
-                        help="comma-separated layer values for the chroma source")
-    parser.add_argument("--limit", type=int, default=0,
-                        help="max chunks per layer for the chroma source (0 = all)")
+    parser.add_argument(
+        "--source",
+        choices=("markdown", "directory", "chroma"),
+        default="markdown",
+        help="Memory source adapter for import-source",
+    )
+    parser.add_argument(
+        "--source-kind",
+        default="directory",
+        help="source_kind label for the directory adapter (e.g. investigator-layer3)",
+    )
+    parser.add_argument(
+        "--layer-key", default="mves_layer", help="Chroma metadata key for the layer filter (default: mves_layer)"
+    )
+    parser.add_argument("--layer-values", default="1,2,3,5", help="comma-separated layer values for the chroma source")
+    parser.add_argument("--limit", type=int, default=0, help="max chunks per layer for the chroma source (0 = all)")
     parser.add_argument("--source-path", help="Source root or file for import-source")
     parser.add_argument("--source-db", help="Output files/chunks store for import-source")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Count import-source records without writing")
-    parser.add_argument("--min-chars", type=int, default=1,
-                        help="Skip source sections shorter than this (import-source)")
-    parser.add_argument("--include-all", action="store_true",
-                        help="Skip registry filter (import stale/low-value memories too)")
+    parser.add_argument("--dry-run", action="store_true", help="Count import-source records without writing")
+    parser.add_argument(
+        "--min-chars", type=int, default=1, help="Skip source sections shorter than this (import-source)"
+    )
+    parser.add_argument(
+        "--include-all", action="store_true", help="Skip registry filter (import stale/low-value memories too)"
+    )
     parser.add_argument("--host", default="127.0.0.1", help="Server bind host")
     parser.add_argument("--port", type=int, default=0, help="Server port (0 = ephemeral)")
     parser.add_argument("--view", choices=["overview", "topics", "files", "semantic", "raw"], default="overview")
@@ -196,14 +206,23 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--top-god-nodes", type=int, default=10)
 
     # Source lineage (GRAPHRAG-ARCH-007)
-    parser.add_argument("--remove-source", metavar="SOURCE_KEY",
-                        help="Remove one source document's id from every node/edge in the graph DB "
-                             "(e.g. 'file:scripts/foo.sh', 'memory:<uuid>'); elements are deleted only "
-                             "when that was their last source")
+    parser.add_argument(
+        "--remove-source",
+        metavar="SOURCE_KEY",
+        help="Remove one source document's id from every node/edge in the graph DB "
+        "(e.g. 'file:scripts/foo.sh', 'memory:<uuid>'); elements are deleted only "
+        "when that was their last source",
+    )
 
     # Watch / update
     parser.add_argument("--watch-interval", type=int, default=30, help="Poll interval in seconds")
     parser.add_argument("--source-dir", help="Source directory for AST + watch")
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Save the graph even when a memory DB or AST extraction fails "
+        "(the saved graph is then explicitly incomplete)",
+    )
 
     # PR dashboard / benchmark
     parser.add_argument("--days", type=int, default=30, help="History window in days")
@@ -228,16 +247,20 @@ def cmd_ast(args: argparse.Namespace) -> None:
         print("Error: --repo is required for AST extraction", file=sys.stderr)
         sys.exit(1)
     if not ast_available():
-        print("Error: tree-sitter not available. Install with: pip install tree-sitter tree-sitter-bash tree-sitter-python", file=sys.stderr)
+        print(
+            "Error: tree-sitter not available. Install with: pip install tree-sitter tree-sitter-bash tree-sitter-python",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    raw = extract_repo_graph(args.repo, include_variables=args.ast_vars,
-                             max_files=args.ast_max_files, subdirs=args.ast_subdirs)
+    raw = extract_repo_graph(
+        args.repo, include_variables=args.ast_vars, max_files=args.ast_max_files, subdirs=args.ast_subdirs
+    )
     g = tag_confidence(raw)
     s = confidence_stats(g)
     node_count = len(g.nodes)
     edge_count = len(g.edges)
     print(f"AST extraction: {node_count} nodes, {edge_count} edges")
-    print(f'Confidence: {s["extracted"]} EXTRACTED, {s["inferred"]} INFERRED, {s["ambiguous"]} AMBIGUOUS')
+    print(f"Confidence: {s['extracted']} EXTRACTED, {s['inferred']} INFERRED, {s['ambiguous']} AMBIGUOUS")
     out_data = g.to_dict()
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
@@ -252,6 +275,7 @@ def cmd_wiring(args: argparse.Namespace) -> None:
         print("Error: --repo is required for wiring analysis", file=sys.stderr)
         sys.exit(1)
     from .wiring import analyze_wiring, format_wiring_report, wiring_summary
+
     report = analyze_wiring(args.repo)
     print(format_wiring_report(report, show_all=args.wiring_all))
     print(f"\nSUMMARY: {wiring_summary(report)}")
@@ -314,7 +338,10 @@ def cmd_uninstall_hook(args: argparse.Namespace) -> None:
 def cmd_import_source(args: argparse.Namespace) -> None:
     """Write a memory source into the files/chunks store kgraph reads."""
     from .source_import import (
-        ChromaMemorySource, DirectoryMemorySource, MarkdownMemorySource, import_source,
+        ChromaMemorySource,
+        DirectoryMemorySource,
+        MarkdownMemorySource,
+        import_source,
     )
 
     if not args.source_path:
@@ -327,15 +354,16 @@ def cmd_import_source(args: argparse.Namespace) -> None:
     try:
         if args.source == "directory":
             source = DirectoryMemorySource(
-                args.source_path, source_kind=args.source_kind,
+                args.source_path,
+                source_kind=args.source_kind,
                 min_chars=args.min_chars,
             )
         elif args.source == "chroma":
-            layers = tuple(
-                part.strip() for part in args.layer_values.split(",") if part.strip()
-            )
+            layers = tuple(part.strip() for part in args.layer_values.split(",") if part.strip())
             source = ChromaMemorySource(
-                args.source_path, layer_values=layers, layer_key=args.layer_key,
+                args.source_path,
+                layer_values=layers,
+                layer_key=args.layer_key,
                 limit=args.limit,
             )
         else:
@@ -353,8 +381,7 @@ def cmd_import_source(args: argparse.Namespace) -> None:
         print("Error: --source-db is required unless --dry-run", file=sys.stderr)
         sys.exit(1)
     result = import_source(source, args.source_db, prune_prefix=source.root)
-    print(f"Imported {result.chunks} chunk(s) from {result.files} file(s) into "
-          f"{result.dbpath}")
+    print(f"Imported {result.chunks} chunk(s) from {result.files} file(s) into {result.dbpath}")
     print(f"Next: kgraph update --import-db {result.dbpath} --source-dir <repo>")
 
 
@@ -364,15 +391,27 @@ def cmd_update(args: argparse.Namespace) -> None:
     # incremental_update resolves ALL memory DB candidates (multi-registry).
     mem_db = args.import_db or None
     src = args.source_dir or args.repo
-    g = incremental_update(graph_db, mem_db_path=mem_db, source_dir=src,
-                           ast=bool(src), ast_vars=args.ast_vars,
-                           ast_max_files=args.ast_max_files, ast_subdirs=args.ast_subdirs,
-                           include_all=args.include_all)
+    try:
+        g = incremental_update(
+            graph_db,
+            mem_db_path=mem_db,
+            source_dir=src,
+            ast=bool(src),
+            ast_vars=args.ast_vars,
+            ast_max_files=args.ast_max_files,
+            ast_subdirs=args.ast_subdirs,
+            include_all=args.include_all,
+            allow_partial=args.allow_partial,
+        )
+    except UpdateError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print("  Re-run with --allow-partial to save an explicitly incomplete graph.", file=sys.stderr)
+        sys.exit(2)
     s = confidence_stats(g)
     node_count = len(g.nodes)
     edge_count = len(g.edges)
     print(f"Update complete: {node_count} nodes, {edge_count} edges")
-    print(f'  EXTRACTED: {s["extracted"]}, INFERRED: {s["inferred"]}, AMBIGUOUS: {s["ambiguous"]}')
+    print(f"  EXTRACTED: {s['extracted']}, INFERRED: {s['inferred']}, AMBIGUOUS: {s['ambiguous']}")
     if args.output:
         out_data = g.to_dict()
         with open(args.output, "w", encoding="utf-8") as f:
@@ -383,20 +422,28 @@ def cmd_watch(args: argparse.Namespace) -> None:
     graph_db = os.path.expanduser(args.graph_db)
     mem_db = args.import_db or resolve_memory_db_path()
     src = args.source_dir or args.repo
-    start_watch(graph_db, mem_db_path=mem_db, source_dir=src,
-                interval=args.watch_interval, ast=bool(src),
-                ast_vars=args.ast_vars, ast_max_files=args.ast_max_files,
-                ast_subdirs=args.ast_subdirs, reporter=print)
+    start_watch(
+        graph_db,
+        mem_db_path=mem_db,
+        source_dir=src,
+        interval=args.watch_interval,
+        ast=bool(src),
+        ast_vars=args.ast_vars,
+        ast_max_files=args.ast_max_files,
+        ast_subdirs=args.ast_subdirs,
+        reporter=print,
+    )
 
 
 def cmd_mcp(args: argparse.Namespace) -> None:
     from .mcp_server import serve_mcp
-    serve_mcp(host=args.host, port=args.port or 8331, graph_db=args.graph_db,
-              reporter=print)
+
+    serve_mcp(host=args.host, port=args.port or 8331, graph_db=args.graph_db, reporter=print)
 
 
 def cmd_remove_source(args: argparse.Namespace) -> None:
     from .graph_db import save_to_graph_db
+
     graph_db = os.path.expanduser(args.graph_db)
     if not os.path.exists(graph_db):
         print(f"Error: graph DB {graph_db} does not exist", file=sys.stderr)
@@ -404,9 +451,11 @@ def cmd_remove_source(args: argparse.Namespace) -> None:
     g = load_from_graph_db(graph_db)
     counts = g.remove_source(args.remove_source)
     save_to_graph_db(graph_db, g)
-    print(f"Removed source '{args.remove_source}': "
-          f"{counts['nodes_removed']} nodes deleted, {counts['nodes_updated']} nodes updated, "
-          f"{counts['edges_removed']} edges deleted, {counts['edges_updated']} edges updated")
+    print(
+        f"Removed source '{args.remove_source}': "
+        f"{counts['nodes_removed']} nodes deleted, {counts['nodes_updated']} nodes updated, "
+        f"{counts['edges_removed']} edges deleted, {counts['edges_updated']} edges updated"
+    )
 
 
 def cmd_query(args: argparse.Namespace) -> None:
@@ -420,8 +469,10 @@ def cmd_query(args: argparse.Namespace) -> None:
     else:
         print(f"{len(results)} matching nodes:")
         for n in results:
-            print(f'  [{n.get("type", "?")}] {n.get("label", "")} ({n.get("id", "")}) '
-                  f'score={n.get("score", 0):g} match={n.get("match", "?")}')
+            print(
+                f"  [{n.get('type', '?')}] {n.get('label', '')} ({n.get('id', '')}) "
+                f"score={n.get('score', 0):g} match={n.get('match', '?')}"
+            )
 
 
 def cmd_path(args: argparse.Namespace) -> None:
@@ -462,11 +513,11 @@ def cmd_communities(args: argparse.Namespace) -> None:
         origin = "cached digest" if cached else "detected now"
         print(f"{len(clusters)} communities ({origin}):")
         for c in clusters:
-            print(f'  {c["label"]} — {c["size"]} members')
+            print(f"  {c['label']} — {c['size']} members")
             central = c.get("central_nodes") or []
             if central:
                 names = " · ".join(str(n.get("label", n.get("id", ""))) for n in central)
-                print(f'    central: {names}')
+                print(f"    central: {names}")
 
 
 def cmd_god_nodes(args: argparse.Namespace) -> None:
@@ -480,7 +531,7 @@ def cmd_god_nodes(args: argparse.Namespace) -> None:
     else:
         print(f"Top {len(gods)} god nodes:")
         for idx, gn in enumerate(gods, 1):
-            print(f'  {idx}. {gn["label"][:35]:35s} score={gn["composite_score"]:.3f}  deg={gn["degree"]}')
+            print(f"  {idx}. {gn['label'][:35]:35s} score={gn['composite_score']:.3f}  deg={gn['degree']}")
 
 
 def cmd_call_flow(args: argparse.Namespace) -> None:
@@ -499,10 +550,10 @@ def cmd_confidence(args: argparse.Namespace) -> None:
     g = tag_confidence(graph)
     s = confidence_stats(g)
     print("Edge confidence:")
-    print(f'  Total: {s["total"]}')
-    print(f'  EXTRACTED: {s["extracted"]} ({s["extracted_pct"]}%)')
-    print(f'  INFERRED:  {s["inferred"]} ({s["inferred_pct"]}%)')
-    print(f'  AMBIGUOUS: {s["ambiguous"]} ({s["ambiguous_pct"]}%)')
+    print(f"  Total: {s['total']}")
+    print(f"  EXTRACTED: {s['extracted']} ({s['extracted_pct']}%)")
+    print(f"  INFERRED:  {s['inferred']} ({s['inferred_pct']}%)")
+    print(f"  AMBIGUOUS: {s['ambiguous']} ({s['ambiguous_pct']}%)")
 
 
 def cmd_report(args: argparse.Namespace) -> None:
@@ -517,16 +568,19 @@ def cmd_report(args: argparse.Namespace) -> None:
 
 def cmd_pr_dashboard(args: argparse.Namespace) -> None:
     from .pr_dashboard import generate_pr_dashboard
+
     graph = _load_graph(args)
     out = args.output or "kgraph_pr_dashboard.html"
-    generate_pr_dashboard(os.getcwd(), days=args.days, graph_data=graph,
-                          output_path=out, author=args.author, max_prs=args.max_prs)
+    generate_pr_dashboard(
+        os.getcwd(), days=args.days, graph_data=graph, output_path=out, author=args.author, max_prs=args.max_prs
+    )
     print(f"PR dashboard written to {out}")
     print(f"Written to {out}")
 
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
     from .benchmark import benchmark_graph_vs_raw, format_benchmark
+
     graph = _load_graph(args)
     out = args.output or "benchmark_results.json"
     result = benchmark_graph_vs_raw(graph, output_path=out)
@@ -551,11 +605,17 @@ def cmd_render(args: argparse.Namespace) -> None:
     print("Wrote", outpath)
 
     if args.serve:
-        serve_file(outpath, host=args.host, port=args.port,
-                   store_path=args.store, force_embed=args.embed,
-                   graph_db_path=os.path.expanduser(args.graph_db),
-                   view_mode=args.view, semantic_threshold=args.semantic_threshold,
-                   reporter=print)
+        serve_file(
+            outpath,
+            host=args.host,
+            port=args.port,
+            store_path=args.store,
+            force_embed=args.embed,
+            graph_db_path=os.path.expanduser(args.graph_db),
+            view_mode=args.view,
+            semantic_threshold=args.semantic_threshold,
+            reporter=print,
+        )
     else:
         _build_subcommand_parser().print_help()
 
@@ -640,7 +700,7 @@ def _hooks_path_from_config(repo_root: str) -> str | None:
             timeout=5,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         logger.debug("core.hooksPath probe failed for %s", repo_root, exc_info=True)
         return None
     configured = result.stdout.strip()

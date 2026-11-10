@@ -1,4 +1,5 @@
 """Constants and import-time setup for the kgraph package."""
+
 import json
 import logging
 import os
@@ -9,9 +10,9 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_canonical_name(text: str) -> str:
-    norm = re.sub(r'\s+', ' ', str(text or '').strip().lower())
-    norm = re.sub(r'[^a-z0-9\s._:-]', ' ', norm)
-    norm = re.sub(r'\s+', ' ', norm).strip(' .:-')
+    norm = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    norm = re.sub(r"[^a-z0-9\s._:-]", " ", norm)
+    norm = re.sub(r"\s+", " ", norm).strip(" .:-")
     return norm
 
 
@@ -23,13 +24,13 @@ def normalize_canonical_name(text: str) -> str:
 # the real `memory_*` schema; `resolve_all_memory_db_paths()` returns whichever exist and
 # `update.py` merges every one of them.
 MEMORY_DB_CANDIDATES = [
-    '~/memory/registry.sqlite',
-    '~/.openclaw/workspace-rook/memory/registry.sqlite',
+    "~/memory/registry.sqlite",
+    "~/.openclaw/workspace-rook/memory/registry.sqlite",
 ]
 
-GRAPH_DB_DEFAULT = '~/.openclaw/kgraph.sqlite'
-LIFE_ROOT_DEFAULT = '~/.openclaw/life'
-CANONICAL_CONCEPTS_DEFAULT = '~/.openclaw/life/canonical-concepts.json'
+GRAPH_DB_DEFAULT = "~/.openclaw/kgraph.sqlite"
+LIFE_ROOT_DEFAULT = "~/.openclaw/life"
+CANONICAL_CONCEPTS_DEFAULT = "~/.openclaw/life/canonical-concepts.json"
 
 # Annotated so the type is not inferred from the heterogeneous literal, which
 # mypy widens to `dict[str, object]` and makes every element access un-iterable.
@@ -38,13 +39,9 @@ SAMPLE_GRAPH: dict[str, list[dict[str, object]]] = {
         {"id": 1, "label": "Cluster A"},
         {"id": 2, "label": "Cluster B"},
         {"id": 3, "label": "Item 1"},
-        {"id": 4, "label": "Item 2"}
+        {"id": 4, "label": "Item 2"},
     ],
-    "edges": [
-        {"from": 1, "to": 3},
-        {"from": 1, "to": 4},
-        {"from": 2, "to": 4}
-    ]
+    "edges": [{"from": 1, "to": 3}, {"from": 1, "to": 4}, {"from": 2, "to": 4}],
 }
 
 # ── Concept classification data — ONE loader, ONE home ──────────────────────
@@ -57,17 +54,27 @@ SAMPLE_GRAPH: dict[str, list[dict[str, object]]] = {
 # into the JSON on 2026-09-16 and every consumer now reads it from here
 # (docs/inspection.md 11.14).  It lives in constants.py because that module
 # imports nothing local, so no consumer can create an import cycle.
-_CONCEPT_CONFIG_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "config", "concept-aliases.json"
-)
+_CONCEPT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "concept-aliases.json")
+
+
+class ConceptConfigError(RuntimeError):
+    """The concept classification config is missing or unusable.
+
+    Raising is deliberate.  Returning an empty mapping disabled every filter
+    (scaffolding labels, aliases, low-value concepts, agent roles) while the
+    import continued, so the graph filled with noise and the only trace was a
+    warning.  The classifier's own comment already says a warning nobody reads is
+    the same as no warning; absence must stop the run.
+    """
 
 
 def load_concept_config() -> dict:
-    """Load concept aliases and classification data from config/concept-aliases.json."""
-    # TWO layouts: a repo checkout keeps it at <repo>/config/, while an INSTALLED tool receives
-    # it as a data file at <prefix>/config/.  Restored 2026-10-18 from git blob 208b62ef after
-    # the file went missing and concept filtering was silently disabled — the warning below was
-    # the only trace of it, and a warning nobody reads is the same as no warning.
+    """Load concept aliases and classification data from config/concept-aliases.json.
+
+    Tries the package copy, the repo checkout's config/, then the installed
+    prefix.  A file that parses but is not the expected mapping is refused for
+    the same reason a missing one is.
+    """
     candidates = (
         os.path.join(os.path.dirname(__file__), "config", "concept-aliases.json"),
         os.path.normpath(_CONCEPT_CONFIG_PATH),
@@ -77,14 +84,24 @@ def load_concept_config() -> dict:
     for path in candidates:
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                return json.load(fh)
+                config = json.load(fh)
         except (OSError, json.JSONDecodeError) as exc:
             last_exc = exc
-    # Without this config all concept filtering (scaffolding labels, aliases,
-    # low-value concepts, agent roles) is silently disabled.
-    logger.warning("concept config unavailable at %s: %s — filtering disabled",
-                   " or ".join(candidates), last_exc)
-    return {}
+            continue
+        if not isinstance(config, dict):
+            last_exc = ValueError(f"{path} holds {type(config).__name__}, not an object")
+            continue
+        missing = [
+            key
+            for key in ("scaffolding_labels", "concept_aliases", "low_value_semantic_concepts", "stopwords")
+            if not isinstance(config.get(key), (list, dict))
+        ]
+        if missing:
+            last_exc = ValueError(f"{path} is missing {', '.join(missing)}")
+            continue
+        return config
+    logger.error("concept config unavailable at %s: %s", " or ".join(candidates), last_exc)
+    raise ConceptConfigError(f"concept config unusable ({last_exc}); tried {', '.join(candidates)}")
 
 
 _concept_config = load_concept_config()
@@ -132,31 +149,57 @@ SOURCES_VERSION = "1"
 # is not read as if it were current.
 COMMUNITY_DIGEST_VERSION = "1"
 
-CURATED_EDGE_LABELS = frozenset({
-    "covers topic", "mentions actor", "authored by", "references file",
-    "file mentions actor", "file authored by", "has project", "has decision",
-    "has issue", "has outcome",
-})
+CURATED_EDGE_LABELS = frozenset(
+    {
+        "covers topic",
+        "mentions actor",
+        "authored by",
+        "references file",
+        "file mentions actor",
+        "file authored by",
+        "has project",
+        "has decision",
+        "has issue",
+        "has outcome",
+    }
+)
 
 AST_EDGE_DEFINES = "defines"
 AST_EDGE_CALLS = "calls"
 AST_EDGE_IMPORTS = "imports"
 AST_EDGE_RESOLVES_TO = "resolves_to"
 AST_NODE_TYPES = frozenset({"function", "class", "call", "module", "variable"})
-AST_EDGE_LABELS = frozenset({
-    AST_EDGE_DEFINES, AST_EDGE_CALLS, AST_EDGE_IMPORTS, AST_EDGE_RESOLVES_TO,
-})
+AST_EDGE_LABELS = frozenset(
+    {
+        AST_EDGE_DEFINES,
+        AST_EDGE_CALLS,
+        AST_EDGE_IMPORTS,
+        AST_EDGE_RESOLVES_TO,
+    }
+)
 
 # The canonical project/decision/issue relation labels.  projection.py declared
 # this set and confidence.py carried a byte-identical private copy
 # (_CANONICAL_RELATION_LABELS), so a change to one would have silently
 # reclassified edges in the other.  Declared here once, imported by both.
-CANONICAL_RELATION_LABELS = frozenset({
-    "project decision", "project issue", "project outcome", "project topic",
-    "project owner", "decision addresses issue", "decision drives outcome",
-    "issue affects outcome", "topic decision", "topic issue", "topic outcome",
-    "actor decision", "actor issue", "actor outcome",
-})
+CANONICAL_RELATION_LABELS = frozenset(
+    {
+        "project decision",
+        "project issue",
+        "project outcome",
+        "project topic",
+        "project owner",
+        "decision addresses issue",
+        "decision drives outcome",
+        "issue affects outcome",
+        "topic decision",
+        "topic issue",
+        "topic outcome",
+        "actor decision",
+        "actor issue",
+        "actor outcome",
+    }
+)
 
 # Labels that emitters write as literals, named so a consumer imports the name
 # instead of retyping the string.  Reading the emitters found two members the
@@ -173,10 +216,27 @@ MENTIONS_ACTOR_LABEL = "mentions actor"
 # AST set, and "unknown" — which models.py assigns by default, so it is a
 # member rather than a finding (a node with no type is worth seeing, but it is
 # expected, and flagging every one would bury the labels that are not).
-NODE_TYPES = frozenset({
-    "actor", "chunk", "decision", "file", "issue", "memory", "organization",
-    "outcome", "person", "place", "project", "summary", "topic", "unknown",
-}) | AST_NODE_TYPES
+NODE_TYPES = (
+    frozenset(
+        {
+            "actor",
+            "chunk",
+            "decision",
+            "file",
+            "issue",
+            "memory",
+            "organization",
+            "outcome",
+            "person",
+            "place",
+            "project",
+            "summary",
+            "topic",
+            "unknown",
+        }
+    )
+    | AST_NODE_TYPES
+)
 
 # Labels that are families rather than fixed strings, e.g. "summarizes <topic>".
 # Kept separate from EDGE_LABELS because a prefix cannot be a set member, but it
@@ -186,7 +246,9 @@ EDGE_LABEL_PREFIXES = ("summarizes ",)
 # Everything an edge label may be: the curated set, the AST set, and the
 # semantic/derived labels the emitters and confidence rules match by name.
 EDGE_LABELS = frozenset(
-    CURATED_EDGE_LABELS | AST_EDGE_LABELS | {
+    CURATED_EDGE_LABELS
+    | AST_EDGE_LABELS
+    | {
         SEMANTIC_SUMMARY_LABEL,
         SEMANTIC_RELATED_LABEL,
         RELATED_CONCEPT_LABEL,
@@ -203,5 +265,3 @@ def is_summary_edge_label(label: str) -> bool:
     changes, both consumers change with it.
     """
     return label == SEMANTIC_SUMMARY_LABEL or label.startswith(EDGE_LABEL_PREFIXES)
-
-

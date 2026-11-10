@@ -14,6 +14,13 @@ setup_file() {
     TAC_TEST_TMPDIR="$(mktemp -d)"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
     mkdir -p "$TAC_CACHE_DIR"
+    # Isolate HOME: sourcing the profile derives OC_ROOT/OC_LOGS/OC_BACKUPS and
+    # the model-drive path from it, and with the real HOME this suite created
+    # directories in the operator's live tree.
+    export _TAC_REAL_HOME="$HOME"
+    export HOME="$TAC_TEST_TMPDIR/home"
+    mkdir -p "$HOME"
+    unset OC_AGENTS OC_AGENTS_SANDBOXED
     export __TAC_INITIALIZED=1
     export TAC_SKIP_PWSH=1
 

@@ -159,7 +159,7 @@ def _extract_ad_fields(adv_data: bytes) -> tuple[list[int], dict[int, bytes], di
         elif ad_type in (0x08, 0x09):
             try:
                 local_name = payload.decode("utf-8", errors="ignore").strip() or None
-            except (UnicodeDecodeError, AttributeError):
+            except UnicodeDecodeError, AttributeError:
                 # payload is bytes and errors="ignore" makes the decode total, so this
                 # guards a malformed buffer rather than a routine path.  A different
                 # exception is a bug and must surface.
@@ -172,16 +172,16 @@ def _extract_ad_fields(adv_data: bytes) -> tuple[list[int], dict[int, bytes], di
 def _parse_mi_scale_v2_live_frame(data: bytes) -> tuple[float | None, int | None]:
     """
     Parse Mi Scale v2 live 13-byte frame in 0x181b service data.
-    
+
     Format: [frame_type(1)][product_id(1)][mi_scale_frame(13)]
-    
+
     Mi Scale frame layout (starting after the 2-byte header):
       [0] Status byte 0 (bit 0 = lbs unit)
       [1] Status byte 1 (bit 1 = has_impedance, bit 5 = stable, bit 7 = removed)
       [2-8] Flags / reserved
       [9-10] Impedance (LE uint16, ohms) if has_impedance=1
       [11-12] Weight (LE uint16 in 0.01 kg units) → divide by 200 for kg
-    
+
     Returns (weight_kg, impedance_ohm) or (None, None) if not a valid stable frame.
     """
     # Service data blob (after UUID prefix stripped): 13 bytes, no extra header.
@@ -204,7 +204,7 @@ def _parse_mi_scale_v2_live_frame(data: bytes) -> tuple[float | None, int | None
     # stable=True is the final locked-in weight (user stepped off).
     if not stable:
         return None, None
-    
+
     # Parse weight (bytes 11-12 of frame, LE, in 0.01 kg units → divide by 200 = kg)
     weight_offset = frame_offset + 11
     weight_raw = _u16_le(data, weight_offset)
@@ -212,7 +212,7 @@ def _parse_mi_scale_v2_live_frame(data: bytes) -> tuple[float | None, int | None
         weight_kg = None
     else:
         weight_kg = round(weight_raw / 200.0, 2)
-    
+
     # Parse impedance if present (bytes 9-10 of frame, LE, in ohms)
     impedance_ohm = None
     if has_impedance:
@@ -220,7 +220,7 @@ def _parse_mi_scale_v2_live_frame(data: bytes) -> tuple[float | None, int | None
         imp_raw = _u16_le(data, imp_offset)
         if imp_raw is not None and 100 <= imp_raw <= 2000:
             impedance_ohm = imp_raw
-    
+
     return weight_kg, impedance_ohm
 
 
@@ -247,7 +247,7 @@ def _parse_govee_frame(mfg_data: bytes) -> tuple[float | None, float | None]:
     H5075 advertising format uses manufacturer data under 0xEC88/0x8801.
     The payload packs temperature and relative humidity into 3 bytes, with an
     optional battery byte following.
-    
+
     Returns (temp_c, humidity_pct) or (None, None) if not parseable.
     """
     if not mfg_data or len(mfg_data) < 3:
@@ -269,7 +269,7 @@ def _parse_govee_frame(mfg_data: bytes) -> tuple[float | None, float | None]:
 
         if -50.0 <= temp_c <= 60.0 and 0.0 <= humidity_pct <= 100.0:
             return round(temp_c, 2), round(humidity_pct, 2)
-    except (ValueError, TypeError, IndexError):
+    except ValueError, TypeError, IndexError:
         # A malformed advertisement is not a parse result: the caller reads
         # (None, None) as "not parseable".  Only the shape errors the slicing and
         # arithmetic can raise are caught; anything else is a bug and must surface.
@@ -433,7 +433,7 @@ class USBHciScanner:
                 self.dev.attach_kernel_driver(intf.bInterfaceNumber)
             except usb.core.USBError:
                 pass
-        except (usb.core.USBError, ValueError, KeyError, IndexError):
+        except usb.core.USBError, ValueError, KeyError, IndexError:
             # Teardown must not mask the USB failure that brought us here: libusb
             # errors and the configuration/interface container lookups above are the
             # expected ones.  Anything else is a bug and must surface.
@@ -545,7 +545,7 @@ def parse_adv_reports(event_pkt: bytes) -> list[Detection]:
         mfg_blob = mfg.get(manufacturer_id, b"") if manufacturer_id is not None else b""
         weight_kg, impedance_ohm = _heuristic_decode(svc_blob, mfg_blob)
         is_mi = _looks_like_mi_scale(mac, uuids, manufacturer_id)
-        
+
         # Parse Govee data if applicable
         is_gov = _looks_like_govee(manufacturer_id, name)
         temp_c, humidity_pct = None, None
@@ -574,15 +574,28 @@ def parse_adv_reports(event_pkt: bytes) -> list[Detection]:
     return out
 
 
+def _post_influx(url: str, data: str) -> bool:
+    """POST one line-protocol body and report whether InfluxDB ACCEPTED it.
+
+    A bare `requests.post(...); return True` reported success for a 4xx/5xx
+    response: the write never happened and the only trace was at DEBUG.
+    """
+    response = requests.post(url, data=data, timeout=5)
+    if response.status_code >= 300:
+        log.warning("InfluxDB rejected a write (HTTP %s) at %s", response.status_code, url)
+        return False
+    return True
+
+
 def _write_to_influxdb(detection: Detection, influx_url: str = "http://127.0.0.1:8086/write?db=sensor_data") -> bool:
     """Write detection data to InfluxDB."""
     if not requests:
         return False
-    
+
     try:
         timestamp_ns = int(datetime.now(timezone.utc).timestamp() * 1e9)
         lines = []
-        
+
         # Mi Scale data
         if detection.is_mi_scale and detection.weight_kg is not None:
             tags = f"mac={detection.mac},type=mi_scale"
@@ -595,7 +608,7 @@ def _write_to_influxdb(detection: Detection, influx_url: str = "http://127.0.0.1
             if fields:
                 line = f"body_composition,{tags} {','.join(fields)} {timestamp_ns}"
                 lines.append(line)
-        
+
         # Govee data -> canonical indoor_env series (Jarvis-Govee-H5075-Protocol.md L80-87)
         if detection.is_govee and (detection.temp_c is not None or detection.humidity_pct is not None):
             _bs = chr(92)  # line-protocol escape without a literal backslash in the source
@@ -623,13 +636,11 @@ def _write_to_influxdb(detection: Detection, influx_url: str = "http://127.0.0.1
             if fields:
                 line = f"indoor_env,{tags} {','.join(fields)} {timestamp_ns}"
                 lines.append(line)
-        
+
         if lines:
-            data = "\n".join(lines)
-            requests.post(influx_url, data=data, timeout=5)
-            return True
+            return _post_influx(influx_url, "\n".join(lines))
     except Exception as e:
-        log.debug("InfluxDB write failed: %s", e)
+        log.warning("InfluxDB write failed: %s", e)
     return False
 
 
@@ -657,7 +668,7 @@ def _daily_first_exists(
         series = data.get("results", [{}])[0].get("series", [])
         return bool(series)
     except Exception as e:
-        log.debug("InfluxDB daily-first existence query failed: %s", e)
+        log.warning("InfluxDB daily-first existence query failed: %s", e)
         return False
 
 
@@ -688,10 +699,9 @@ def _write_daily_first_to_influxdb(
             fields.append(f"impedance_ohm={detection.impedance_ohm}i")
         fields.append(f"rssi={detection.rssi}i")
         line = f"body_composition_daily,{tags} {','.join(fields)} {timestamp_ns}"
-        requests.post(influx_url, data=line, timeout=5)
-        return True
+        return _post_influx(influx_url, line)
     except Exception as e:
-        log.debug("InfluxDB daily-first write failed: %s", e)
+        log.warning("InfluxDB daily-first write failed: %s", e)
         return False
 
 
@@ -721,11 +731,11 @@ def publish_detection(client: mqtt.Client, d: Detection, target_mac: str, write_
             "manufacturer_data_hex": d.manufacturer_data_hex,
         }
         client.publish(f"bt/mi_scale/{d.mac}", json.dumps(mi_payload, separators=(",", ":")), qos=0, retain=False)
-        
+
         if write_influx and d.weight_kg is not None:
             _write_to_influxdb(d)
             _write_daily_first_to_influxdb(d)
-    
+
     if d.is_govee and (d.temp_c is not None or d.humidity_pct is not None):
         gov_payload = {
             "ts": ts,
@@ -737,7 +747,7 @@ def publish_detection(client: mqtt.Client, d: Detection, target_mac: str, write_
             "manufacturer_data_hex": d.manufacturer_data_hex,
         }
         client.publish(f"bt/govee/{d.mac}", json.dumps(gov_payload, separators=(",", ":")), qos=0, retain=False)
-        
+
         if write_influx and (d.temp_c is not None or d.humidity_pct is not None):
             _write_to_influxdb(d)
 
@@ -772,7 +782,7 @@ def scan_and_publish(client: mqtt.Client, scan_seconds: int, target_mac: str, vi
     finally:
         try:
             scanner.set_scan_enable(False)
-        except (usb.core.USBError, RuntimeError):
+        except usb.core.USBError, RuntimeError:
             # The scanner is being torn down; a USB error or a closed device
             # (RuntimeError "device not open") is expected here and must not hide the
             # scan's own outcome.  Anything else is a bug and must surface.
@@ -800,7 +810,9 @@ def main() -> None:
     pid = parse_hex_int(args.usb_pid)
     target_mac = args.target_mac.upper()
 
-    client = mqtt.Client(client_id="nas-bt-bridge", callback_api_version=mqtt.CallbackAPIVersion.VERSION2, clean_session=True)
+    client = mqtt.Client(
+        client_id="nas-bt-bridge", callback_api_version=mqtt.CallbackAPIVersion.VERSION2, clean_session=True
+    )
     client.will_set("bt/bridge/status", "offline", qos=1, retain=True)
 
     try:

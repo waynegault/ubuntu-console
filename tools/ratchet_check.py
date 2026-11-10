@@ -4,6 +4,7 @@ Every counter is a pure function of one file's text, so --selftest can exercise 
 a fixture instead of on the repo.  The corpus-wide number is their sum.
 """
 
+import importlib
 import os
 import re
 import subprocess
@@ -15,6 +16,12 @@ import sys
 # check mode.  They are not a fallback for a caller that forgot an argument:
 # running the program with too few arguments still raises.
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+# Loaded through importlib: a plain `from tools.fsutil import ...` would be an
+# E402 import after the sys.path bootstrap, which the repo bans.
+_fsutil = importlib.import_module("tools.fsutil")
+atomic_write_text = _fsutil.atomic_write_text
 BASELINE = os.path.join(REPO, "tools", "ratchet-baseline.tsv")
 MODE = "check"
 
@@ -344,14 +351,13 @@ def _preserved_comments(path):
 
 def write_baseline(path, counts):
     preserved = _preserved_comments(path)
-    with open(path, "w", encoding="utf-8") as fh:
-        for line in _BASELINE_HEADER:
-            fh.write(line + "\n")
-        # ...then any hand-added provenance, so a re-baseline no longer destroys it.
-        for line in preserved:
-            fh.write(line + "\n")
-        for cid, _desc, _fn in COUNTERS:
-            fh.write(f"{cid}\t{counts[cid]}\n")
+    lines: list[str] = list(_BASELINE_HEADER)
+    # ...then any hand-added provenance, so a re-baseline no longer destroys it.
+    lines.extend(preserved)
+    lines.extend(f"{cid}\t{counts[cid]}" for cid, _desc, _fn in COUNTERS)
+    # Atomic: a failed rewrite used to leave a truncated baseline, and the next
+    # check then read every counter as "missing" and reddened all of them.
+    atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def corpus_counts():

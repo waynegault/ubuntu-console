@@ -33,6 +33,15 @@ setup_file() {
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
     mkdir -p "$TAC_CACHE_DIR"
 
+    # The teardown's recovery net may RESTART the gateway.  Record whether it was
+    # already active when this run began: a gateway the operator deliberately
+    # stopped must not be resurrected by a test run (Wayne's rule — a down gateway
+    # may be his own stop).  Only "active at start, down at teardown" is repaired.
+    if systemctl --user is-active --quiet openclaw-gateway.service 2>/dev/null
+    then
+        : > "$TAC_TEST_TMPDIR/gateway-was-active-at-start"
+    fi
+
     # Pre-set to skip dashboard auto-launch and clear_tactical
     export __TAC_INITIALIZED=1
 
@@ -86,7 +95,8 @@ teardown_file() {
     # LIMIT, stated rather than implied: an exit net cannot run if the suite's whole
     # process tree is SIGKILLed, and bats owns the signal traps. That residue is why
     # openclaw-gateway-guard.service exists; this net only shortens the window.
-    if [[ -f "${TAC_TEST_TMPDIR:-/tmp/bats-noop}/gateway-touched" ]]
+    if [[ -f "${TAC_TEST_TMPDIR:-/tmp/bats-noop}/gateway-touched" ]] \
+        && [[ -f "${TAC_TEST_TMPDIR:-/tmp/bats-noop}/gateway-was-active-at-start" ]]
     then
         local _gw=""
         if ! _gw=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)

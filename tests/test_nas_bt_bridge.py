@@ -116,6 +116,41 @@ def test_run_does_not_swallow_an_unexpected_exception() -> None:
         bridge.run(cast(Any, 123))
 
 
+def test_influx_write_reports_a_rejected_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 4xx/5xx from InfluxDB is FAILURE, not a successful write.
+
+    The old code ignored `requests.post`'s response entirely and returned True,
+    so a rejected line-protocol body left no trace above DEBUG.
+    """
+
+    class _Response:
+        status_code = 204
+
+    class _Requests:
+        @staticmethod
+        def post(_url: str, data: str, timeout: int) -> _Response:
+            del data, timeout
+            return _Response()
+
+    monkeypatch.setattr(bridge, "requests", _Requests)
+    detection = bridge.Detection(
+        mac="aa:bb",
+        rssi=-50,
+        name=None,
+        payload_hex="",
+        service_uuids=[],
+        manufacturer_id=None,
+        service_data_hex="",
+        manufacturer_data_hex="",
+        weight_kg=70.0,
+        impedance_ohm=None,
+        is_mi_scale=True,
+    )
+    assert bridge._write_to_influxdb(detection, "http://127.0.0.1:8086/write") is True
+    _Response.status_code = 400
+    assert bridge._write_to_influxdb(detection, "http://127.0.0.1:8086/write") is False
+
+
 def test_parse_govee_frame_rejects_a_malformed_payload_without_raising() -> None:
     """A malformed advertisement is (None, None), the documented "not parseable".
 

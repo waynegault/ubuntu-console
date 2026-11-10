@@ -47,8 +47,13 @@ try:
     greedy_modularity_communities = _community_mod.greedy_modularity_communities
     louvain_communities = _community_mod.louvain_communities
     _NX_AVAILABLE = True
-except ImportError:
+except ImportError as exc:
     _NX_AVAILABLE = False
+    logger.warning(
+        "networkx is unavailable (%s) — community detection and centrality "
+        "will return the graph unchanged / an empty mapping",
+        exc,
+    )
 
 # Louvain is expensive on large graphs (quadratic-ish refinement passes).
 # Above this node count, requests for Louvain fall back to greedy modularity
@@ -86,8 +91,7 @@ def _build_nx_graph(graph: Graph) -> Any:
             # store an explicit `distance` (stronger = shorter) and use that for
             # betweenness; otherwise a strong-linked hub is scored as a weak
             # bridge.
-            G.add_edge(e.source, e.target, weight=strength,
-                       distance=1.0 / max(float(strength), 1e-9))
+            G.add_edge(e.source, e.target, weight=strength, distance=1.0 / max(float(strength), 1e-9))
     return G
 
 
@@ -106,12 +110,16 @@ def detect_communities(graph: Graph | dict, method: str = "leiden_like", **kwarg
         graph = Graph.from_dict(graph)
 
     if not _NX_AVAILABLE:
+        logger.debug("community detection skipped: networkx unavailable")
         return graph
 
     min_community_size = kwargs.get("min_community_size", 2)
     G = _build_nx_graph(graph)
 
     if G.number_of_nodes() < 3 or G.number_of_edges() < 2:
+        logger.debug(
+            "community detection skipped: graph has %d nodes / %d edges", G.number_of_nodes(), G.number_of_edges()
+        )
         return graph
 
     node_labels = {n.id: (n.label or n.id) for n in graph.nodes}
@@ -139,7 +147,10 @@ def detect_communities(graph: Graph | dict, method: str = "leiden_like", **kwarg
     elapsed = time.monotonic() - started
     logger.info(
         "Community detection (%s) on %d nodes, %d edges: %.1fs",
-        effective_method, G.number_of_nodes(), G.number_of_edges(), elapsed,
+        effective_method,
+        G.number_of_nodes(),
+        G.number_of_edges(),
+        elapsed,
     )
 
     graph.meta.community_method = effective_method
@@ -152,12 +163,14 @@ def detect_communities(graph: Graph | dict, method: str = "leiden_like", **kwarg
         label = " · ".join(labels) if len(labels) >= 2 else (labels[0] if labels else f"community_{idx}")
         if len(mlist) > 3:
             label += f" (+{len(mlist) - 3})"
-        community_list.append({
-            "id": f"community_{idx}",
-            "label": label[:80],
-            "members": mlist,
-            "size": len(mlist),
-        })
+        community_list.append(
+            {
+                "id": f"community_{idx}",
+                "label": label[:80],
+                "members": mlist,
+                "size": len(mlist),
+            }
+        )
 
     if community_list:
         graph.meta.communities = community_list
@@ -174,10 +187,12 @@ def compute_centrality(graph: Graph | dict) -> dict:
         graph = Graph.from_dict(graph)
 
     if not _NX_AVAILABLE:
+        logger.debug("centrality skipped: networkx unavailable")
         return {}
 
     G = _build_nx_graph(graph)
     if G.number_of_nodes() < 2:
+        logger.debug("centrality skipped: graph has %d node(s)", G.number_of_nodes())
         return {}
 
     node_labels = {n.id: (n.label or n.id) for n in graph.nodes}
@@ -208,29 +223,33 @@ def compute_centrality(graph: Graph | dict) -> dict:
             # Fall back to per-component power iteration:
             # each connected component is scored on its own dominant-eigenvector
             # scale; isolated nodes stay at 0.0.
-            logger.warning(
-                "Eigenvector centrality (numpy) failed (%s); using per-component fallback", exc
-            )
+            logger.warning("Eigenvector centrality (numpy) failed (%s); using per-component fallback", exc)
             eigenvector = {}
             for component in nx.connected_components(G):
                 if len(component) < 2:
                     continue
                 try:
-                    ev = nx.eigenvector_centrality(
-                        G.subgraph(component), max_iter=200, weight="weight"
-                    )
-                except (nx.PowerIterationFailedConvergence, ValueError, TypeError,
-                        ZeroDivisionError, ArithmeticError) as exc2:
+                    ev = nx.eigenvector_centrality(G.subgraph(component), max_iter=200, weight="weight")
+                except (
+                    nx.PowerIterationFailedConvergence,
+                    ValueError,
+                    TypeError,
+                    ZeroDivisionError,
+                    ArithmeticError,
+                ) as exc2:
                     logger.warning(
                         "Eigenvector centrality fallback failed for component of %d nodes: %s",
-                        len(component), exc2,
+                        len(component),
+                        exc2,
                     )
                     continue
                 eigenvector.update(ev)
     for warning in caught_warnings:
         logger.warning(
             "eigenvector_centrality_numpy warning at %s:%s: %s",
-            warning.filename, warning.lineno, warning.message,
+            warning.filename,
+            warning.lineno,
+            warning.message,
         )
 
     for nid in G.nodes():
@@ -261,14 +280,16 @@ def _rank_nodes(centralities: dict) -> list[dict]:
         btw_norm = data["betweenness"] * 5.0
         eig_norm = data["eigenvector"] * 3.0
         composite = round((degree_norm * 0.3 + btw_norm * 0.4 + eig_norm * 0.3), 4)
-        scored.append({
-            "id": nid,
-            "label": data["label"],
-            "composite_score": composite,
-            "degree": data["degree"],
-            "betweenness": data["betweenness"],
-            "eigenvector": data["eigenvector"],
-        })
+        scored.append(
+            {
+                "id": nid,
+                "label": data["label"],
+                "composite_score": composite,
+                "degree": data["degree"],
+                "betweenness": data["betweenness"],
+                "eigenvector": data["eigenvector"],
+            }
+        )
 
     # id as the tie-break, so two runs on the same graph order identically.
     scored.sort(key=lambda x: (-x["composite_score"], x["id"]))
@@ -293,9 +314,9 @@ DEFAULT_CENTRAL_NODES = 3
 DEFAULT_BOUNDARY_EDGES = 5
 
 
-def digest_communities(graph: Graph | dict,
-                       central_nodes: int = DEFAULT_CENTRAL_NODES,
-                       boundary_edges: int = DEFAULT_BOUNDARY_EDGES) -> Graph:
+def digest_communities(
+    graph: Graph | dict, central_nodes: int = DEFAULT_CENTRAL_NODES, boundary_edges: int = DEFAULT_BOUNDARY_EDGES
+) -> Graph:
     """Write a short, deterministic community report onto each community.
 
     REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural
@@ -351,13 +372,9 @@ def digest_communities(graph: Graph | dict,
         picks = [rank_by_id[m] for m in members if m in rank_by_id]
         picks.sort(key=lambda r: (-r["composite_score"], r["id"]))
         community["central_nodes"] = [
-            {"id": r["id"], "label": r["label"], "composite_score": r["composite_score"]}
-            for r in picks[:central_nodes]
+            {"id": r["id"], "label": r["label"], "composite_score": r["composite_score"]} for r in picks[:central_nodes]
         ]
-        community["god_nodes"] = [
-            {"id": r["id"], "label": r["label"]}
-            for r in picks if r["id"] in god_ids
-        ]
+        community["god_nodes"] = [{"id": r["id"], "label": r["label"]} for r in picks if r["id"] in god_ids]
 
         boundary: list[CommunityBoundaryEdge] = []
         for e in graph.edges:
@@ -365,12 +382,14 @@ def digest_communities(graph: Graph | dict,
             dst_in = e.target in member_set
             if src_in == dst_in:
                 continue
-            boundary.append({
-                "source": e.source,
-                "target": e.target,
-                "label": e.label,
-                "direction": "out" if src_in else "in",
-            })
+            boundary.append(
+                {
+                    "source": e.source,
+                    "target": e.target,
+                    "label": e.label,
+                    "direction": "out" if src_in else "in",
+                }
+            )
         boundary.sort(key=lambda b: (b["source"], b["target"], b["label"]))
         community["boundary_edge_count"] = len(boundary)
         community["boundary_edges"] = boundary[:boundary_edges]

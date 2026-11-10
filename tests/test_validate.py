@@ -51,10 +51,12 @@ class TestValidateLimits(unittest.TestCase):
         nested: object = "leaf"
         for _ in range(500):
             nested = {"nested": nested}
-        errors = self.validate.validate_graph({
-            "nodes": [{"id": "n", "label": "N", "payload": nested}],
-            "edges": [],
-        })
+        errors = self.validate.validate_graph(
+            {
+                "nodes": [{"id": "n", "label": "N", "payload": nested}],
+                "edges": [],
+            }
+        )
         self.assertTrue(any("Excessive nesting" in e["message"] for e in errors))
 
     def test_non_list_nodes_and_edges_are_reported(self):
@@ -68,17 +70,18 @@ class TestValidateLimits(unittest.TestCase):
             mock.patch.object(self.validate, "MAX_NODES", 1),
             mock.patch.object(self.validate, "MAX_EDGES", 1),
         ):
-            errors = self.validate.validate_graph({
-                "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
-                "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}],
-            })
+            errors = self.validate.validate_graph(
+                {
+                    "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+                    "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}],
+                }
+            )
         messages = " ".join(e["message"] for e in errors)
         self.assertIn("Too many nodes", messages)
         self.assertIn("Too many edges", messages)
 
     def test_schema_violations_are_reported(self):
-        errors = self.validate.validate_graph(
-            {"nodes": [{"label": "no id"}], "edges": []})
+        errors = self.validate.validate_graph({"nodes": [{"label": "no id"}], "edges": []})
         self.assertTrue(any(e["message"].startswith("Schema:") for e in errors))
 
 
@@ -89,18 +92,21 @@ class TestValidateXss(unittest.TestCase):
         self.validate = validate
 
     def test_detects_a_dangerous_pattern_at_top_level(self):
-        errors = self.validate.validate_graph({
-            "nodes": [{"id": "x", "label": "<script>alert(1)</script>"}],
-            "edges": [],
-        })
+        errors = self.validate.validate_graph(
+            {
+                "nodes": [{"id": "x", "label": "<script>alert(1)</script>"}],
+                "edges": [],
+            }
+        )
         self.assertTrue(any("dangerous patterns" in e["message"] for e in errors))
 
     def test_detects_a_dangerous_pattern_nested_in_a_container(self):
-        errors = self.validate.validate_graph({
-            "nodes": [{"id": "x", "label": "ok",
-                       "payload": {"deep": ["fine", "javascript:alert(1)"]}}],
-            "edges": [],
-        })
+        errors = self.validate.validate_graph(
+            {
+                "nodes": [{"id": "x", "label": "ok", "payload": {"deep": ["fine", "javascript:alert(1)"]}}],
+                "edges": [],
+            }
+        )
         self.assertTrue(any("payload" in e["message"] for e in errors))
 
     def test_skips_non_list_and_non_dict_items(self):
@@ -211,11 +217,7 @@ class TestValidateFileAndPayload(unittest.TestCase):
         self.assertIn("JSON string or dict", reason)
 
     def test_payload_rejects_deep_json_with_depth_error(self):
-        raw = (
-            '{"nodes":[{"id":"n","label":"N","payload":'
-            + "[" * 1500 + "0" + "]" * 1500
-            + '}],"edges":[]}'
-        )
+        raw = '{"nodes":[{"id":"n","label":"N","payload":' + "[" * 1500 + "0" + "]" * 1500 + '}],"edges":[]}'
         ok, reason = self.validate.validate_graph_payload(raw)
         self.assertFalse(ok)
         self.assertIn("Excessive nesting", reason)
@@ -227,10 +229,12 @@ class TestValidateFileAndPayload(unittest.TestCase):
         self.assertIn("nesting exceeds parser limit", reason)
 
     def test_payload_surfaces_the_first_error_message(self):
-        ok, reason = self.validate.validate_graph_payload({
-            "nodes": [{"id": "x", "label": "<script>alert(1)</script>"}],
-            "edges": [],
-        })
+        ok, reason = self.validate.validate_graph_payload(
+            {
+                "nodes": [{"id": "x", "label": "<script>alert(1)</script>"}],
+                "edges": [],
+            }
+        )
         self.assertFalse(ok)
         self.assertIn("dangerous patterns", reason)
 
@@ -240,7 +244,10 @@ class TestValidateCli(unittest.TestCase):
         env = dict(os.environ, PYTHONPATH=os.path.join(REPO_ROOT, "scripts"))
         return subprocess.run(
             [sys.executable, "-m", "kgraph.validate", *args],
-            capture_output=True, text=True, env=env, cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=REPO_ROOT,
         )
 
     def test_usage_without_arguments(self):
@@ -256,6 +263,22 @@ class TestValidateCli(unittest.TestCase):
             proc = self._run(path)
         self.assertEqual(proc.returncode, 0)
         self.assertIn("validation PASSED", proc.stdout)
+
+    def test_vocabulary_warnings_do_not_fail_the_cli(self):
+        """A warning is a report, not a rejection — the checks' own stated contract.
+
+        The failure this catches: the CLI exited 1 whenever the findings list was
+        non-empty, so a graph using a label outside the declared vocabulary — which
+        the importers themselves emit — was rejected as invalid.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "warn.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"nodes": [{"id": "a", "label": "A", "type": "claim"}], "edges": []}, f)
+            proc = self._run(path)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("[warning]", proc.stdout)
+        self.assertIn("validation PASSED with", proc.stdout)
 
     def test_invalid_file_exits_nonzero_with_issues(self):
         with tempfile.TemporaryDirectory() as td:

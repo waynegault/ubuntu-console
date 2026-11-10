@@ -1173,7 +1173,8 @@ EOS
 @test "train-runner: a second tenant is refused, not queued behind" {
     command -v flock >/dev/null || skip "flock unavailable"
     local lock="$TAC_TEST_TMPDIR/train2.lock" log="$TAC_TEST_TMPDIR/train2.log"
-    { flock -x 9; sleep 5; } 9>"$lock" &
+    # The flock lives on <lock>.mutex; $lock is the PID marker the probes read.
+    { flock -x 9; sleep 5; } 9>"$lock.mutex" &
     local holder=$!
     _bg "$holder"
     sleep 1

@@ -192,6 +192,14 @@ def test_scoring_is_deterministic():
 
 
 # ── safety and I/O edges ─────────────────────────────────────────────────────
+def test_model_selection_pins_an_explicit_name_and_discovers_otherwise():
+    """States the wrong outcome: an artefact filed under the literal "local"."""
+    assert llm_outcome_cases._select_model([{"id": "served-model"}], "pinned") == ("pinned", True)
+    assert llm_outcome_cases._select_model([{"id": "served-model"}], None) == ("served-model", False)
+    with pytest.raises(SystemExit):
+        llm_outcome_cases._select_model([], None)
+
+
 def test_a_remote_base_url_is_refused_before_any_request_is_sent():
     with pytest.raises(SystemExit) as excinfo:
         llm_outcome_cases._post_chat("https://api.example.com/v1", "m", "prompt", 1.0)

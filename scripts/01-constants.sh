@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 55
+# Module Version: 56
+#   v56 (2026-11-10): LLM_MODELSHELL_PID_DIR — one declaration for the directory the
+#     `model use` wrapper writes its PID file into.  11e (writer) and 11d (stale-lock
+#     reaper) each carried the `/tmp/llm-modelshell…` literal, so a test could not
+#     sandbox it and had to SKIP whenever the operator had a live model session.
 #   v55 (2026-11-09): the registry header gains gpu_carve (48) — the GPU carve the row was
 #     MEASURED under, in MiB as `nvidia-smi --query-gpu=memory.total` reports it.  Wayne,
 #     2026-11-08: "A tps figure must name its GPU carve."  Rows certified at 24 GiB and rows
@@ -607,6 +611,10 @@ export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
 # the REAL port, found this box's CPU lane on 8081, and both the witness and
 # __llm_server_stop treated that live lane as a backend the stop owned.
 export LLM_PORT="${LLM_PORT:-8081}"
+# Where `model use` records its wrapper PID. One declaration, because the writer
+# (11e) and the stale-lock reaper (11d) must agree, and a test must be able to
+# sandbox it instead of skipping whenever the operator has a live model session.
+export LLM_MODELSHELL_PID_DIR="${LLM_MODELSHELL_PID_DIR:-/tmp}"
 # The lane `so` treats as the production server (gateway baseUrl target).  Which
 # lane that is belongs to the host: this box's Xe 3B lane on 18081, an empty
 # table on a box with no resident lanes yet.  The generic 18081 remains the

@@ -68,19 +68,22 @@ def _write_artifact(path: Path, *, median: float, status: str = "complete", cont
         "context_size": context,
         "max_tokens": 32,
         "concurrency": 1,
-        "workloads": [{"id": "sample", "prompt_sha256": "prompt", "system_sha256": "",
-                       "max_tokens": 32, "temperature": 0.0}],
+        "workloads": [
+            {"id": "sample", "prompt_sha256": "prompt", "system_sha256": "", "max_tokens": 32, "temperature": 0.0}
+        ],
     }
     payload = {
         "schema_version": llm_benchmark.SCHEMA_VERSION,
         "status": status,
         "manifest": manifest,
-        "workloads": [{
-            "id": "sample",
-            "summary": {
-                "decode_tokens_per_second": {"median": median},
-            },
-        }],
+        "workloads": [
+            {
+                "id": "sample",
+                "summary": {
+                    "decode_tokens_per_second": {"median": median},
+                },
+            }
+        ],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -91,9 +94,7 @@ def test_endpoint_refuses_remote_or_credential_urls():
         llm_benchmark._local_endpoint("http://example.com:8080")
     with pytest.raises(llm_benchmark.BenchmarkError, match="loopback"):
         llm_benchmark._local_endpoint("http://user:secret@127.0.0.1:8080")
-    assert llm_benchmark._local_endpoint("http://[::1]:8080") == (
-        "http://[::1]:8080/v1/chat/completions"
-    )
+    assert llm_benchmark._local_endpoint("http://[::1]:8080") == ("http://[::1]:8080/v1/chat/completions")
 
 
 def test_workload_loader_is_strict_and_rejects_duplicate_ids(tmp_path):
@@ -111,10 +112,22 @@ def test_workload_loader_is_strict_and_rejects_duplicate_ids(tmp_path):
 
 def test_summary_reports_median_tail_and_failures():
     samples = [
-        {"warmup": False, "status": "ok", "ttft_ms": 10, "end_to_end_ms": 30,
-         "decode_tokens_per_second": 20, "observed_prompt_tokens_per_second": 100},
-        {"warmup": False, "status": "ok", "ttft_ms": 20, "end_to_end_ms": 50,
-         "decode_tokens_per_second": 10, "observed_prompt_tokens_per_second": 50},
+        {
+            "warmup": False,
+            "status": "ok",
+            "ttft_ms": 10,
+            "end_to_end_ms": 30,
+            "decode_tokens_per_second": 20,
+            "observed_prompt_tokens_per_second": 100,
+        },
+        {
+            "warmup": False,
+            "status": "ok",
+            "ttft_ms": 20,
+            "end_to_end_ms": 50,
+            "decode_tokens_per_second": 10,
+            "observed_prompt_tokens_per_second": 50,
+        },
         {"warmup": False, "status": "failed", "error": "timeout"},
         {"warmup": True, "status": "ok", "ttft_ms": 2},
     ]
@@ -127,7 +140,9 @@ def test_summary_reports_median_tail_and_failures():
 
 
 def test_run_writes_reproducible_redacted_artifact_and_concurrency_metrics(
-    tmp_path, streaming_server, monkeypatch,
+    tmp_path,
+    streaming_server,
+    monkeypatch,
 ):
     workload_file = tmp_path / "workloads.jsonl"
     prompt = "prompt text must never enter the report"
@@ -137,22 +152,37 @@ def test_run_writes_reproducible_redacted_artifact_and_concurrency_metrics(
     output = tmp_path / "run.json"
     monkeypatch.setattr(llm_benchmark, "_gpu_metadata", lambda _index: (None, None))
 
-    result = llm_benchmark.main([
-        "run",
-        "--endpoint", streaming_server,
-        "--workloads", str(workload_file),
-        "--output", str(output),
-        "--model-id", "fixture-model",
-        "--model-file", str(model_file),
-        "--quantization", "Q4_K_M",
-        "--runtime-version", "fixture-version",
-        "--runtime-build", "fixture-build",
-        "--context-size", "4096",
-        "--max-tokens", "32",
-        "--repetitions", "3",
-        "--warmups", "1",
-        "--concurrency", "2",
-    ])
+    result = llm_benchmark.main(
+        [
+            "run",
+            "--endpoint",
+            streaming_server,
+            "--workloads",
+            str(workload_file),
+            "--output",
+            str(output),
+            "--model-id",
+            "fixture-model",
+            "--model-file",
+            str(model_file),
+            "--quantization",
+            "Q4_K_M",
+            "--runtime-version",
+            "fixture-version",
+            "--runtime-build",
+            "fixture-build",
+            "--context-size",
+            "4096",
+            "--max-tokens",
+            "32",
+            "--repetitions",
+            "3",
+            "--warmups",
+            "1",
+            "--concurrency",
+            "2",
+        ]
+    )
 
     assert result == 0
     artifact_text = output.read_text(encoding="utf-8")
@@ -203,18 +233,29 @@ def test_runner_never_overwrites_artifact_without_force(tmp_path, capsys):
     workload.write_text('{"id":"one","prompt":"hello"}\n', encoding="utf-8")
     model_file = tmp_path / "model.gguf"
     model_file.write_bytes(b"fixture")
-    result = llm_benchmark.main([
-        "run",
-        "--endpoint", "http://127.0.0.1:1",
-        "--workloads", str(workload),
-        "--output", str(output),
-        "--model-id", "fixture",
-        "--model-file", str(model_file),
-        "--quantization", "Q4_K_M",
-        "--runtime-version", "test",
-        "--runtime-build", "fixture",
-        "--context-size", "2048",
-    ])
+    result = llm_benchmark.main(
+        [
+            "run",
+            "--endpoint",
+            "http://127.0.0.1:1",
+            "--workloads",
+            str(workload),
+            "--output",
+            str(output),
+            "--model-id",
+            "fixture",
+            "--model-file",
+            str(model_file),
+            "--quantization",
+            "Q4_K_M",
+            "--runtime-version",
+            "test",
+            "--runtime-build",
+            "fixture",
+            "--context-size",
+            "2048",
+        ]
+    )
     assert result == 2
     assert "output already exists" in capsys.readouterr().err
     assert output.read_text(encoding="utf-8") == "preserve me"
@@ -264,10 +305,12 @@ def test_comparison_rejects_workload_rows_that_do_not_match_manifest(tmp_path, m
     if mutation == "missing":
         payload["workloads"] = []
     else:
-        payload["workloads"].append({
-            "id": "unmanifested",
-            "summary": {"decode_tokens_per_second": {"median": 1}},
-        })
+        payload["workloads"].append(
+            {
+                "id": "unmanifested",
+                "summary": {"decode_tokens_per_second": {"median": 1}},
+            }
+        )
     current.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(
@@ -280,9 +323,15 @@ def test_comparison_rejects_workload_rows_that_do_not_match_manifest(tmp_path, m
 def test_compare_cli_reports_regression_with_nonzero_status(tmp_path, capsys):
     baseline = _write_artifact(tmp_path / "baseline.json", median=100)
     current = _write_artifact(tmp_path / "current.json", median=80)
-    result = llm_benchmark.main([
-        "compare", str(baseline), str(current), "--max-regression-pct", "10",
-    ])
+    result = llm_benchmark.main(
+        [
+            "compare",
+            str(baseline),
+            str(current),
+            "--max-regression-pct",
+            "10",
+        ]
+    )
     report = json.loads(capsys.readouterr().out)
     assert result == 1
     assert report["passed"] is False
@@ -300,29 +349,93 @@ def _write_artifact_with_samples(path: Path, rates: list[float]) -> Path:
         "context_size": 4096,
         "max_tokens": 32,
         "concurrency": 1,
-        "workloads": [{
-            "id": "sample",
-            "prompt_sha256": "prompt",
-            "system_sha256": "",
-            "max_tokens": 32,
-            "temperature": 0.0,
-        }],
+        "workloads": [
+            {
+                "id": "sample",
+                "prompt_sha256": "prompt",
+                "system_sha256": "",
+                "max_tokens": 32,
+                "temperature": 0.0,
+            }
+        ],
     }
     payload = {
         "schema_version": llm_benchmark.SCHEMA_VERSION,
         "status": "complete",
         "manifest": manifest,
-        "workloads": [{
-            "id": "sample",
-            "samples": [
-                {"warmup": False, "status": "ok", "decode_tokens_per_second": rate}
-                for rate in rates
-            ],
-            "summary": {"decode_tokens_per_second": {"median": sorted(rates)[len(rates) // 2]}},
-        }],
+        "workloads": [
+            {
+                "id": "sample",
+                "samples": [{"warmup": False, "status": "ok", "decode_tokens_per_second": rate} for rate in rates],
+                "summary": {"decode_tokens_per_second": {"median": sorted(rates)[len(rates) // 2]}},
+            }
+        ],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def _write_concurrent_artifact(path: Path, group_rates: list[float]) -> Path:
+    """An artefact at concurrency 2, where throughput lives on the GROUP, not a sample."""
+    manifest = {
+        "model_sha256": "abc123",
+        "quantization": "Q4_K_M",
+        "runtime_version": "test",
+        "runtime_build": "fixture",
+        "gpu_name": "fixture gpu",
+        "gpu_driver": "1.0",
+        "context_size": 4096,
+        "max_tokens": 32,
+        "concurrency": 2,
+        "workloads": [
+            {
+                "id": "sample",
+                "prompt_sha256": "prompt",
+                "system_sha256": "",
+                "max_tokens": 32,
+                "temperature": 0.0,
+            }
+        ],
+    }
+    median = sorted(group_rates)[len(group_rates) // 2]
+    payload = {
+        "schema_version": llm_benchmark.SCHEMA_VERSION,
+        "status": "complete",
+        "manifest": manifest,
+        "workloads": [
+            {
+                "id": "sample",
+                "samples": [
+                    {"warmup": False, "status": "ok", "decode_tokens_per_second": rate / 2} for rate in group_rates
+                ],
+                "groups": [{"warmup": False, "status": "ok", "decode_tokens_per_second": rate} for rate in group_rates],
+                "summary": {
+                    "decode_tokens_per_second": {"median": median / 2},
+                    "concurrency_group_decode_tokens_per_second": {"median": median},
+                },
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_concurrent_comparison_uses_the_group_population_for_welch(tmp_path):
+    """Concurrency throughput must get a Welch interval, not a silent median fallback.
+
+    The failure this catches: `_measured_rates` scans `samples`, but the group rate
+    exists only on `groups`, so every concurrent comparison reported method="median"
+    with sample_count 0 while still advertising the Welch rule.
+    """
+    baseline = _write_concurrent_artifact(tmp_path / "b.json", [99.0, 100.0, 101.0])
+    current = _write_concurrent_artifact(tmp_path / "c.json", [79.0, 80.0, 81.0])
+
+    report = llm_benchmark.compare_artifacts(baseline, current, 10)
+
+    row = next(r for r in report["checked"] if r["metric"] == "concurrency_group_decode_tokens_per_second")
+    assert row["method"] == "welch_95"
+    assert row["sample_count"] == {"baseline": 3, "current": 3}
+    assert row["regression"] is True
 
 
 def test_compare_tolerates_a_drop_the_noise_can_explain(tmp_path):

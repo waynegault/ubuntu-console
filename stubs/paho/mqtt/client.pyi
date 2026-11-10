@@ -27,7 +27,10 @@ class Client:
     on_message: Callable[..., None] | None
     def __init__(
         self,
-        callback_api_version: CallbackAPIVersion = ...,
+        # Required in paho-mqtt 2.x: omitting it raises ValueError at runtime.
+        # An optional stub parameter let `Client()` type-check and then fail on
+        # the NAS — the defect a stub exists to catch.
+        callback_api_version: CallbackAPIVersion,
         client_id: str | None = ...,
         clean_session: bool | None = ...,
     ) -> None: ...

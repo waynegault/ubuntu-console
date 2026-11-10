@@ -185,23 +185,28 @@ def test_a_directory_of_artefacts_is_read_per_model(tmp_path):
 
 
 def test_best_measured_ranks_on_correct_first_then_fewest_invalid(tmp_path):
-    outcomes, _ = load_outcomes(str(tmp_path))
+    """The two criteria must DISAGREE, or this case cannot tell which one ran.
+
+    Alpha has more correct answers but five invalid ones; Beta has fewer invalid
+    but only one correct.  Correct-first selects Alpha; fewest-invalid-first
+    selects Beta.  The old fixture gave Alpha both advantages, so it passed under
+    either rule and `assert worse and better` only silenced unused names.
+    """
     rows = parse_registry(_write_registry(tmp_path))
-    better = _artefact(
-        tmp_path / "better.json",
+    _artefact(
+        tmp_path / "alpha.json",
         "Alpha Coder",
-        [_result("chat", "correct"), _result("chat", "correct")],
+        [_result("chat", "correct"), _result("chat", "correct")] + [_result("chat", "invalid")] * 5,
     )
-    worse = _artefact(
-        tmp_path / "worse.json",
+    _artefact(
+        tmp_path / "beta.json",
         "Beta",
-        [_result("chat", "correct"), _result("chat", "invalid")],
+        [_result("chat", "correct")],
     )
     outcomes, _ = load_outcomes(str(tmp_path))
     best = best_measured(outcomes, rows)
     assert best is not None
     assert best[0] == "Alpha Coder"
-    assert worse and better
 
 
 def test_best_measured_ignores_a_model_with_no_observation(tmp_path):

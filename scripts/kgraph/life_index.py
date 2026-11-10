@@ -68,13 +68,27 @@ def load_life_index(life_root: str | None = None) -> dict:
     if os.path.isfile(canonical_json):
         try:
             payload = json.loads(Path(canonical_json).read_text(encoding="utf-8"))
-            for record in payload.get("records", []):
+            if not isinstance(payload, dict):
+                raise ValueError(f"root is {type(payload).__name__}, not an object")
+            records = payload.get("records", [])
+            if not isinstance(records, list):
+                raise ValueError("'records' is not a list")
+            for record in records:
+                if not isinstance(record, dict):
+                    logger.warning("Skipping non-object record in %s: %r", canonical_json, record)
+                    continue
+                record_aliases = record.get("aliases") or []
+                if not isinstance(record_aliases, list):
+                    logger.warning(
+                        "Record %r in %s has non-list aliases; ignoring them", record.get("slug"), canonical_json
+                    )
+                    record_aliases = []
                 rec: dict[str, Any] = {
                     "slug": str(record.get("slug") or "").strip().lower(),
                     "title": str(record.get("title") or "").strip(),
                     "type": str(record.get("type") or "").strip().lower(),
                     "path": str(record.get("path") or "").strip(),
-                    "aliases": list(record.get("aliases") or []),
+                    "aliases": [str(alias) for alias in record_aliases],
                     "status": str(record.get("status") or "").strip().lower(),
                 }
                 if not rec["slug"]:
@@ -90,7 +104,7 @@ def load_life_index(life_root: str | None = None) -> dict:
                         index["title_aliases"][norm] = rec["title"]
             if index["records"]:
                 return index
-        except (json.JSONDecodeError, OSError, KeyError) as exc:
+        except (json.JSONDecodeError, OSError, KeyError, ValueError) as exc:
             logger.warning("Failed to load canonical concepts from '%s': %s", root, exc)
 
     if not os.path.isdir(root):
@@ -200,18 +214,20 @@ def merge_relations(graph: Graph | dict, life_root: str | None = None) -> Graph:
         if not src_id or not tgt_id:
             continue
         if (src_id, tgt_id, rel_type) not in existing_edges:
-            graph.edges.append(GraphEdge(
-                source=src_id,
-                target=tgt_id,
-                label=rel_type,
-                # origin records the edge's PROVENANCE, not its endpoint:
-                # downstream confidence logic keys off origin == "ast" etc.
-                origin="life_index",
-                # ...and sources records the DOCUMENT that asserts it: the
-                # hand-maintained relations file (GRAPHRAG-ARCH-007).
-                sources=[source_key("life", "relations.json")],
-                explicit=True,
-            ))
+            graph.edges.append(
+                GraphEdge(
+                    source=src_id,
+                    target=tgt_id,
+                    label=rel_type,
+                    # origin records the edge's PROVENANCE, not its endpoint:
+                    # downstream confidence logic keys off origin == "ast" etc.
+                    origin="life_index",
+                    # ...and sources records the DOCUMENT that asserts it: the
+                    # hand-maintained relations file (GRAPHRAG-ARCH-007).
+                    sources=[source_key("life", "relations.json")],
+                    explicit=True,
+                )
+            )
             existing_edges.add((src_id, tgt_id, rel_type))
 
     return graph

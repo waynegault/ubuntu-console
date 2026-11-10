@@ -35,29 +35,79 @@ from .models import (
 # drifted apart once already; validate.py checks the same objects this module
 # uses, so a divergent copy is no longer possible.
 
-WEAK_NODE_LABELS = frozenset({
-    "created", "updated", "watched", "watch", "identified", "audited",
-    "added", "removed", "fixed", "changed", "summary", "overview",
-    "context", "details", "notes", "status", "result", "results",
-    "outcome", "outcomes", "current state", "important technical state",
-    "key decisions", "next steps", "next actions", "open threads",
-    "work", "project", "issue", "decision", "topic", "memory stack",
-    "graph quality",
-})
+WEAK_NODE_LABELS = frozenset(
+    {
+        "created",
+        "updated",
+        "watched",
+        "watch",
+        "identified",
+        "audited",
+        "added",
+        "removed",
+        "fixed",
+        "changed",
+        "summary",
+        "overview",
+        "context",
+        "details",
+        "notes",
+        "status",
+        "result",
+        "results",
+        "outcome",
+        "outcomes",
+        "current state",
+        "important technical state",
+        "key decisions",
+        "next steps",
+        "next actions",
+        "open threads",
+        "work",
+        "project",
+        "issue",
+        "decision",
+        "topic",
+        "memory stack",
+        "graph quality",
+    }
+)
 
-SEMANTIC_CORE_TYPES = frozenset({
-    "actor", "topic", "summary", "project", "decision", "issue",
-    "outcome", "person", "organization", "place",
-})
+SEMANTIC_CORE_TYPES = frozenset(
+    {
+        "actor",
+        "topic",
+        "summary",
+        "project",
+        "decision",
+        "issue",
+        "outcome",
+        "person",
+        "organization",
+        "place",
+    }
+)
 
-WEAK_CLUSTER_LABELS = frozenset({
-    "graph quality", "repo cleanup", "env bridge", "semantic filtering",
-    "copilot token",
-})
+WEAK_CLUSTER_LABELS = frozenset(
+    {
+        "graph quality",
+        "repo cleanup",
+        "env bridge",
+        "semantic filtering",
+        "copilot token",
+    }
+)
 
 PREFERRED_CLUSTER_TYPES = (
-    "project", "issue", "decision", "outcome", "topic", "actor",
-    "person", "organization", "place",
+    "project",
+    "issue",
+    "decision",
+    "outcome",
+    "topic",
+    "actor",
+    "person",
+    "organization",
+    "place",
 )
 
 # ── Thresholds ─────────────────────────────────────────────────────────
@@ -102,7 +152,9 @@ def _is_curated_node(node: dict) -> bool:
     label = str(node.get("label", "") or "").strip().lower()
     if _node_visibility(node) == "raw" or _node_quality(node) == "supporting":
         return False
-    if ntype == "file" and re.search(r"(?:^|/)(?:fact-|preference-|decision-|reflection-)", str(node.get("path", "") or "").lower()):
+    if ntype == "file" and re.search(
+        r"(?:^|/)(?:fact-|preference-|decision-|reflection-)", str(node.get("path", "") or "").lower()
+    ):
         return False
     if ntype in SEMANTIC_CORE_TYPES or ntype == "file":
         return True
@@ -110,7 +162,9 @@ def _is_curated_node(node: dict) -> bool:
 
 
 def _effective_semantic_threshold(semantic_threshold: float) -> float:
-    return max(SEMANTIC_THRESHOLD_MIN, min(SEMANTIC_THRESHOLD_MAX, SEMANTIC_THRESHOLD_MIN + ((semantic_threshold - 0.5) * 0.6)))
+    return max(
+        SEMANTIC_THRESHOLD_MIN, min(SEMANTIC_THRESHOLD_MAX, SEMANTIC_THRESHOLD_MIN + ((semantic_threshold - 0.5) * 0.6))
+    )
 
 
 def _is_curated_edge(edge: dict, effective_threshold: float) -> bool:
@@ -125,7 +179,7 @@ def _is_curated_edge(edge: dict, effective_threshold: float) -> bool:
             return False
         try:
             return float(score) >= effective_threshold
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
     return False
 
@@ -166,17 +220,21 @@ def _merge_sources(target: dict, source: dict) -> None:
     incoming = source.get("sources") or []
     if not incoming:
         return
-    lineage = SourceLineage.model_validate({
-        "sources": list(target.get("sources") or []),
-        "metadata": target.get("metadata") or {},
-    })
+    lineage = SourceLineage.model_validate(
+        {
+            "sources": list(target.get("sources") or []),
+            "metadata": target.get("metadata") or {},
+        }
+    )
     lineage.merge_sources(incoming)
     target["sources"] = lineage.sources
     if "sources_overflow" in lineage.metadata:
         target["metadata"] = lineage.metadata
 
 
-def _dedupe_append(out_edges: list, seen: dict, source: str | None, target: str | None, label: str, payload: dict | None = None) -> None:
+def _dedupe_append(
+    out_edges: list, seen: dict, source: str | None, target: str | None, label: str, payload: dict | None = None
+) -> None:
     if not source or not target:
         return
     key = (source, target, label)
@@ -206,7 +264,9 @@ def _enrich_graph_payload(projected: dict, current_mode: str) -> dict:
 
     # ── Semantic dedup ──
     if current_mode in {"overview", "topics", "semantic"}:
-        _collapse_semantic_duplicates(out, {"topic", "project", "decision", "issue", "outcome", "organization", "place", "person"}, life_index)
+        _collapse_semantic_duplicates(
+            out, {"topic", "project", "decision", "issue", "outcome", "organization", "place", "person"}, life_index
+        )
 
     # ── Semantic edge filtering (topics/semantic modes) ──
     if current_mode in {"topics", "semantic"}:
@@ -265,9 +325,7 @@ def _enrich_graph_payload(projected: dict, current_mode: str) -> dict:
     out["_meta"]["nodeCount"] = len(out["nodes"])
     out["_meta"]["edgeCount"] = len(out["edges"])
     if cluster_suggestions:
-        out["_meta"]["clusterSuggestions"] = [
-            suggestion.model_dump(mode="json") for suggestion in cluster_suggestions
-        ]
+        out["_meta"]["clusterSuggestions"] = [suggestion.model_dump(mode="json") for suggestion in cluster_suggestions]
     return out
 
 
@@ -284,7 +342,11 @@ def _set_display_label(node: dict, nid: str, ntype: str, mode: str, top_label_no
         else:
             node["display_label"] = raw_label
     elif mode == "semantic":
-        if ntype == "file" or re.match(r"^\d{4}-\d{2}-\d{2}\.md$", raw_label) or raw_label.lower() in {"memory.md", "profile.md"}:
+        if (
+            ntype == "file"
+            or re.match(r"^\d{4}-\d{2}-\d{2}\.md$", raw_label)
+            or raw_label.lower() in {"memory.md", "profile.md"}
+        ):
             node["display_label"] = ""
             node["visual_role"] = "provenance"
         elif nid not in top_label_nodes and node.get("importance", 0) < 6:
@@ -319,7 +381,8 @@ def _collapse_semantic_duplicates(graph_out: dict, allowed_types: set[str], life
     frontend, so that spelling is restored on the way out.
     """
     collapsed = collapse_semantic_duplicates(
-        Graph.from_dict(graph_out), life_index=life_index, allowed_types=allowed_types)
+        Graph.from_dict(graph_out), life_index=life_index, allowed_types=allowed_types
+    )
     graph_out["nodes"] = [_projected_element_dict(n) for n in collapsed.nodes]
     graph_out["edges"] = [_projected_edge_dict(e) for e in collapsed.edges]
 
@@ -353,11 +416,11 @@ def _projected_edge_dict(edge) -> dict:
 def _edge_strength_value(edge: dict) -> float:
     try:
         semantic_score = float(edge.get("semantic_score", 0) or 0)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         semantic_score = 0.0
     try:
         cooccurrence = int(edge.get("cooccurrence_count", 0) or 0)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         cooccurrence = 0
     label = str(edge.get("label", "") or "").strip().lower()
     base = semantic_score
@@ -365,7 +428,15 @@ def _edge_strength_value(edge: dict) -> float:
         base = max(base, 0.95)
     elif label in {"project outcome", "issue affects outcome", "project owner"}:
         base = max(base, 0.88)
-    elif label in {"project topic", "topic decision", "topic issue", "topic outcome", "actor decision", "actor issue", "actor outcome"}:
+    elif label in {
+        "project topic",
+        "topic decision",
+        "topic issue",
+        "topic outcome",
+        "actor decision",
+        "actor issue",
+        "actor outcome",
+    }:
         base = max(base, 0.76)
     base += min(0.08, 0.02 * cooccurrence)
     return round(min(base, 0.99), 3)
@@ -387,7 +458,10 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
         src, dst = _edge_endpoints(edge)
         if not src or not dst or src not in node_lookup or dst not in node_lookup:
             continue
-        if edge.get("semantic_score") is not None or str(edge.get("label", "") or "").lower() in CANONICAL_RELATION_LABELS:
+        if (
+            edge.get("semantic_score") is not None
+            or str(edge.get("label", "") or "").lower() in CANONICAL_RELATION_LABELS
+        ):
             semantic_edges.append(dict(edge))
         else:
             supporting_edges.append(dict(edge))
@@ -408,9 +482,20 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
         label = str(edge.get("label", "") or "").lower()
 
         if label == "semantic related":
-            if src_label in {"workspace", "openclaw", "gateway", "engram", "wayne", "hal"} or dst_label in {"workspace", "openclaw", "gateway", "engram", "wayne", "hal"}:
+            if src_label in {"workspace", "openclaw", "gateway", "engram", "wayne", "hal"} or dst_label in {
+                "workspace",
+                "openclaw",
+                "gateway",
+                "engram",
+                "wayne",
+                "hal",
+            }:
                 strength = min(strength, 0.52)
-            if canonical_anchor_labels and src_type not in canonical_anchor_types and dst_type not in canonical_anchor_types:
+            if (
+                canonical_anchor_labels
+                and src_type not in canonical_anchor_types
+                and dst_type not in canonical_anchor_types
+            ):
                 strength = min(strength, 0.62)
         if src_label in canonical_anchor_labels or dst_label in canonical_anchor_labels:
             strength = min(0.99, strength + 0.06)
@@ -431,7 +516,11 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
     kept_semantic = []
     kept_counts: dict[str, int] = {}
     seen_pairs: set[tuple[str, str]] = set()
-    scored_edges_sorted = sorted(scored_edges, key=lambda e: (e.get("_strength", 0), e.get("cooccurrence_count", 0), str(e.get("label", ""))), reverse=True)
+    scored_edges_sorted = sorted(
+        scored_edges,
+        key=lambda e: (e.get("_strength", 0), e.get("cooccurrence_count", 0), str(e.get("label", ""))),
+        reverse=True,
+    )
 
     for edge in scored_edges_sorted:
         src, dst = _edge_endpoints(edge)
@@ -450,7 +539,9 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
             threshold = SEMANTIC_EDGE_MED_DEGREE_THRESHOLD if current_mode == "semantic" else 0.71
         if strength < threshold:
             continue
-        if kept_counts.get(src, 0) >= neighbor_budget.get(src, 6) or kept_counts.get(dst, 0) >= neighbor_budget.get(dst, 6):
+        if kept_counts.get(src, 0) >= neighbor_budget.get(src, 6) or kept_counts.get(dst, 0) >= neighbor_budget.get(
+            dst, 6
+        ):
             if strength < SEMANTIC_EDGE_OVERRIDE_THRESHOLD:
                 continue
         seen_pairs.add(pair)
@@ -518,12 +609,22 @@ def _build_cluster_suggestions(out: dict) -> list[ClusterSuggestion]:
     semantic_nodes = {str(n.get("id")): n for n in out["nodes"] if n.get("id") is not None}
 
     strong_relation_labels = {
-        "project decision", "project issue", "decision addresses issue", "decision drives outcome",
-        "project outcome", "issue affects outcome", "project owner",
+        "project decision",
+        "project issue",
+        "decision addresses issue",
+        "decision drives outcome",
+        "project outcome",
+        "issue affects outcome",
+        "project owner",
     }
     medium_relation_labels = {
-        "project topic", "topic decision", "topic issue", "topic outcome",
-        "actor decision", "actor issue", "actor outcome",
+        "project topic",
+        "topic decision",
+        "topic issue",
+        "topic outcome",
+        "actor decision",
+        "actor issue",
+        "actor outcome",
     }
 
     for edge in out["edges"]:
@@ -533,11 +634,11 @@ def _build_cluster_suggestions(out: dict) -> list[ClusterSuggestion]:
         label = str(edge.get("label", "") or "").strip().lower()
         try:
             semantic_score = float(edge.get("semantic_score", 0) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             semantic_score = 0.0
         try:
             cooccurrence = int(edge.get("cooccurrence_count", 0) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             cooccurrence = 0
         edge_strength = semantic_score
         if label in strong_relation_labels:
@@ -572,12 +673,16 @@ def _build_cluster_suggestions(out: dict) -> list[ClusterSuggestion]:
         if len(component) < 3:
             continue
 
-        ranked = sorted(component, key=lambda cid: (
-            semantic_nodes[cid].get("semantic_degree", 0),
-            semantic_nodes[cid].get("importance", 0),
-            semantic_nodes[cid].get("degree", 0),
-            len(str(semantic_nodes[cid].get("label", "") or "")),
-        ), reverse=True)
+        ranked = sorted(
+            component,
+            key=lambda cid: (
+                semantic_nodes[cid].get("semantic_degree", 0),
+                semantic_nodes[cid].get("importance", 0),
+                semantic_nodes[cid].get("degree", 0),
+                len(str(semantic_nodes[cid].get("label", "") or "")),
+            ),
+            reverse=True,
+        )
 
         label_parts: list[str] = []
         chosen_types: set[str] = set()
@@ -601,7 +706,11 @@ def _build_cluster_suggestions(out: dict) -> list[ClusterSuggestion]:
         if not label_parts:
             for cid in ranked:
                 label = str(semantic_nodes[cid].get("label", "") or "").strip()
-                if label and label.lower() not in WEAK_CLUSTER_LABELS and label.lower() not in [x.lower() for x in label_parts]:
+                if (
+                    label
+                    and label.lower() not in WEAK_CLUSTER_LABELS
+                    and label.lower() not in [x.lower() for x in label_parts]
+                ):
                     label_parts.append(label)
                 if len(label_parts) >= 2:
                     break
@@ -615,12 +724,14 @@ def _build_cluster_suggestions(out: dict) -> list[ClusterSuggestion]:
         else:
             cluster_label = f"cluster {len(cluster_suggestions) + 1}"
 
-        cluster_suggestions.append(ClusterSuggestion(
-            id=f"semantic_cluster_{len(cluster_suggestions) + 1}",
-            label=cluster_label[:64],
-            members=component,
-            size=len(component),
-        ))
+        cluster_suggestions.append(
+            ClusterSuggestion(
+                id=f"semantic_cluster_{len(cluster_suggestions) + 1}",
+                label=cluster_label[:64],
+                members=component,
+                size=len(component),
+            )
+        )
 
     return cluster_suggestions
 
@@ -634,8 +745,14 @@ def project_graph(graph: Graph | dict, mode: str = "overview", semantic_threshol
     Modes: overview, files, topics, semantic, raw.
     Returns a plain dict for JSON serialization.
     """
+    # Validate at the entry, not incidentally inside one mode.  `raw` and `files`
+    # used to return a caller-supplied dict untouched, so the HTTP server could
+    # render or serve fields the strict schema rejects — the validation bypass this
+    # function's contract says cannot exist.
     if isinstance(graph, Graph):
         graph = graph.to_dict()
+    else:
+        graph = Graph.from_dict(graph).to_dict()
 
     mode = (mode or "overview").lower()
     if mode == "raw":
@@ -662,7 +779,17 @@ def project_graph(graph: Graph | dict, mode: str = "overview", semantic_threshol
 
     # ── Semantic mode (dedicated path) ──
     if mode == "semantic":
-        return _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold, _is_curated_node, _is_curated_edge, _edge_endpoints, _dedupe_append, _enrich_graph_payload)
+        return _project_semantic(
+            node_by_id,
+            edges,
+            effective_threshold,
+            semantic_threshold,
+            _is_curated_node,
+            _is_curated_edge,
+            _edge_endpoints,
+            _dedupe_append,
+            _enrich_graph_payload,
+        )
 
     # ── Files mode ──
     if mode == "files":
@@ -676,7 +803,17 @@ def project_graph(graph: Graph | dict, mode: str = "overview", semantic_threshol
     for nid, node in node_by_id.items():
         ntype = str(node.get("type", ""))
         if mode == "topics":
-            if ntype in {"topic", "actor", "project", "decision", "issue", "outcome", "person", "organization", "place"}:
+            if ntype in {
+                "topic",
+                "actor",
+                "project",
+                "decision",
+                "issue",
+                "outcome",
+                "person",
+                "organization",
+                "place",
+            }:
                 out_nodes[nid] = node
         else:  # overview
             if ntype == "chunk":
@@ -696,10 +833,18 @@ def project_graph(graph: Graph | dict, mode: str = "overview", semantic_threshol
         if mode == "topics":
             if src in out_nodes and dst in out_nodes:
                 if label in CANONICAL_RELATION_LABELS:
-                    payload = {"semantic_score": edge.get("semantic_score")} if edge.get("semantic_score") is not None else None
+                    payload = (
+                        {"semantic_score": edge.get("semantic_score")}
+                        if edge.get("semantic_score") is not None
+                        else None
+                    )
                     _dedupe_append(out_edges, seen_edges, src, dst, label, payload)
                     continue
-                if label in {"covers topic", "mentions actor", "authored by"} and src_type != "file" and dst_type != "file":
+                if (
+                    label in {"covers topic", "mentions actor", "authored by"}
+                    and src_type != "file"
+                    and dst_type != "file"
+                ):
                     _dedupe_append(out_edges, seen_edges, src, dst, label)
                     continue
         else:  # overview
@@ -707,18 +852,28 @@ def project_graph(graph: Graph | dict, mode: str = "overview", semantic_threshol
                 if label in AST_EDGE_LABELS:
                     _dedupe_append(out_edges, seen_edges, src, dst, label)
                     continue
-                if src_type == "file" and dst_type in {"topic", "actor", "project", "decision", "issue", "outcome"} and label in CURATED_EDGE_LABELS:
+                if (
+                    src_type == "file"
+                    and dst_type in {"topic", "actor", "project", "decision", "issue", "outcome"}
+                    and label in CURATED_EDGE_LABELS
+                ):
                     continue
                 if not _is_curated_edge(edge, effective_threshold) and label not in CURATED_EDGE_LABELS:
                     continue
-                payload = {"semantic_score": edge.get("semantic_score")} if edge.get("semantic_score") is not None else None
+                payload = (
+                    {"semantic_score": edge.get("semantic_score")} if edge.get("semantic_score") is not None else None
+                )
                 _dedupe_append(out_edges, seen_edges, src, dst, label, payload)
                 continue
             # Lift chunk-derived edges to file level
             if src_type == "chunk" and dst in out_nodes:
                 parent_file = file_from_chunk(src)
                 if parent_file and parent_file in out_nodes:
-                    mapped_label = "file " + label if not label.startswith("file ") and label != "references file" else "references file"
+                    mapped_label = (
+                        "file " + label
+                        if not label.startswith("file ") and label != "references file"
+                        else "references file"
+                    )
                     if label in {"has project", "has decision", "has issue", "has outcome"}:
                         _dedupe_append(out_edges, seen_edges, parent_file, dst, label)
                     elif mapped_label in CURATED_EDGE_LABELS or label in CURATED_EDGE_LABELS:
@@ -758,13 +913,28 @@ def _project_files(
 
 
 _SEMANTIC_CONCEPT_TYPES = {
-    "topic", "project", "decision", "issue", "outcome",
-    "actor", "person", "organization", "place", "chunk",
+    "topic",
+    "project",
+    "decision",
+    "issue",
+    "outcome",
+    "actor",
+    "person",
+    "organization",
+    "place",
+    "chunk",
 }
 _SEMANTIC_ANCHOR_TYPES = {"project", "decision", "issue", "outcome"}
 _SEMANTIC_PREFERRED_TYPES = {
-    "project", "decision", "issue", "outcome", "actor",
-    "person", "organization", "place", "chunk",
+    "project",
+    "decision",
+    "issue",
+    "outcome",
+    "actor",
+    "person",
+    "organization",
+    "place",
+    "chunk",
 }
 
 
@@ -848,7 +1018,7 @@ def _collect_concept_links(
             if edge.get("semantic_score") is not None:
                 try:
                     payload["semantic_score"] = round(float(edge.get("semantic_score") or 0), 3)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     pass
             label = str(edge.get("label", "") or "").strip().lower()
             if is_curated_edge(edge, effective_threshold) or label in CANONICAL_RELATION_LABELS:
@@ -868,18 +1038,18 @@ def _collect_concept_links(
             chunk_to_concepts.setdefault(dst, set()).add(src)
             concept_to_chunks.setdefault(src, set()).add(dst)
 
-    return (direct_edges, summary_to_concepts, chunk_to_concepts,
-            concept_to_summaries, concept_to_chunks)
+    return (direct_edges, summary_to_concepts, chunk_to_concepts, concept_to_summaries, concept_to_chunks)
 
 
-def _score_cooccurrence(summary_to_concepts: dict[str, set[str]],
-                        chunk_to_concepts: dict[str, set[str]]) -> dict[tuple[str, str], dict[str, int]]:
+def _score_cooccurrence(
+    summary_to_concepts: dict[str, set[str]], chunk_to_concepts: dict[str, set[str]]
+) -> dict[tuple[str, str], dict[str, int]]:
     """Count co-occurrences of concept pairs within shared summaries/chunks."""
     inferred_scores: dict[tuple[str, str], dict[str, int]] = {}
     for members in summary_to_concepts.values():
         member_list = sorted(members)
         for i, a in enumerate(member_list):
-            for b in member_list[i + 1:]:
+            for b in member_list[i + 1 :]:
                 pair = (a, b) if a <= b else (b, a)
                 inferred_scores.setdefault(pair, {"summary": 0, "chunk": 0})
                 inferred_scores[pair]["summary"] += 1
@@ -887,16 +1057,16 @@ def _score_cooccurrence(summary_to_concepts: dict[str, set[str]],
     for members in chunk_to_concepts.values():
         member_list = sorted(members)
         for i, a in enumerate(member_list):
-            for b in member_list[i + 1:]:
+            for b in member_list[i + 1 :]:
                 pair = (a, b) if a <= b else (b, a)
                 inferred_scores.setdefault(pair, {"summary": 0, "chunk": 0})
                 inferred_scores[pair]["chunk"] += 1
     return inferred_scores
 
 
-def _compute_node_strength(concept_nodes: dict[str, dict],
-                           concept_to_summaries: dict[str, set[str]],
-                           concept_to_chunks: dict[str, set[str]]) -> dict[str, float]:
+def _compute_node_strength(
+    concept_nodes: dict[str, dict], concept_to_summaries: dict[str, set[str]], concept_to_chunks: dict[str, set[str]]
+) -> dict[str, float]:
     """Score each concept node by type, membership support and confidence."""
     node_strength: dict[str, float] = {}
     for nid, node in concept_nodes.items():
@@ -927,10 +1097,14 @@ def _select_direct_edges(
     seen: dict[tuple[str, str, str], dict] = {}
     direct_pairs: set[tuple[str, str]] = set()
 
-    for src, dst, label, payload in sorted(direct_edges, key=lambda item: (
-        float((item[3] or {}).get("semantic_score", 0) or 0),
-        node_strength.get(item[0], 0) + node_strength.get(item[1], 0),
-    ), reverse=True):
+    for src, dst, label, payload in sorted(
+        direct_edges,
+        key=lambda item: (
+            float((item[3] or {}).get("semantic_score", 0) or 0),
+            node_strength.get(item[0], 0) + node_strength.get(item[1], 0),
+        ),
+        reverse=True,
+    ):
         dedupe_append(keep_edges, seen, src, dst, label, payload or None)
         direct_pairs.add(tuple(sorted((src, dst))))
         keep_nodes.add(src)
@@ -966,19 +1140,29 @@ def _build_inferred_candidates(
         score += min(0.2, 0.02 * (node_strength.get(a, 0) + node_strength.get(b, 0)))
         if score < SEMANTIC_FALLBACK_MIN_SCORE:
             continue
-        inferred_candidates.append((a, b, "semantic related", {
-            "semantic_score": round(min(score, 0.95), 3),
-            "cooccurrence_count": summary_support + chunk_support,
-            "inferred": True,
-            "support_summary_count": summary_support,
-            "support_chunk_count": chunk_support,
-        }))
+        inferred_candidates.append(
+            (
+                a,
+                b,
+                "semantic related",
+                {
+                    "semantic_score": round(min(score, 0.95), 3),
+                    "cooccurrence_count": summary_support + chunk_support,
+                    "inferred": True,
+                    "support_summary_count": summary_support,
+                    "support_chunk_count": chunk_support,
+                },
+            )
+        )
 
-    inferred_candidates.sort(key=lambda item: (
-        float((item[3] or {}).get("semantic_score", 0) or 0),
-        (item[3] or {}).get("cooccurrence_count", 0),
-        node_strength.get(item[0], 0) + node_strength.get(item[1], 0),
-    ), reverse=True)
+    inferred_candidates.sort(
+        key=lambda item: (
+            float((item[3] or {}).get("semantic_score", 0) or 0),
+            (item[3] or {}).get("cooccurrence_count", 0),
+            node_strength.get(item[0], 0) + node_strength.get(item[1], 0),
+        ),
+        reverse=True,
+    )
     return inferred_candidates
 
 
@@ -997,8 +1181,16 @@ def _select_inferred_edges(
         pair = (src, dst) if src <= dst else (dst, src)
         if pair in direct_pairs:
             continue
-        src_budget = SEMANTIC_INFERRED_NEIGHBOR_BUDGET_HIGH if node_strength.get(src, 0) >= SEMANTIC_INFERRED_NEIGHBOR_STRENGTH_CUTOFF else SEMANTIC_INFERRED_NEIGHBOR_BUDGET_LOW
-        dst_budget = SEMANTIC_INFERRED_NEIGHBOR_BUDGET_HIGH if node_strength.get(dst, 0) >= SEMANTIC_INFERRED_NEIGHBOR_STRENGTH_CUTOFF else SEMANTIC_INFERRED_NEIGHBOR_BUDGET_LOW
+        src_budget = (
+            SEMANTIC_INFERRED_NEIGHBOR_BUDGET_HIGH
+            if node_strength.get(src, 0) >= SEMANTIC_INFERRED_NEIGHBOR_STRENGTH_CUTOFF
+            else SEMANTIC_INFERRED_NEIGHBOR_BUDGET_LOW
+        )
+        dst_budget = (
+            SEMANTIC_INFERRED_NEIGHBOR_BUDGET_HIGH
+            if node_strength.get(dst, 0) >= SEMANTIC_INFERRED_NEIGHBOR_STRENGTH_CUTOFF
+            else SEMANTIC_INFERRED_NEIGHBOR_BUDGET_LOW
+        )
         if inferred_neighbor_counts.get(src, 0) >= src_budget or inferred_neighbor_counts.get(dst, 0) >= dst_budget:
             if float((payload or {}).get("semantic_score", 0) or 0) < 0.72:
                 continue
@@ -1024,12 +1216,16 @@ def _apply_sparse_fallback(
             keep_nodes.add(nid)
         fallback_pairs = list(inferred_candidates[:18])
         if not fallback_pairs:
-            strong_nodes = [nid for nid, _score in sorted(node_strength.items(), key=lambda item: item[1], reverse=True)[:10]]
+            strong_nodes = [
+                nid for nid, _score in sorted(node_strength.items(), key=lambda item: item[1], reverse=True)[:10]
+            ]
             fallback_pairs = []
             for idx, src in enumerate(strong_nodes):
-                for dst in strong_nodes[idx + 1:idx + 3]:
+                for dst in strong_nodes[idx + 1 : idx + 3]:
                     if src != dst:
-                        fallback_pairs.append((src, dst, "semantic related", {"semantic_score": 0.42, "inferred": True, "fallback": True}))
+                        fallback_pairs.append(
+                            (src, dst, "semantic related", {"semantic_score": 0.42, "inferred": True, "fallback": True})
+                        )
                     if len(fallback_pairs) >= 10:
                         break
                 if len(fallback_pairs) >= 10:
@@ -1059,25 +1255,27 @@ def _project_semantic(
     """Semantic mode: aggressive curation with inferred co-occurrence edges."""
     life_index = load_life_index()
     concept_nodes = _collect_semantic_concepts(node_by_id, is_curated_node, life_index)
-    (direct_edges, summary_to_concepts, chunk_to_concepts,
-     concept_to_summaries, concept_to_chunks) = _collect_concept_links(
-        edges, node_by_id, concept_nodes, effective_threshold,
-        is_curated_edge, edge_endpoints)
+    (direct_edges, summary_to_concepts, chunk_to_concepts, concept_to_summaries, concept_to_chunks) = (
+        _collect_concept_links(edges, node_by_id, concept_nodes, effective_threshold, is_curated_edge, edge_endpoints)
+    )
     inferred_scores = _score_cooccurrence(summary_to_concepts, chunk_to_concepts)
     node_strength = _compute_node_strength(concept_nodes, concept_to_summaries, concept_to_chunks)
-    keep_edges, keep_nodes, seen, direct_pairs = _select_direct_edges(
-        direct_edges, node_strength, dedupe_append)
+    keep_edges, keep_nodes, seen, direct_pairs = _select_direct_edges(direct_edges, node_strength, dedupe_append)
     inferred_candidates = _build_inferred_candidates(inferred_scores, concept_nodes, node_strength)
-    _select_inferred_edges(inferred_candidates, node_strength, direct_pairs,
-                           keep_edges, keep_nodes, seen, dedupe_append)
-    _apply_sparse_fallback(keep_edges, keep_nodes, inferred_candidates, node_strength,
-                           semantic_threshold, seen, dedupe_append)
+    _select_inferred_edges(
+        inferred_candidates, node_strength, direct_pairs, keep_edges, keep_nodes, seen, dedupe_append
+    )
+    _apply_sparse_fallback(
+        keep_edges, keep_nodes, inferred_candidates, node_strength, semantic_threshold, seen, dedupe_append
+    )
 
-    return enrich({
-        # Emit the canonical-biased copies (canonical label/type/slug/path
-        # computed by _apply_canonical_bias).  Using node_by_id here discarded
-        # that work, so the served graph never showed canonical labels.
-        "nodes": [concept_nodes.get(nid) or node_by_id[nid]
-                  for nid in keep_nodes if nid in node_by_id],
-        "edges": keep_edges,
-    }, "semantic")
+    return enrich(
+        {
+            # Emit the canonical-biased copies (canonical label/type/slug/path
+            # computed by _apply_canonical_bias).  Using node_by_id here discarded
+            # that work, so the served graph never showed canonical labels.
+            "nodes": [concept_nodes.get(nid) or node_by_id[nid] for nid in keep_nodes if nid in node_by_id],
+            "edges": keep_edges,
+        },
+        "semantic",
+    )

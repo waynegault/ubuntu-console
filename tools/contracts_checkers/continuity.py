@@ -6,8 +6,11 @@ import sys
 import yaml
 
 from .core import (
-    EXIT_CANNOT_RUN, EXIT_CLEAN, EXIT_DRIFT,
-    READ_BACK_REASON_MIN, read_lines,
+    EXIT_CANNOT_RUN,
+    EXIT_CLEAN,
+    EXIT_DRIFT,
+    READ_BACK_REASON_MIN,
+    read_lines,
 )
 from .derived import command_contracts_file, contract_command_name
 from .modules import command_surface, module_graph, module_list_names
@@ -78,34 +81,40 @@ def check_verified_by(entry, where, status, name, nodes, problems, report):
     declared = entry.get("verified_by")
     if declared is None:
         if status == "active":
-            report.append(f"NOT VERIFIED  {name} — no `verified_by:` names the test that "
-                          f"holds this entry to its word")
+            report.append(f"NOT VERIFIED  {name} — no `verified_by:` names the test that holds this entry to its word")
         return
     if not isinstance(declared, list) or not declared:
-        problems.append(f"  FAIL  {where}: declares an empty `verified_by:` — name at least "
-                        f"one '<path>::<exact @test name>' node, or omit the field so the "
-                        f"entry is counted as unverified")
+        problems.append(
+            f"  FAIL  {where}: declares an empty `verified_by:` — name at least "
+            f"one '<path>::<exact @test name>' node, or omit the field so the "
+            f"entry is counted as unverified"
+        )
         return
     for item in declared:
         if not isinstance(item, str) or "::" not in item:
-            problems.append(f"  FAIL  {where}: `verified_by:` item {item!r} is not of the form "
-                            f"'<repo-relative .bats path>::<exact @test name>'")
+            problems.append(
+                f"  FAIL  {where}: `verified_by:` item {item!r} is not of the form "
+                f"'<repo-relative .bats path>::<exact @test name>'"
+            )
             continue
         path, _sep, node = item.partition("::")
         path = path.strip()
         node = node.strip()
         if not path or not node:
-            problems.append(f"  FAIL  {where}: `verified_by:` item '{item}' has an empty path or "
-                            f"test name")
+            problems.append(f"  FAIL  {where}: `verified_by:` item '{item}' has an empty path or test name")
             continue
         if path not in nodes:
-            problems.append(f"  FAIL  {where}: `verified_by:` names '{item}', but '{path}' is not "
-                            f"a BATS file under tests/ — a Python test cannot be named here")
+            problems.append(
+                f"  FAIL  {where}: `verified_by:` names '{item}', but '{path}' is not "
+                f"a BATS file under tests/ — a Python test cannot be named here"
+            )
             continue
         if node not in nodes[path]:
-            problems.append(f"  FAIL  {where}: `verified_by:` names '{item}', which is not a "
-                            f"@test in {path} — the node was renamed or deleted, so the entry "
-                            f"claims a test that does not exist")
+            problems.append(
+                f"  FAIL  {where}: `verified_by:` names '{item}', which is not a "
+                f"@test in {path} — the node was renamed or deleted, so the entry "
+                f"claims a test that does not exist"
+            )
             continue
         report.append(f"VERIFIED      {name} -> {item}")
 
@@ -144,36 +153,46 @@ def check_disposition(entry, where, status, name, problems, report):
     bound_text = bound.strip() if isinstance(bound, str) else ""
     if disposition is None:
         if bound is not None:
-            problems.append(f"  FAIL  {where}: declares a `bound:` with no `disposition:` — the "
-                            f"bound belongs to a `disposition: decision`, and without the "
-                            f"disposition nothing says whether the value is stated or derived")
+            problems.append(
+                f"  FAIL  {where}: declares a `bound:` with no `disposition:` — the "
+                f"bound belongs to a `disposition: decision`, and without the "
+                f"disposition nothing says whether the value is stated or derived"
+            )
         elif status == "active":
-            report.append(f"UNCLASSIFIED  {name} — no `disposition:` says whether this entry "
-                          f"states a decision (closed bound) or records a consequence")
+            report.append(
+                f"UNCLASSIFIED  {name} — no `disposition:` says whether this entry "
+                f"states a decision (closed bound) or records a consequence"
+            )
         return
     if not isinstance(disposition, str) or disposition.strip() not in DISPOSITIONS:
-        problems.append(f"  FAIL  {where}: `disposition:` must be one of "
-                        f"{'/'.join(DISPOSITIONS)} (got {disposition!r})")
+        problems.append(
+            f"  FAIL  {where}: `disposition:` must be one of {'/'.join(DISPOSITIONS)} (got {disposition!r})"
+        )
         return
     disposition = disposition.strip()
     if disposition == "decision":
         if not bound_text:
-            problems.append(f"  FAIL  {where}: `disposition: decision` with no `bound:` — a "
-                            f"decision is a closed stated value, and a decision without its "
-                            f"bound is the half-stated line this rule exists to refuse")
+            problems.append(
+                f"  FAIL  {where}: `disposition: decision` with no `bound:` — a "
+                f"decision is a closed stated value, and a decision without its "
+                f"bound is the half-stated line this rule exists to refuse"
+            )
             return
         if len(bound_text) < READ_BACK_REASON_MIN:
-            problems.append(f"  FAIL  {where}: `bound:` says nothing weighable ({bound_text!r}) — "
-                            f"state the closed value the decision fixes")
+            problems.append(
+                f"  FAIL  {where}: `bound:` says nothing weighable ({bound_text!r}) — "
+                f"state the closed value the decision fixes"
+            )
             return
     elif bound is not None:
-        problems.append(f"  FAIL  {where}: `disposition: consequence` carries a `bound:` — a "
-                        f"consequence is derived from its producer, so a hard-coded value here "
-                        f"goes stale the moment the producer changes; drop the bound, or state "
-                        f"the entry as a decision with the bound it really has")
+        problems.append(
+            f"  FAIL  {where}: `disposition: consequence` carries a `bound:` — a "
+            f"consequence is derived from its producer, so a hard-coded value here "
+            f"goes stale the moment the producer changes; drop the bound, or state "
+            f"the entry as a decision with the bound it really has"
+        )
         return
-    report.append(f"DISPOSITION   {name} -> {disposition}"
-                  + (f" ({bound_text})" if bound_text else ""))
+    report.append(f"DISPOSITION   {name} -> {disposition}" + (f" ({bound_text})" if bound_text else ""))
 
 
 def decision_records(repo):
@@ -182,8 +201,9 @@ def decision_records(repo):
     records: list[tuple[str, dict[str, str], str]] = []
     problems = []
     if not os.path.isdir(directory):
-        return records, [f"{DECISION_DIR}/ does not exist — no register, so no decision "
-                         f"survives a session (the card's hole (c))"]
+        return records, [
+            f"{DECISION_DIR}/ does not exist — no register, so no decision survives a session (the card's hole (c))"
+        ]
     for entry in sorted(os.listdir(directory)):
         if not entry.endswith(".md"):
             continue
@@ -194,8 +214,7 @@ def decision_records(repo):
             continue
         lines = text.splitlines()
         if not lines or lines[0].strip() != "---":
-            problems.append(f"  FAIL  {rel}: no frontmatter block (a record that cannot be "
-                            f"parsed cannot be surfaced)")
+            problems.append(f"  FAIL  {rel}: no frontmatter block (a record that cannot be parsed cannot be surfaced)")
             continue
         fields = {}
         closed = False
@@ -211,14 +230,14 @@ def decision_records(repo):
             continue
         name = fields.get("name", "")
         if name != entry[:-3]:
-            problems.append(f"  FAIL  {rel}: frontmatter name '{name}' does not match the "
-                            f"file name '{entry[:-3]}'")
+            problems.append(f"  FAIL  {rel}: frontmatter name '{name}' does not match the file name '{entry[:-3]}'")
         if not ISO_DATE.match(fields.get("date", "")):
-            problems.append(f"  FAIL  {rel}: `date:` must be an ISO date "
-                            f"(got '{fields.get('date', '')}')")
+            problems.append(f"  FAIL  {rel}: `date:` must be an ISO date (got '{fields.get('date', '')}')")
         if fields.get("status") not in CONTRACT_STATUSES:
-            problems.append(f"  FAIL  {rel}: `status:` must be one of "
-                            f"{'/'.join(CONTRACT_STATUSES)} (got '{fields.get('status', '')}')")
+            problems.append(
+                f"  FAIL  {rel}: `status:` must be one of "
+                f"{'/'.join(CONTRACT_STATUSES)} (got '{fields.get('status', '')}')"
+            )
         records.append((name or entry[:-3], fields, rel))
     return records, problems
 
@@ -241,31 +260,42 @@ def check_superseded_chains(by_name, rel, problems):
             chain = [name]
             cursor = name
             for _step in range(len(by_name) + 1):
-                targets = sorted({str(other.get("superseded_by")).strip()
-                                  for other in by_name.get(cursor, [])
-                                  if other.get("superseded_by")})
+                targets = sorted(
+                    {
+                        str(other.get("superseded_by")).strip()
+                        for other in by_name.get(cursor, [])
+                        if other.get("superseded_by")
+                    }
+                )
                 if not targets:
                     break
                 if len(targets) > 1:
-                    problems.append(f"  FAIL  {rel}:{name}: two entries for '{cursor}' name "
-                                    f"different replacements ({', '.join(targets)}) — which one "
-                                    f"supersedes the other is not decidable from the file")
+                    problems.append(
+                        f"  FAIL  {rel}:{name}: two entries for '{cursor}' name "
+                        f"different replacements ({', '.join(targets)}) — which one "
+                        f"supersedes the other is not decidable from the file"
+                    )
                     break
                 nxt = targets[0]
                 if nxt not in by_name:
-                    problems.append(f"  FAIL  {rel}:{name}: superseded_by names '{nxt}', which "
-                                    f"is not an entry in this file")
+                    problems.append(
+                        f"  FAIL  {rel}:{name}: superseded_by names '{nxt}', which is not an entry in this file"
+                    )
                     break
                 active = [other for other in by_name[nxt] if other.get("status") == "active"]
                 if not active:
-                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain ends at "
-                                    f"'{nxt}', which is not active ({' -> '.join(chain + [nxt])})")
+                    problems.append(
+                        f"  FAIL  {rel}:{name}: the superseded_by chain ends at "
+                        f"'{nxt}', which is not active ({' -> '.join(chain + [nxt])})"
+                    )
                     break
                 if nxt == cursor:
                     break
                 if nxt in chain:
-                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain loops back "
-                                    f"to '{nxt}' ({' -> '.join(chain + [nxt])})")
+                    problems.append(
+                        f"  FAIL  {rel}:{name}: the superseded_by chain loops back "
+                        f"to '{nxt}' ({' -> '.join(chain + [nxt])})"
+                    )
                     break
                 chain.append(nxt)
                 cursor = nxt
@@ -289,73 +319,101 @@ def validate_contract_entries(entries, rel, test_nodes):
         by_name.setdefault(name, []).append(entry)
         version = entry.get("version")
         if not isinstance(version, int) or version < 1:
-            problems.append(f"  FAIL  {where}: `version:` must be a positive integer "
-                            f"(got {version!r}) — an edited contract is a NEW version, and the")
+            problems.append(
+                f"  FAIL  {where}: `version:` must be a positive integer "
+                f"(got {version!r}) — an edited contract is a NEW version, and the"
+            )
             problems.append("        old one is marked superseded, never deleted")
         if not ISO_DATE.match(str(entry.get("updated", ""))):
-            problems.append(f"  FAIL  {where}: `updated:` must be an ISO date "
-                            f"(got {entry.get('updated', '')!r})")
+            problems.append(f"  FAIL  {where}: `updated:` must be an ISO date (got {entry.get('updated', '')!r})")
         scope = entry.get("scope")
         if scope not in CONTRACT_SCOPES:
-            problems.append(f"  FAIL  {where}: `scope:` must be one of "
-                            f"{'/'.join(CONTRACT_SCOPES)} (got {scope!r}) — scope is what lets")
-            problems.append("        the interactive loader and tac-exec library mode carry "
-                            "different contracts for the same command")
+            problems.append(
+                f"  FAIL  {where}: `scope:` must be one of "
+                f"{'/'.join(CONTRACT_SCOPES)} (got {scope!r}) — scope is what lets"
+            )
+            problems.append(
+                "        the interactive loader and tac-exec library mode carry "
+                "different contracts for the same command"
+            )
         status = entry.get("status")
         if status not in CONTRACT_STATUSES:
-            problems.append(f"  FAIL  {where}: `status:` must be one of "
-                            f"{'/'.join(CONTRACT_STATUSES)} (got {status!r})")
+            problems.append(f"  FAIL  {where}: `status:` must be one of {'/'.join(CONTRACT_STATUSES)} (got {status!r})")
         target = entry.get("superseded_by")
         if status == "superseded":
             if not target:
-                problems.append(f"  FAIL  {where}: status is superseded but there is no "
-                                f"`superseded_by:` pointer — nothing records what replaced it")
+                problems.append(
+                    f"  FAIL  {where}: status is superseded but there is no "
+                    f"`superseded_by:` pointer — nothing records what replaced it"
+                )
             if not ISO_DATE.match(str(entry.get("superseded", ""))):
-                problems.append(f"  FAIL  {where}: status is superseded but `superseded:` is "
-                                f"not an ISO date (got {entry.get('superseded', '')!r})")
+                problems.append(
+                    f"  FAIL  {where}: status is superseded but `superseded:` is "
+                    f"not an ISO date (got {entry.get('superseded', '')!r})"
+                )
             if not entry.get("contract"):
-                problems.append(f"  FAIL  {where}: a superseded entry must keep its `contract:` "
-                                f"block — the old rule is the record being superseded")
+                problems.append(
+                    f"  FAIL  {where}: a superseded entry must keep its `contract:` "
+                    f"block — the old rule is the record being superseded"
+                )
         elif target:
-            problems.append(f"  FAIL  {where}: declares `superseded_by:` but status is "
-                            f"'{status}' — an active contract that points at its replacement "
-                            f"is two live rules for one command")
+            problems.append(
+                f"  FAIL  {where}: declares `superseded_by:` but status is "
+                f"'{status}' — an active contract that points at its replacement "
+                f"is two live rules for one command"
+            )
         if status == "active" and scope:
             key = (name, scope)
             if key in active_pairs:
-                problems.append(f"  FAIL  {where}: two ACTIVE contracts for '{name}' in the "
-                                f"same scope '{scope}' — different scopes may coexist, the "
-                                "same scope may not")
+                problems.append(
+                    f"  FAIL  {where}: two ACTIVE contracts for '{name}' in the "
+                    f"same scope '{scope}' — different scopes may coexist, the "
+                    "same scope may not"
+                )
             active_pairs.add(key)
         check_verified_by(entry, where, status, name, test_nodes, problems, trace_lines)
         check_disposition(entry, where, status, name, problems, trace_lines)
     return by_name, trace_lines, problems
 
 
-def validate_decision_records(repo, records, problems):
-    """Validate decision command references against the loaded module surface."""
+def validate_decision_records(repo, records, problems) -> bool:
+    """Validate decision command references against the loaded module surface.
+
+    Returns False when the surface could not be derived.  That is a cannot-run,
+    not a pass: the `commands:` half of every decision record was not checked,
+    and the caller must not print OK for it.
+    """
     surface = {}
-    if os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
+    checked = os.path.isfile(os.path.join(repo, "scripts/_module-list.sh"))
+    if checked:
         order = module_list_names(repo) or []
         positions, group_of, _files, _groups = module_graph(repo, order)
         surface = command_surface(
-            repo, sorted(positions, key=lambda name: positions[name]), positions, group_of,
+            repo,
+            sorted(positions, key=lambda name: positions[name]),
+            positions,
+            group_of,
         )
     else:
-        print("  NOT CHECKED  the decisions' `commands:` values resolve against the @exports "
-              "surface only\n               when scripts/_module-list.sh is present")
+        print(
+            "  NOT CHECKED  the decisions' `commands:` values resolve against the @exports "
+            "surface only\n               when scripts/_module-list.sh is present"
+        )
     for name, fields, where in records:
         for command in decision_commands(fields):
             if surface and command not in surface:
-                problems.append(f"  FAIL  {where}: decision `commands:` names '{command}', "
-                                f"which no loaded module @exports")
+                problems.append(
+                    f"  FAIL  {where}: decision `commands:` names '{command}', which no loaded module @exports"
+                )
         if fields.get("scope") not in CONTRACT_SCOPES:
-            problems.append(f"  FAIL  {where}: `scope:` must be one of "
-                            f"{'/'.join(CONTRACT_SCOPES)} (got {fields.get('scope', '')})")
+            problems.append(
+                f"  FAIL  {where}: `scope:` must be one of {'/'.join(CONTRACT_SCOPES)} (got {fields.get('scope', '')})"
+            )
     if not records:
         problems.append(f"  FAIL  {DECISION_DIR}/ holds no decision record — the register this")
         problems.append("        check surfaces is empty, so nothing persists an agent's")
         problems.append("        decision across sessions")
+    return checked
 
 
 def print_continuity_lookup(entries, names, records):
@@ -365,47 +423,49 @@ def print_continuity_lookup(entries, names, records):
     query = " ".join(names)
     command = query.split()[0]
     print(f"  --- continuity for: {query} ---")
-    matches = [entry for entry in entries
-               if isinstance(entry, dict)
-               and (entry.get("name") or "").strip() == query]
+    matches = [entry for entry in entries if isinstance(entry, dict) and (entry.get("name") or "").strip() == query]
     if not matches:
-        matches = [entry for entry in entries
-                   if isinstance(entry, dict)
-                   and contract_command_name(entry) == command]
+        matches = [entry for entry in entries if isinstance(entry, dict) and contract_command_name(entry) == command]
     if not matches:
-        print(f"  NONE     '{query}' has no contract entry — a new command with no "
-              f"recorded rule is not continuity-checked at all")
+        print(
+            f"  NONE     '{query}' has no contract entry — a new command with no "
+            f"recorded rule is not continuity-checked at all"
+        )
     for entry in matches:
-        print(f"  ENTRY    {entry.get('name')} v{entry.get('version')} "
-              f"status={entry.get('status')} scope={entry.get('scope')} "
-              f"updated={entry.get('updated')} family={entry.get('family')}")
+        print(
+            f"  ENTRY    {entry.get('name')} v{entry.get('version')} "
+            f"status={entry.get('status')} scope={entry.get('scope')} "
+            f"updated={entry.get('updated')} family={entry.get('family')}"
+        )
         if entry.get("superseded_by"):
-            print(f"           superseded {entry.get('superseded')} by "
-                  f"'{entry.get('superseded_by')}'")
+            print(f"           superseded {entry.get('superseded')} by '{entry.get('superseded_by')}'")
         if entry.get("verified_by"):
-            print("           verified_by: "
-                  f"{', '.join(str(node) for node in entry['verified_by'])}")
+            print(f"           verified_by: {', '.join(str(node) for node in entry['verified_by'])}")
         if entry.get("disposition"):
-            print(f"           disposition: {entry.get('disposition')}"
-                  + (f" — bound: {str(entry.get('bound')).strip()}"
-                     if entry.get("bound") else ""))
+            print(
+                f"           disposition: {entry.get('disposition')}"
+                + (f" — bound: {str(entry.get('bound')).strip()}" if entry.get("bound") else "")
+            )
     family = {entry.get("family") for entry in matches if isinstance(entry, dict)}
     matched_names = {entry.get("name") for entry in matches}
-    siblings = sorted(str(name) for name in {
-        entry.get("name") for entry in entries
-        if isinstance(entry, dict)
-        and entry.get("family") in family
-        and entry.get("name") not in matched_names})
+    siblings = sorted(
+        str(name)
+        for name in {
+            entry.get("name")
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("family") in family and entry.get("name") not in matched_names
+        }
+    )
     if siblings:
         print(f"  FAMILY   still applies from the same family: {', '.join(siblings)}")
-    related = [name for name, fields, _where in records
-               if command in decision_commands(fields)]
+    related = [name for name, fields, _where in records if command in decision_commands(fields)]
     if related:
         print(f"  DECISION {', '.join(related)}")
 
 
-def print_continuity_result(entries, records, test_nodes, n_bats, trace_lines, problems,
-                            changed_note):
+def print_continuity_result(
+    entries, records, test_nodes, n_bats, trace_lines, problems, changed_note, *, surface_checked=True
+):
     """Print traceability/finding counts and the final continuity verdict."""
     verified_lines = [line for line in trace_lines if line.startswith("VERIFIED")]
     unverified_lines = [line for line in trace_lines if line.startswith("NOT VERIFIED")]
@@ -415,25 +475,30 @@ def print_continuity_result(entries, records, test_nodes, n_bats, trace_lines, p
         print(f"  {line}")
     for problem in problems:
         print(problem)
-    n_active = sum(1 for entry in entries
-                   if isinstance(entry, dict) and entry.get("status") == "active")
-    superseded = sum(1 for entry in entries
-                     if isinstance(entry, dict) and entry.get("status") == "superseded")
+    n_active = sum(1 for entry in entries if isinstance(entry, dict) and entry.get("status") == "active")
+    superseded = sum(1 for entry in entries if isinstance(entry, dict) and entry.get("status") == "superseded")
     decisions = sum(1 for line in classified_lines if "-> decision" in line)
     consequences = sum(1 for line in classified_lines if "-> consequence" in line)
-    summary = (f"{len(entries)} contract entr(ies) ({n_active} active, {superseded} superseded) | "
-               f"{len(records)} decision record(s) in {DECISION_DIR}/ | "
-               f"verified_by: {len(verified_lines)} node(s) verified, "
-               f"{len(unverified_lines)} active entr(ies) unverified (printed above) | "
-               f"@test oracle: {sum(len(v) for v in test_nodes.values())} node(s) "
-               f"in {n_bats} BATS file(s) | disposition: {decisions} decision(s), "
-               f"{consequences} consequence(s), "
-               f"{len(unclassified_lines)} active entr(ies) unclassified (printed above)")
+    summary = (
+        f"{len(entries)} contract entr(ies) ({n_active} active, {superseded} superseded) | "
+        f"{len(records)} decision record(s) in {DECISION_DIR}/ | "
+        f"verified_by: {len(verified_lines)} node(s) verified, "
+        f"{len(unverified_lines)} active entr(ies) unverified (printed above) | "
+        f"@test oracle: {sum(len(v) for v in test_nodes.values())} node(s) "
+        f"in {n_bats} BATS file(s) | disposition: {decisions} decision(s), "
+        f"{consequences} consequence(s), "
+        f"{len(unclassified_lines)} active entr(ies) unclassified (printed above)"
+    )
     if problems:
         print(f"check-contracts[continuity]: FAIL — {len(problems)} finding(s). {summary}")
         print("  An edited contract is a NEW version with its predecessor marked superseded —")
         print("  never deleted — so what a rule replaced stays readable.")
         return EXIT_DRIFT
+    if not surface_checked:
+        print(f"check-contracts[continuity]: CANNOT RUN — {summary}")
+        print("  The decisions' `commands:` references were not checked because the @exports")
+        print("  surface could not be derived (scripts/_module-list.sh is absent).")
+        return EXIT_CANNOT_RUN
     print(f"check-contracts[continuity]: OK — {summary}")
     if changed_note:
         print("  Continuity surface: the entries listed as CHANGED above were resolved against")
@@ -473,8 +538,10 @@ def run_continuity(repo, names):
         return EXIT_CANNOT_RUN
     entries = data.get("commands")
     if not isinstance(entries, list) or not entries:
-        sys.stderr.write("check-contracts: command-contracts.yaml declares no commands — "
-                         "refusing to pass on an empty contract set.\n")
+        sys.stderr.write(
+            "check-contracts: command-contracts.yaml declares no commands — "
+            "refusing to pass on an empty contract set.\n"
+        )
         return EXIT_CANNOT_RUN
 
     # The traceability oracle (card SPEC-VV-CONSOLE-003): the @test names the pytest
@@ -487,12 +554,19 @@ def run_continuity(repo, names):
 
     records, register_problems = decision_records(repo)
     problems.extend(register_problems)
-    validate_decision_records(repo, records, problems)
+    surface_checked = validate_decision_records(repo, records, problems)
     print_continuity_lookup(entries, names, records)
 
     changed_note = print_changed_entries(repo, rel)
     return print_continuity_result(
-        entries, records, test_nodes, n_bats, trace_lines, problems, changed_note,
+        entries,
+        records,
+        test_nodes,
+        n_bats,
+        trace_lines,
+        problems,
+        changed_note,
+        surface_checked=surface_checked,
     )
 
 
@@ -507,14 +581,12 @@ def print_changed_entries(repo, rel):
     run — a silent skip would look identical to "nothing changed".
     """
     try:
-        shown = subprocess.run(["git", "-C", repo, "show", f"HEAD:{rel}"],
-                               capture_output=True, text=True, check=False)
+        shown = subprocess.run(["git", "-C", repo, "show", f"HEAD:{rel}"], capture_output=True, text=True, check=False)
     except OSError as exc:
         print(f"  NOT CHECKED  changed-entry pass: git is unavailable ({exc})")
         return False
     if shown.returncode != 0:
-        print(f"  NOT CHECKED  changed-entry pass: `git show HEAD:{rel}` failed "
-              f"(no HEAD revision or not a git tree)")
+        print(f"  NOT CHECKED  changed-entry pass: `git show HEAD:{rel}` failed (no HEAD revision or not a git tree)")
         return False
     try:
         before = yaml.safe_load(shown.stdout) or {}
@@ -537,8 +609,10 @@ def print_changed_entries(repo, rel):
         applies = ", ".join(entry_family_siblings(data, name)) or "(none)"
         if was is None:
             changed = True
-            print(f"  CHANGED  '{name}' is NEW in the working tree (v{entry.get('version')}) — "
-                  f"older entries that still apply: {applies}")
+            print(
+                f"  CHANGED  '{name}' is NEW in the working tree (v{entry.get('version')}) — "
+                f"older entries that still apply: {applies}"
+            )
             continue
         # A rule change is what needs a superseded predecessor: summary and the
         # contract block.  Adding the v2 metadata (version/updated/status/scope)
@@ -549,13 +623,13 @@ def print_changed_entries(repo, rel):
         rule_now = (entry.get("summary"), entry.get("contract"))
         if rule_before != rule_now:
             changed = True
-            print(f"  CHANGED  '{name}': the rule changed "
-                  f"(v{was.get('version', '?')} -> v{entry.get('version')}). The previous")
-            print(f"           revision must be kept as a superseded entry. Older entries that "
-                  f"still apply: {applies}")
+            print(
+                f"  CHANGED  '{name}': the rule changed "
+                f"(v{was.get('version', '?')} -> v{entry.get('version')}). The previous"
+            )
+            print(f"           revision must be kept as a superseded entry. Older entries that still apply: {applies}")
     if not changed:
-        print("  (no contract entry was added, and no entry's summary or contract block "
-              "changed, against HEAD)")
+        print("  (no contract entry was added, and no entry's summary or contract block changed, against HEAD)")
     return changed
 
 
@@ -564,7 +638,11 @@ def entry_family_siblings(data, name):
     for entry in data.get("commands") or []:
         if isinstance(entry, dict) and str(entry.get("name", "")).strip() == name:
             family = entry.get("family")
-            return sorted({str(e.get("name")).strip() for e in data.get("commands") or []
-                           if isinstance(e, dict) and e.get("family") == family
-                           and str(e.get("name", "")).strip() != name})
+            return sorted(
+                {
+                    str(e.get("name")).strip()
+                    for e in data.get("commands") or []
+                    if isinstance(e, dict) and e.get("family") == family and str(e.get("name", "")).strip() != name
+                }
+            )
     return []

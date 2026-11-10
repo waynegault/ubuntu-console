@@ -343,15 +343,21 @@ jobs:
         uses: ./.github/actions/which-box
       - name: Numbered modules discovered
         run: |
-          count=$(ls scripts/[0-9][0-9]-*.sh | wc -l)
+          # nullglob + a length check: an unmatched glob must FAIL, not yield zero
+          # iterations that leave `missing=0` and pass the step vacuously.
+          shopt -s nullglob
+          modules=(scripts/[0-9][0-9]-*.sh)
+          count=${#modules[@]}
           echo "Found $count modules"
-          [[ "$count" -gt 0 ]]
+          (( count > 0 )) || { echo "no scripts/NN-*.sh module matched" >&2; exit 1; }
 
       - name: All modules have version comments
         run: |
+          shopt -s nullglob
+          files=(scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh)
+          (( ${#files[@]} > 0 )) || { echo "no module files matched" >&2; exit 1; }
           missing=0
-          for f in scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh; do
-            [[ -f "$f" ]] || continue
+          for f in "${files[@]}"; do
             if ! grep -q '^# Module Version:' "$f"; then
               echo "MISSING version in $f"
               missing=$((missing + 1))
@@ -361,9 +367,11 @@ jobs:
 
       - name: All modules have AI INSTRUCTION
         run: |
+          shopt -s nullglob
+          files=(scripts/[0-9][0-9]-*.sh bin/*.sh)
+          (( ${#files[@]} > 0 )) || { echo "no shell files matched" >&2; exit 1; }
           missing=0
-          for f in scripts/[0-9][0-9]-*.sh bin/*.sh; do
-            [[ -f "$f" ]] || continue
+          for f in "${files[@]}"; do
             if ! grep -q 'AI INSTRUCTION' "$f"; then
               echo "MISSING AI INSTRUCTION in $f"
               missing=$((missing + 1))
@@ -373,9 +381,11 @@ jobs:
 
       - name: All files end with newline
         run: |
-          for f in tactical-console.bashrc install.sh env.sh \
-                   scripts/[0-9][0-9]-*.sh bin/*.sh; do
-            [[ -f "$f" ]] || continue
+          shopt -s nullglob
+          files=(tactical-console.bashrc install.sh env.sh \
+                 scripts/[0-9][0-9]-*.sh bin/*.sh)
+          (( ${#files[@]} > 0 )) || { echo "no files matched" >&2; exit 1; }
+          for f in "${files[@]}"; do
             if [[ "$(tail -c 1 "$f" | xxd -p)" != "0a" ]]; then
               echo "Missing trailing newline in $f"
               exit 1
@@ -384,9 +394,11 @@ jobs:
 
       - name: No carriage returns
         run: |
-          for f in tactical-console.bashrc install.sh env.sh \
-                   scripts/[0-9][0-9]-*.sh bin/*.sh; do
-            [[ -f "$f" ]] || continue
+          shopt -s nullglob
+          files=(tactical-console.bashrc install.sh env.sh \
+                 scripts/[0-9][0-9]-*.sh bin/*.sh)
+          (( ${#files[@]} > 0 )) || { echo "no files matched" >&2; exit 1; }
+          for f in "${files[@]}"; do
             # Distinguish grep's three outcomes.  rc 1 is "no match", the expected
             # answer; rc >= 2 is a real error (unreadable file, bad pattern) and must
             # NOT be read as "no carriage returns" — the old `|| true` left the count
@@ -427,6 +439,16 @@ jobs:
           # .github/ci-requirements.txt — bump them there, not here.
           pip install -r .github/ci-requirements.txt
 
+      - name: Install bats (pinned)
+        # The push lane now collects `tests/` (not a hand-listed file set), which
+        # imports the two BATS bridge modules even though `-m "not host_coupled"`
+        # runs none of their cases.  Collection resolves the bats executable, so it
+        # must exist; the same pinned install the behavioural job uses.
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          tools/install-bats.sh -p "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
       - name: Ruff lint
         run: ruff check .
 
@@ -449,18 +471,12 @@ jobs:
         run: pyright nas/
 
       - name: Run Python tests
-        run: >-
-          python -m pytest
-          tests/test_kgraph.py tests/test_kgraph_wiring.py tests/test_models.py
-          tests/test_call_flow.py tests/test_update.py tests/test_life_index.py
-          tests/test_benchmark.py tests/test_mcp_server.py tests/test_pr_dashboard.py
-          tests/test_validate.py tests/test_graph_server.py tests/test_report.py
-          tests/test_cli.py tests/test_memory_import.py tests/test_projection.py
-          tests/test_ast_extractor.py tests/test_kgraph_package.py
-          tests/test_bats_lock_fixture.py tests/test_check_ci_status.py
-          tests/test_oc_health_check.py tests/test_shell_command_scan.py
-          nas/butler/openclaw/salus-it500/tests
-          -x --timeout=120 -q
+        # Directories, not a file list: a hand-listed set silently omitted 17 suites
+        # from the push lane (including every LLM-evaluation tool and both NAS
+        # collector suites).  `host_coupled` is the one marker the push lane must
+        # exclude — those cases drive this box's live BATS suites — and it is
+        # declared in pytest.ini so a misspelling fails collection.
+        run: python -m pytest -m "not host_coupled" --timeout=120 -q
 
   python-unit:
     name: Python Full Suite (PR / dispatch)
@@ -473,10 +489,10 @@ jobs:
     #
     # It runs `pytest tests/` (testpaths in pytest.ini) rather than a hand-listed file
     # set, so a NEW tests/test_*.py is picked up with no workflow edit — the acceptance
-    # in card 50cef401.  That same run covers the five files which previously ran
-    # NOWHERE: test_bats_bridge.py, test_bats_unittest.py, test_kv_recall_probe.py,
-    # test_oc_restart_check.py and test_grpo_vram_probe.py.  There is deliberately no
-    # `-x`: stopping at the first failure would hide every later one.
+    # in card 50cef401.  This is now the lane that runs the HOST-COUPLED cases too
+    # (test_bats_bridge.py, test_bats_unittest.py); the push lane excludes them with
+    # `-m "not host_coupled"` but still collects every other suite.  There is
+    # deliberately no `-x`: stopping at the first failure would hide every later one.
     if: github.event_name != 'push'
     runs-on: [self-hosted, wsl-console]
     timeout-minutes: 120

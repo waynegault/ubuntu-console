@@ -5,14 +5,32 @@ import sys
 import yaml
 
 from .core import (
-    ASSIGN, COMMENT, DELETE, ENTRY_LINE, ENTITY_LINES, EXIT_CANNOT_RUN, EXIT_DRIFT,
-    MUTATE, READ_BACK_REASON_MIN, REDIRECT, SUBMODULE_ARG, SUBMODULE_CALL,
-    _StateCounts, _WitnessCounts, fail, read_lines,
+    ASSIGN,
+    COMMENT,
+    DELETE,
+    ENTRY_LINE,
+    ENTITY_LINES,
+    EXIT_CANNOT_RUN,
+    EXIT_DRIFT,
+    MUTATE,
+    READ_BACK_REASON_MIN,
+    REDIRECT,
+    SUBMODULE_ARG,
+    SUBMODULE_CALL,
+    _StateCounts,
+    _WitnessCounts,
+    fail,
+    read_lines,
 )
 from .derived import command_contracts_file, contract_command_name
 from .modules import (
-    command_surface, defined_names, loader_submodules, module_graph, module_list_names,
+    command_surface,
+    defined_names,
+    loader_submodules,
+    module_graph,
+    module_list_names,
 )
+
 
 # ── file resolution ─────────────────────────────────────────────────────────
 def resolve_ref(repo, ref):
@@ -57,8 +75,6 @@ def resolve_ref(repo, ref):
     return files, missing
 
 
-
-
 def is_write(line, kind, symbol, tokens):
     """Is this line an assignment or a write of this entry's symbol/path?
 
@@ -75,8 +91,10 @@ def is_write(line, kind, symbol, tokens):
       satisfy a producer edge.
     """
     if kind == "variables":
-        pattern = (r"(?:^|[\s;&|(])(?:export\s+|local\s+|declare\s+|readonly\s+|"
-                   r"typeset\s+)?" + re.escape(symbol) + r"=")
+        pattern = (
+            r"(?:^|[\s;&|(])(?:export\s+|local\s+|declare\s+|readonly\s+|"
+            r"typeset\s+)?" + re.escape(symbol) + r"="
+        )
         return re.search(pattern, line) is not None
     assignment = ASSIGN.search(line)
     if assignment:
@@ -180,12 +198,10 @@ def check_consumers(kind, entry, consumers, repo, problems, counts: _StateCounts
             continue
         if edge.get("unenforced"):
             if not edge.get("why"):
-                fail(problems, symbol,
-                     f"unenforced edge {edge.get('reader', '')!r} declares no `why:`")
+                fail(problems, symbol, f"unenforced edge {edge.get('reader', '')!r} declares no `why:`")
                 continue
             counts["unenforced"] += 1
-            counts["unenforced_lines"].append(
-                f"NOT ENFORCED  {symbol} <- {edge.get('reader', '')} — {edge['why']}")
+            counts["unenforced_lines"].append(f"NOT ENFORCED  {symbol} <- {edge.get('reader', '')} — {edge['why']}")
             continue
         ref = edge.get("file")
         if not ref:
@@ -203,9 +219,11 @@ def check_consumers(kind, entry, consumers, repo, problems, counts: _StateCounts
                 hit = (candidate, where)
                 break
         if hit is None and not missing:
-            fail(problems, symbol,
-                 f"consumer '{ref}' no longer references {'/'.join(tokens)} "
-                 f"(searched {', '.join(files)})")
+            fail(
+                problems,
+                symbol,
+                f"consumer '{ref}' no longer references {'/'.join(tokens)} (searched {', '.join(files)})",
+            )
 
 
 def check_producers(kind, entry, repo, problems, counts: _StateCounts):
@@ -231,9 +249,11 @@ def check_producers(kind, entry, repo, problems, counts: _StateCounts):
             if found:
                 break
         if found is None:
-            fail(problems, symbol,
-                 f"no assignment or write of {'/'.join(tokens)} in producer '{ref}' "
-                 f"(searched {', '.join(files)})")
+            fail(
+                problems,
+                symbol,
+                f"no assignment or write of {'/'.join(tokens)} in producer '{ref}' (searched {', '.join(files)})",
+            )
 
 
 def check_path_identity(kind, entry, repo, problems):
@@ -272,10 +292,13 @@ def check_path_identity(kind, entry, repo, problems):
                     continue
                 if is_write(line, "files", literal, [literal]):
                     return
-    fail(problems, entry_symbol(kind, entry),
-         f"the declared path literal '{literal}' is not bound or written in any "
-         f"producer file (searched {', '.join(searched) or 'nothing'}) — rename the "
-         "cache in the contract too, or the contract names a path nothing produces")
+    fail(
+        problems,
+        entry_symbol(kind, entry),
+        f"the declared path literal '{literal}' is not bound or written in any "
+        f"producer file (searched {', '.join(searched) or 'nothing'}) — rename the "
+        "cache in the contract too, or the contract names a path nothing produces",
+    )
 
 
 def check_invalidators(kind, entry, repo, problems, counts: _StateCounts):
@@ -301,9 +324,11 @@ def check_invalidators(kind, entry, repo, problems, counts: _StateCounts):
             if found:
                 break
         if found is None:
-            fail(problems, symbol,
-                 f"no delete of {'/'.join(tokens)} in invalidator '{ref}' "
-                 f"(searched {', '.join(files)})")
+            fail(
+                problems,
+                symbol,
+                f"no delete of {'/'.join(tokens)} in invalidator '{ref}' (searched {', '.join(files)})",
+            )
 
 
 def compute_counts(kind_entries, text, problems):
@@ -313,7 +338,8 @@ def compute_counts(kind_entries, text, problems):
     if declared != seen:
         problems.append(
             f"  FAIL  <contract>: {declared} entry declaration(s) in the file but "
-            f"{seen} parsed — a schema change is hiding entries from this check")
+            f"{seen} parsed — a schema change is hiding entries from this check"
+        )
     return seen, declared
 
 
@@ -332,7 +358,7 @@ def index_contract_lines(text, kind_entries):
     for match in ENTRY_LINE.finditer(text):
         start = text.rfind("\n", 0, match.start()) + 1
         end = text.find("\n", match.end())
-        line_text = text[start:end if end != -1 else len(text)]
+        line_text = text[start : end if end != -1 else len(text)]
         value = line_text.split(":", 1)[1].strip().strip("'\"")
         lines.setdefault(value, text.count("\n", 0, match.start()) + 1)
     for kind, entries in kind_entries:
@@ -370,8 +396,7 @@ def run_state(repo):
     print(f"=== Contract drift check ({contract_rel}) ===")
     problems: list[str] = []
     symbols: dict[str, str] = {}
-    counts: _StateCounts = {"producer": 0, "consumer": 0, "invalidator": 0, "unenforced": 0,
-                            "unenforced_lines": []}
+    counts: _StateCounts = {"producer": 0, "consumer": 0, "invalidator": 0, "unenforced": 0, "unenforced_lines": []}
     kind_entries = []
     for kind in ("variables", "files"):
         entries = data.get(kind) or []
@@ -404,8 +429,7 @@ def run_state(repo):
     # line item inside `state` rather than a sixth subcommand: the claim being
     # checked ("this command queried the state before it printed success") is a
     # state claim, and the dispatcher stays at five subcommands.
-    witnesses: _WitnessCounts = {"verified": 0, "exempt": 0, "checked": True, "lines": [],
-                                 "mutating": []}
+    witnesses: _WitnessCounts = {"verified": 0, "exempt": 0, "checked": True, "lines": [], "mutating": []}
     check_read_backs(repo, problems, witnesses)
 
     for line in counts["unenforced_lines"]:
@@ -422,20 +446,31 @@ def run_state(repo):
     if mutating:
         print(f"  MUTATING surface ({len(mutating)} entries): {', '.join(mutating)}")
     if witnesses["checked"]:
-        witness_summary = (f"read-back witnesses: {witnesses['verified']} verified, "
-                           f"{witnesses['exempt']} not witnessed (printed above)")
+        witness_summary = (
+            f"read-back witnesses: {witnesses['verified']} verified, "
+            f"{witnesses['exempt']} not witnessed (printed above)"
+        )
     else:
         witness_summary = "read-back witnesses: NOT CHECKED (printed above)"
-    summary = (f"{entries_seen} entries ({declared} declared) | enforced edges: "
-               f"{counts['producer']} producer, {counts['consumer']} consumer, "
-               f"{counts['invalidator']} invalidator | declared-unenforced edges: "
-               f"{counts['unenforced']} (printed above) | {witness_summary}")
+    summary = (
+        f"{entries_seen} entries ({declared} declared) | enforced edges: "
+        f"{counts['producer']} producer, {counts['consumer']} consumer, "
+        f"{counts['invalidator']} invalidator | declared-unenforced edges: "
+        f"{counts['unenforced']} (printed above) | {witness_summary}"
+    )
     if problems:
         print(f"check-contracts[state]: FAIL — {len(problems)} finding(s). {summary}")
         print("  Fix the contract or the code (both are wrong if they disagree); an edge that")
         print("  cannot be checked must be declared `unenforced: true` with a `why:`, and a")
         print("  read-back that is not written yet must be declared `read_back_exempt: <why>`.")
         return EXIT_DRIFT
+    if not witnesses["checked"]:
+        # An axis that could not run is NOT a clean run.  `derived` returns
+        # EXIT_CANNOT_RUN for the same class of missing input; this sibling used to
+        # print NOT CHECKED and then return 0, so a checkout without the contracts
+        # or the module list passed the state gate with the witness axis unverified.
+        print(f"check-contracts[state]: CANNOT RUN — {witness_summary}")
+        return EXIT_CANNOT_RUN
     print(f"check-contracts[state]: OK — {summary}")
     print("  Coverage limits, not enforced by construction: a file that reads a declared")
     print("  symbol without being declared is invisible here; the type/format/semantics/")
@@ -525,19 +560,22 @@ def check_read_backs(repo, problems, counts: _WitnessCounts):
     data, _text, error = command_contracts_file(repo)
     if error:
         counts["checked"] = False
-        counts["lines"].append(f"NOT CHECKED  read-back witnesses — {error}; continuity owns "
-                               f"that file's existence, so a missing contract is its finding")
+        counts["lines"].append(
+            f"NOT CHECKED  read-back witnesses — {error}; continuity owns "
+            f"that file's existence, so a missing contract is its finding"
+        )
         return
     entries = data.get("commands")
     if not isinstance(entries, list) or not entries:
         counts["checked"] = False
-        counts["lines"].append("NOT CHECKED  read-back witnesses — the contract declares no "
-                               "commands to witness")
+        counts["lines"].append("NOT CHECKED  read-back witnesses — the contract declares no commands to witness")
         return
     if not os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
         counts["checked"] = False
-        counts["lines"].append("NOT CHECKED  read-back witnesses — resolving a command to the "
-                               "module that exports it needs scripts/_module-list.sh")
+        counts["lines"].append(
+            "NOT CHECKED  read-back witnesses — resolving a command to the "
+            "module that exports it needs scripts/_module-list.sh"
+        )
         return
     order = module_list_names(repo) or []
     positions, group_of, _findings, _groups = module_graph(repo, order)
@@ -560,40 +598,63 @@ def check_read_backs(repo, problems, counts: _WitnessCounts):
         # exemption claims there is nothing to observe.
         effect = str(entry.get("effect") or "").strip()
         if effect not in CONTRACT_EFFECTS:
-            fail(problems, name, f"declares effect '{effect or '(none)'}' — every active entry "
-                                 f"must declare one of {'/'.join(CONTRACT_EFFECTS)}")
+            fail(
+                problems,
+                name,
+                f"declares effect '{effect or '(none)'}' — every active entry "
+                f"must declare one of {'/'.join(CONTRACT_EFFECTS)}",
+            )
         elif effect == "mutate":
             counts["mutating"].append(name)
             if exempt is not None:
-                fail(problems, name, "is `mutate` but declares `read_back_exempt:` — a state "
-                                     "change must say how it was read back, or be reclassified "
-                                     "as `read`")
+                fail(
+                    problems,
+                    name,
+                    "is `mutate` but declares `read_back_exempt:` — a state "
+                    "change must say how it was read back, or be reclassified "
+                    "as `read`",
+                )
         if not effects:
             if declared:
-                fail(problems, name, "declares a `read_back:` witness but its contract lists no "
-                                     "side_effects — there is no effect to read back")
+                fail(
+                    problems,
+                    name,
+                    "declares a `read_back:` witness but its contract lists no "
+                    "side_effects — there is no effect to read back",
+                )
             continue
         if exempt is not None:
             reason = str(exempt).strip()
             if len(reason) < READ_BACK_REASON_MIN:
-                fail(problems, name, f"`read_back_exempt:` needs a reason, not '{reason}' — a "
-                                     f"missing witness with no reason cannot be weighed")
+                fail(
+                    problems,
+                    name,
+                    f"`read_back_exempt:` needs a reason, not '{reason}' — a "
+                    f"missing witness with no reason cannot be weighed",
+                )
             else:
                 counts["exempt"] += 1
                 counts["lines"].append(f"NOT WITNESSED  {name} — {reason}")
             continue
         if not isinstance(declared, list) or not declared:
-            fail(problems, name, f"declares {len(effects)} side effect(s) but neither a "
-                                 f"`read_back:` witness nor a `read_back_exempt:` reason — "
-                                 f"nothing records whether the effect was verified before the "
-                                 f"command reported success")
+            fail(
+                problems,
+                name,
+                f"declares {len(effects)} side effect(s) but neither a "
+                f"`read_back:` witness nor a `read_back_exempt:` reason — "
+                f"nothing records whether the effect was verified before the "
+                f"command reported success",
+            )
             continue
         command = contract_command_name(entry)
         module = surface.get(command)
         impl_files = command_impl_files(repo, module) if module else []
         if not impl_files:
-            fail(problems, name, f"cannot resolve the files that export '{command}', so the "
-                                 f"witness call site cannot be checked")
+            fail(
+                problems,
+                name,
+                f"cannot resolve the files that export '{command}', so the witness call site cannot be checked",
+            )
             continue
         for index, witness in enumerate(declared, 1):
             where = f"{name} read_back[{index}]"
@@ -604,12 +665,10 @@ def check_read_backs(repo, problems, counts: _WitnessCounts):
             rel = str(witness.get("file") or "").strip()
             claim = str(witness.get("asserts") or "").strip()
             if not symbol or not rel:
-                fail(problems, where, "needs both a `witness:` symbol and the `file:` that "
-                                      "defines it")
+                fail(problems, where, "needs both a `witness:` symbol and the `file:` that defines it")
                 continue
             if len(claim) < READ_BACK_REASON_MIN:
-                fail(problems, where, f"`asserts:` must say what the witness reads back, not "
-                                      f"'{claim}'")
+                fail(problems, where, f"`asserts:` must say what the witness reads back, not '{claim}'")
             text = read_lines(repo, rel)
             if text is None:
                 fail(problems, where, f"names missing file '{rel}'")
@@ -617,10 +676,13 @@ def check_read_backs(repo, problems, counts: _WitnessCounts):
             if defined_names(text).get(symbol) != "function":
                 fail(problems, where, f"'{symbol}' is not a function defined in {rel}")
                 continue
-            if not any(first_call(repo, impl, symbol) is not None
-                       for impl in impl_files):
-                fail(problems, where, f"'{symbol}' is defined in {rel} but never called in "
-                                      f"{' or '.join(impl_files)}, which export the command — a "
-                                      f"witness nothing calls verifies nothing")
+            if not any(first_call(repo, impl, symbol) is not None for impl in impl_files):
+                fail(
+                    problems,
+                    where,
+                    f"'{symbol}' is defined in {rel} but never called in "
+                    f"{' or '.join(impl_files)}, which export the command — a "
+                    f"witness nothing calls verifies nothing",
+                )
                 continue
             counts["verified"] += 1

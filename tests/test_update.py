@@ -49,20 +49,36 @@ class TestUpdateIncremental(unittest.TestCase):
         kgraph.save_to_graph_db(db, graph if graph is not None else _SMALL_GRAPH)
         return db
 
-    def test_merges_memory_dbs_surviving_a_failing_one(self):
+    def test_a_failing_memory_db_fails_the_update_by_default(self):
+        """A failed import must not save a graph that looks complete."""
         with tempfile.TemporaryDirectory() as td:
             db = self._seed(td)
             mem = os.path.join(td, "mem.sqlite")
             with open(mem, "w", encoding="utf-8") as f:
                 f.write("")  # exists, so it is handed to load_from_memory_db
             with (
-                mock.patch("kgraph.memory_import.load_from_memory_db",
-                           side_effect=ValueError("bad db")),
+                mock.patch("kgraph.memory_import.load_from_memory_db", side_effect=ValueError("bad db")),
                 mock.patch("kgraph.update.logger") as log,
             ):
-                result = kgraph.incremental_update(db, mem_db_path=mem, ast=False)
-            log.warning.assert_called()
+                with self.assertRaises(kgraph.UpdateError):
+                    kgraph.incremental_update(db, mem_db_path=mem, ast=False)
+            log.error.assert_called()
+            # The persisted graph is untouched: no partial write.
+            self.assertGreater(len(kgraph.load_from_graph_db(db).nodes), 0)
+
+    def test_allow_partial_keeps_the_merge_and_says_it_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._seed(td)
+            mem = os.path.join(td, "mem.sqlite")
+            with open(mem, "w", encoding="utf-8") as f:
+                f.write("")
+            with (
+                mock.patch("kgraph.memory_import.load_from_memory_db", side_effect=ValueError("bad db")),
+                mock.patch("kgraph.update.logger") as log,
+            ):
+                result = kgraph.incremental_update(db, mem_db_path=mem, ast=False, allow_partial=True)
             self.assertGreater(len(result.nodes), 0)
+            self.assertTrue(any("INCOMPLETE" in str(call) for call in log.warning.call_args_list))
 
     def test_merges_a_successful_memory_db(self):
         with tempfile.TemporaryDirectory() as td:
@@ -70,12 +86,14 @@ class TestUpdateIncremental(unittest.TestCase):
             mem = os.path.join(td, "mem.sqlite")
             with open(mem, "w", encoding="utf-8") as f:
                 f.write("")
-            mem_graph = {"nodes": [{"id": "m1", "label": "From memory",
-                                    "type": "memory"}], "edges": []}
-            with mock.patch("kgraph.memory_import.load_from_memory_db",
-                            return_value=mem_graph) as load_mem:
-                result = kgraph.incremental_update(db, mem_db_path=mem, ast=False,
-                                                   include_all=True)
+            mem_graph = kgraph.Graph.from_dict(
+                {
+                    "nodes": [{"id": "m1", "label": "From memory", "type": "memory"}],
+                    "edges": [],
+                }
+            )
+            with mock.patch("kgraph.memory_import.load_from_memory_db", return_value=mem_graph) as load_mem:
+                result = kgraph.incremental_update(db, mem_db_path=mem, ast=False, include_all=True)
             self.assertEqual(load_mem.call_args.kwargs.get("include_all"), True)
             self.assertIn("m1", {n.id for n in result.nodes})
 
@@ -89,8 +107,7 @@ class TestUpdateIncremental(unittest.TestCase):
                 f.write("")
             with (
                 mock.patch.dict(os.environ, {"HOME": home}),
-                mock.patch("kgraph.memory_import.load_from_memory_db",
-                           return_value={"nodes": [], "edges": []}) as load_mem,
+                mock.patch("kgraph.memory_import.load_from_memory_db", return_value=kgraph.Graph()) as load_mem,
                 mock.patch("kgraph.graph_db.resolve_all_memory_db_paths") as resolve,
             ):
                 resolve.return_value = []
@@ -102,8 +119,7 @@ class TestUpdateIncremental(unittest.TestCase):
             seeded = {
                 "nodes": [
                     {"id": "a", "label": "Alpha", "type": "topic"},
-                    {"id": "ast_func:gone", "label": "gone", "type": "function",
-                     "source": "ast"},
+                    {"id": "ast_func:gone", "label": "gone", "type": "function", "source": "ast"},
                 ],
                 "edges": [{"from": "ast_func:gone", "to": "a", "label": "calls"}],
             }
@@ -113,27 +129,73 @@ class TestUpdateIncremental(unittest.TestCase):
             self.assertIn("a", {n.id for n in result.nodes})
             self.assertNotIn("ast_func:gone", {n.id for n in result.nodes})
 
+    def test_prunes_memory_nodes_so_an_edited_memory_is_reread(self):
+        """The memory import owns its nodes: a re-read must replace, not merge.
+
+        The failure this catches: the persisted graph was merged first and
+        `GraphBuilder.add_node` keeps the first node, so `memory:mem-1` kept the
+        OLD label after its registry row changed, and a deleted row never went.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            seeded = {
+                "nodes": [
+                    {
+                        "id": "memory:mem-1",
+                        "label": "Old label",
+                        "type": "memory",
+                        "origin": "memory_db",
+                        "sources": ["memory:mem-1"],
+                    },
+                    {"id": "user:keep", "label": "User node", "type": "topic"},
+                ],
+                "edges": [{"from": "memory:mem-1", "to": "user:keep", "label": "links"}],
+            }
+            db = self._seed(td, seeded)
+            mem = os.path.join(td, "mem.sqlite")
+            with open(mem, "w", encoding="utf-8") as f:
+                f.write("")
+            fresh = kgraph.Graph.from_dict(
+                {
+                    "nodes": [
+                        {
+                            "id": "memory:mem-1",
+                            "label": "New label",
+                            "type": "memory",
+                            "origin": "memory_db",
+                            "sources": ["memory:mem-1"],
+                        }
+                    ],
+                    "edges": [],
+                }
+            )
+            with mock.patch("kgraph.memory_import.load_from_memory_db", return_value=fresh):
+                result = kgraph.incremental_update(db, mem_db_path=mem, ast=False)
+
+        nodes = {n.id: n for n in result.nodes}
+        self.assertEqual(nodes["memory:mem-1"].label, "New label")
+        self.assertIn("user:keep", nodes)
+        # The pruned node's old edge cannot survive its replacement.
+        self.assertNotIn(("memory:mem-1", "user:keep"), {(e.source, e.target) for e in result.edges})
+
     def test_merges_ast_extraction_output(self):
         with tempfile.TemporaryDirectory() as td:
             db = self._seed(td, {"nodes": [], "edges": []})
             src = os.path.join(td, "src")
             os.makedirs(src)
             ast_graph = {
-                "nodes": [{"id": "ast_func:x", "label": "x", "type": "function",
-                           "source": "ast"}],
+                "nodes": [{"id": "ast_func:x", "label": "x", "type": "function", "source": "ast"}],
                 "edges": [],
             }
             with (
                 mock.patch("kgraph.graph_db.resolve_all_memory_db_paths", return_value=[]),
                 mock.patch("kgraph.ast_extractor.ast_available", return_value=True),
-                mock.patch("kgraph.ast_extractor.extract_repo_graph",
-                           return_value=ast_graph) as extract,
+                mock.patch("kgraph.ast_extractor.extract_repo_graph", return_value=ast_graph) as extract,
             ):
                 result = kgraph.incremental_update(db, source_dir=src, ast=True)
             extract.assert_called_once()
             self.assertIn("ast_func:x", {n.id for n in result.nodes})
 
-    def test_survives_an_ast_extraction_failure(self):
+    def test_an_ast_extraction_failure_fails_the_update_by_default(self):
         with tempfile.TemporaryDirectory() as td:
             db = self._seed(td, {"nodes": [], "edges": []})
             src = os.path.join(td, "src")
@@ -141,11 +203,25 @@ class TestUpdateIncremental(unittest.TestCase):
             with (
                 mock.patch("kgraph.graph_db.resolve_all_memory_db_paths", return_value=[]),
                 mock.patch("kgraph.ast_extractor.ast_available", return_value=True),
-                mock.patch("kgraph.ast_extractor.extract_repo_graph",
-                           side_effect=ValueError("no parser")),
+                mock.patch("kgraph.ast_extractor.extract_repo_graph", side_effect=ValueError("no parser")),
                 mock.patch("kgraph.update.logger") as log,
             ):
-                result = kgraph.incremental_update(db, source_dir=src, ast=True)
+                with self.assertRaises(kgraph.UpdateError):
+                    kgraph.incremental_update(db, source_dir=src, ast=True)
+            log.error.assert_called()
+
+    def test_allow_partial_survives_an_ast_extraction_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = self._seed(td, {"nodes": [], "edges": []})
+            src = os.path.join(td, "src")
+            os.makedirs(src)
+            with (
+                mock.patch("kgraph.graph_db.resolve_all_memory_db_paths", return_value=[]),
+                mock.patch("kgraph.ast_extractor.ast_available", return_value=True),
+                mock.patch("kgraph.ast_extractor.extract_repo_graph", side_effect=ValueError("no parser")),
+                mock.patch("kgraph.update.logger") as log,
+            ):
+                result = kgraph.incremental_update(db, source_dir=src, ast=True, allow_partial=True)
             log.warning.assert_called()
             self.assertEqual(len(result.nodes), 0)
 
@@ -317,8 +393,7 @@ class TestStartWatch(unittest.TestCase):
             stub = _StubTime(touch_note, lambda: None)
             with (
                 mock.patch.object(update, "time", stub),
-                mock.patch.object(update, "incremental_update",
-                                  side_effect=ValueError("boom")),
+                mock.patch.object(update, "incremental_update", side_effect=ValueError("boom")),
                 mock.patch.object(update, "logger") as log,
                 mock.patch("kgraph.graph_db.resolve_all_memory_db_paths", return_value=[]),
             ):

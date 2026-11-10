@@ -1,7 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 23
+#   v23 (2026-11-10): every registry rewrite uses a per-writer mktemp file, not
+#     a shared "${LLM_REGISTRY}.tmp".  Two writers could interleave or replace
+#     each other's half-written file.
+#   v22 (2026-11-10): __save_model_ctx no longer swallows both writes.  An
+#     autotuned ctx that never reached the registry was indistinguishable from
+#     one that did; each failure now names itself and returns non-zero.
+#   v21 (2026-11-10): the doc block above __llm_json_escape described the lock
+#     cleaner that lives in 11d; it now describes the function beneath it.
 #   v20 (2026-10-02): the registry header and column count come from ONE source,
 #   LLM_REGISTRY_HEADER (01-constants): __llm_registry_sync_state emits it and
 #   derives ncols from it (no literal 1..39 field list), and __renumber_registry
@@ -64,14 +72,19 @@ function __llm_registry_set_field() {
     fi
     [[ -n "$row_file" && -n "$_row" ]] || return 1
 
+    # Per-writer temp file: a shared "${LLM_REGISTRY}.tmp" let two writers
+    # (model scan, an autotune state mark) interleave or replace each other's
+    # half-written file.
+    local _reg_tmp
+    _reg_tmp=$(mktemp "${LLM_REGISTRY}.tmp.XXXXXX") || return 1
     awk -F'|' -v f="$row_file" -v i="$field_index" -v v="$value" \
         'BEGIN{OFS="|"} $3 == f {$i = v} {print}' \
-        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
+        "$LLM_REGISTRY" > "$_reg_tmp"
+    if [[ -s "$_reg_tmp" ]] && [[ "$(wc -l < "$_reg_tmp")" -ge 2 ]]
     then
-        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
+        mv "$_reg_tmp" "$LLM_REGISTRY"
     else
-        rm -f "${LLM_REGISTRY}.tmp"
+        rm -f "$_reg_tmp"
         return 1
     fi
 }
@@ -88,8 +101,16 @@ function __save_model_ctx() {
     # The model may be named by row NUMBER or by FILE name; __llm_registry_set_field
     # resolves either and matches the row by file (the row's identity).
     [[ -n "$model_ref" && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
-    __llm_registry_sync_state >/dev/null 2>&1 || true
-    __llm_registry_set_field "$model_ref" 8 "$ctx_val" || true
+    if ! __llm_registry_sync_state >/dev/null 2>&1
+    then
+        __tac_info "Registry" "[FAILED to sync the registry before saving ctx]" "$C_Error"
+        return 1
+    fi
+    if ! __llm_registry_set_field "$model_ref" 8 "$ctx_val"
+    then
+        __tac_info "Registry" "[FAILED to record ctx $ctx_val for $model_ref]" "$C_Error"
+        return 1
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -111,10 +132,8 @@ function __require_llm() {
 }
 
 # ---------------------------------------------------------------------------
-# __tac_cleanup_stale_locks — Kill orphaned bench/autotune lock files and orphan
-# stdin-keeper processes left behind by aborted runs (SIGKILL, WSL crash, etc.).
-# Safe to call at any time — only removes files with no active holder.
-# @returns 0 always.
+# __llm_json_escape — escape one string for the registry's JSON fields.
+# @returns 0 always; prints the escaped value.
 # ---------------------------------------------------------------------------
 function __llm_json_escape() {
     local raw="${1:-}"
@@ -310,6 +329,9 @@ function __llm_default_number() {
 function __llm_registry_sync_state() {
     [[ -f "$LLM_REGISTRY" ]] || return 0
 
+    local _reg_tmp
+    _reg_tmp=$(mktemp "${LLM_REGISTRY}.tmp.XXXXXX") || return 1
+
     local default_file=""
     local active_file=""
     local running=0
@@ -369,17 +391,17 @@ function __llm_registry_sync_state() {
             for (i = 2; i <= ncols; i++) _row = _row OFS $i
             print _row
         }
-    ' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" || return 1
+    ' "$LLM_REGISTRY" > "$_reg_tmp" || { rm -f "$_reg_tmp"; return 1; }
 
     # Safety: never replace the registry with an empty or truncated file.
     # A failed awk run can produce 0 lines, wiping all model data.
     # Require header + at least 1 data row (≥ 2 lines) so a header-only
     # output cannot overwrite a populated registry.
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
+    if [[ -s "$_reg_tmp" ]] && [[ "$(wc -l < "$_reg_tmp")" -ge 2 ]]
     then
-        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY" || return 1
+        mv "$_reg_tmp" "$LLM_REGISTRY" || return 1
     else
-        rm -f "${LLM_REGISTRY}.tmp"
+        rm -f "$_reg_tmp"
         return 1
     fi
     return 0
@@ -401,7 +423,11 @@ function __renumber_registry() {
         return 1
     }
 
-    awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
+    local _reg_tmp _reg_tmp2
+    _reg_tmp=$(mktemp "${LLM_REGISTRY}.tmp.XXXXXX") || return 1
+    _reg_tmp2=$(mktemp "${LLM_REGISTRY}.tmp.XXXXXX") || { rm -f "$_reg_tmp"; return 1; }
+    awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "$_reg_tmp" \
+        || { rm -f "$_reg_tmp" "$_reg_tmp2"; return 1; }
     local newnum=0
     {
         # The ONE header definition (01-constants), not another literal copy.
@@ -410,16 +436,16 @@ function __renumber_registry() {
         do
             ((++newnum))
             echo "${newnum}|${rest}"
-        done < "${LLM_REGISTRY}.tmp"
-    } > "${LLM_REGISTRY}.tmp2"
-    rm -f "${LLM_REGISTRY}.tmp"
+        done < "$_reg_tmp"
+    } > "$_reg_tmp2"
+    rm -f "$_reg_tmp"
     # Safety: refuse to replace registry with header-only output.
-    if [[ -s "${LLM_REGISTRY}.tmp2" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp2")" -ge 2 ]]
+    if [[ -s "$_reg_tmp2" ]] && [[ "$(wc -l < "$_reg_tmp2")" -ge 2 ]]
     then
-        mv "${LLM_REGISTRY}.tmp2" "$LLM_REGISTRY"
+        mv "$_reg_tmp2" "$LLM_REGISTRY"
     else
-        __tac_info "Registry" "[Refusing to overwrite — would leave $(wc -l < "${LLM_REGISTRY}.tmp2") lines]" "$C_Error"
-        rm -f "${LLM_REGISTRY}.tmp2"
+        __tac_info "Registry" "[Refusing to overwrite — would leave $(wc -l < "$_reg_tmp2") lines]" "$C_Error"
+        rm -f "$_reg_tmp2"
         rm -f "$old_registry_snapshot"
         return 1
     fi

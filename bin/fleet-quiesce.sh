@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-11-09): inline JSON parsing uses the repository-venv resolver
+#       (tools/python-runtime.sh), not bare `python3` — the AUD-008 rule.
 #   v1 (2026-10-18): the FLEET GATE — a distro reset must not cut live agent turns.
 # ─────────────────────────────────────────────────────────────────────────────
 # fleet-quiesce.sh — is the FLEET quiet enough to reset this distro?
@@ -50,6 +52,11 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export HOME="${HOME:-/home/wayne}"
 export PATH="$HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:$PATH"
 
+_FLEET_REPO_ROOT="$(cd "$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$_FLEET_REPO_ROOT/tools/python-runtime.sh"
+FLEET_PYTHON="$(_tac_python_path "$_FLEET_REPO_ROOT")"
+
 # 180 s.  Two measured facts fix this number, both from the gateway's own shutdown path
 # (Rook's filing 2026-10-18, echoing the gateway log):
 #   * the gateway's PRE-STOP drain is 20 s; on timeout it calls
@@ -95,12 +102,15 @@ read_active() {
     local _out
     # No stderr suppression here on purpose: a traceback goes to the wrapper log, and
     # the "${_out:-...}" fallback below turns an empty parse into UNKNOWN (fail closed).
-    _out=$(printf '%s' "$_json" | python3 -c '
+    _out=$(printf '%s' "$_json" | "$FLEET_PYTHON" -c '
 import json, os, sys
 try:
     d = json.load(sys.stdin)
 except Exception as exc:
     print("UNKNOWN: unparseable status JSON (%s) - not a clear" % exc)
+    sys.exit(2)
+if not isinstance(d, dict):
+    print("UNKNOWN: status JSON is %s, not an object - not a clear" % type(d).__name__)
     sys.exit(2)
 aw = (d.get("shutdownBudget") or {}).get("activeWork")
 if not isinstance(aw, dict):

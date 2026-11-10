@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 43
+# Module Version: 45
+#   v45 (2026-11-10): removed __llm_train_lane_busy — the predicate form had no
+#     caller (every consumer calls __llm_train_lane_holder directly).
+#   v44 (2026-11-10): the stale-lock reaper reads model-shell PID files from
+#     LLM_MODELSHELL_PID_DIR (one constant) instead of the hardcoded /tmp literal.
 #   v43 (2026-11-09): __spec_launch_flags reports an unknown draft type through this
 #   file's `warn` helper.  v42 wrote it with a hand-written `>&2`, which is exactly the
 #   pattern §18.3 10.7 counts — tools/count-ratchet.sh read 245 -> 246 on the commit that
@@ -115,7 +119,7 @@
 #   __gpu_clear_stale_processes, __llm_kill_cuda_llama_servers,
 #   __llm_stand_down_cuda_lanes, __llm_vram_holder_report,
 #   __llm_gpu_lock_path, __llm_gpu_lock_holder, __llm_gpu_foreign_owner,
-#   __llm_train_lane_holder, __llm_train_lane_busy
+#   __llm_train_lane_holder
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
@@ -151,7 +155,8 @@ function __tac_cleanup_stale_locks() {
     # Track currently live model-shell wrappers so we do not kill keepers that
     # still belong to an active model session.
     local _c_ms_kf _c_ms_pid
-    for _c_ms_kf in /tmp/llm-modelshell.*.pid /tmp/llm-modelshell.pid
+    for _c_ms_kf in "${LLM_MODELSHELL_PID_DIR:-/tmp}"/llm-modelshell.*.pid \
+                    "${LLM_MODELSHELL_PID_DIR:-/tmp}"/llm-modelshell.pid
     do
         [[ -f "$_c_ms_kf" ]] || continue
         _c_ms_pid=$(cat "$_c_ms_kf" 2>/dev/null || true)
@@ -170,22 +175,33 @@ function __tac_cleanup_stale_locks() {
     for _c_lock in "${_c_lock_candidates[@]}"
     do
         [[ -f "$_c_lock" ]] || continue
-        if command -v lsof >/dev/null 2>&1
+        # The flock lives on the never-unlinked <lock>.mutex; the lock path is
+        # the PID marker.  Probe the MUTEX first: a live holder must keep its
+        # marker even though nobody has the marker file open (the old lsof test
+        # assumed the marker was the flocked file and would delete a live one).
+        local _c_lock_fd="" _c_lock_held=0
+        if command -v flock >/dev/null 2>&1
         then
-            if ! lsof "$_c_lock" >/dev/null 2>&1
+            # swallow-ok: an unopenable mutex is not an error; the PID fallback below decides
+            if exec {_c_lock_fd}>"${_c_lock}.mutex" 2>/dev/null
             then
-                rm -f "$_c_lock"
+                # swallow-ok: a failed non-blocking probe IS the "held" answer read on the next line
+                if ! flock -n "$_c_lock_fd" 2>/dev/null
+                then
+                    _c_lock_held=1
+                fi
+                exec {_c_lock_fd}>&-
             fi
-        else
-            # cat, not the $(<file) builtin: the `2>/dev/null || true` tail turns
-            # a bare redirection into a command-less one (SC2188), and the
-            # failure path is wanted. The rest of this module already reads this
-            # way.
-            _c_pid=$(cat "$_c_lock" 2>/dev/null || true)
-            if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
-            then
-                rm -f "$_c_lock"
-            fi
+        fi
+        (( _c_lock_held )) && continue
+        # cat, not the $(<file) builtin: the `2>/dev/null || true` tail turns
+        # a bare redirection into a command-less one (SC2188), and the
+        # failure path is wanted. The rest of this module already reads this
+        # way.
+        _c_pid=$(cat "$_c_lock" 2>/dev/null || true)
+        if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
+        then
+            rm -f "$_c_lock"
         fi
     done
 
@@ -537,11 +553,6 @@ function __llm_train_lane_holder() {
     # swallow-ok: pgrep's non-zero exit means no candidate matched — the "no tenant" answer
     done < <(pgrep -f '/train-timeout-runner\.sh' 2>/dev/null)
     return 1
-}
-
-# Predicate form for callers that only branch on it.
-function __llm_train_lane_busy() {
-    __llm_train_lane_holder >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------

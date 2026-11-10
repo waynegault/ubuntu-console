@@ -195,7 +195,9 @@ _s() { source "$REPO_ROOT/env.sh"; }
 # ===== E) CONCURRENCY / LOCKING SAFETY =======================================
 
 @test "[E1] Lock: bench singleton prevents concurrent run" {
-    exec {fd}>"$LLM_BENCH_LOCK_FILE"
+    # The flock lives on the never-unlinked .mutex; $LLM_BENCH_LOCK_FILE is the
+    # PID marker.  Locking the marker would no longer exclude a bench.
+    exec {fd}>"$LLM_BENCH_LOCK_FILE.mutex"
     flock -x "$fd"
     echo "$$" > "$LLM_BENCH_LOCK_FILE"
     run __model_bench
@@ -205,7 +207,9 @@ _s() { source "$REPO_ROOT/env.sh"; }
 }
 
 @test "[E2] Lock: autotune-model.sh respects bench singleton lock" {
-    exec {fd}>"$LLM_BENCH_LOCK_FILE"
+    # The flock lives on the never-unlinked .mutex; $LLM_BENCH_LOCK_FILE is the
+    # PID marker.  Locking the marker would no longer exclude a bench.
+    exec {fd}>"$LLM_BENCH_LOCK_FILE.mutex"
     flock -x "$fd"
     echo "$$" > "$LLM_BENCH_LOCK_FILE"
     run timeout 10 bash -c "source '$REPO_ROOT/env.sh' >/dev/null || exit 125; \
@@ -261,8 +265,13 @@ _s() { source "$REPO_ROOT/env.sh"; }
 @test "[E7] Lock: __tac_cleanup_stale_locks preserves lock held by our PID" {
     # Must use exec flock to hold an fd, not just echo PID — lsof check
     # requires an actual open file descriptor.
-    exec {fd}>"$LLM_BENCH_LOCK_FILE"
+    # The flock lives on the never-unlinked .mutex; $LLM_BENCH_LOCK_FILE is the
+    # PID marker.  Locking the marker would no longer exclude a bench.
+    exec {fd}>"$LLM_BENCH_LOCK_FILE.mutex"
     flock -x "$fd"
+    # A real bench writes the marker after taking the mutex; the reaper probes
+    # the mutex, so this is the complete held state.
+    echo "$$" > "$LLM_BENCH_LOCK_FILE"
     __tac_cleanup_stale_locks
     [[ -f "$LLM_BENCH_LOCK_FILE" ]]
     flock -u "$fd"

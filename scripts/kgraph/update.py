@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -21,8 +22,22 @@ from .models import Graph, GraphBuilder
 logger = logging.getLogger(__name__)
 
 
-def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
-                       source_dir: str | None = None, **kwargs) -> Graph:
+class UpdateError(RuntimeError):
+    """An incremental rebuild could not read one of its inputs.
+
+    Raised BEFORE the graph is saved unless the caller explicitly opted into a
+    partial build.  The previous behaviour logged a warning and wrote a graph
+    that looked complete while silently missing a whole registry or the AST half.
+    """
+
+
+def incremental_update(
+    graph_db_path: str,
+    mem_db_path: str | None = None,
+    source_dir: str | None = None,
+    allow_partial: bool = False,
+    **kwargs,
+) -> Graph:
     """Perform an incremental (or full) rebuild of the graph.
 
     Strategy:
@@ -53,18 +68,23 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     # 1. Load existing user graph
     if graph_db_path and os.path.exists(os.path.expanduser(graph_db_path)):
         user_graph = load_from_graph_db(graph_db_path)
-        # AST nodes are derived from this build's extraction: drop stale ast_*
-        # nodes (old slug formats, deleted files, other source dirs) so they
-        # do not accumulate across rebuilds. Memory/user nodes are preserved.
+        # Derived nodes are owned by the build that produced them.  AST nodes are
+        # replaced by this run's extraction; memory-derived nodes are replaced by
+        # this run's import.  Keeping either would make an EDIT invisible (the
+        # builder keeps the first node's fields) and let deleted rows accumulate
+        # forever.  Nodes with no such provenance — user edits — are preserved.
         user_graph.prune_ast_nodes()
+        user_graph.prune_memory_nodes()
         builder.merge(user_graph)
 
     # 2. Merge memory DB data (all registries; multi-DB support)
+    failures: list[str] = []
     memory_dbs = []
     if mem_db_path and os.path.exists(mem_db_path):
         memory_dbs.append(os.path.expanduser(mem_db_path))
     else:
         from .graph_db import resolve_all_memory_db_paths
+
         memory_dbs = resolve_all_memory_db_paths()
     for mdb in memory_dbs:
         try:
@@ -74,13 +94,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
             # ONE memory and ZERO entities between them, so the phase was working and the STORE
             # was starved.  A count per registry — and a named line when none is found — makes
             # that difference visible instead of leaving a silent zero to be re-diagnosed.
-            # The return shape is not uniform: the modern path yields the pydantic `Graph`, the
-            # legacy path a plain dict, so probe as `object` rather than trusting the annotation.
-            _mg: object = mem_graph
-            if isinstance(_mg, dict):
-                _mn, _me = len(_mg.get("nodes", [])), len(_mg.get("edges", []))
-            else:
-                _mn, _me = len(getattr(_mg, "nodes", [])), len(getattr(_mg, "edges", []))
+            _mn, _me = len(mem_graph.nodes), len(mem_graph.edges)
             # The CLI logs at WARNING, so an INFO line never reaches the post-commit output — and
             # a ZERO is precisely what must not stay invisible (it is what was mistaken for a
             # dead path).  A starved or absent import is a warning; a healthy count is INFO.
@@ -89,8 +103,9 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
             else:
                 logger.warning("memory: NOTHING imported from %s (0 nodes, 0 edges)", mdb)
             builder.merge(mem_graph)
-        except (OSError, ValueError, KeyError) as exc:
-            logger.warning("Memory DB import failed (%s): %s", mdb, exc)
+        except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+            failures.append(f"memory DB {mdb}: {exc}")
+            logger.error("Memory DB import failed (%s): %s", mdb, exc)
 
     # 3. AST extraction
     ast_run = kwargs.get("ast", True)
@@ -104,10 +119,18 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
             )
             if ast_graph.get("nodes"):
                 builder.merge(ast_graph)
-                logger.info("AST: %d nodes, %d edges from %s",
-                            len(ast_graph["nodes"]), len(ast_graph["edges"]), source_dir)
+                logger.info(
+                    "AST: %d nodes, %d edges from %s", len(ast_graph["nodes"]), len(ast_graph["edges"]), source_dir
+                )
         except (OSError, ValueError, KeyError) as exc:
-            logger.warning("AST extraction failed: %s", exc)
+            failures.append(f"AST extraction from {source_dir}: {exc}")
+            logger.error("AST extraction failed: %s", exc)
+
+    if failures:
+        detail = "; ".join(failures)
+        if not allow_partial:
+            raise UpdateError(f"incremental update incomplete: {detail}")
+        logger.warning("partial update allowed; the saved graph is INCOMPLETE: %s", detail)
 
     # 4. Semantic deduplication across all merged sources.
     # Collapses same-concept nodes (e.g. "decision: X" from different chunks)
@@ -136,8 +159,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     return graph
 
 
-def merge_graphs(base: Graph | dict, overlay: Graph | dict,
-                 life_index: dict | None = None) -> Graph:
+def merge_graphs(base: Graph | dict, overlay: Graph | dict, life_index: dict | None = None) -> Graph:
     """Merge overlay graph into base, deduplicating by id and semantics.
 
     Delegates to ``GraphBuilder`` for consistent dedup logic.
@@ -161,9 +183,14 @@ def merge_graphs(base: Graph | dict, overlay: Graph | dict,
     return builder.build()
 
 
-def start_watch(graph_db_path: str, mem_db_path: str | None = None,
-                source_dir: str | None = None, interval: int = 30,
-                reporter: Callable[[str], None] | None = None, **kwargs) -> None:
+def start_watch(
+    graph_db_path: str,
+    mem_db_path: str | None = None,
+    source_dir: str | None = None,
+    interval: int = 30,
+    reporter: Callable[[str], None] | None = None,
+    **kwargs,
+) -> None:
     """Watch directories and auto-rebuild on changes.
 
     Polls for file changes at the given interval.  When detected,
@@ -172,6 +199,7 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
     Progress goes to *reporter* when one is given (the CLI passes ``print``);
     this module never writes to stdout itself.
     """
+
     def _say(message: str) -> None:
         if reporter is not None:
             reporter(message)
@@ -186,7 +214,10 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
         for ext in (".py", ".sh", ".bash", ".zsh", ".pyw"):
             for fpath in root.glob(f"**/*{ext}"):
                 parts = fpath.relative_to(root).parts
-                if any(p.startswith(".") or p in ("venv", "node_modules", "__pycache__", "dist", "build", ".git") for p in parts):
+                if any(
+                    p.startswith(".") or p in ("venv", "node_modules", "__pycache__", "dist", "build", ".git")
+                    for p in parts
+                ):
                     continue
                 try:
                     data = fpath.read_bytes()
@@ -211,6 +242,7 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
         if mem_db_path:
             return [mem_db_path] if os.path.exists(mem_db_path) else []
         from .graph_db import resolve_all_memory_db_paths
+
         return resolve_all_memory_db_paths()
 
     for _p in _mem_watch_paths():
@@ -250,7 +282,8 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
                     **kwargs,
                 )
                 from .graph_db import load_from_graph_db
+
                 reloaded = load_from_graph_db(graph_db_path)
                 _say(f"  Rebuilt: {len(reloaded.nodes)} nodes, {len(reloaded.edges)} edges")
-            except (OSError, ValueError, KeyError) as exc:
+            except (OSError, ValueError, KeyError, UpdateError) as exc:
                 logger.warning("Rebuild failed: %s", exc)

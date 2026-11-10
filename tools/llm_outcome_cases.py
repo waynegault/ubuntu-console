@@ -66,6 +66,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -79,6 +80,9 @@ from typing import Any
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+_fsutil = importlib.import_module("tools.fsutil")
+atomic_write_text = _fsutil.atomic_write_text
 
 from tools.llm_task_quality import (  # noqa: E402 - repo root must be on sys.path first
     CODE_BAD_ARGUMENTS,
@@ -172,10 +176,7 @@ CASES: tuple[Case, ...] = (
     Case(
         id="chat-instruction-follow",
         workload="chat",
-        prompt=(
-            "Reply with exactly one line and nothing else: ANSWER: ALPHA — "
-            "do not add punctuation or explanation."
-        ),
+        prompt=("Reply with exactly one line and nothing else: ANSWER: ALPHA — do not add punctuation or explanation."),
         expect=("ALPHA",),
         note="tests literal instruction following with no reasoning content at all",
     ),
@@ -183,8 +184,7 @@ CASES: tuple[Case, ...] = (
         id="chat-order",
         workload="chat",
         prompt=(
-            "Sort these three numbers ascending and reply with exactly one line: "
-            "ANSWER: n1,n2,n3 — numbers: 14, 3, 9"
+            "Sort these three numbers ascending and reply with exactly one line: ANSWER: n1,n2,n3 — numbers: 14, 3, 9"
         ),
         expect=("3,9,14", "3, 9, 14"),
         note="comma-form is part of the contract, so a missing comma is not correct",
@@ -239,8 +239,8 @@ CASES: tuple[Case, ...] = (
         prompt=(
             "You may call search_corpus(query), fetch_document(id) or summarize(text). "
             "Find the annual leave policy. Reply with a JSON array containing exactly "
-            "one tool call, for example [{\"tool\": \"summarize\", \"arguments\": "
-            "{\"text\": \"...\"}}]"
+            'one tool call, for example [{"tool": "summarize", "arguments": '
+            '{"text": "..."}}]'
         ),
         expect=("search_corpus(query~leave)",),
         kind="tool_call",
@@ -298,10 +298,7 @@ CASES: tuple[Case, ...] = (
     Case(
         id="mix-unit",
         workload="mix",
-        prompt=(
-            "A model decodes 240 tokens in 8 seconds. Reply with exactly one line: "
-            "ANSWER: <tokens per second>"
-        ),
+        prompt=("A model decodes 240 tokens in 8 seconds. Reply with exactly one line: ANSWER: <tokens per second>"),
         expect=("30", "30 tps", "30 tokens per second", "30/s"),
         note="unit-bearing arithmetic; the number must not be inverted",
     ),
@@ -315,8 +312,7 @@ CASES: tuple[Case, ...] = (
         ),
         expect=("NO_TOOL",),
         note=(
-            "the article's off-menu case: a model that always emits a tool call has "
-            "the interface and not the choice"
+            "the article's off-menu case: a model that always emits a tool call has the interface and not the choice"
         ),
     ),
     Case(
@@ -413,11 +409,7 @@ def _tool_calls_in(text: str) -> list[Any] | None:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return None
-    if (
-        isinstance(parsed, list)
-        and parsed
-        and all(isinstance(call, dict) and "tool" in call for call in parsed)
-    ):
+    if isinstance(parsed, list) and parsed and all(isinstance(call, dict) and "tool" in call for call in parsed):
         return parsed
     return None
 
@@ -664,9 +656,7 @@ def summarise(results: list[CaseResult]) -> dict[str, Any]:
         counts[result.outcome] = counts.get(result.outcome, 0) + 1
         if result.outcome != OUTCOME_CORRECT:
             code_counts[result.code] = code_counts.get(result.code, 0) + 1
-        bucket = by_workload.setdefault(
-            result.workload, {"cases": 0, **{outcome: 0 for outcome in OUTCOMES}}
-        )
+        bucket = by_workload.setdefault(result.workload, {"cases": 0, **{outcome: 0 for outcome in OUTCOMES}})
         bucket["cases"] += 1
         bucket[result.outcome] += 1
     total = len(results)
@@ -718,9 +708,7 @@ def _post_chat(base_url: str, model: str, prompt: str, timeout: float) -> Any:
     """
     host = urllib.parse.urlsplit(base_url).hostname or ""
     if host not in {"127.0.0.1", "localhost", "::1"}:
-        raise SystemExit(
-            f"refusing to send case prompts to a non-loopback URL: {base_url}"
-        )
+        raise SystemExit(f"refusing to send case prompts to a non-loopback URL: {base_url}")
     body = json.dumps(
         {
             "model": model,
@@ -738,6 +726,38 @@ def _post_chat(base_url: str, model: str, prompt: str, timeout: float) -> Any:
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode())
+
+
+def _select_model(entries: Any, explicit: str | None) -> tuple[str, bool]:
+    """The model to request, and whether it was PINNED by the caller.
+
+    An explicit name wins.  Otherwise the served list is the only honest answer:
+    the old default was the literal string "local", which was written into the
+    artefact and joined against the registry as if it were a real model — so a
+    score could be filed under a name no lane serves.
+    """
+    if explicit:
+        return explicit, True
+    if not isinstance(entries, list) or not entries:
+        raise SystemExit("/v1/models listed no model; pass --model to pin one")
+    first = entries[0]
+    model = first.get("id") if isinstance(first, dict) else None
+    if not model:
+        raise SystemExit("/v1/models did not name an id; pass --model to pin one")
+    return str(model), False
+
+
+def _resolve_model(base_url: str, explicit: str | None, timeout: float) -> tuple[str, bool]:
+    if explicit:
+        return explicit, True
+    host = urllib.parse.urlsplit(base_url).hostname or ""
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise SystemExit(f"refusing to discover a model from a non-loopback URL: {base_url}")
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/models")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = json.loads(response.read().decode())
+    data = body.get("data") if isinstance(body, dict) else None
+    return _select_model(data, explicit)
 
 
 def main() -> int:
@@ -760,8 +780,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("LLM_OUTCOME_MODEL", "local"),
-        help="model name to request in --run mode",
+        default=os.environ.get("LLM_OUTCOME_MODEL") or None,
+        help="model name to request in --run mode; by default read from /v1/models and marked UNPINNED",
     )
     parser.add_argument("--timeout", type=float, default=120.0, help="per-request timeout for --run")
     parser.add_argument("--json", action="store_true", help="emit the scored result as JSON")
@@ -796,6 +816,11 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    model = os.environ.get("LLM_OUTCOME_MODEL", "")
+    model_pinned = bool(model)
+    if args.run:
+        model, model_pinned = _resolve_model(args.base_url, args.model, args.timeout)
+
     results: list[CaseResult] = []
     if args.responses:
         for case_id, response in _load_response_log(args.responses):
@@ -808,7 +833,7 @@ def main() -> int:
     else:
         for case in selected:
             try:
-                response = _post_chat(args.base_url, args.model, case.prompt, args.timeout)
+                response = _post_chat(args.base_url, model, case.prompt, args.timeout)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 results.append(
                     CaseResult(
@@ -827,7 +852,8 @@ def main() -> int:
     summary = summarise(results)
     artefact = {
         "tool": "llm_outcome_cases",
-        "model": args.model if args.run else os.environ.get("LLM_OUTCOME_MODEL", ""),
+        "model": model,
+        "model_pinned": model_pinned,
         "base_url": args.base_url if args.run else "",
         "cases_file": args.responses or "",
         "summary": summary,
@@ -840,12 +866,10 @@ def main() -> int:
     }
 
     if args.write:
-        directory = os.path.dirname(os.path.abspath(args.write))
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        with open(args.write, "w", encoding="utf-8") as handle:
-            json.dump(artefact, handle, indent=2, sort_keys=False)
-            handle.write("\n")
+        atomic_write_text(
+            args.write,
+            json.dumps(artefact, indent=2, sort_keys=False) + "\n",
+        )
 
     if args.json:
         print(json.dumps(artefact))
@@ -867,9 +891,7 @@ def main() -> int:
                 f"invalid={bucket[OUTCOME_INVALID]}"
             )
         if summary["code_counts"]:
-            breakdown = ", ".join(
-                f"{code}={count}" for code, count in summary["code_counts"].items()
-            )
+            breakdown = ", ".join(f"{code}={count}" for code, count in summary["code_counts"].items())
             print(f"  non-correct codes: {breakdown}")
         for result in results:
             if result.outcome != OUTCOME_CORRECT:

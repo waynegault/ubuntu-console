@@ -81,7 +81,11 @@
 #                                     (default ~/.cache/gpu-watch-selfcheck.state)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-11-10): the alarm names bin/gpu-passthrough-check.sh, the checker that
+#     actually exists.  It named bin/gpu-passthrough-watch.sh, which is tracked
+#     nowhere and installed nowhere; the one test that read the text SKIPPED when
+#     the extraction came up empty, so the dead reference survived.
 #   v6 (2026-10-11): an opt-in, bounded READINESS WAIT before concluding "unreadable" —
 #   GPU_WATCH_SELFCHECK_READY_WAIT_S (seconds; 0 = off, the default) with
 #   GPU_WATCH_SELFCHECK_READY_INTERVAL_S (seconds between retries, default 20).  A Gateway
@@ -298,7 +302,7 @@ alarm_text() {
     printf '%s\n' "Why this matters: this automation is the ONLY scheduled path that fires the GPU-passthrough"
     printf '%s\n' "watcher and ANNOUNCES a change. Nothing else covers it: measured 2026-11-03T23:16Z there is no"
     printf '%s\n' "openclaw-gpu-passthrough-watch unit at user or system scope, and no cron job, crontab entry or"
-    printf '%s\n' "timer invokes bin/gpu-passthrough-watch.sh. So a pause here means NOTHING is watching"
+    printf '%s\n' "timer runs bin/gpu-passthrough-check.sh. So a pause here means NOTHING is watching"
     printf '%s\n' "passthrough -- the earlier text claimed an independent timer that has never existed."
     printf '%s\n' "Automation: ${3:-unknown} (${AUTOMATION_ID})  lastRunStatus=${4:-unknown}"
     printf '%s\n' "Inspect: ${OPENCLAW} automations get ${AUTOMATION_ID} --json"

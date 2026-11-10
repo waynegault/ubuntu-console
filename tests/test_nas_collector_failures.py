@@ -96,9 +96,14 @@ class _Request:
         self.headers[name] = value
 
 
-def _fake_urllib(*, fail: bool = False, status: int = 204, body: bytes = b"",
-                 http_error: tuple[int, bytes] | None = None,
-                 requests: list[_Request] | None = None) -> Any:
+def _fake_urllib(
+    *,
+    fail: bool = False,
+    status: int = 204,
+    body: bytes = b"",
+    http_error: tuple[int, bytes] | None = None,
+    requests: list[_Request] | None = None,
+) -> Any:
     """A module-local replacement for the ``urllib`` package name."""
     ns = types.SimpleNamespace()
 
@@ -155,46 +160,38 @@ def _glowmarkt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     return _load("nas_glowmarkt", "glowmarkt-collector.py")
 
 
-def _stub_glowmarkt(monkeypatch: pytest.MonkeyPatch, mod: Any, tmp_path: Path,
-                    *, write_result: int | None, data: list[Any]) -> None:
+def _stub_glowmarkt(
+    monkeypatch: pytest.MonkeyPatch, mod: Any, tmp_path: Path, *, write_result: int | None, data: list[Any]
+) -> None:
     monkeypatch.setattr(mod, "get_token", lambda force_refresh=False: "tok")
     monkeypatch.setattr(mod, "fetch_resources", lambda token: [{"resourceId": mod.RESOURCE_ID}])
-    monkeypatch.setattr(mod, "fetch_consumption",
-                        lambda *a, **k: {"data": data, "units": "kWh"})
+    monkeypatch.setattr(mod, "fetch_consumption", lambda *a, **k: {"data": data, "units": "kWh"})
     monkeypatch.setattr(mod, "write_influx", lambda lines: write_result)
     monkeypatch.setattr(mod, "_save_cursor", lambda last: None)
     monkeypatch.setattr(mod, "_append_history", lambda record: None)
     monkeypatch.setattr(mod, "LATEST_FILE", tmp_path / "latest.json")
 
 
-def test_glowmarkt_not_ok_when_the_influx_write_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_glowmarkt_not_ok_when_the_influx_write_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Catches the shipped defect: a total InfluxDB outage was recorded as ok:True
     # (and main() then exited 0), so the collector reported success while every
     # reading was lost.
     mod = _glowmarkt(monkeypatch, tmp_path)
-    _stub_glowmarkt(monkeypatch, mod, tmp_path, write_result=None,
-                    data=[[1_700_000_000, 1.5]])
+    _stub_glowmarkt(monkeypatch, mod, tmp_path, write_result=None, data=[[1_700_000_000, 1.5]])
     result = mod.collect_once()
     assert result["ok"] is False
     assert result["influx"]["status"] is None
 
 
-def test_glowmarkt_ok_when_the_write_lands(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_glowmarkt_ok_when_the_write_lands(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _glowmarkt(monkeypatch, tmp_path)
-    _stub_glowmarkt(monkeypatch, mod, tmp_path, write_result=204,
-                    data=[[1_700_000_000, 1.5]])
+    _stub_glowmarkt(monkeypatch, mod, tmp_path, write_result=204, data=[[1_700_000_000, 1.5]])
     result = mod.collect_once()
     assert result["ok"] is True
     assert result["influx"]["status"] == 204
 
 
-def test_glowmarkt_ok_when_there_is_nothing_to_write(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_glowmarkt_ok_when_there_is_nothing_to_write(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _glowmarkt(monkeypatch, tmp_path)
     _stub_glowmarkt(monkeypatch, mod, tmp_path, write_result=None, data=[])
     assert mod.collect_once()["ok"] is True
@@ -229,7 +226,19 @@ def _mi_scale(monkeypatch: pytest.MonkeyPatch) -> Any:
     mqtt = types.ModuleType("paho.mqtt")
     client = types.ModuleType("paho.mqtt.client")
     setattr(client, "CallbackAPIVersion", types.SimpleNamespace(VERSION2=2))
-    setattr(client, "Client", lambda **k: types.SimpleNamespace())
+
+    def _client(**kwargs: Any) -> Any:
+        # Mirror paho 2.x's real signature: callback_api_version is required,
+        # and an unknown keyword is a TypeError.  A bare `lambda **k` accepted
+        # anything, so a wrong call passed here and failed on the NAS.
+        if "callback_api_version" not in kwargs:
+            raise TypeError("callback_api_version is required")
+        unknown = set(kwargs) - {"callback_api_version", "client_id", "clean_session"}
+        if unknown:
+            raise TypeError(f"unexpected keyword argument(s): {sorted(unknown)}")
+        return types.SimpleNamespace()
+
+    setattr(client, "Client", _client)
     setattr(mqtt, "client", client)
     setattr(paho, "mqtt", mqtt)
     monkeypatch.setitem(sys.modules, "paho", paho)
@@ -238,9 +247,7 @@ def _mi_scale(monkeypatch: pytest.MonkeyPatch) -> Any:
     return _load("nas_mi_scale", "mi-scale-subscriber.py")
 
 
-def test_mi_scale_write_influx_logs_a_failed_write(
-    monkeypatch: pytest.MonkeyPatch, caplog: Any
-) -> None:
+def test_mi_scale_write_influx_logs_a_failed_write(monkeypatch: pytest.MonkeyPatch, caplog: Any) -> None:
     # Catches: `except Exception: pass` — the write failure used to vanish entirely.
     mod = _mi_scale(monkeypatch)
     monkeypatch.setattr(_butler_common(), "urllib", _fake_urllib(fail=True))
@@ -249,9 +256,7 @@ def test_mi_scale_write_influx_logs_a_failed_write(
     assert any("influx write failed" in r.getMessage() for r in caplog.records)
 
 
-def test_mi_scale_write_influx_warns_on_a_non_204(
-    monkeypatch: pytest.MonkeyPatch, caplog: Any
-) -> None:
+def test_mi_scale_write_influx_warns_on_a_non_204(monkeypatch: pytest.MonkeyPatch, caplog: Any) -> None:
     # Catches: `if r.status != 204: pass` — a rejected write looked like a stored one.
     mod = _mi_scale(monkeypatch)
     monkeypatch.setattr(_butler_common(), "urllib", _fake_urllib(status=500))
@@ -272,9 +277,7 @@ def test_mi_scale_import_has_no_side_effect(monkeypatch: pytest.MonkeyPatch) -> 
 # ── air-monitor: an Influx outage propagates; a bad field is skipped ──────────
 
 
-def test_air_monitor_influx_failure_propagates(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_air_monitor_influx_failure_propagates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Catches: a write failure wrapped into an ok:true printout.  The criterion is
     # that the run cannot report success while the series is missing.
     mod = _load("nas_air", "air-monitor-influx-collector.py")
@@ -292,10 +295,14 @@ def test_air_monitor_skips_a_non_numeric_field_and_logs_it(caplog: Any) -> None:
     # silent (a genuinely benign site is classified, not silenced).
     mod = _load("nas_air2", "air-monitor-influx-collector.py")
     with caplog.at_level(logging.DEBUG, logger="nas_air2"):
-        out = mod._parse_metrics({"sensordatavalues": [
-            {"value_type": "bad", "value": "n/a"},
-            {"value_type": "good", "value": "2"},
-        ]})
+        out = mod._parse_metrics(
+            {
+                "sensordatavalues": [
+                    {"value_type": "bad", "value": "n/a"},
+                    {"value_type": "good", "value": "2"},
+                ]
+            }
+        )
     assert out == {"good": 2.0}
     assert any("skipping non-numeric" in r.getMessage() for r in caplog.records)
 
@@ -365,19 +372,23 @@ def test_cpap_myair_fetch_uses_expected_graphql_contract_without_network(
     mod = _load("nas_cpap_myair_fetch", "cpap-myair-fetch.py")
     monkeypatch.setenv("CPAP_MYAIR_BEARER_TOKEN", "test-only-bearer")
     monkeypatch.setenv("CPAP_MYAIR_API_KEY", "test-only-api-key")
-    response = _FakeHttpResponse({
-        "data": {
-            "getPatientWrapper": {
-                "patient": {"id": "device-1", "firstName": "Test user"},
-                "fgDevices": [{
-                    "deviceSeries": "AirSense",
-                    "deviceFamily": "10",
-                    "lastSleepDataReportTime": "2026-10-14T08:00:00Z",
-                }],
-                "sleepRecords": {"items": [{"startDate": "2026-10-14", "ahi": 1.2}]},
+    response = _FakeHttpResponse(
+        {
+            "data": {
+                "getPatientWrapper": {
+                    "patient": {"id": "device-1", "firstName": "Test user"},
+                    "fgDevices": [
+                        {
+                            "deviceSeries": "AirSense",
+                            "deviceFamily": "10",
+                            "lastSleepDataReportTime": "2026-10-14T08:00:00Z",
+                        }
+                    ],
+                    "sleepRecords": {"items": [{"startDate": "2026-10-14", "ahi": 1.2}]},
+                },
             },
-        },
-    })
+        }
+    )
     opener = _FakeHttpOpener(response)
     monkeypatch.setattr(mod.urllib.request, "build_opener", lambda *_handlers: opener)
 
@@ -472,9 +483,7 @@ def test_migrated_module_imports(module_name: str, filename: str) -> None:
     assert _load(module_name, filename) is not None
 
 
-def test_migrated_modules_with_paths_sandboxed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_migrated_modules_with_paths_sandboxed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("GLOWMARKT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("GLOWMARKT_TOKEN_FILE", str(tmp_path / "t.json"))
     monkeypatch.setenv("CPAP_DATA_DIR", str(tmp_path / "cpap"))
@@ -482,9 +491,7 @@ def test_migrated_modules_with_paths_sandboxed(
     assert _load("nas_smoke_cpap", "cpap-myair-collector.py") is not None
 
 
-def test_graph_oauth_token_cache_rejects_corruption(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_graph_oauth_token_cache_rejects_corruption(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load("nas_oauth_corrupt", "read-myair-otp-graph-oauth.py")
     token_file = tmp_path / "token.json"
     monkeypatch.setenv("CPAP_MYAIR_GRAPH_TOKEN_FILE", str(token_file))
@@ -498,9 +505,7 @@ def test_graph_oauth_token_cache_rejects_corruption(
         mod._token_state()
 
 
-def test_graph_oauth_token_cache_is_atomic_and_private(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_graph_oauth_token_cache_is_atomic_and_private(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load("nas_oauth_save", "read-myair-otp-graph-oauth.py")
     token_file = tmp_path / "nested" / "token.json"
     monkeypatch.setenv("CPAP_MYAIR_GRAPH_TOKEN_FILE", str(token_file))
@@ -571,5 +576,6 @@ def test_collector_imports_the_shared_lib(filename: str) -> None:
     # imported by the collectors.  Catches a copy that drifts back to a private
     # implementation (the lib is the deliberate mirroring exception).
     source = (NAS / filename).read_text()
-    assert re.search(r"^from lib\.butler_common import ", source, flags=re.M), \
+    assert re.search(r"^from lib\.butler_common import ", source, flags=re.M), (
         f"{filename} does not import lib.butler_common"
+    )

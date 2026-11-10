@@ -23,165 +23,180 @@ def load_kgraph_module():
 class KGraphTests(unittest.TestCase):
     def test_generate_html_contains_cytoscape_markup(self):
         with tempfile.TemporaryDirectory() as td:
-            out = os.path.join(td, 'nested', 'kgraph.html')
-            subprocess.run([sys.executable, '-m', 'kgraph', 'html', '--output', out], check=True, cwd=SCRIPT_DIR)
+            out = os.path.join(td, "nested", "kgraph.html")
+            subprocess.run([sys.executable, "-m", "kgraph", "html", "--output", out], check=True, cwd=SCRIPT_DIR)
 
-            self.assertTrue(os.path.exists(out), 'Output HTML not created')
-            with open(out, 'r', encoding='utf-8') as handle:
+            self.assertTrue(os.path.exists(out), "Output HTML not created")
+            with open(out, "r", encoding="utf-8") as handle:
                 text = handle.read()
 
-            self.assertIn('cytoscape', text.lower())
-            self.assertIn('Knowledge Graph (Cytoscape)', text)
+            self.assertIn("cytoscape", text.lower())
+            self.assertIn("Knowledge Graph (Cytoscape)", text)
 
     def test_resolve_serve_target_respects_embed_flag(self):
         kgraph = load_kgraph_module()
 
         with tempfile.TemporaryDirectory() as td:
-            out = os.path.join(td, 'kgraph.html')
+            out = os.path.join(td, "kgraph.html")
             serve_dir, filename, using_built_frontend = kgraph.resolve_serve_target(out, force_embed=True)
 
             self.assertEqual(serve_dir, os.path.abspath(td))
-            self.assertEqual(filename, 'kgraph.html')
+            self.assertEqual(filename, "kgraph.html")
             self.assertFalse(using_built_frontend)
 
     def test_graph_db_round_trip_preserves_extra_payload(self):
         kgraph = load_kgraph_module()
 
         graph = {
-            'nodes': [
-                {'id': 'n1', 'label': 'Node 1', 'type': 'topic', 'content_preview': 'preview'},
+            "nodes": [
+                {"id": "n1", "label": "Node 1", "type": "topic", "content_preview": "preview"},
+                {"id": "n2", "label": "Node 2", "type": "topic"},
             ],
-            'edges': [
-                {'from': 'n1', 'to': 'n2', 'label': 'relates to', 'semantic_score': 0.82},
+            "edges": [
+                {"from": "n1", "to": "n2", "label": "relates to", "semantic_score": 0.82},
             ],
         }
 
         with tempfile.TemporaryDirectory() as td:
-            db_path = os.path.join(td, 'graph.sqlite')
+            db_path = os.path.join(td, "graph.sqlite")
             kgraph.save_to_graph_db(db_path, graph)
             loaded = kgraph.load_from_graph_db(db_path)
 
-        self.assertEqual(loaded.nodes[0].id, 'n1')
-        self.assertEqual(loaded.nodes[0].type, 'topic')
-        self.assertEqual(loaded.edges[0].source, 'n1')
+        self.assertEqual(loaded.nodes[0].id, "n1")
+        self.assertEqual(loaded.nodes[0].type, "topic")
+        self.assertEqual(loaded.edges[0].source, "n1")
         self.assertEqual(loaded.edges[0].semantic_score, 0.82)
 
     def test_prune_ast_nodes_drops_stale_ast_and_keeps_user_nodes(self):
         """prune_ast_nodes removes ast_* nodes/edges but keeps user data."""
         kgraph = load_kgraph_module()
-        graph = kgraph.Graph.from_dict({
-            'nodes': [
-                {'id': 'ast_file:scripts-03-design-tokens-sh', 'label': '03-design-tokens.sh', 'type': 'file'},
-                {'id': 'ast_file:scripts_03_design_tokens_sh', 'label': '03-design-tokens.sh', 'type': 'file'},
-                {'id': 'ast_func:hello', 'label': 'hello', 'type': 'function'},
-                {'id': 'memory:keep', 'label': 'keep', 'type': 'memory'},
-                {'id': 'plain', 'label': 'plain'},
-            ],
-            'edges': [
-                {'from': 'ast_file:scripts-03-design-tokens-sh', 'to': 'ast_func:hello', 'label': 'defines'},
-                {'from': 'ast_func:hello', 'to': 'memory:keep', 'label': 'calls'},
-                {'from': 'memory:keep', 'to': 'plain', 'label': 'relates'},
-            ],
-        })
+        graph = kgraph.Graph.from_dict(
+            {
+                "nodes": [
+                    {"id": "ast_file:scripts-03-design-tokens-sh", "label": "03-design-tokens.sh", "type": "file"},
+                    {"id": "ast_file:scripts_03_design_tokens_sh", "label": "03-design-tokens.sh", "type": "file"},
+                    {"id": "ast_func:hello", "label": "hello", "type": "function"},
+                    {"id": "memory:keep", "label": "keep", "type": "memory"},
+                    {"id": "plain", "label": "plain"},
+                ],
+                "edges": [
+                    {"from": "ast_file:scripts-03-design-tokens-sh", "to": "ast_func:hello", "label": "defines"},
+                    {"from": "ast_func:hello", "to": "memory:keep", "label": "calls"},
+                    {"from": "memory:keep", "to": "plain", "label": "relates"},
+                ],
+            }
+        )
         graph.prune_ast_nodes()
         ids = graph.node_ids()
-        self.assertNotIn('ast_file:scripts-03-design-tokens-sh', ids)
-        self.assertNotIn('ast_file:scripts_03_design_tokens_sh', ids)
-        self.assertNotIn('ast_func:hello', ids)
-        self.assertIn('memory:keep', ids)
-        self.assertIn('plain', ids)
+        self.assertNotIn("ast_file:scripts-03-design-tokens-sh", ids)
+        self.assertNotIn("ast_file:scripts_03_design_tokens_sh", ids)
+        self.assertNotIn("ast_func:hello", ids)
+        self.assertIn("memory:keep", ids)
+        self.assertIn("plain", ids)
         # edges incident to AST nodes are dropped; user edges survive
         edge_pairs = {(e.source, e.target) for e in graph.edges}
-        self.assertNotIn(('ast_file:scripts-03-design-tokens-sh', 'ast_func:hello'), edge_pairs)
-        self.assertNotIn(('ast_func:hello', 'memory:keep'), edge_pairs)
-        self.assertIn(('memory:keep', 'plain'), edge_pairs)
+        self.assertNotIn(("ast_file:scripts-03-design-tokens-sh", "ast_func:hello"), edge_pairs)
+        self.assertNotIn(("ast_func:hello", "memory:keep"), edge_pairs)
+        self.assertIn(("memory:keep", "plain"), edge_pairs)
 
     def test_incremental_update_prunes_stale_ast_nodes(self):
         """a rebuild drops stale ast_* nodes and re-derives them from source."""
         kgraph = load_kgraph_module()
         with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, 'repo')
+            src = os.path.join(td, "repo")
             os.makedirs(src)
-            with open(os.path.join(src, 'main.sh'), 'w', encoding='utf-8') as f:
-                f.write('function hello() { echo hi; }\n')
-            db_path = os.path.join(td, 'graph.sqlite')
-            kgraph.save_to_graph_db(db_path, {
-                'nodes': [
-                    {'id': 'ast_file:stale', 'label': 'stale.sh', 'type': 'file',
-                     'path': '/gone/stale.sh', 'rel_path': 'stale.sh'},
-                    {'id': 'memory:keep', 'label': 'keep', 'type': 'memory'},
-                ],
-                'edges': [
-                    {'from': 'ast_file:stale', 'to': 'memory:keep', 'label': 'calls'},
-                ],
-            })
-            from kgraph.update import incremental_update
-            incremental_update(
+            with open(os.path.join(src, "main.sh"), "w", encoding="utf-8") as f:
+                f.write("function hello() { echo hi; }\n")
+            db_path = os.path.join(td, "graph.sqlite")
+            kgraph.save_to_graph_db(
                 db_path,
-                mem_db_path=os.path.join(td, 'missing.sqlite'),
-                source_dir=src,
-                ast=True,
-                include_all=True,
+                {
+                    "nodes": [
+                        {
+                            "id": "ast_file:stale",
+                            "label": "stale.sh",
+                            "type": "file",
+                            "path": "/gone/stale.sh",
+                            "rel_path": "stale.sh",
+                        },
+                        # A USER node: memory-derived nodes are now pruned and re-read
+                        # on every update, so they cannot stand in for "user data".
+                        {"id": "user:keep", "label": "keep", "type": "topic"},
+                    ],
+                    "edges": [
+                        {"from": "ast_file:stale", "to": "user:keep", "label": "calls"},
+                    ],
+                },
             )
+            from kgraph.update import incremental_update
+
+            with mock.patch("kgraph.graph_db.resolve_all_memory_db_paths", return_value=[]):
+                incremental_update(
+                    db_path,
+                    mem_db_path=os.path.join(td, "missing.sqlite"),
+                    source_dir=src,
+                    ast=True,
+                    include_all=True,
+                )
             loaded = kgraph.load_from_graph_db(db_path)
             ids = loaded.node_ids()
-            self.assertNotIn('ast_file:stale', ids)
-            self.assertIn('memory:keep', ids)
+            self.assertNotIn("ast_file:stale", ids)
+            self.assertIn("user:keep", ids)
             # fresh AST from the temp repo is present
             self.assertTrue(
-                any(i.startswith('ast_file:') for i in ids),
-                f'no fresh ast nodes in {sorted(ids)}',
+                any(i.startswith("ast_file:") for i in ids),
+                f"no fresh ast nodes in {sorted(ids)}",
             )
             edge_pairs = {(e.source, e.target) for e in loaded.edges}
-            self.assertNotIn(('ast_file:stale', 'memory:keep'), edge_pairs)
+            self.assertNotIn(("ast_file:stale", "user:keep"), edge_pairs)
 
     def test_ast_call_links_to_function_definition(self):
         """call nodes resolve to their function definitions ('who calls X')."""
         kgraph = load_kgraph_module()
         with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, 'repo')
+            src = os.path.join(td, "repo")
             os.makedirs(src)
-            with open(os.path.join(src, 'lib.sh'), 'w', encoding='utf-8') as f:
-                f.write('function helper() { echo hi; }\n')
-            with open(os.path.join(src, 'main.sh'), 'w', encoding='utf-8') as f:
-                f.write('helper\n')
-                f.write('undefined_cmd\n')
+            with open(os.path.join(src, "lib.sh"), "w", encoding="utf-8") as f:
+                f.write("function helper() { echo hi; }\n")
+            with open(os.path.join(src, "main.sh"), "w", encoding="utf-8") as f:
+                f.write("helper\n")
+                f.write("undefined_cmd\n")
             g = kgraph.extract_repo_graph(src)
-        edges = {(e['source'], e['target'], e.get('label')) for e in g['edges']}
-        self.assertIn(('ast_call:bash:helper', 'ast_func:bash:helper', 'calls'), edges)
+        edges = {(e["source"], e["target"], e.get("label")) for e in g["edges"]}
+        self.assertIn(("ast_call:bash:helper", "ast_func:bash:helper", "calls"), edges)
         # calls to names with no definition are not linked.  The id carries the language
         # AND the name verbatim, so this must name `undefined_cmd` exactly — a slugged
         # `undefined-cmd` can no longer be produced, and asserting NotIn on it would
         # pass for the wrong reason.
-        self.assertNotIn(('ast_call:bash:undefined_cmd', 'ast_func:bash:undefined_cmd', 'calls'), edges)
+        self.assertNotIn(("ast_call:bash:undefined_cmd", "ast_func:bash:undefined_cmd", "calls"), edges)
 
     def test_graph_db_round_trip_supports_basename_path(self):
         kgraph = load_kgraph_module()
 
         graph = {
-            'nodes': [{'id': 'n1', 'label': 'Node 1'}],
-            'edges': [{'from': 'n1', 'to': 'n2', 'label': 'links'}],
+            "nodes": [{"id": "n1", "label": "Node 1"}, {"id": "n2", "label": "Node 2"}],
+            "edges": [{"from": "n1", "to": "n2", "label": "links"}],
         }
 
         with tempfile.TemporaryDirectory() as td:
             old_cwd = os.getcwd()
             os.chdir(td)
             try:
-                kgraph.save_to_graph_db('graph.sqlite', graph)
-                loaded = kgraph.load_from_graph_db('graph.sqlite')
+                kgraph.save_to_graph_db("graph.sqlite", graph)
+                loaded = kgraph.load_from_graph_db("graph.sqlite")
             finally:
                 os.chdir(old_cwd)
 
-        self.assertEqual(loaded.nodes[0].id, 'n1')
-        self.assertEqual(loaded.edges[0].label, 'links')
+        self.assertEqual(loaded.nodes[0].id, "n1")
+        self.assertEqual(loaded.edges[0].label, "links")
 
     def test_install_flag_is_not_supported(self):
         # The legacy --install flag was a backward-compatibility shim feature
         # and is no longer supported. The package CLI should reject it.
         with tempfile.TemporaryDirectory() as td:
-            out = os.path.join(td, 'kgraph.py')
+            out = os.path.join(td, "kgraph.py")
             result = subprocess.run(
-                [sys.executable, '-m', 'kgraph', '--install', out],
+                [sys.executable, "-m", "kgraph", "--install", out],
                 cwd=SCRIPT_DIR,
                 capture_output=True,
                 text=True,
@@ -192,39 +207,39 @@ class KGraphTests(unittest.TestCase):
     def test_project_graph_overview_hides_chunks_and_remaps_edges(self):
         kgraph = load_kgraph_module()
         graph = {
-            'nodes': [
-                {'id': 'file:a', 'label': 'A.md', 'type': 'file'},
-                {'id': 'chunk:1', 'label': 'chunk', 'type': 'chunk'},
-                {'id': 'topic:x', 'label': 'Topic X', 'type': 'topic'},
+            "nodes": [
+                {"id": "file:a", "label": "A.md", "type": "file"},
+                {"id": "chunk:1", "label": "chunk", "type": "chunk"},
+                {"id": "topic:x", "label": "Topic X", "type": "topic"},
             ],
-            'edges': [
-                {'from': 'file:a', 'to': 'chunk:1', 'label': 'contains chunk'},
-                {'from': 'chunk:1', 'to': 'topic:x', 'label': 'covers topic'},
+            "edges": [
+                {"from": "file:a", "to": "chunk:1", "label": "contains chunk"},
+                {"from": "chunk:1", "to": "topic:x", "label": "covers topic"},
             ],
         }
-        projected = kgraph.project_graph(graph, mode='overview')
-        node_ids = {n['id'] for n in projected['nodes']}
-        self.assertIn('file:a', node_ids)
-        self.assertIn('topic:x', node_ids)
-        self.assertNotIn('chunk:1', node_ids)
-        self.assertEqual(projected['edges'][0]['label'], 'file covers topic')
+        projected = kgraph.project_graph(graph, mode="overview")
+        node_ids = {n["id"] for n in projected["nodes"]}
+        self.assertIn("file:a", node_ids)
+        self.assertIn("topic:x", node_ids)
+        self.assertNotIn("chunk:1", node_ids)
+        self.assertEqual(projected["edges"][0]["label"], "file covers topic")
 
     def test_project_graph_semantic_filters_by_threshold(self):
         kgraph = load_kgraph_module()
         graph = {
-            'nodes': [
-                {'id': 'chunk:a', 'label': 'A', 'type': 'chunk'},
-                {'id': 'chunk:b', 'label': 'B', 'type': 'chunk'},
-                {'id': 'chunk:c', 'label': 'C', 'type': 'chunk'},
+            "nodes": [
+                {"id": "chunk:a", "label": "A", "type": "chunk"},
+                {"id": "chunk:b", "label": "B", "type": "chunk"},
+                {"id": "chunk:c", "label": "C", "type": "chunk"},
             ],
-            'edges': [
-                {'from': 'chunk:a', 'to': 'chunk:b', 'label': 'related (0.90)', 'semantic_score': 0.90},
-                {'from': 'chunk:a', 'to': 'chunk:c', 'label': 'related (0.78)', 'semantic_score': 0.78},
+            "edges": [
+                {"from": "chunk:a", "to": "chunk:b", "label": "related (0.90)", "semantic_score": 0.90},
+                {"from": "chunk:a", "to": "chunk:c", "label": "related (0.78)", "semantic_score": 0.78},
             ],
         }
-        projected = kgraph.project_graph(graph, mode='semantic', semantic_threshold=0.85)
-        self.assertEqual(len(projected['edges']), 1)
-        self.assertEqual(projected['edges'][0]['to'], 'chunk:b')
+        projected = kgraph.project_graph(graph, mode="semantic", semantic_threshold=0.85)
+        self.assertEqual(len(projected["edges"]), 1)
+        self.assertEqual(projected["edges"][0]["to"], "chunk:b")
 
 
 class TestConfidence(unittest.TestCase):
@@ -235,67 +250,67 @@ class TestConfidence(unittest.TestCase):
 
     def test_tag_confidence_extracted_ast_edges(self):
         graph = {
-            'edges': [
-                {'from': 'mod.py', 'to': 'os', 'label': 'imports', 'source': 'ast'},
-                {'from': 'mod.py', 'to': 'func', 'label': 'defines'},
+            "edges": [
+                {"from": "mod.py", "to": "os", "label": "imports", "source": "ast"},
+                {"from": "mod.py", "to": "func", "label": "defines"},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         for e in result.edges:
             assert e.confidence is not None
-            self.assertEqual(e.confidence.value, 'EXTRACTED')
+            self.assertEqual(e.confidence.value, "EXTRACTED")
 
     def test_tag_confidence_inferred_semantic_edges(self):
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 0.82},
-                {'from': 'c', 'to': 'd', 'semantic_score': 0.91},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 0.82},
+                {"from": "c", "to": "d", "semantic_score": 0.91},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         for e in result.edges:
             assert e.confidence is not None
-            self.assertEqual(e.confidence.value, 'INFERRED')
+            self.assertEqual(e.confidence.value, "INFERRED")
 
     def test_tag_confidence_ambiguous_low_semantic(self):
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 0.42},
-                {'from': 'c', 'to': 'd', 'semantic_score': 0.30},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 0.42},
+                {"from": "c", "to": "d", "semantic_score": 0.30},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         for e in result.edges:
             assert e.confidence is not None
-            self.assertEqual(e.confidence.value, 'AMBIGUOUS')
+            self.assertEqual(e.confidence.value, "AMBIGUOUS")
 
     def test_tag_confidence_explicit_flag(self):
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'label': 'whatever', 'explicit': True},
+            "edges": [
+                {"from": "a", "to": "b", "label": "whatever", "explicit": True},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         conf = result.edges[0].confidence
         assert conf is not None
-        self.assertEqual(conf.value, 'EXTRACTED')
+        self.assertEqual(conf.value, "EXTRACTED")
 
     def test_tag_confidence_inferred_flag(self):
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'label': 'related concept', 'inferred': True},
+            "edges": [
+                {"from": "a", "to": "b", "label": "related concept", "inferred": True},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         conf = result.edges[0].confidence
         assert conf is not None
-        self.assertEqual(conf.value, 'INFERRED')
+        self.assertEqual(conf.value, "INFERRED")
 
     def test_tag_confidence_cooccurrence_threshold(self):
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'cooccurrence_count': 5},
-                {'from': 'c', 'to': 'd', 'cooccurrence_count': 1},
+            "edges": [
+                {"from": "a", "to": "b", "cooccurrence_count": 5},
+                {"from": "c", "to": "d", "cooccurrence_count": 1},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
@@ -303,8 +318,8 @@ class TestConfidence(unittest.TestCase):
         conf1 = result.edges[1].confidence
         assert conf0 is not None
         assert conf1 is not None
-        self.assertEqual(conf0.value, 'INFERRED')
-        self.assertEqual(conf1.value, 'AMBIGUOUS')
+        self.assertEqual(conf0.value, "INFERRED")
+        self.assertEqual(conf1.value, "AMBIGUOUS")
 
     def test_semantic_score_threshold_boundary_is_inclusive(self):
         """GRAPHRAG-JEV-005 states the rule as ``semantic_score >= 0.55``.
@@ -316,17 +331,17 @@ class TestConfidence(unittest.TestCase):
         else changing.
         """
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 0.55},
-                {'from': 'c', 'to': 'd', 'semantic_score': 0.549},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 0.55},
+                {"from": "c", "to": "d", "semantic_score": 0.549},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         conf0 = result.edges[0].confidence
         conf1 = result.edges[1].confidence
         assert conf0 is not None and conf1 is not None
-        self.assertEqual(conf0.value, 'INFERRED')
-        self.assertEqual(conf1.value, 'AMBIGUOUS')
+        self.assertEqual(conf0.value, "INFERRED")
+        self.assertEqual(conf1.value, "AMBIGUOUS")
 
     def test_cooccurrence_threshold_boundary_is_inclusive(self):
         """GRAPHRAG-JEV-005 states the rule as ``cooccurrence_count >= 3``.
@@ -334,78 +349,78 @@ class TestConfidence(unittest.TestCase):
         Catches the same drift as above on the co-occurrence signal.
         """
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'cooccurrence_count': 3},
-                {'from': 'c', 'to': 'd', 'cooccurrence_count': 2},
+            "edges": [
+                {"from": "a", "to": "b", "cooccurrence_count": 3},
+                {"from": "c", "to": "d", "cooccurrence_count": 2},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         conf0 = result.edges[0].confidence
         conf1 = result.edges[1].confidence
         assert conf0 is not None and conf1 is not None
-        self.assertEqual(conf0.value, 'INFERRED')
-        self.assertEqual(conf1.value, 'AMBIGUOUS')
+        self.assertEqual(conf0.value, "INFERRED")
+        self.assertEqual(conf1.value, "AMBIGUOUS")
 
     def test_tag_confidence_ambiguous_fallback_related_label(self):
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'label': 'related concept'},
+            "edges": [
+                {"from": "a", "to": "b", "label": "related concept"},
             ],
         }
         result = self.kgraph.tag_confidence(graph)
         conf = result.edges[0].confidence
         assert conf is not None
-        self.assertEqual(conf.value, 'AMBIGUOUS')
+        self.assertEqual(conf.value, "AMBIGUOUS")
 
     def test_tag_confidence_preserves_existing_fields(self):
         graph = {
-            'nodes': [{'id': 'a', 'label': 'A'}],
-            'edges': [{'from': 'a', 'to': 'b', 'label': 'imports', 'source': 'ast', 'role': 'general'}],
+            "nodes": [{"id": "a", "label": "A"}],
+            "edges": [{"from": "a", "to": "b", "label": "imports", "source": "ast", "role": "general"}],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result.nodes[0].label, 'A')
+        self.assertEqual(result.nodes[0].label, "A")
         # A declared field is preserved; an UNKNOWN one is rejected by the model
         # (card d25d3b8b), so the tag pass keeps every field the model declares.
-        self.assertEqual(result.edges[0].role, 'general')
+        self.assertEqual(result.edges[0].role, "general")
         conf = result.edges[0].confidence
         assert conf is not None
-        self.assertEqual(conf.value, 'EXTRACTED')
+        self.assertEqual(conf.value, "EXTRACTED")
 
     def test_confidence_stats_empty_graph(self):
-        stats = self.kgraph.confidence_stats({'edges': []})
-        self.assertEqual(stats['total'], 0)
-        self.assertEqual(stats['extracted'], 0)
-        self.assertEqual(stats['extracted_pct'], 0)
+        stats = self.kgraph.confidence_stats({"edges": []})
+        self.assertEqual(stats["total"], 0)
+        self.assertEqual(stats["extracted"], 0)
+        self.assertEqual(stats["extracted_pct"], 0)
 
     def test_confidence_stats_counts_by_confidence_level(self):
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'source': 'ast', 'label': 'calls'},
-                {'from': 'c', 'to': 'd', 'semantic_score': 0.91},
-                {'from': 'e', 'to': 'f', 'semantic_score': 0.30},
+            "edges": [
+                {"from": "a", "to": "b", "source": "ast", "label": "calls"},
+                {"from": "c", "to": "d", "semantic_score": 0.91},
+                {"from": "e", "to": "f", "semantic_score": 0.30},
             ],
         }
         self.kgraph.tag_confidence(graph)
         stats = self.kgraph.confidence_stats(graph)
-        self.assertEqual(stats['total'], 3)
-        self.assertEqual(stats['extracted'], 1)
-        self.assertEqual(stats['inferred'], 1)
-        self.assertEqual(stats['ambiguous'], 1)
-        self.assertEqual(stats['extracted_pct'], 33.3)
-        self.assertEqual(stats['inferred_pct'], 33.3)
-        self.assertEqual(stats['ambiguous_pct'], 33.3)
+        self.assertEqual(stats["total"], 3)
+        self.assertEqual(stats["extracted"], 1)
+        self.assertEqual(stats["inferred"], 1)
+        self.assertEqual(stats["ambiguous"], 1)
+        self.assertEqual(stats["extracted_pct"], 33.3)
+        self.assertEqual(stats["inferred_pct"], 33.3)
+        self.assertEqual(stats["ambiguous_pct"], 33.3)
 
     def test_confidence_stats_before_tagging(self):
         """confidence_stats calls _determine_confidence for untagged edges."""
         graph = {
-            'edges': [
-                {'from': 'a', 'to': 'b', 'source': 'ast', 'label': 'imports'},
-                {'from': 'c', 'to': 'd', 'semantic_score': 0.99},
+            "edges": [
+                {"from": "a", "to": "b", "source": "ast", "label": "imports"},
+                {"from": "c", "to": "d", "semantic_score": 0.99},
             ],
         }
         stats = self.kgraph.confidence_stats(graph)
-        self.assertEqual(stats['extracted'], 1)
-        self.assertEqual(stats['inferred'], 1)
+        self.assertEqual(stats["extracted"], 1)
+        self.assertEqual(stats["inferred"], 1)
 
 
 # ══════════════ GRAPHRAG-JEV-005: strength is semantic_score ══════════════
@@ -416,11 +431,11 @@ class TestConfidence(unittest.TestCase):
 # (cost 2 × -log(0.9) = 0.21).  Shared by the query tests and the CLI test below,
 # so the mode that answers differently is the SAME graph in both.
 _WEAK_SHORTCUT_GRAPH = {
-    'nodes': [{'id': 's'}, {'id': 'x'}, {'id': 't'}],
-    'edges': [
-        {'from': 's', 'to': 't', 'label': 'weak', 'semantic_score': 0.05},
-        {'from': 's', 'to': 'x', 'label': 'strong', 'semantic_score': 0.9},
-        {'from': 'x', 'to': 't', 'label': 'strong', 'semantic_score': 0.9},
+    "nodes": [{"id": "s"}, {"id": "x"}, {"id": "t"}],
+    "edges": [
+        {"from": "s", "to": "t", "label": "weak", "semantic_score": 0.05},
+        {"from": "s", "to": "x", "label": "strong", "semantic_score": 0.9},
+        {"from": "x", "to": "t", "label": "strong", "semantic_score": 0.9},
     ],
 }
 
@@ -431,7 +446,7 @@ class EdgeStrengthTests(unittest.TestCase):
     def test_graph_edge_no_longer_declares_weight(self):
         # Catches: the removed field surviving as a second strength vocabulary —
         # the state in which two consumers could disagree about the same edge.
-        self.assertNotIn('weight', kgraph.GraphEdge.model_fields)
+        self.assertNotIn("weight", kgraph.GraphEdge.model_fields)
 
     def test_community_detection_reads_semantic_score_as_strength(self):
         # Catches: the field deleted WITHOUT moving its reader — _build_nx_graph
@@ -439,25 +454,31 @@ class EdgeStrengthTests(unittest.TestCase):
         # strength the graph actually carries.
         from kgraph import community
 
-        nx_graph = community._build_nx_graph(kgraph.Graph.from_dict({
-            'nodes': [{'id': 'a'}, {'id': 'b'}, {'id': 'c'}, {'id': 'd'}],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 0.9},
-                {'from': 'c', 'to': 'd'},
-            ],
-        }))
-        self.assertEqual(nx_graph['a']['b']['weight'], 0.9)
-        self.assertAlmostEqual(nx_graph['a']['b']['distance'], 1 / 0.9)
+        nx_graph = community._build_nx_graph(
+            kgraph.Graph.from_dict(
+                {
+                    "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}],
+                    "edges": [
+                        {"from": "a", "to": "b", "semantic_score": 0.9},
+                        {"from": "c", "to": "d"},
+                    ],
+                }
+            )
+        )
+        self.assertEqual(nx_graph["a"]["b"]["weight"], 0.9)
+        self.assertAlmostEqual(nx_graph["a"]["b"]["distance"], 1 / 0.9)
         # An edge with no score is an asserted tie, read as strength 1.0.
-        self.assertEqual(nx_graph['c']['d']['weight'], 1.0)
+        self.assertEqual(nx_graph["c"]["d"]["weight"], 1.0)
 
     def test_a_serialized_obsolete_weight_is_rejected(self):
         # A removed field must not be silently discarded at the strict model boundary.
         with self.assertRaises(ValidationError):
-            kgraph.Graph.from_dict({
-                'nodes': [{'id': 's'}, {'id': 't'}],
-                'edges': [{'from': 's', 'to': 't', 'weight': 0.05}],
-            })
+            kgraph.Graph.from_dict(
+                {
+                    "nodes": [{"id": "s"}, {"id": "t"}],
+                    "edges": [{"from": "s", "to": "t", "weight": 0.05}],
+                }
+            )
 
 
 class PathModeCliTests(unittest.TestCase):
@@ -468,18 +489,31 @@ class PathModeCliTests(unittest.TestCase):
         # path (a flag with no effect), or printing a path with no indication of
         # which mode produced it.
         with tempfile.TemporaryDirectory() as td:
-            graph_path = os.path.join(td, 'graph.json')
-            with open(graph_path, 'w', encoding='utf-8') as fh:
+            graph_path = os.path.join(td, "graph.json")
+            with open(graph_path, "w", encoding="utf-8") as fh:
                 json.dump(_WEAK_SHORTCUT_GRAPH, fh)
             run = subprocess.run(
-                [sys.executable, '-m', 'kgraph', 'path', '--graph', graph_path,
-                 '--path', 's', 't', '--path-mode', 'strongest'],
-                cwd=SCRIPT_DIR, capture_output=True, text=True,
+                [
+                    sys.executable,
+                    "-m",
+                    "kgraph",
+                    "path",
+                    "--graph",
+                    graph_path,
+                    "--path",
+                    "s",
+                    "t",
+                    "--path-mode",
+                    "strongest",
+                ],
+                cwd=SCRIPT_DIR,
+                capture_output=True,
+                text=True,
             )
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertIn('mode: strongest', run.stdout)
-        self.assertIn('s → x', run.stdout)
-        self.assertNotIn('s → t', run.stdout)
+        self.assertIn("mode: strongest", run.stdout)
+        self.assertIn("s → x", run.stdout)
+        self.assertNotIn("s → t", run.stdout)
 
 
 class TestQuery(unittest.TestCase):
@@ -488,38 +522,38 @@ class TestQuery(unittest.TestCase):
     def setUp(self):
         self.kgraph = load_kgraph_module()
         self.small_graph = {
-            'nodes': [
-                {'id': 'n1', 'label': 'Authentication', 'type': 'topic'},
-                {'id': 'n2', 'label': 'Login Flow', 'type': 'topic'},
-                {'id': 'n3', 'label': 'JWT Token', 'type': 'concept'},
-                {'id': 'n4', 'label': 'Database', 'type': 'topic'},
+            "nodes": [
+                {"id": "n1", "label": "Authentication", "type": "topic"},
+                {"id": "n2", "label": "Login Flow", "type": "topic"},
+                {"id": "n3", "label": "JWT Token", "type": "concept"},
+                {"id": "n4", "label": "Database", "type": "topic"},
             ],
-            'edges': [
-                {'from': 'n1', 'to': 'n2', 'label': 'depends on'},
-                {'from': 'n2', 'to': 'n3', 'label': 'uses'},
-                {'from': 'n1', 'to': 'n3', 'label': 'produces'},
+            "edges": [
+                {"from": "n1", "to": "n2", "label": "depends on"},
+                {"from": "n2", "to": "n3", "label": "uses"},
+                {"from": "n1", "to": "n3", "label": "produces"},
             ],
         }
 
     # ── query_nodes ────────────────────────────────────────────────
 
     def test_query_nodes_by_label_substring(self):
-        results = self.kgraph.query_nodes(self.small_graph, 'auth')
+        results = self.kgraph.query_nodes(self.small_graph, "auth")
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['id'], 'n1')
+        self.assertEqual(results[0]["id"], "n1")
 
     def test_query_nodes_by_type(self):
-        results = self.kgraph.query_nodes(self.small_graph, 'concept', match_type='type')
+        results = self.kgraph.query_nodes(self.small_graph, "concept", match_type="type")
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['id'], 'n3')
+        self.assertEqual(results[0]["id"], "n3")
 
     def test_query_nodes_case_insensitive(self):
-        results = self.kgraph.query_nodes(self.small_graph, 'jwt')
+        results = self.kgraph.query_nodes(self.small_graph, "jwt")
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['id'], 'n3')
+        self.assertEqual(results[0]["id"], "n3")
 
     def test_query_nodes_no_match(self):
-        results = self.kgraph.query_nodes(self.small_graph, 'zzzznotfound')
+        results = self.kgraph.query_nodes(self.small_graph, "zzzznotfound")
         self.assertEqual(results, [])
 
     # ── RAGACT-007: the candidate set carries strength, not membership ─────
@@ -532,15 +566,15 @@ class TestQuery(unittest.TestCase):
         # Catches: a decisive hit and a partial one treated alike — the score would then
         # rank nothing, and row one would be graph order rather than the best match.
         graph = {
-            'nodes': [
-                {'id': 'n-long', 'label': 'Authentication', 'type': 'topic'},
-                {'id': 'n-exact', 'label': 'Auth', 'type': 'topic'},
+            "nodes": [
+                {"id": "n-long", "label": "Authentication", "type": "topic"},
+                {"id": "n-exact", "label": "Auth", "type": "topic"},
             ],
         }
-        results = self.kgraph.query_nodes(graph, 'auth')
-        self.assertEqual([r['id'] for r in results], ['n-exact', 'n-long'])
-        self.assertEqual(results[0]['match'], 'exact')
-        self.assertEqual(results[1]['match'], 'substring')
+        results = self.kgraph.query_nodes(graph, "auth")
+        self.assertEqual([r["id"] for r in results], ["n-exact", "n-long"])
+        self.assertEqual(results[0]["match"], "exact")
+        self.assertEqual(results[1]["match"], "substring")
 
     def test_query_nodes_match_kind_outranks_edge_confidence(self):
         # Catches: a weighting formula in which a confident partial match is promoted above
@@ -548,140 +582,138 @@ class TestQuery(unittest.TestCase):
         # caller's threshold could not be reasoned about.  This is the invariant
         # _MATCH_TIER's comment names: the tier gap must exceed the maximum edge weight.
         graph = {
-            'nodes': [
-                {'id': 'n-exact', 'label': 'Auth', 'type': 'topic'},
-                {'id': 'n-partial', 'label': 'Authentication', 'type': 'topic'},
-                {'id': 'n-other', 'label': 'Unrelated', 'type': 'topic'},
+            "nodes": [
+                {"id": "n-exact", "label": "Auth", "type": "topic"},
+                {"id": "n-partial", "label": "Authentication", "type": "topic"},
+                {"id": "n-other", "label": "Unrelated", "type": "topic"},
             ],
-            'edges': [
-                {'from': 'n-partial', 'to': 'n-other', 'label': 'x', 'confidence': 'EXTRACTED'},
+            "edges": [
+                {"from": "n-partial", "to": "n-other", "label": "x", "confidence": "EXTRACTED"},
             ],
         }
-        results = self.kgraph.query_nodes(graph, 'auth')
-        self.assertEqual([r['id'] for r in results], ['n-exact', 'n-partial'])
+        results = self.kgraph.query_nodes(graph, "auth")
+        self.assertEqual([r["id"] for r in results], ["n-exact", "n-partial"])
         # 3.0 with no incident edges must still beat 2.0 with the strongest edges.
-        self.assertGreater(results[0]['score'], results[1]['score'])
+        self.assertGreater(results[0]["score"], results[1]["score"])
 
     def test_query_nodes_ranks_by_incident_edge_confidence_within_a_tier(self):
         # Catches: the score ignoring edge confidence, so a weakly-supported partial
         # outranks a well-supported one and the two look equally strong to a caller.
         graph = {
-            'nodes': [
-                {'id': 'n-weak', 'label': 'Auth Weak', 'type': 'topic'},
-                {'id': 'n-strong', 'label': 'Auth Strong', 'type': 'topic'},
-                {'id': 'n-w2', 'label': 'Filler W', 'type': 'topic'},
-                {'id': 'n-s2', 'label': 'Filler S', 'type': 'topic'},
+            "nodes": [
+                {"id": "n-weak", "label": "Auth Weak", "type": "topic"},
+                {"id": "n-strong", "label": "Auth Strong", "type": "topic"},
+                {"id": "n-w2", "label": "Filler W", "type": "topic"},
+                {"id": "n-s2", "label": "Filler S", "type": "topic"},
             ],
-            'edges': [
-                {'from': 'n-strong', 'to': 'n-s2', 'label': 'x', 'confidence': 'EXTRACTED'},
-                {'from': 'n-weak', 'to': 'n-w2', 'label': 'x', 'confidence': 'AMBIGUOUS'},
+            "edges": [
+                {"from": "n-strong", "to": "n-s2", "label": "x", "confidence": "EXTRACTED"},
+                {"from": "n-weak", "to": "n-w2", "label": "x", "confidence": "AMBIGUOUS"},
             ],
         }
-        results = self.kgraph.query_nodes(graph, 'auth')
-        self.assertEqual([r['id'] for r in results], ['n-strong', 'n-weak'])
-        self.assertGreater(results[0]['score'], results[1]['score'])
+        results = self.kgraph.query_nodes(graph, "auth")
+        self.assertEqual([r["id"] for r in results], ["n-strong", "n-weak"])
+        self.assertGreater(results[0]["score"], results[1]["score"])
 
     def test_query_nodes_tie_break_is_deterministic_by_id(self):
         # Catches: graph-order dependence (the behaviour this replaced), where the same
         # graph could return a different order — and a different row at max_results=1 —
         # between runs or after a rebuild.
         graph = {
-            'nodes': [
-                {'id': 'zzz', 'label': 'Auth Z', 'type': 'topic'},
-                {'id': 'aaa', 'label': 'Auth A', 'type': 'topic'},
+            "nodes": [
+                {"id": "zzz", "label": "Auth Z", "type": "topic"},
+                {"id": "aaa", "label": "Auth A", "type": "topic"},
             ],
         }
-        first = [r['id'] for r in self.kgraph.query_nodes(graph, 'auth')]
-        self.assertEqual(first, ['aaa', 'zzz'])
-        self.assertEqual([r['id'] for r in self.kgraph.query_nodes(graph, 'auth')], first)
-        self.assertEqual(
-            [r['id'] for r in self.kgraph.query_nodes(graph, 'auth', max_results=1)], ['aaa'])
+        first = [r["id"] for r in self.kgraph.query_nodes(graph, "auth")]
+        self.assertEqual(first, ["aaa", "zzz"])
+        self.assertEqual([r["id"] for r in self.kgraph.query_nodes(graph, "auth")], first)
+        self.assertEqual([r["id"] for r in self.kgraph.query_nodes(graph, "auth", max_results=1)], ["aaa"])
 
     def test_query_nodes_rows_carry_a_descending_score(self):
         # Catches: a score computed but not surfaced (a caller cannot threshold what it
         # cannot see) and an unsorted return.
-        results = self.kgraph.query_nodes(self.small_graph, 'n')
+        results = self.kgraph.query_nodes(self.small_graph, "n")
         self.assertTrue(results)
         for row in results:
-            self.assertIn('score', row)
-            self.assertIn('match', row)
-        scores = [r['score'] for r in results]
+            self.assertIn("score", row)
+            self.assertIn("match", row)
+        scores = [r["score"] for r in results]
         self.assertEqual(scores, sorted(scores, reverse=True))
 
     def test_query_nodes_empty_pattern_still_matches_everything(self):
         # Catches: the ordering rewrite changing the empty-query semantics — an empty
         # pattern is a substring of every label, and a caller passing an empty filter
         # expects the whole set rather than none of it.
-        results = self.kgraph.query_nodes(self.small_graph, '')
+        results = self.kgraph.query_nodes(self.small_graph, "")
         self.assertEqual(len(results), 4)
 
     def test_query_nodes_max_results(self):
         graph = {
-            'nodes': [{'id': f'n{i}', 'label': 'Alpha'} for i in range(10)],
+            "nodes": [{"id": f"n{i}", "label": "Alpha"} for i in range(10)],
         }
-        results = self.kgraph.query_nodes(graph, 'alpha', max_results=3)
+        results = self.kgraph.query_nodes(graph, "alpha", max_results=3)
         self.assertEqual(len(results), 3)
 
     def test_query_nodes_deduplicates(self):
         graph = {
-            'nodes': [
-                {'id': 'x', 'label': 'X', 'type': 'topic'},
+            "nodes": [
+                {"id": "x", "label": "X", "type": "topic"},
             ],
         }
         # Searching 'any' by label AND type should return the node once
-        results = self.kgraph.query_nodes(graph, 'x', match_type='any')
+        results = self.kgraph.query_nodes(graph, "x", match_type="any")
         self.assertEqual(len(results), 1)
 
     def test_query_nodes_invalid_regex_falls_back_to_literal(self):
         # An invalid regex must not raise; literal substring matching applies.
-        self.assertEqual(self.kgraph.query_nodes(self.small_graph, '['), [])
+        self.assertEqual(self.kgraph.query_nodes(self.small_graph, "["), [])
 
     def test_query_nodes_valid_regex_still_matches(self):
-        results = self.kgraph.query_nodes(self.small_graph, r'^jwt')
-        self.assertEqual([r['id'] for r in results], ['n3'])
+        results = self.kgraph.query_nodes(self.small_graph, r"^jwt")
+        self.assertEqual([r["id"] for r in results], ["n3"])
 
     # ── find_path ───────────────────────────────────────────────────
 
     def test_find_path_direct_edge(self):
-        path = self.kgraph.find_path(self.small_graph, 'n1', 'n2')
+        path = self.kgraph.find_path(self.small_graph, "n1", "n2")
         self.assertEqual(len(path), 1)
-        self.assertEqual(path[0]['label'], 'depends on')
+        self.assertEqual(path[0]["label"], "depends on")
 
     def test_find_path_multi_hop(self):
-        path = self.kgraph.find_path(self.small_graph, 'n1', 'n3')
+        path = self.kgraph.find_path(self.small_graph, "n1", "n3")
         # Two possible paths: n1→n3 (direct) is shorter — BFS
         self.assertEqual(len(path), 1)
-        self.assertEqual(path[0]['label'], 'produces')
+        self.assertEqual(path[0]["label"], "produces")
 
     def test_find_path_no_path_exists(self):
         graph = {
-            'nodes': [{'id': 'a'}, {'id': 'b'}],
-            'edges': [],
+            "nodes": [{"id": "a"}, {"id": "b"}],
+            "edges": [],
         }
-        path = self.kgraph.find_path(graph, 'a', 'b')
+        path = self.kgraph.find_path(graph, "a", "b")
         self.assertEqual(path, [])
 
     def test_find_path_no_such_node(self):
-        path = self.kgraph.find_path(self.small_graph, 'n1', 'nonexistent')
+        path = self.kgraph.find_path(self.small_graph, "n1", "nonexistent")
         self.assertEqual(path, [])
 
     def test_find_path_by_label(self):
-        path = self.kgraph.find_path(self.small_graph, 'Authentication', 'JWT Token')
+        path = self.kgraph.find_path(self.small_graph, "Authentication", "JWT Token")
         self.assertGreater(len(path), 0)
 
     def test_find_path_max_depth_limit(self):
         # Longer graph: a → b → c → d → e (single chain)
         graph = {
-            'nodes': [{'id': f'n{i}'} for i in range(5)],
-            'edges': [{'from': f'n{i}', 'to': f'n{i+1}', 'label': 'next'}
-                      for i in range(4)],
+            "nodes": [{"id": f"n{i}"} for i in range(5)],
+            "edges": [{"from": f"n{i}", "to": f"n{i + 1}", "label": "next"} for i in range(4)],
         }
         # max_depth=1 should prevent reaching n4 from n0
-        path = self.kgraph.find_path(graph, 'n0', 'n4', max_depth=1)
+        path = self.kgraph.find_path(graph, "n0", "n4", max_depth=1)
         self.assertEqual(path, [])
 
         # max_depth=10 should find the path
-        path = self.kgraph.find_path(graph, 'n0', 'n4', max_depth=10)
+        path = self.kgraph.find_path(graph, "n0", "n4", max_depth=10)
         self.assertEqual(len(path), 4)
 
     # ── find_path_result: the mode is NAMED (GRAPHRAG-JEV-005) ─────────
@@ -702,25 +734,22 @@ class TestQuery(unittest.TestCase):
         # Catches: the default drifting to the weighted answer — every existing
         # caller would silently start getting a different path — or the result
         # not naming the mode at all.
-        result = self.kgraph.find_path_result(self.small_graph, 'n1', 'n3')
-        self.assertEqual(result['mode'], 'bfs')
-        self.assertTrue(result['path_found'])
-        self.assertEqual([(e['source'], e['target']) for e in result['edges']],
-                         [('n1', 'n3')])
+        result = self.kgraph.find_path_result(self.small_graph, "n1", "n3")
+        self.assertEqual(result["mode"], "bfs")
+        self.assertTrue(result["path_found"])
+        self.assertEqual([(e["source"], e["target"]) for e in result["edges"]], [("n1", "n3")])
         # find_path stays the list-returning form and answers with the same edges.
-        self.assertEqual(self.kgraph.find_path(self.small_graph, 'n1', 'n3'), result['edges'])
+        self.assertEqual(self.kgraph.find_path(self.small_graph, "n1", "n3"), result["edges"])
 
     def test_strongest_mode_takes_the_strong_chain_over_the_weak_shortcut(self):
         # Catches: a "weighted" mode that still returns the fewest-hop path — the
         # card's finding, where strength is declared but never consumed.  That
         # failure looks plausible (a path IS returned) and is wrong.
-        bfs = self.kgraph.find_path_result(_WEAK_SHORTCUT_GRAPH, 's', 't')
-        strongest = self.kgraph.find_path_result(
-            _WEAK_SHORTCUT_GRAPH, 's', 't', mode='strongest')
-        self.assertEqual([(e['source'], e['target']) for e in bfs['edges']], [('s', 't')])
-        self.assertEqual([(e['source'], e['target']) for e in strongest['edges']],
-                         [('s', 'x'), ('x', 't')])
-        self.assertEqual(strongest['mode'], 'strongest')
+        bfs = self.kgraph.find_path_result(_WEAK_SHORTCUT_GRAPH, "s", "t")
+        strongest = self.kgraph.find_path_result(_WEAK_SHORTCUT_GRAPH, "s", "t", mode="strongest")
+        self.assertEqual([(e["source"], e["target"]) for e in bfs["edges"]], [("s", "t")])
+        self.assertEqual([(e["source"], e["target"]) for e in strongest["edges"]], [("s", "x"), ("x", "t")])
+        self.assertEqual(strongest["mode"], "strongest")
 
     def test_strongest_mode_breaks_an_equal_cost_tie_by_fewer_hops(self):
         # a→b costs -log(1.0) = 0.0, so a→b→c and a→c tie at exactly
@@ -729,15 +758,15 @@ class TestQuery(unittest.TestCase):
         # win, so "strongest" no longer prefers the shortest of two equally strong
         # chains.
         graph = {
-            'nodes': [{'id': 'a'}, {'id': 'b'}, {'id': 'c'}],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'label': 'free', 'semantic_score': 1.0},
-                {'from': 'b', 'to': 'c', 'label': 'half', 'semantic_score': 0.5},
-                {'from': 'a', 'to': 'c', 'label': 'half', 'semantic_score': 0.5},
+            "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+            "edges": [
+                {"from": "a", "to": "b", "label": "free", "semantic_score": 1.0},
+                {"from": "b", "to": "c", "label": "half", "semantic_score": 0.5},
+                {"from": "a", "to": "c", "label": "half", "semantic_score": 0.5},
             ],
         }
-        result = self.kgraph.find_path_result(graph, 'a', 'c', mode='strongest')
-        self.assertEqual([(e['source'], e['target']) for e in result['edges']], [('a', 'c')])
+        result = self.kgraph.find_path_result(graph, "a", "c", mode="strongest")
+        self.assertEqual([(e["source"], e["target"]) for e in result["edges"]], [("a", "c")])
 
     def test_strongest_mode_breaks_an_equal_cost_tie_by_node_sequence(self):
         # Two 2-hop paths, both costing -log(0.5): (a,x,c) and (a,b,c).  The
@@ -746,31 +775,30 @@ class TestQuery(unittest.TestCase):
         # Catches: an insertion-order tie-break, where the same graph would answer
         # differently after a rebuild reordered its edges.
         graph = {
-            'nodes': [{'id': 'a'}, {'id': 'x'}, {'id': 'b'}, {'id': 'c'}],
-            'edges': [
-                {'from': 'a', 'to': 'x', 'label': 'via-x', 'semantic_score': 1.0},
-                {'from': 'x', 'to': 'c', 'label': 'via-x', 'semantic_score': 0.5},
-                {'from': 'a', 'to': 'b', 'label': 'via-b', 'semantic_score': 1.0},
-                {'from': 'b', 'to': 'c', 'label': 'via-b', 'semantic_score': 0.5},
+            "nodes": [{"id": "a"}, {"id": "x"}, {"id": "b"}, {"id": "c"}],
+            "edges": [
+                {"from": "a", "to": "x", "label": "via-x", "semantic_score": 1.0},
+                {"from": "x", "to": "c", "label": "via-x", "semantic_score": 0.5},
+                {"from": "a", "to": "b", "label": "via-b", "semantic_score": 1.0},
+                {"from": "b", "to": "c", "label": "via-b", "semantic_score": 0.5},
             ],
         }
-        result = self.kgraph.find_path_result(graph, 'a', 'c', mode='strongest')
-        self.assertEqual([e['label'] for e in result['edges']], ['via-b', 'via-b'])
+        result = self.kgraph.find_path_result(graph, "a", "c", mode="strongest")
+        self.assertEqual([e["label"] for e in result["edges"]], ["via-b", "via-b"])
 
     def test_strongest_mode_is_deterministic_across_repeated_calls(self):
         # Catches: an answer that depends on dict/heap iteration order, which would
         # not be reproducible between runs over the same graph.
         graph = {
-            'nodes': [{'id': 'a'}, {'id': 'x'}, {'id': 'b'}, {'id': 'c'}],
-            'edges': [
-                {'from': 'a', 'to': 'x', 'label': 'via-x', 'semantic_score': 1.0},
-                {'from': 'x', 'to': 'c', 'label': 'via-x', 'semantic_score': 0.5},
-                {'from': 'a', 'to': 'b', 'label': 'via-b', 'semantic_score': 1.0},
-                {'from': 'b', 'to': 'c', 'label': 'via-b', 'semantic_score': 0.5},
+            "nodes": [{"id": "a"}, {"id": "x"}, {"id": "b"}, {"id": "c"}],
+            "edges": [
+                {"from": "a", "to": "x", "label": "via-x", "semantic_score": 1.0},
+                {"from": "x", "to": "c", "label": "via-x", "semantic_score": 0.5},
+                {"from": "a", "to": "b", "label": "via-b", "semantic_score": 1.0},
+                {"from": "b", "to": "c", "label": "via-b", "semantic_score": 0.5},
             ],
         }
-        runs = [self.kgraph.find_path_result(graph, 'a', 'c', mode='strongest')
-                for _ in range(3)]
+        runs = [self.kgraph.find_path_result(graph, "a", "c", mode="strongest") for _ in range(3)]
         self.assertEqual(runs[0], runs[1])
         self.assertEqual(runs[1], runs[2])
 
@@ -781,117 +809,117 @@ class TestQuery(unittest.TestCase):
         # 0.0 score, and a clamp so loose that the weakest edge is treated as
         # ordinary.
         graph = {
-            'nodes': [{'id': 's'}, {'id': 'x'}, {'id': 't'}],
-            'edges': [
-                {'from': 's', 'to': 't', 'label': 'nil', 'semantic_score': 0.0},
-                {'from': 's', 'to': 'x', 'label': 'half', 'semantic_score': 0.5},
-                {'from': 'x', 'to': 't', 'label': 'half', 'semantic_score': 0.5},
+            "nodes": [{"id": "s"}, {"id": "x"}, {"id": "t"}],
+            "edges": [
+                {"from": "s", "to": "t", "label": "nil", "semantic_score": 0.0},
+                {"from": "s", "to": "x", "label": "half", "semantic_score": 0.5},
+                {"from": "x", "to": "t", "label": "half", "semantic_score": 0.5},
             ],
         }
-        result = self.kgraph.find_path_result(graph, 's', 't', mode='strongest')
-        self.assertEqual([e['label'] for e in result['edges']], ['half', 'half'])
+        result = self.kgraph.find_path_result(graph, "s", "t", mode="strongest")
+        self.assertEqual([e["label"] for e in result["edges"]], ["half", "half"])
 
     def test_strongest_mode_honours_max_depth(self):
         # Catches: the weighted mode ignoring the hop cap, answering with a path a
         # caller asked not to receive.
         graph = {
-            'nodes': [{'id': f'n{i}'} for i in range(4)],
-            'edges': [{'from': f'n{i}', 'to': f'n{i+1}', 'label': 'next',
-                       'semantic_score': 0.9} for i in range(3)],
+            "nodes": [{"id": f"n{i}"} for i in range(4)],
+            "edges": [{"from": f"n{i}", "to": f"n{i + 1}", "label": "next", "semantic_score": 0.9} for i in range(3)],
         }
-        capped = self.kgraph.find_path_result(graph, 'n0', 'n3', mode='strongest', max_depth=2)
-        self.assertEqual(capped['edges'], [])
-        allowed = self.kgraph.find_path_result(graph, 'n0', 'n3', mode='strongest', max_depth=3)
-        self.assertEqual(len(allowed['edges']), 3)
+        capped = self.kgraph.find_path_result(graph, "n0", "n3", mode="strongest", max_depth=2)
+        self.assertEqual(capped["edges"], [])
+        allowed = self.kgraph.find_path_result(graph, "n0", "n3", mode="strongest", max_depth=3)
+        self.assertEqual(len(allowed["edges"]), 3)
 
     def test_an_unknown_mode_raises_rather_than_defaulting(self):
         # Catches: a typo'd mode silently answered with the default, so a caller
         # that asked for the strongest path gets a fewest-hop one and cannot tell
         # from the answer alone.
         with self.assertRaises(ValueError):
-            self.kgraph.find_path_result(self.small_graph, 'n1', 'n2', mode='fastest')
+            self.kgraph.find_path_result(self.small_graph, "n1", "n2", mode="fastest")
 
     def test_non_finite_strength_reads_as_one_and_is_logged(self):
         # Catches: NaN flowing into the cost arithmetic, where every comparison is
         # False and the clamp would silently return whichever bound the argument
         # order happened to favour.
         from kgraph import query as kgraph_query
-        edge = self.kgraph.GraphEdge(source='a', target='b', semantic_score=float('nan'))
-        with self.assertLogs('kgraph.query', level='WARNING'):
+
+        edge = self.kgraph.GraphEdge(source="a", target="b", semantic_score=float("nan"))
+        with self.assertLogs("kgraph.query", level="WARNING"):
             self.assertEqual(kgraph_query._path_strength(edge), 1.0)
 
     def test_format_path_names_the_mode_when_given_one(self):
         # Catches: the CLI showing WHICH path without which mode produced it — the
         # same text then meaning two different answers.
-        result = self.kgraph.find_path_result(self.small_graph, 'n1', 'n3', mode='strongest')
-        text = self.kgraph.format_path(result['edges'], mode=result['mode'])
-        self.assertIn('Path:', text)
-        self.assertIn('mode: strongest', text)
+        result = self.kgraph.find_path_result(self.small_graph, "n1", "n3", mode="strongest")
+        text = self.kgraph.format_path(result["edges"], mode=result["mode"])
+        self.assertIn("Path:", text)
+        self.assertIn("mode: strongest", text)
 
     # ── explain_node ────────────────────────────────────────────────
 
     def test_explain_node_by_id(self):
-        expl = self.kgraph.explain_node(self.small_graph, 'n1')
-        self.assertEqual(expl['node']['id'], 'n1')
-        self.assertEqual(expl['node']['label'], 'Authentication')
+        expl = self.kgraph.explain_node(self.small_graph, "n1")
+        self.assertEqual(expl["node"]["id"], "n1")
+        self.assertEqual(expl["node"]["label"], "Authentication")
 
     def test_explain_node_by_label_substring(self):
-        expl = self.kgraph.explain_node(self.small_graph, 'Login')
-        self.assertEqual(expl['node']['id'], 'n2')
+        expl = self.kgraph.explain_node(self.small_graph, "Login")
+        self.assertEqual(expl["node"]["id"], "n2")
 
     def test_explain_node_not_found(self):
-        expl = self.kgraph.explain_node(self.small_graph, 'Zork')
-        self.assertIn('error', expl)
+        expl = self.kgraph.explain_node(self.small_graph, "Zork")
+        self.assertIn("error", expl)
 
     def test_explain_node_connection_counts(self):
-        expl = self.kgraph.explain_node(self.small_graph, 'n1')
+        expl = self.kgraph.explain_node(self.small_graph, "n1")
         # n1 → n2 (depends on), n1 → n3 (produces) = 2 outbound, 0 inbound
-        self.assertEqual(expl['outbound_count'], 2)
-        self.assertEqual(expl['inbound_count'], 0)
-        self.assertEqual(expl['total_connections'], 2)
+        self.assertEqual(expl["outbound_count"], 2)
+        self.assertEqual(expl["inbound_count"], 0)
+        self.assertEqual(expl["total_connections"], 2)
 
     def test_explain_node_inbound_connections(self):
-        expl = self.kgraph.explain_node(self.small_graph, 'n3')
+        expl = self.kgraph.explain_node(self.small_graph, "n3")
         # inbound edges appear in edge-list order:
         #   n2 → n3 (uses)  → source_label = 'Login Flow'
         #   n1 → n3 (produces) → source_label = 'Authentication'
-        self.assertEqual(expl['outbound_count'], 0)
-        self.assertEqual(expl['inbound_count'], 2)
-        source_labels = {c['source_label'] for c in expl['inbound_connections']}
-        self.assertIn('Authentication', source_labels)
-        self.assertIn('Login Flow', source_labels)
+        self.assertEqual(expl["outbound_count"], 0)
+        self.assertEqual(expl["inbound_count"], 2)
+        source_labels = {c["source_label"] for c in expl["inbound_connections"]}
+        self.assertIn("Authentication", source_labels)
+        self.assertIn("Login Flow", source_labels)
 
     # ── format_explain ──────────────────────────────────────────────
 
     def test_format_explain(self):
-        expl = self.kgraph.explain_node(self.small_graph, 'n1')
+        expl = self.kgraph.explain_node(self.small_graph, "n1")
         text = self.kgraph.format_explain(expl)
-        self.assertIn('Authentication', text)
-        self.assertIn('n1', text)
-        self.assertIn('Outbound:', text)
-        self.assertIn('Login Flow', text)
+        self.assertIn("Authentication", text)
+        self.assertIn("n1", text)
+        self.assertIn("Outbound:", text)
+        self.assertIn("Login Flow", text)
 
     def test_format_explain_error(self):
-        text = self.kgraph.format_explain({'error': 'Node "Zork" not found'})
-        self.assertIn('Error:', text)
-        self.assertIn('Zork', text)
+        text = self.kgraph.format_explain({"error": 'Node "Zork" not found'})
+        self.assertIn("Error:", text)
+        self.assertIn("Zork", text)
 
     # ── format_path ─────────────────────────────────────────────────
 
     def test_format_path_returns_path_string_with_nodenames(self):
-        path = self.kgraph.find_path(self.small_graph, 'n1', 'n2')
+        path = self.kgraph.find_path(self.small_graph, "n1", "n2")
         text = self.kgraph.format_path(path)
-        self.assertIn('Path:', text)
-        self.assertIn('n1', text)
-        self.assertIn('n2', text)
-        self.assertIn('depends on', text)
+        self.assertIn("Path:", text)
+        self.assertIn("n1", text)
+        self.assertIn("n2", text)
+        self.assertIn("depends on", text)
 
     def test_format_path_returns_no_path_message(self):
         text = self.kgraph.format_path([])
-        self.assertEqual(text, 'No path found')
+        self.assertEqual(text, "No path found")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
 
 
@@ -900,62 +928,65 @@ class TestBenchmark(unittest.TestCase):
 
     def _get_benchmark(self):
         from kgraph.benchmark import benchmark_graph_vs_raw, estimate_tokens
+
         return estimate_tokens, benchmark_graph_vs_raw
 
     def test_estimate_tokens_empty_text(self):
         estimate_tokens, _ = self._get_benchmark()
-        self.assertEqual(estimate_tokens(''), 1)
+        self.assertEqual(estimate_tokens(""), 1)
 
     def test_estimate_tokens_short_text(self):
         estimate_tokens, _ = self._get_benchmark()
-        self.assertEqual(estimate_tokens('hi'), 1)
+        self.assertEqual(estimate_tokens("hi"), 1)
 
     def test_estimate_tokens_four_chars(self):
         estimate_tokens, _ = self._get_benchmark()
-        self.assertEqual(estimate_tokens('test'), 1)
+        self.assertEqual(estimate_tokens("test"), 1)
 
     def test_estimate_tokens_eight_chars(self):
         estimate_tokens, _ = self._get_benchmark()
-        self.assertEqual(estimate_tokens('testword'), 2)
+        self.assertEqual(estimate_tokens("testword"), 2)
 
     def test_estimate_tokens_long_text(self):
         estimate_tokens, _ = self._get_benchmark()
-        text = 'hello world ' * 100
+        text = "hello world " * 100
         self.assertEqual(estimate_tokens(text), 300)
 
     def test_benchmark_empty_graph(self):
         _, benchmark_graph_vs_raw = self._get_benchmark()
-        result = benchmark_graph_vs_raw({'nodes': [], 'edges': []})
-        self.assertIn('graph_tokens', result)
-        self.assertEqual(result['graph_tokens'], 0)
-        self.assertEqual(result['node_count'], 0)
+        result = benchmark_graph_vs_raw({"nodes": [], "edges": []})
+        self.assertIn("graph_tokens", result)
+        self.assertEqual(result["graph_tokens"], 0)
+        self.assertEqual(result["node_count"], 0)
 
     def test_benchmark_simple_graph_returns_expected_counts(self):
         _, benchmark_graph_vs_raw = self._get_benchmark()
         graph = {
-            'nodes': [{'id': 'n1', 'label': 'Node One'}],
-            'edges': [{'from': 'n1', 'to': 'n2', 'label': 'links to'}],
+            "nodes": [{"id": "n1", "label": "Node One"}],
+            "edges": [{"from": "n1", "to": "n2", "label": "links to"}],
         }
         result = benchmark_graph_vs_raw(graph)
-        self.assertGreater(result['graph_tokens'], 0)
-        self.assertIn('node_count', result)
-        self.assertEqual(result['node_count'], 1)
+        self.assertGreater(result["graph_tokens"], 0)
+        self.assertIn("node_count", result)
+        self.assertEqual(result["node_count"], 1)
+
 
 _SMALL_CONNECTED_GRAPH = {
-    'nodes': [
-        {'id': 'a', 'label': 'Alpha'},
-        {'id': 'b', 'label': 'Beta'},
-        {'id': 'c', 'label': 'Gamma'},
-        {'id': 'd', 'label': 'Delta'},
-        {'id': 'e', 'label': 'Epsilon'},
+    "nodes": [
+        {"id": "a", "label": "Alpha"},
+        {"id": "b", "label": "Beta"},
+        {"id": "c", "label": "Gamma"},
+        {"id": "d", "label": "Delta"},
+        {"id": "e", "label": "Epsilon"},
     ],
-    'edges': [
-        {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
-        {'from': 'a', 'to': 'c', 'semantic_score': 0.5},
-        {'from': 'b', 'to': 'c', 'semantic_score': 0.8},
-        {'from': 'd', 'to': 'e', 'semantic_score': 0.9},
+    "edges": [
+        {"from": "a", "to": "b", "semantic_score": 1.0},
+        {"from": "a", "to": "c", "semantic_score": 0.5},
+        {"from": "b", "to": "c", "semantic_score": 0.8},
+        {"from": "d", "to": "e", "semantic_score": 0.9},
     ],
 }
+
 
 class CommunityDetectionTests(unittest.TestCase):
     """Tests for community.py: detect_communities, compute_centrality, find_god_nodes."""
@@ -970,138 +1001,138 @@ class CommunityDetectionTests(unittest.TestCase):
 
     def test_detect_communities_empty_graph_returns_as_is(self):
         """detect_communities on empty graph returns graph with no communities."""
-        graph: dict = {'nodes': [], 'edges': []}
-        result = kgraph.detect_communities(graph, method='greedy')
+        graph: dict = {"nodes": [], "edges": []}
+        result = kgraph.detect_communities(graph, method="greedy")
         self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_too_few_nodes_returns_as_is(self):
         """detect_communities with <3 nodes returns graph with no communities."""
         graph = {
-            'nodes': [{'id': 'a', 'label': 'A'}, {'id': 'b', 'label': 'B'}],
-            'edges': [{'from': 'a', 'to': 'b'}],
+            "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+            "edges": [{"from": "a", "to": "b"}],
         }
-        result = kgraph.detect_communities(graph, method='greedy')
+        result = kgraph.detect_communities(graph, method="greedy")
         self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_too_few_edges_returns_as_is(self):
         """detect_communities with <2 edges returns graph with no communities."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
+            "nodes": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
             ],
-            'edges': [{'from': 'a', 'to': 'b'}],
+            "edges": [{"from": "a", "to": "b"}],
         }
-        result = kgraph.detect_communities(graph, method='greedy')
+        result = kgraph.detect_communities(graph, method="greedy")
         self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_greedy_adds_communities(self):
         """greedy modularity detection populates meta.communities."""
-        result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH, method='greedy')
+        result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH, method="greedy")
         self.assertGreater(len(result.meta.communities), 0)
         for comm in result.meta.communities:
-            self.assertIn('id', comm)
-            self.assertIn('label', comm)
-            self.assertIn('members', comm)
-            self.assertIn('size', comm)
+            self.assertIn("id", comm)
+            self.assertIn("label", comm)
+            self.assertIn("members", comm)
+            self.assertIn("size", comm)
 
     def test_detect_communities_louvain_adds_communities(self):
         """louvain detection populates meta.communities."""
-        result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH, method='louvain')
+        result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH, method="louvain")
         self.assertGreater(len(result.meta.communities), 0)
 
     def test_detect_communities_method_defaults_to_leiden_like(self):
         """default method ('leiden_like') falls through to greedy modularity."""
         result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH)
-        self.assertEqual(result.meta.community_method, 'leiden_like')
+        self.assertEqual(result.meta.community_method, "leiden_like")
 
     def test_detect_communities_label_truncation(self):
         """community labels are truncated to 80 chars."""
         long_label_graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A' * 60},
-                {'id': 'b', 'label': 'B' * 60},
-                {'id': 'c', 'label': 'C' * 60},
-                {'id': 'd', 'label': 'D'},
-                {'id': 'e', 'label': 'E'},
+            "nodes": [
+                {"id": "a", "label": "A" * 60},
+                {"id": "b", "label": "B" * 60},
+                {"id": "c", "label": "C" * 60},
+                {"id": "d", "label": "D"},
+                {"id": "e", "label": "E"},
             ],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
-                {'from': 'a', 'to': 'c', 'semantic_score': 0.5},
-                {'from': 'b', 'to': 'c', 'semantic_score': 0.8},
-                {'from': 'd', 'to': 'e', 'semantic_score': 0.9},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 1.0},
+                {"from": "a", "to": "c", "semantic_score": 0.5},
+                {"from": "b", "to": "c", "semantic_score": 0.8},
+                {"from": "d", "to": "e", "semantic_score": 0.9},
             ],
         }
-        result = kgraph.detect_communities(long_label_graph, method='greedy')
+        result = kgraph.detect_communities(long_label_graph, method="greedy")
         for comm in result.meta.communities:
-            self.assertLessEqual(len(comm['label']), 80)
+            self.assertLessEqual(len(comm["label"]), 80)
 
     def test_detect_communities_min_community_size_filters(self):
         """min_community_size drops smaller communities."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
-                {'id': 'd', 'label': 'D'},
-                {'id': 'e', 'label': 'E'},
+            "nodes": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
+                {"id": "d", "label": "D"},
+                {"id": "e", "label": "E"},
             ],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
-                {'from': 'a', 'to': 'c', 'semantic_score': 0.5},
-                {'from': 'b', 'to': 'c', 'semantic_score': 0.8},
-                {'from': 'd', 'to': 'e', 'semantic_score': 0.9},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 1.0},
+                {"from": "a", "to": "c", "semantic_score": 0.5},
+                {"from": "b", "to": "c", "semantic_score": 0.8},
+                {"from": "d", "to": "e", "semantic_score": 0.9},
             ],
         }
-        result = kgraph.detect_communities(graph, method='greedy', min_community_size=5)
+        result = kgraph.detect_communities(graph, method="greedy", min_community_size=5)
         self.assertEqual(len(result.meta.communities), 0)
 
     def test_detect_communities_missing_graph_keys(self):
         """detect_communities handles missing 'nodes'/'edges' keys gracefully."""
         # An unknown KEY is rejected by the model (card d25d3b8b); the missing-keys
         # shape this case pins is the empty dict.
-        result = kgraph.detect_communities({}, method='greedy')
+        result = kgraph.detect_communities({}, method="greedy")
         self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_edge_source_target_aliases(self):
         """edges can use 'source'/'target' keys instead of 'from'/'to'."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
-                {'id': 'd', 'label': 'D'},
-                {'id': 'e', 'label': 'E'},
+            "nodes": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
+                {"id": "d", "label": "D"},
+                {"id": "e", "label": "E"},
             ],
-            'edges': [
-                {'source': 'a', 'target': 'b', 'semantic_score': 1.0},
-                {'source': 'a', 'target': 'c', 'semantic_score': 0.5},
-                {'source': 'b', 'target': 'c', 'semantic_score': 0.8},
-                {'source': 'd', 'target': 'e', 'semantic_score': 0.9},
+            "edges": [
+                {"source": "a", "target": "b", "semantic_score": 1.0},
+                {"source": "a", "target": "c", "semantic_score": 0.5},
+                {"source": "b", "target": "c", "semantic_score": 0.8},
+                {"source": "d", "target": "e", "semantic_score": 0.9},
             ],
         }
-        result = kgraph.detect_communities(graph, method='greedy')
+        result = kgraph.detect_communities(graph, method="greedy")
         self.assertGreater(len(result.meta.communities), 0)
 
     def test_detect_communities_edge_semantic_score_as_strength(self):
         """edges carry their strength as semantic_score — the only field community detection reads."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
-                {'id': 'd', 'label': 'D'},
-                {'id': 'e', 'label': 'E'},
+            "nodes": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
+                {"id": "d", "label": "D"},
+                {"id": "e", "label": "E"},
             ],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 0.95},
-                {'from': 'a', 'to': 'c', 'semantic_score': 0.50},
-                {'from': 'b', 'to': 'c', 'semantic_score': 0.85},
-                {'from': 'd', 'to': 'e', 'semantic_score': 0.80},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 0.95},
+                {"from": "a", "to": "c", "semantic_score": 0.50},
+                {"from": "b", "to": "c", "semantic_score": 0.85},
+                {"from": "d", "to": "e", "semantic_score": 0.80},
             ],
         }
-        result = kgraph.detect_communities(graph, method='greedy')
+        result = kgraph.detect_communities(graph, method="greedy")
         self.assertGreater(len(result.meta.communities), 0)
 
     def test_detect_communities_preserves_existing_meta(self):
@@ -1109,51 +1140,51 @@ class CommunityDetectionTests(unittest.TestCase):
         graph = dict(_SMALL_CONNECTED_GRAPH)
         # Declared GraphMeta fields (an unknown meta key is now rejected — card
         # d25d3b8b), so this pins preservation on the model's own surface.
-        graph['_meta'] = {'data_source': 'test', 'view_mode': 'overview'}
-        result = kgraph.detect_communities(graph, method='greedy')
-        self.assertEqual(result.meta.data_source, 'test')
-        self.assertEqual(result.meta.view_mode, 'overview')
+        graph["_meta"] = {"data_source": "test", "view_mode": "overview"}
+        result = kgraph.detect_communities(graph, method="greedy")
+        self.assertEqual(result.meta.data_source, "test")
+        self.assertEqual(result.meta.view_mode, "overview")
         self.assertGreater(len(result.meta.communities), 0)
 
     # ── compute_centrality ──────────────────────────────────────────
 
     def test_compute_centrality_empty_graph(self):
         """compute_centrality on empty graph returns empty dict."""
-        self.assertEqual(kgraph.compute_centrality({'nodes': [], 'edges': []}), {})
+        self.assertEqual(kgraph.compute_centrality({"nodes": [], "edges": []}), {})
 
     def test_compute_centrality_single_node(self):
         """compute_centrality with <2 nodes returns empty dict."""
         graph = {
-            'nodes': [{'id': 'a', 'label': 'A'}],
-            'edges': [],
+            "nodes": [{"id": "a", "label": "A"}],
+            "edges": [],
         }
         self.assertEqual(kgraph.compute_centrality(graph), {})
 
     def test_compute_centrality_returns_all_keys(self):
         """each node entry has id, label, degree, betweenness, eigenvector."""
         graph = {
-            'nodes': [{'id': 'a', 'label': 'A'}, {'id': 'b', 'label': 'B'}],
-            'edges': [{'from': 'a', 'to': 'b', 'semantic_score': 1.0}],
+            "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+            "edges": [{"from": "a", "to": "b", "semantic_score": 1.0}],
         }
         result = kgraph.compute_centrality(graph)
-        self.assertIn('a', result)
-        self.assertIn('b', result)
-        for key in ('id', 'label', 'degree', 'betweenness', 'eigenvector'):
-            self.assertIn(key, result['a'])
-        self.assertEqual(result['a']['degree'], 1)
-        self.assertEqual(result['b']['degree'], 1)
+        self.assertIn("a", result)
+        self.assertIn("b", result)
+        for key in ("id", "label", "degree", "betweenness", "eigenvector"):
+            self.assertIn(key, result["a"])
+        self.assertEqual(result["a"]["degree"], 1)
+        self.assertEqual(result["b"]["degree"], 1)
 
     def test_compute_centrality_missing_labels(self):
         """nodes without labels use their id as the label."""
         graph = {
-            'nodes': [{'id': 'a'}, {'id': 'b'}, {'id': 'c'}],
-            'edges': [
-                {'from': 'a', 'to': 'b'},
-                {'from': 'b', 'to': 'c'},
+            "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+            "edges": [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "c"},
             ],
         }
         result = kgraph.compute_centrality(graph)
-        self.assertEqual(result['a']['label'], 'a')
+        self.assertEqual(result["a"]["label"], "a")
 
     def test_compute_centrality_missing_graph_keys(self):
         """compute_centrality handles missing 'nodes'/'edges' keys."""
@@ -1166,84 +1197,86 @@ class CommunityDetectionTests(unittest.TestCase):
 
     def test_find_god_nodes_empty_graph(self):
         """find_god_nodes on empty graph returns empty list."""
-        self.assertEqual(kgraph.find_god_nodes({'nodes': [], 'edges': []}), [])
+        self.assertEqual(kgraph.find_god_nodes({"nodes": [], "edges": []}), [])
 
     def test_find_god_nodes_returns_sorted(self):
         """god nodes are sorted by composite_score descending."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'Hub'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
-                {'id': 'd', 'label': 'D'},
+            "nodes": [
+                {"id": "a", "label": "Hub"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
+                {"id": "d", "label": "D"},
             ],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
-                {'from': 'a', 'to': 'c', 'semantic_score': 0.8},
-                {'from': 'a', 'to': 'd', 'semantic_score': 0.6},
-                {'from': 'b', 'to': 'c', 'semantic_score': 0.5},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 1.0},
+                {"from": "a", "to": "c", "semantic_score": 0.8},
+                {"from": "a", "to": "d", "semantic_score": 0.6},
+                {"from": "b", "to": "c", "semantic_score": 0.5},
             ],
         }
         result = kgraph.find_god_nodes(graph, top_n=5)
         self.assertGreater(len(result), 0)
-        scores = [r['composite_score'] for r in result]
+        scores = [r["composite_score"] for r in result]
         self.assertEqual(scores, sorted(scores, reverse=True))
         # 'a' (Hub) has 3 edges — should be top
-        self.assertEqual(result[0]['id'], 'a')
+        self.assertEqual(result[0]["id"], "a")
 
     def test_compute_centrality_disconnected_graph(self):
         """disconnected graphs must not raise AmbiguousSolution; all nodes get keys."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A'}, {'id': 'b', 'label': 'B'},
-                {'id': 'x', 'label': 'X'}, {'id': 'y', 'label': 'Y'},
-                {'id': 'solo', 'label': 'Solo'},
+            "nodes": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "x", "label": "X"},
+                {"id": "y", "label": "Y"},
+                {"id": "solo", "label": "Solo"},
             ],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
-                {'from': 'x', 'to': 'y', 'semantic_score': 1.0},
+            "edges": [
+                {"from": "a", "to": "b", "semantic_score": 1.0},
+                {"from": "x", "to": "y", "semantic_score": 1.0},
             ],
         }
         result = kgraph.compute_centrality(graph)
-        self.assertEqual(set(result), {'a', 'b', 'x', 'y', 'solo'})
+        self.assertEqual(set(result), {"a", "b", "x", "y", "solo"})
         for nid, data in result.items():
-            for key in ('id', 'label', 'degree', 'betweenness', 'eigenvector'):
+            for key in ("id", "label", "degree", "betweenness", "eigenvector"):
                 self.assertIn(key, data)
         # Singleton component has no adjacency → eigenvector and degree are 0.
-        self.assertEqual(result['solo']['eigenvector'], 0.0)
-        self.assertEqual(result['solo']['degree'], 0)
+        self.assertEqual(result["solo"]["eigenvector"], 0.0)
+        self.assertEqual(result["solo"]["degree"], 0)
 
     def test_find_god_nodes_disconnected_graph(self):
         """god nodes on a disconnected graph do not raise."""
         graph = {
-            'nodes': [
-                {'id': 'hub', 'label': 'Hub'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
-                {'id': 'lone', 'label': 'Lone'},
+            "nodes": [
+                {"id": "hub", "label": "Hub"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
+                {"id": "lone", "label": "Lone"},
             ],
-            'edges': [
-                {'from': 'hub', 'to': 'b', 'semantic_score': 1.0},
-                {'from': 'hub', 'to': 'c', 'semantic_score': 1.0},
+            "edges": [
+                {"from": "hub", "to": "b", "semantic_score": 1.0},
+                {"from": "hub", "to": "c", "semantic_score": 1.0},
             ],
         }
         result = kgraph.find_god_nodes(graph, top_n=5)
         self.assertGreater(len(result), 0)
-        self.assertEqual(result[0]['id'], 'hub')
+        self.assertEqual(result[0]["id"], "hub")
 
     def test_find_god_nodes_top_n_limit(self):
         """find_god_nodes respects the top_n parameter."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
-                {'id': 'd', 'label': 'D'},
+            "nodes": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
+                {"id": "d", "label": "D"},
             ],
-            'edges': [
-                {'from': 'a', 'to': 'b'},
-                {'from': 'a', 'to': 'c'},
-                {'from': 'a', 'to': 'd'},
+            "edges": [
+                {"from": "a", "to": "b"},
+                {"from": "a", "to": "c"},
+                {"from": "a", "to": "d"},
             ],
         }
         result = kgraph.find_god_nodes(graph, top_n=2)
@@ -1252,19 +1285,19 @@ class CommunityDetectionTests(unittest.TestCase):
     def test_find_god_nodes_contains_all_score_keys(self):
         """each god node entry has composite_score, degree, betweenness, eigenvector."""
         graph = {
-            'nodes': [
-                {'id': 'a', 'label': 'A'},
-                {'id': 'b', 'label': 'B'},
-                {'id': 'c', 'label': 'C'},
+            "nodes": [
+                {"id": "a", "label": "A"},
+                {"id": "b", "label": "B"},
+                {"id": "c", "label": "C"},
             ],
-            'edges': [
-                {'from': 'a', 'to': 'b'},
-                {'from': 'b', 'to': 'c'},
+            "edges": [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "c"},
             ],
         }
         result = kgraph.find_god_nodes(graph, top_n=5)
         self.assertGreater(len(result), 0)
-        for key in ('composite_score', 'degree', 'betweenness', 'eigenvector'):
+        for key in ("composite_score", "degree", "betweenness", "eigenvector"):
             self.assertIn(key, result[0])
 
 
@@ -1278,71 +1311,81 @@ class ValidatePayloadTests(unittest.TestCase):
 
     def test_validate_payload_valid_dict(self):
         """validate_graph_payload accepts a valid dict."""
-        valid, msg = kgraph.validate_graph_payload({
-            'nodes': [{'id': 1, 'label': 'one'}],
-            'edges': [{'from': 1, 'to': 2}],
-        })
+        valid, msg = kgraph.validate_graph_payload(
+            {
+                "nodes": [{"id": 1, "label": "one"}],
+                "edges": [{"from": 1, "to": 2}],
+            }
+        )
         self.assertTrue(valid)
-        self.assertEqual(msg, '')
+        self.assertEqual(msg, "")
 
     def test_validate_payload_valid_json_string(self):
         """validate_graph_payload accepts a valid JSON string."""
         payload = '{"nodes": [{"id": "n1", "label": "Node 1"}], "edges": [{"from": "n1", "to": "n2"}]}'
         valid, msg = kgraph.validate_graph_payload(payload)
         self.assertTrue(valid)
-        self.assertEqual(msg, '')
+        self.assertEqual(msg, "")
 
     def test_validate_payload_valid_bytes(self):
         """validate_graph_payload accepts bytes payload."""
         payload = b'{"nodes": [{"id": "x", "label": "X"}], "edges": [{"from": "x", "to": "y"}]}'
         valid, msg = kgraph.validate_graph_payload(payload)
         self.assertTrue(valid)
-        self.assertEqual(msg, '')
+        self.assertEqual(msg, "")
 
     def test_validate_payload_invalid_type(self):
         """validate_graph_payload rejects non-JSON, non-dict types."""
         valid, msg = kgraph.validate_graph_payload(42)
         self.assertFalse(valid)
-        self.assertIn('Payload must be JSON string or dict', msg)
+        self.assertIn("Payload must be JSON string or dict", msg)
 
     def test_validate_payload_invalid_json(self):
         """validate_graph_payload rejects malformed JSON."""
         valid, msg = kgraph.validate_graph_payload('{"nodes": broken')
         self.assertFalse(valid)
-        self.assertIn('Invalid JSON', msg)
+        self.assertIn("Invalid JSON", msg)
 
     def test_validate_payload_too_large(self):
-        """validate_graph_payload rejects payloads exceeding MAX_PAYLOAD_SIZE."""
-        # Build a payload > 100MB (MAX_PAYLOAD_SIZE)
-        large = '{"nodes": [' + ','.join(
-            f'{{"id": {i}, "label": "n{i}"}}' for i in range(10_000_000)
-        ) + '], "edges": []}'
-        valid, msg = kgraph.validate_graph_payload(large)
+        """validate_graph_payload rejects payloads exceeding MAX_PAYLOAD_SIZE.
+
+        The limit is patched down instead of materialising a 100 MB string: the
+        old fixture built ten million JSON rows, which is a multi-hundred-MB
+        temporary and can OOM a small runner.  The branch is the same check.
+        """
+        import kgraph.validate as validate_mod
+
+        with mock.patch.object(validate_mod, "MAX_PAYLOAD_SIZE", 64):
+            valid, msg = kgraph.validate_graph_payload("x" * 65)
         self.assertFalse(valid)
-        self.assertIn('Payload too large', msg)
+        self.assertIn("Payload too large", msg)
 
     def test_validate_payload_nodes_not_a_list(self):
         """validate_graph_payload rejects payload where nodes is not a list."""
-        valid, msg = kgraph.validate_graph_payload({'nodes': 'bad', 'edges': []})
+        valid, msg = kgraph.validate_graph_payload({"nodes": "bad", "edges": []})
         self.assertFalse(valid)
-        self.assertIn('must be a list', msg)
+        self.assertIn("must be a list", msg)
 
     def test_validate_payload_missing_required_node_field(self):
         """validate_graph_payload catches missing required fields (id)."""
-        valid, msg = kgraph.validate_graph_payload({
-            'nodes': [{'label': 'No ID'}],  # missing 'id'
-            'edges': [],
-        })
+        valid, msg = kgraph.validate_graph_payload(
+            {
+                "nodes": [{"label": "No ID"}],  # missing 'id'
+                "edges": [],
+            }
+        )
         self.assertFalse(valid)
 
     def test_validate_payload_xss_detection(self):
         """validate_graph_payload flags nodes with XSS patterns."""
-        valid, msg = kgraph.validate_graph_payload({
-            'nodes': [{'id': 1, 'label': '<script>alert(1)</script>'}],
-            'edges': [],
-        })
+        valid, msg = kgraph.validate_graph_payload(
+            {
+                "nodes": [{"id": 1, "label": "<script>alert(1)</script>"}],
+                "edges": [],
+            }
+        )
         self.assertFalse(valid)
-        self.assertIn('dangerous patterns', msg)
+        self.assertIn("dangerous patterns", msg)
 
     def test_validate_payload_warning_downgrade(self):
         """warnings alone (no errors) do not fail validation.
@@ -1351,12 +1394,14 @@ class ValidatePayloadTests(unittest.TestCase):
         node FIELD is now a schema ERROR (card d25d3b8b), so this pins the
         warning path with a field the model accepts.
         """
-        valid, msg = kgraph.validate_graph_payload({
-            'nodes': [{'id': 'n1', 'label': 'ok', 'type': 'not-a-declared-type'}],
-            'edges': [],
-        })
+        valid, msg = kgraph.validate_graph_payload(
+            {
+                "nodes": [{"id": "n1", "label": "ok", "type": "not-a-declared-type"}],
+                "edges": [],
+            }
+        )
         self.assertTrue(valid)
-        self.assertEqual(msg, '')
+        self.assertEqual(msg, "")
 
 
 class TestRegistryAdapter(unittest.TestCase):
@@ -1405,175 +1450,235 @@ class TestRegistryAdapter(unittest.TestCase):
         # memories: NULL value_score must survive the filter (live case)
         cur.execute(
             "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            ('mem-1', 'CONTEXT', 'NAS SSH access available', 'jarvis', 'jarvis',
-             '[]', 0.9, '2026-04-01', None, None, None, 'registry', 'active'))
+            (
+                "mem-1",
+                "CONTEXT",
+                "NAS SSH access available",
+                "jarvis",
+                "jarvis",
+                "[]",
+                0.9,
+                "2026-04-01",
+                None,
+                None,
+                None,
+                "registry",
+                "active",
+            ),
+        )
         cur.execute(
             "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            ('mem-2', 'FACT', 'Low value stale memory', 'rook', 'rook',
-             '[]', 0.3, '2026-04-01', None, 0.3, None, 'registry', 'active'))
+            (
+                "mem-2",
+                "FACT",
+                "Low value stale memory",
+                "rook",
+                "rook",
+                "[]",
+                0.3,
+                "2026-04-01",
+                None,
+                0.3,
+                None,
+                "registry",
+                "active",
+            ),
+        )
         # native chunks → memory:native:{chunk_id}
         cur.execute(
             "INSERT INTO memory_native_chunks VALUES (?,?,?,?,?,?,?,?,?)",
-            ('chunk-1', '/mem/MEMORY.md', 'memory_md', 'KG', '4', '4',
-             'Integrity checks: Weekly Sunday 04:00', 'profile:main', 'active'))
+            (
+                "chunk-1",
+                "/mem/MEMORY.md",
+                "memory_md",
+                "KG",
+                "4",
+                "4",
+                "Integrity checks: Weekly Sunday 04:00",
+                "profile:main",
+                "active",
+            ),
+        )
         # memory_entities stays EMPTY (live condition) → synthesis from mentions
         # mentions: hal survives (agent), database dropped (noise)
         cur.execute(
             "INSERT INTO memory_entity_mentions VALUES (?,?,?,?,?,?)",
-            ('native:chunk-1', 'hal', 'hal', 'general', 0.8, 'profile:main'))
+            ("native:chunk-1", "hal", "hal", "general", 0.8, "profile:main"),
+        )
         cur.execute(
             "INSERT INTO memory_entity_mentions VALUES (?,?,?,?,?,?)",
-            ('native:chunk-1', 'database', 'database', 'general', 0.8, 'profile:main'))
+            ("native:chunk-1", "database", "database", "general", 0.8, "profile:main"),
+        )
         # syntheses: one stale=0 (kept), one stale=1 (dropped unless include_all)
         cur.execute(
             "INSERT INTO memory_syntheses VALUES (?,?,?,?,?,?,?,?)",
-            ('synth:ok', 'current_state', 'global', 'global', 'Current State', 0, 0.9, '2026-04-01'))
+            ("synth:ok", "current_state", "global", "global", "Current State", 0, 0.9, "2026-04-01"),
+        )
         cur.execute(
             "INSERT INTO memory_syntheses VALUES (?,?,?,?,?,?,?,?)",
-            ('synth:stale', 'old_report', 'global', 'global', 'Old', 1, 0.8, '2026-04-01'))
+            ("synth:stale", "old_report", "global", "global", "Old", 1, 0.8, "2026-04-01"),
+        )
         cur.execute(
-            "INSERT INTO memory_claims VALUES (?,?,?,?,?,?)",
-            ('mem-1', 'durable', 'slot-1', 'op', 0.9, 'claim text'))
+            "INSERT INTO memory_claims VALUES (?,?,?,?,?,?)", ("mem-1", "durable", "slot-1", "op", 0.9, "claim text")
+        )
         cur.execute(
             "INSERT INTO memory_events VALUES (?,?,?,?,?,?,?)",
-            ('evt-1', '2026-04-01', 'capture', 'capture_inserted', '[]', 'mem-1', '{}'))
+            ("evt-1", "2026-04-01", "capture", "capture_inserted", "[]", "mem-1", "{}"),
+        )
         # beliefs: schema default status 'current' survives the default filter;
         # 'superseded' is dropped unless include_all (regression: the filter
         # compared against 'active' and dropped default-status beliefs).
         cur.execute(
             "INSERT INTO memory_beliefs VALUES (?,?,?,?,?,?,?,?)",
-            ('bel-1', 'e-1', 'fact', 'Live belief', 'current', 0.9, 'mem-1', 'registry'))
+            ("bel-1", "e-1", "fact", "Live belief", "current", 0.9, "mem-1", "registry"),
+        )
         cur.execute(
             "INSERT INTO memory_beliefs VALUES (?,?,?,?,?,?,?,?)",
-            ('bel-2', 'e-1', 'fact', 'Superseded belief', 'superseded', 0.9, 'mem-1', 'registry'))
+            ("bel-2", "e-1", "fact", "Superseded belief", "superseded", 0.9, "mem-1", "registry"),
+        )
         # open loops: status 'open' survives the default filter;
         # 'closed' is dropped unless include_all (regression: the filter
         # compared a 'open' default against 'active' and dropped everything).
         cur.execute(
             "INSERT INTO memory_open_loops VALUES (?,?,?,?,?,?)",
-            ('loop-1', 'followup', 'Rotate gateway token', 'open', 'high', None))
+            ("loop-1", "followup", "Rotate gateway token", "open", "high", None),
+        )
         cur.execute(
             "INSERT INTO memory_open_loops VALUES (?,?,?,?,?,?)",
-            ('loop-2', 'followup', 'Old closed item', 'closed', 'low', None))
+            ("loop-2", "followup", "Old closed item", "closed", "low", None),
+        )
         conn.commit()
         conn.close()
 
     def _run(self, path, include_all=False):
         import kgraph.memory_import as mi
         from kgraph.models import GraphBuilder
+
         conn = sqlite3.connect(path)
         builder = GraphBuilder()
-        mi._load_from_registry_db(conn, builder, registry='home', include_all=include_all)
+        mi._load_from_registry_db(conn, builder, registry="home", include_all=include_all)
         conn.close()
         g = builder.build()
         return (g.nodes, g.edges)
 
     def test_basic_import_and_filter(self):
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             self._make_registry(path)
             nodes, edges = self._run(path)
             nids = [n.id for n in nodes]
             # memories: mem-1 kept (NULL value_score), mem-2 dropped (0.3 < 0.5)
-            self.assertIn('memory:mem-1', nids)
-            self.assertNotIn('memory:mem-2', nids)
+            self.assertIn("memory:mem-1", nids)
+            self.assertNotIn("memory:mem-2", nids)
             # native chunk mapped
-            self.assertIn('memory:native:chunk-1', nids)
+            self.assertIn("memory:native:chunk-1", nids)
             # syntheses: ok kept, stale dropped
-            self.assertIn('synthesis:synth:ok', nids)
-            self.assertNotIn('synthesis:synth:stale', nids)
+            self.assertIn("synthesis:synth:ok", nids)
+            self.assertNotIn("synthesis:synth:stale", nids)
             # claim + event skipped
-            self.assertIn('claim:mem-1:slot-1', nids)
+            self.assertIn("claim:mem-1:slot-1", nids)
             # beliefs: default status 'current' kept, 'superseded' dropped
-            self.assertIn('belief:bel-1', nids)
-            self.assertNotIn('belief:bel-2', nids)
+            self.assertIn("belief:bel-1", nids)
+            self.assertNotIn("belief:bel-2", nids)
             # entity synthesis: hal kept, database (noise) dropped
-            ent_ids = [n.id for n in nodes if n.type == 'entity']
-            self.assertIn('entity:hal', ent_ids)
-            self.assertNotIn('entity:database', ent_ids)
+            ent_ids = [n.id for n in nodes if n.type == "entity"]
+            self.assertIn("entity:hal", ent_ids)
+            self.assertNotIn("entity:database", ent_ids)
             # mentions edge resolves native: → memory:native:chunk-1
-            self.assertTrue(any(e.source == 'memory:native:chunk-1' and e.target == 'entity:hal'
-                                for e in edges))
+            self.assertTrue(any(e.source == "memory:native:chunk-1" and e.target == "entity:hal" for e in edges))
 
     def test_include_all_bypasses_filter(self):
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             self._make_registry(path)
             nodes, _ = self._run(path, include_all=True)
             nids = [n.id for n in nodes]
-            self.assertIn('memory:mem-2', nids)          # low value now included
-            self.assertIn('synthesis:synth:stale', nids)  # stale now included
+            self.assertIn("memory:mem-2", nids)  # low value now included
+            self.assertIn("synthesis:synth:stale", nids)  # stale now included
 
     def test_entity_row_preferred_over_mention_synthesis(self):
         """Jarvis note 1: when memory_entities has a row, edge targets its id."""
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             self._make_registry(path)
             conn = sqlite3.connect(path)
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO memory_entities VALUES (?,?,?,?,?,?,?)",
-                ('e-1', 'person', 'Hal', 'hal', 'active', 0.95, '[]'))
+                ("e-1", "person", "Hal", "hal", "active", 0.95, "[]"),
+            )
             conn.commit()
             conn.close()
             nodes, edges = self._run(path)
-            ent_ids = [n.id for n in nodes if n.type == 'entity']
-            self.assertIn('entity:person:hal', ent_ids)
-            self.assertTrue(any(e.target == 'entity:person:hal' for e in edges))
+            ent_ids = [n.id for n in nodes if n.type == "entity"]
+            self.assertIn("entity:person:hal", ent_ids)
+            self.assertTrue(any(e.target == "entity:person:hal" for e in edges))
 
     def test_claim_linked_to_its_memory(self):
         """claims nodes get an edge to the memory they were consolidated from."""
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             self._make_registry(path)
             nodes, edges = self._run(path)
             nids = [n.id for n in nodes]
-            self.assertIn('claim:mem-1:slot-1', nids)
+            self.assertIn("claim:mem-1:slot-1", nids)
             self.assertTrue(
-                any(e.source == 'memory:mem-1' and e.target == 'claim:mem-1:slot-1'
-                    and e.label == 'claims' for e in edges),
-                f'no claims edge from memory:mem-1 in {[(e.source, e.target, e.label) for e in edges]}',
+                any(
+                    e.source == "memory:mem-1" and e.target == "claim:mem-1:slot-1" and e.label == "claims"
+                    for e in edges
+                ),
+                f"no claims edge from memory:mem-1 in {[(e.source, e.target, e.label) for e in edges]}",
             )
 
     def test_promoted_native_chunk_not_duplicated(self):
         """a native chunk whose content matches an imported memory is skipped."""
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             self._make_registry(path)
             conn = sqlite3.connect(path)
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO memory_native_chunks VALUES (?,?,?,?,?,?,?,?,?)",
-                ('chunk-dup', '/mem/MEMORY.md', 'memory_md', 'KG', '1', '1',
-                 'NAS SSH access available', 'profile:main', 'active'))
+                (
+                    "chunk-dup",
+                    "/mem/MEMORY.md",
+                    "memory_md",
+                    "KG",
+                    "1",
+                    "1",
+                    "NAS SSH access available",
+                    "profile:main",
+                    "active",
+                ),
+            )
             conn.commit()
             conn.close()
             nodes, _ = self._run(path)
             nids = [n.id for n in nodes]
-            self.assertIn('memory:mem-1', nids)
-            self.assertNotIn('memory:native:chunk-dup', nids)
+            self.assertIn("memory:mem-1", nids)
+            self.assertNotIn("memory:native:chunk-dup", nids)
             # unrelated chunks still import
-            self.assertIn('memory:native:chunk-1', nids)
+            self.assertIn("memory:native:chunk-1", nids)
 
     def test_open_loop_open_status_survives_filter(self):
         """A loop with status='open' is kept by default (not silently dropped)."""
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             self._make_registry(path)
             nodes, _ = self._run(path)
             nids = [n.id for n in nodes]
-            self.assertIn('open_loop:loop-1', nids)
-            self.assertNotIn('open_loop:loop-2', nids)
+            self.assertIn("open_loop:loop-1", nids)
+            self.assertNotIn("open_loop:loop-2", nids)
 
     def test_open_loop_include_all_keeps_closed(self):
         """include_all keeps closed loops too."""
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             self._make_registry(path)
             nodes, _ = self._run(path, include_all=True)
             nids = [n.id for n in nodes]
-            self.assertIn('open_loop:loop-1', nids)
-            self.assertIn('open_loop:loop-2', nids)
+            self.assertIn("open_loop:loop-1", nids)
+            self.assertIn("open_loop:loop-2", nids)
 
 
 class TestDispatcherCallEdges(unittest.TestCase):
@@ -1590,17 +1695,17 @@ class TestDispatcherCallEdges(unittest.TestCase):
 
         dispatcher = sorted(_BASH_DISPATCHERS)[0]
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+            with open(os.path.join(td, "mod.sh"), "w") as f:
                 f.write(
-                    '#!/usr/bin/env bash\n'
+                    "#!/usr/bin/env bash\n"
                     f'{dispatcher}() {{ "$@"; }}\n'
-                    '__target_fn() { echo t; }\n'
-                    f'run() {{ {dispatcher} __target_fn; }}\n'
+                    "__target_fn() { echo t; }\n"
+                    f"run() {{ {dispatcher} __target_fn; }}\n"
                 )
             graph = extract_repo_graph(td)
-        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:bash:__target_fn'), edges)
-        self.assertIn(('ast_call:bash:__target_fn', 'calls', 'ast_func:bash:__target_fn'), edges)
+        edges = {(e["source"], e["label"], e["target"]) for e in graph["edges"]}
+        self.assertIn(("ast_file:mod-sh", "calls", "ast_call:bash:__target_fn"), edges)
+        self.assertIn(("ast_call:bash:__target_fn", "calls", "ast_func:bash:__target_fn"), edges)
 
     def test_only_bare_word_arguments_become_calls(self):
         """A quoted or substituted argument is not statically resolvable, so no edge."""
@@ -1608,16 +1713,16 @@ class TestDispatcherCallEdges(unittest.TestCase):
 
         dispatcher = sorted(_BASH_DISPATCHERS)[0]
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+            with open(os.path.join(td, "mod.sh"), "w") as f:
                 f.write(
-                    '#!/usr/bin/env bash\n'
+                    "#!/usr/bin/env bash\n"
                     f'{dispatcher}() {{ "$@"; }}\n'
-                    'fn_name=some_thing\n'
+                    "fn_name=some_thing\n"
                     f'run() {{ {dispatcher} "$fn_name"; }}\n'
                 )
             graph = extract_repo_graph(td)
-        targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
-        self.assertNotIn('ast_call:bash:some_thing', targets)
+        targets = {e["target"] for e in graph["edges"] if e["label"] == "calls"}
+        self.assertNotIn("ast_call:bash:some_thing", targets)
 
 
 class TestTrapHandlerCallEdges(unittest.TestCase):
@@ -1634,60 +1739,49 @@ class TestTrapHandlerCallEdges(unittest.TestCase):
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+            with open(os.path.join(td, "mod.sh"), "w") as f:
                 f.write(
-                    '#!/usr/bin/env bash\n'
-                    '__bench_cleanup() { :; }\n'
+                    "#!/usr/bin/env bash\n"
+                    "__bench_cleanup() { :; }\n"
                     "run() { trap '__rc=0; __bench_cleanup; return 130' INT; }\n"
                 )
             graph = extract_repo_graph(td)
-        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:bash:__bench_cleanup'), edges)
-        self.assertIn(('ast_call:bash:__bench_cleanup', 'calls', 'ast_func:bash:__bench_cleanup'), edges)
+        edges = {(e["source"], e["label"], e["target"]) for e in graph["edges"]}
+        self.assertIn(("ast_file:mod-sh", "calls", "ast_call:bash:__bench_cleanup"), edges)
+        self.assertIn(("ast_call:bash:__bench_cleanup", "calls", "ast_func:bash:__bench_cleanup"), edges)
 
     def test_bare_word_handler_is_recorded(self):
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
-                f.write(
-                    '#!/usr/bin/env bash\n'
-                    'cleanup() { :; }\n'
-                    'trap cleanup EXIT\n'
-                )
+            with open(os.path.join(td, "mod.sh"), "w") as f:
+                f.write("#!/usr/bin/env bash\ncleanup() { :; }\ntrap cleanup EXIT\n")
             graph = extract_repo_graph(td)
-        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:bash:cleanup'), edges)
+        edges = {(e["source"], e["label"], e["target"]) for e in graph["edges"]}
+        self.assertIn(("ast_file:mod-sh", "calls", "ast_call:bash:cleanup"), edges)
 
     def test_signal_arguments_are_not_recorded_as_calls(self):
         """Only the handler is a call site — the signal names are arguments."""
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
-                f.write(
-                    '#!/usr/bin/env bash\n'
-                    "trap 'echo hi' INT TERM\n"
-                )
+            with open(os.path.join(td, "mod.sh"), "w") as f:
+                f.write("#!/usr/bin/env bash\ntrap 'echo hi' INT TERM\n")
             graph = extract_repo_graph(td)
-        targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
-        self.assertNotIn('ast_call:bash:INT', targets)
-        self.assertNotIn('ast_call:bash:TERM', targets)
+        targets = {e["target"] for e in graph["edges"] if e["label"] == "calls"}
+        self.assertNotIn("ast_call:bash:INT", targets)
+        self.assertNotIn("ast_call:bash:TERM", targets)
 
     def test_substituted_handler_is_not_resolved(self):
         """A handler held in a variable is not statically resolvable."""
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
-                f.write(
-                    '#!/usr/bin/env bash\n'
-                    'handler=cleanup_thing\n'
-                    'trap "$handler" INT\n'
-                )
+            with open(os.path.join(td, "mod.sh"), "w") as f:
+                f.write('#!/usr/bin/env bash\nhandler=cleanup_thing\ntrap "$handler" INT\n')
             graph = extract_repo_graph(td)
-        targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
-        self.assertNotIn('ast_call:bash:cleanup_thing', targets)
+        targets = {e["target"] for e in graph["edges"] if e["label"] == "calls"}
+        self.assertNotIn("ast_call:bash:cleanup_thing", targets)
 
 
 class TestSymbolIdsDoNotCollide(unittest.TestCase):
@@ -1704,43 +1798,43 @@ class TestSymbolIdsDoNotCollide(unittest.TestCase):
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+            with open(os.path.join(td, "mod.sh"), "w") as f:
                 f.write(
-                    '#!/usr/bin/env bash\n'
-                    '__model_recommend() { :; }\n'
-                    'model-recommend() { :; }\n'
-                    'run() { __model_recommend; model-recommend; }\n'
+                    "#!/usr/bin/env bash\n"
+                    "__model_recommend() { :; }\n"
+                    "model-recommend() { :; }\n"
+                    "run() { __model_recommend; model-recommend; }\n"
                 )
             graph = extract_repo_graph(td)
-        ids = {n['id'] for n in graph['nodes']}
-        self.assertIn('ast_func:bash:__model_recommend', ids)
-        self.assertIn('ast_func:bash:model-recommend', ids)
-        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_call:bash:__model_recommend', 'calls', 'ast_func:bash:__model_recommend'), edges)
-        self.assertIn(('ast_call:bash:model-recommend', 'calls', 'ast_func:bash:model-recommend'), edges)
+        ids = {n["id"] for n in graph["nodes"]}
+        self.assertIn("ast_func:bash:__model_recommend", ids)
+        self.assertIn("ast_func:bash:model-recommend", ids)
+        edges = {(e["source"], e["label"], e["target"]) for e in graph["edges"]}
+        self.assertIn(("ast_call:bash:__model_recommend", "calls", "ast_func:bash:__model_recommend"), edges)
+        self.assertIn(("ast_call:bash:model-recommend", "calls", "ast_func:bash:model-recommend"), edges)
 
     def test_case_is_preserved_in_ids(self):
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
-                f.write('#!/usr/bin/env bash\nLOG_ONE() { :; }\nlog_one() { :; }\n')
+            with open(os.path.join(td, "mod.sh"), "w") as f:
+                f.write("#!/usr/bin/env bash\nLOG_ONE() { :; }\nlog_one() { :; }\n")
             graph = extract_repo_graph(td)
-        ids = {n['id'] for n in graph['nodes']}
-        self.assertIn('ast_func:bash:LOG_ONE', ids)
-        self.assertIn('ast_func:bash:log_one', ids)
+        ids = {n["id"] for n in graph["nodes"]}
+        self.assertIn("ast_func:bash:LOG_ONE", ids)
+        self.assertIn("ast_func:bash:log_one", ids)
 
     def test_unsafe_characters_are_escaped_not_dropped(self):
         """The `:` builtin used to land on the empty id ``ast_call:``."""
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+            with open(os.path.join(td, "mod.sh"), "w") as f:
                 f.write('#!/usr/bin/env bash\n: "noop"\n')
             graph = extract_repo_graph(td)
-        ids = {n['id'] for n in graph['nodes']}
-        self.assertNotIn('ast_call:bash:', ids)
-        self.assertIn('ast_call:bash:~_3a', ids)
+        ids = {n["id"] for n in graph["nodes"]}
+        self.assertNotIn("ast_call:bash:", ids)
+        self.assertIn("ast_call:bash:~_3a", ids)
 
 
 class TestShebangDiscovery(unittest.TestCase):
@@ -1756,28 +1850,27 @@ class TestShebangDiscovery(unittest.TestCase):
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            bindir = os.path.join(td, 'bin')
+            bindir = os.path.join(td, "bin")
             os.makedirs(bindir)
-            with open(os.path.join(bindir, 'wrapper'), 'w') as f:
-                f.write('#!/usr/bin/env bash\nhelper_fn\n')
-            with open(os.path.join(bindir, 'not-a-script'), 'w') as f:
-                f.write('plain text, no shebang\n')
+            with open(os.path.join(bindir, "wrapper"), "w") as f:
+                f.write("#!/usr/bin/env bash\nhelper_fn\n")
+            with open(os.path.join(bindir, "not-a-script"), "w") as f:
+                f.write("plain text, no shebang\n")
             graph = extract_repo_graph(td)
-        ids = {n['id'] for n in graph['nodes']}
-        self.assertIn('ast_file:bin-wrapper', ids)
-        self.assertNotIn('ast_file:bin-not-a-script', ids)
-        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:bin-wrapper', 'calls', 'ast_call:bash:helper_fn'), edges)
+        ids = {n["id"] for n in graph["nodes"]}
+        self.assertIn("ast_file:bin-wrapper", ids)
+        self.assertNotIn("ast_file:bin-not-a-script", ids)
+        edges = {(e["source"], e["label"], e["target"]) for e in graph["edges"]}
+        self.assertIn(("ast_file:bin-wrapper", "calls", "ast_call:bash:helper_fn"), edges)
 
     def test_a_file_its_extension_already_claims_is_not_added_twice(self):
         from kgraph.ast_extractor import extract_repo_graph
 
         with tempfile.TemporaryDirectory() as td:
-            with open(os.path.join(td, 'mod.sh'), 'w') as f:
-                f.write('#!/usr/bin/env bash\nfn() { :; }\n')
+            with open(os.path.join(td, "mod.sh"), "w") as f:
+                f.write("#!/usr/bin/env bash\nfn() { :; }\n")
             graph = extract_repo_graph(td)
-        defines = [e for e in graph['edges']
-                   if e['source'] == 'ast_file:mod-sh' and e['label'] == 'defines']
+        defines = [e for e in graph["edges"] if e["source"] == "ast_file:mod-sh" and e["label"] == "defines"]
         self.assertEqual(len(defines), 1)
 
 
@@ -1797,42 +1890,46 @@ class VocabularyValidationTests(unittest.TestCase):
     def _vocabulary_findings(graph):
         from kgraph.validate import validate_graph
 
-        return [e for e in validate_graph(graph)
-                if 'vocabulary' in e.get('message', '')]
+        return [e for e in validate_graph(graph) if "vocabulary" in e.get("message", "")]
 
     def test_unknown_edge_label_is_reported_once_per_label_with_a_count(self):
-        findings = self._vocabulary_findings({
-            'nodes': [{'id': 1, 'label': 'a'}, {'id': 2, 'label': 'b'}],
-            'edges': [{'from': 1, 'to': 2, 'label': 'teleports to'},
-                      {'from': 2, 'to': 1, 'label': 'teleports to'}],
-        })
+        findings = self._vocabulary_findings(
+            {
+                "nodes": [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}],
+                "edges": [{"from": 1, "to": 2, "label": "teleports to"}, {"from": 2, "to": 1, "label": "teleports to"}],
+            }
+        )
         self.assertEqual(len(findings), 1)
-        self.assertIn("'teleports to' (2x)", findings[0]['message'])
-        self.assertEqual(findings[0]['severity'], 'warning')
+        self.assertIn("'teleports to' (2x)", findings[0]["message"])
+        self.assertEqual(findings[0]["severity"], "warning")
 
     def test_unknown_node_type_is_reported(self):
-        findings = self._vocabulary_findings({
-            'nodes': [{'id': 1, 'label': 'a', 'type': 'gadget'}],
-            'edges': [],
-        })
+        findings = self._vocabulary_findings(
+            {
+                "nodes": [{"id": 1, "label": "a", "type": "gadget"}],
+                "edges": [],
+            }
+        )
         self.assertEqual(len(findings), 1)
-        self.assertIn('gadget', findings[0]['message'])
+        self.assertIn("gadget", findings[0]["message"])
 
     def test_declared_vocabulary_is_not_reported(self):
         """Curated, AST, the two literals and the prefix family all stay quiet."""
-        findings = self._vocabulary_findings({
-            'nodes': [
-                {'id': 1, 'label': 'a', 'type': 'file'},
-                {'id': 2, 'label': 'b', 'type': 'topic'},
-                {'id': 3, 'label': 'c', 'type': 'function'},
-            ],
-            'edges': [
-                {'from': 1, 'to': 2, 'label': 'covers topic'},
-                {'from': 1, 'to': 3, 'label': 'defines'},
-                {'from': 3, 'to': 2, 'label': 'semantic summary'},
-                {'from': 3, 'to': 1, 'label': 'summarizes releases'},
-            ],
-        })
+        findings = self._vocabulary_findings(
+            {
+                "nodes": [
+                    {"id": 1, "label": "a", "type": "file"},
+                    {"id": 2, "label": "b", "type": "topic"},
+                    {"id": 3, "label": "c", "type": "function"},
+                ],
+                "edges": [
+                    {"from": 1, "to": 2, "label": "covers topic"},
+                    {"from": 1, "to": 3, "label": "defines"},
+                    {"from": 3, "to": 2, "label": "semantic summary"},
+                    {"from": 3, "to": 1, "label": "summarizes releases"},
+                ],
+            }
+        )
         self.assertEqual(findings, [])
 
     def test_vocabulary_sets_are_one_object_across_modules(self):
@@ -1849,14 +1946,12 @@ class VocabularyValidationTests(unittest.TestCase):
         self.assertIs(projection.CURATED_EDGE_LABELS, constants.CURATED_EDGE_LABELS)
         self.assertIs(projection.AST_EDGE_LABELS, constants.AST_EDGE_LABELS)
         self.assertIs(projection.AST_NODE_TYPES, constants.AST_NODE_TYPES)
-        self.assertIs(projection.CANONICAL_RELATION_LABELS,
-                      constants.CANONICAL_RELATION_LABELS)
+        self.assertIs(projection.CANONICAL_RELATION_LABELS, constants.CANONICAL_RELATION_LABELS)
         # confidence.py reads the SAME objects.  It used to declare private
         # copies (_AST_LABELS, _CANONICAL_RELATION_LABELS), so a label change in
         # constants.py would silently reclassify edges there.
         self.assertIs(confidence.AST_EDGE_LABELS, constants.AST_EDGE_LABELS)
-        self.assertIs(confidence.CANONICAL_RELATION_LABELS,
-                      constants.CANONICAL_RELATION_LABELS)
+        self.assertIs(confidence.CANONICAL_RELATION_LABELS, constants.CANONICAL_RELATION_LABELS)
         self.assertFalse(hasattr(confidence, "_AST_LABELS"))
         self.assertFalse(hasattr(confidence, "_CANONICAL_RELATION_LABELS"))
         for label_set in (constants.CURATED_EDGE_LABELS, constants.AST_EDGE_LABELS):
@@ -1879,19 +1974,21 @@ class VocabularyValidationTests(unittest.TestCase):
         from kgraph.models import ConfidenceLevel, GraphEdge
 
         for label in sorted(AST_EDGE_LABELS):
-            edge = GraphEdge(source='a', target='b', label=label)
+            edge = GraphEdge(source="a", target="b", label=label)
             self.assertEqual(_determine_confidence(edge), ConfidenceLevel.EXTRACTED, label)
 
     def test_unknown_label_does_not_reject_the_payload(self):
         """A warning, not an error: the MCP pre-flight contract is unchanged."""
         from kgraph.validate import validate_graph_payload
 
-        valid, msg = validate_graph_payload({
-            'nodes': [{'id': 1, 'label': 'a'}],
-            'edges': [{'from': 1, 'to': 1, 'label': 'teleports to'}],
-        })
+        valid, msg = validate_graph_payload(
+            {
+                "nodes": [{"id": 1, "label": "a"}],
+                "edges": [{"from": 1, "to": 1, "label": "teleports to"}],
+            }
+        )
         self.assertTrue(valid)
-        self.assertEqual(msg, '')
+        self.assertEqual(msg, "")
 
 
 class VocabularyStampTests(unittest.TestCase):
@@ -1907,11 +2004,14 @@ class VocabularyStampTests(unittest.TestCase):
         from kgraph.graph_db import read_vocabulary_version, save_to_graph_db
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
-            save_to_graph_db(db, {
-                'nodes': [{'id': 'n1', 'label': 'a'}],
-                'edges': [],
-            })
+            db = os.path.join(td, "graph.sqlite")
+            save_to_graph_db(
+                db,
+                {
+                    "nodes": [{"id": "n1", "label": "a"}],
+                    "edges": [],
+                },
+            )
             self.assertEqual(read_vocabulary_version(db), constants.VOCABULARY_VERSION)
 
     def test_a_table_but_no_save_reads_as_unstamped(self):
@@ -1919,14 +2019,14 @@ class VocabularyStampTests(unittest.TestCase):
         from kgraph.graph_db import init_graph_db, read_vocabulary_version
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
+            db = os.path.join(td, "graph.sqlite")
             init_graph_db(db)
             self.assertIsNone(read_vocabulary_version(db))
 
     def test_missing_database_reads_as_unstamped(self):
         from kgraph.graph_db import read_vocabulary_version
 
-        self.assertIsNone(read_vocabulary_version('/tmp/does-not-exist-kgraph.sqlite'))
+        self.assertIsNone(read_vocabulary_version("/tmp/does-not-exist-kgraph.sqlite"))
 
 
 # ══════════════ GRAPHRAG-ARCH-006: community digest ══════════════
@@ -1935,22 +2035,22 @@ class VocabularyStampTests(unittest.TestCase):
 #      (Partha Sarkar, TDS, 2026-09-20)
 
 _TWO_CLUSTER_GRAPH = {
-    'nodes': [
-        {'id': 'a', 'label': 'Alpha', 'type': 'topic'},
-        {'id': 'b', 'label': 'Beta', 'type': 'topic'},
-        {'id': 'c', 'label': 'Gamma', 'type': 'topic'},
-        {'id': 'd', 'label': 'Delta', 'type': 'topic'},
-        {'id': 'e', 'label': 'Epsilon', 'type': 'topic'},
-        {'id': 'f', 'label': 'Zeta', 'type': 'topic'},
+    "nodes": [
+        {"id": "a", "label": "Alpha", "type": "topic"},
+        {"id": "b", "label": "Beta", "type": "topic"},
+        {"id": "c", "label": "Gamma", "type": "topic"},
+        {"id": "d", "label": "Delta", "type": "topic"},
+        {"id": "e", "label": "Epsilon", "type": "topic"},
+        {"id": "f", "label": "Zeta", "type": "topic"},
     ],
-    'edges': [
-        {'from': 'a', 'to': 'b', 'label': 'links', 'semantic_score': 1.0},
-        {'from': 'b', 'to': 'c', 'label': 'links', 'semantic_score': 1.0},
-        {'from': 'a', 'to': 'c', 'label': 'links', 'semantic_score': 1.0},
-        {'from': 'd', 'to': 'e', 'label': 'links', 'semantic_score': 1.0},
-        {'from': 'e', 'to': 'f', 'label': 'links', 'semantic_score': 1.0},
-        {'from': 'd', 'to': 'f', 'label': 'links', 'semantic_score': 1.0},
-        {'from': 'c', 'to': 'd', 'label': 'links', 'semantic_score': 0.05},
+    "edges": [
+        {"from": "a", "to": "b", "label": "links", "semantic_score": 1.0},
+        {"from": "b", "to": "c", "label": "links", "semantic_score": 1.0},
+        {"from": "a", "to": "c", "label": "links", "semantic_score": 1.0},
+        {"from": "d", "to": "e", "label": "links", "semantic_score": 1.0},
+        {"from": "e", "to": "f", "label": "links", "semantic_score": 1.0},
+        {"from": "d", "to": "f", "label": "links", "semantic_score": 1.0},
+        {"from": "c", "to": "d", "label": "links", "semantic_score": 0.05},
     ],
 }
 
@@ -1959,24 +2059,24 @@ class CommunityDigestTests(unittest.TestCase):
     """The article's community report: digest_communities + its consumers."""
 
     def _digested(self):
-        graph = kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy')
+        graph = kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method="greedy")
         return kgraph.digest_communities(graph)
 
     def test_digest_adds_the_report_fields_to_every_community(self):
         graph = self._digested()
-        self.assertTrue(graph.meta.communities, 'fixture produced no communities')
+        self.assertTrue(graph.meta.communities, "fixture produced no communities")
         for community in graph.meta.communities:
-            self.assertIn('central_nodes', community)
-            self.assertIn('god_nodes', community)
-            self.assertIn('boundary_edges', community)
-            self.assertIn('boundary_edge_count', community)
-            central_nodes = community.get('central_nodes')
+            self.assertIn("central_nodes", community)
+            self.assertIn("god_nodes", community)
+            self.assertIn("boundary_edges", community)
+            self.assertIn("boundary_edge_count", community)
+            central_nodes = community.get("central_nodes")
             self.assertIsNotNone(central_nodes, community)
             assert central_nodes is not None
             self.assertTrue(central_nodes, community)
             for entry in central_nodes:
-                self.assertEqual(set(entry), {'id', 'label', 'composite_score'})
-                self.assertIn(entry['id'], community['members'])
+                self.assertEqual(set(entry), {"id", "label", "composite_score"})
+                self.assertIn(entry["id"], community["members"])
 
     def test_digest_is_deterministic(self):
         first = self._digested().meta.communities
@@ -1985,33 +2085,33 @@ class CommunityDigestTests(unittest.TestCase):
 
     def test_boundary_edges_cross_the_community_and_are_capped(self):
         graph = self._digested()
-        community = max(graph.meta.communities, key=lambda c: c['size'])
-        members = set(community['members'])
-        boundary_edges = community.get('boundary_edges')
-        boundary_edge_count = community.get('boundary_edge_count')
+        community = max(graph.meta.communities, key=lambda c: c["size"])
+        members = set(community["members"])
+        boundary_edges = community.get("boundary_edges")
+        boundary_edge_count = community.get("boundary_edge_count")
         self.assertIsNotNone(boundary_edges)
         self.assertIsNotNone(boundary_edge_count)
         assert boundary_edges is not None
         assert boundary_edge_count is not None
         for edge in boundary_edges:
-            self.assertIn(edge['direction'], ('out', 'in'))
-            inside = edge['source'] in members
-            self.assertNotEqual(inside, edge['target'] in members, edge)
+            self.assertIn(edge["direction"], ("out", "in"))
+            inside = edge["source"] in members
+            self.assertNotEqual(inside, edge["target"] in members, edge)
         # The reported total is the true count, independent of the rendered cap.
         self.assertGreaterEqual(boundary_edge_count, len(boundary_edges))
 
     def test_digest_leaves_a_graph_without_communities_untouched(self):
-        graph = kgraph.Graph.from_dict({'nodes': [{'id': 'a', 'label': 'A'}], 'edges': []})
+        graph = kgraph.Graph.from_dict({"nodes": [{"id": "a", "label": "A"}], "edges": []})
         self.assertIs(kgraph.digest_communities(graph), graph)
         self.assertEqual(graph.meta.communities, [])
 
     def test_community_for_node_finds_the_containing_community(self):
         graph = self._digested()
-        community = kgraph.community_for_node(graph, 'a')
+        community = kgraph.community_for_node(graph, "a")
         self.assertIsNotNone(community)
         assert community is not None  # narrows for the type checker
-        self.assertIn('a', community['members'])
-        self.assertIsNone(kgraph.community_for_node(graph, 'no-such-node'))
+        self.assertIn("a", community["members"])
+        self.assertIsNone(kgraph.community_for_node(graph, "no-such-node"))
 
 
 class CommunityViewTests(unittest.TestCase):
@@ -2020,51 +2120,61 @@ class CommunityViewTests(unittest.TestCase):
     def test_summary_reads_the_cached_digest_rather_than_recomputing(self):
         # A digest whose membership no detection could produce: if the view
         # recomputed, these ids could not appear.
-        graph = kgraph.Graph.from_dict({
-            'nodes': [{'id': 'a', 'label': 'A'}],
-            'edges': [],
-            'meta': {'community_method': 'cached-greedy',
-                     'communities': [{'id': 'community_0', 'label': 'Cached · Theme',
-                                      'size': 1, 'members': ['a'],
-                                      'central_nodes': [{'id': 'a', 'label': 'A',
-                                                         'composite_score': 0.5}],
-                                      'god_nodes': [], 'boundary_edges': [],
-                                      'boundary_edge_count': 0}]},
-        })
+        graph = kgraph.Graph.from_dict(
+            {
+                "nodes": [{"id": "a", "label": "A"}],
+                "edges": [],
+                "meta": {
+                    "community_method": "cached-greedy",
+                    "communities": [
+                        {
+                            "id": "community_0",
+                            "label": "Cached · Theme",
+                            "size": 1,
+                            "members": ["a"],
+                            "central_nodes": [{"id": "a", "label": "A", "composite_score": 0.5}],
+                            "god_nodes": [],
+                            "boundary_edges": [],
+                            "boundary_edge_count": 0,
+                        }
+                    ],
+                },
+            }
+        )
         result = kgraph.community_view(graph)
-        self.assertEqual(result['source'], 'digest')
-        self.assertEqual(result['method'], 'cached-greedy')
-        self.assertEqual([c['label'] for c in result['communities']], ['Cached · Theme'])
-        self.assertEqual(result['communities'][0]['central_nodes'][0]['id'], 'a')
+        self.assertEqual(result["source"], "digest")
+        self.assertEqual(result["method"], "cached-greedy")
+        self.assertEqual([c["label"] for c in result["communities"]], ["Cached · Theme"])
+        self.assertEqual(result["communities"][0]["central_nodes"][0]["id"], "a")
 
     def test_single_community_returns_members_and_boundary_edges(self):
-        graph = kgraph.digest_communities(
-            kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy'))
-        community_id = graph.meta.communities[0]['id']
+        graph = kgraph.digest_communities(kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method="greedy"))
+        community_id = graph.meta.communities[0]["id"]
         result = kgraph.community_view(graph, community_id)
-        self.assertEqual(result['source'], 'digest')
-        self.assertEqual(result['community']['id'], community_id)
-        self.assertIn('members', result['community'])
-        self.assertIn('boundary_edges', result['community'])
+        self.assertEqual(result["source"], "digest")
+        self.assertEqual(result["community"]["id"], community_id)
+        self.assertIn("members", result["community"])
+        self.assertIn("boundary_edges", result["community"])
 
     def test_unknown_community_id_reports_the_ids_it_does_have(self):
         graph = self._cached()
-        result = kgraph.community_view(graph, 'community_99')
-        self.assertIn('error', result)
-        self.assertEqual(result['community_ids'], ['community_0'])
+        result = kgraph.community_view(graph, "community_99")
+        self.assertIn("error", result)
+        self.assertEqual(result["community_ids"], ["community_0"])
 
     def test_a_graph_with_no_cached_digest_computes_and_says_so(self):
         result = kgraph.community_view(_TWO_CLUSTER_GRAPH)
-        self.assertEqual(result['source'], 'computed')
-        self.assertGreater(result['count'], 0)
+        self.assertEqual(result["source"], "computed")
+        self.assertGreater(result["count"], 0)
 
     @staticmethod
     def _cached():
-        return kgraph.Graph.from_dict({
-            'nodes': [{'id': 'a', 'label': 'A'}],
-            'meta': {'communities': [{'id': 'community_0', 'label': 'T', 'size': 1,
-                                      'members': ['a']}]},
-        })
+        return kgraph.Graph.from_dict(
+            {
+                "nodes": [{"id": "a", "label": "A"}],
+                "meta": {"communities": [{"id": "community_0", "label": "T", "size": 1, "members": ["a"]}]},
+            }
+        )
 
 
 class CommunityDigestPersistenceTests(unittest.TestCase):
@@ -2073,20 +2183,18 @@ class CommunityDigestPersistenceTests(unittest.TestCase):
     def test_save_and_load_round_trip_the_digest(self):
         from kgraph.graph_db import load_from_graph_db, read_community_digest, save_to_graph_db
 
-        graph = kgraph.digest_communities(
-            kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy'))
+        graph = kgraph.digest_communities(kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method="greedy"))
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
+            db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(db, graph)
             digest = read_community_digest(db)
             loaded = load_from_graph_db(db)
         self.assertIsNotNone(digest)
         assert digest is not None  # narrows for the type checker
-        self.assertEqual(digest['method'], graph.meta.community_method)
-        self.assertEqual([c['id'] for c in loaded.meta.communities],
-                         [c['id'] for c in graph.meta.communities])
-        loaded_central_nodes = loaded.meta.communities[0].get('central_nodes')
-        expected_central_nodes = graph.meta.communities[0].get('central_nodes')
+        self.assertEqual(digest["method"], graph.meta.community_method)
+        self.assertEqual([c["id"] for c in loaded.meta.communities], [c["id"] for c in graph.meta.communities])
+        loaded_central_nodes = loaded.meta.communities[0].get("central_nodes")
+        expected_central_nodes = graph.meta.communities[0].get("central_nodes")
         self.assertIsNotNone(loaded_central_nodes)
         self.assertIsNotNone(expected_central_nodes)
         assert loaded_central_nodes is not None
@@ -2096,16 +2204,14 @@ class CommunityDigestPersistenceTests(unittest.TestCase):
 
     def test_saving_without_communities_clears_a_stale_digest(self):
         """A graph with no communities must not leave the old digest behind."""
-        from kgraph.graph_db import (load_from_graph_db, read_community_digest,
-                                     save_to_graph_db)
+        from kgraph.graph_db import load_from_graph_db, read_community_digest, save_to_graph_db
 
-        graph = kgraph.digest_communities(
-            kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy'))
+        graph = kgraph.digest_communities(kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method="greedy"))
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
+            db = os.path.join(td, "graph.sqlite")
             save_to_graph_db(db, graph)
             self.assertIsNotNone(read_community_digest(db))
-            save_to_graph_db(db, {'nodes': [{'id': 'a', 'label': 'A'}], 'edges': []})
+            save_to_graph_db(db, {"nodes": [{"id": "a", "label": "A"}], "edges": []})
             self.assertIsNone(read_community_digest(db))
             self.assertEqual(load_from_graph_db(db).meta.communities, [])
 
@@ -2113,89 +2219,102 @@ class CommunityDigestPersistenceTests(unittest.TestCase):
         from kgraph.graph_db import init_graph_db, load_from_graph_db
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
+            db = os.path.join(td, "graph.sqlite")
             init_graph_db(db)
             conn = sqlite3.connect(db)
             try:
-                conn.execute("INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)",
-                             ('a', 'Alpha', '{"type": "topic"}'))
+                conn.execute(
+                    "INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)", ("a", "Alpha", '{"type": "topic"}')
+                )
                 conn.commit()
             finally:
                 conn.close()
             loaded = load_from_graph_db(db)
         self.assertEqual(loaded.meta.communities, [])
-        self.assertEqual([n.id for n in loaded.nodes], ['a'])
+        self.assertEqual([n.id for n in loaded.nodes], ["a"])
 
     def test_report_renders_the_cached_digest_without_recomputing(self):
         from kgraph import report
 
         graph = self._cached()
-        with mock.patch.object(report, 'detect_communities',
-                               side_effect=AssertionError('report recomputed communities')):
+        with mock.patch.object(
+            report, "detect_communities", side_effect=AssertionError("report recomputed communities")
+        ):
             text = report.generate_report(graph)
-        self.assertIn('- **Cached · Theme** — 1 members', text)
-        self.assertIn('central: Alpha', text)
-        self.assertIn('- **Communities detected:** 1', text)
+        self.assertIn("- **Cached · Theme** — 1 members", text)
+        self.assertIn("central: Alpha", text)
+        self.assertIn("- **Communities detected:** 1", text)
 
     def test_incremental_update_writes_a_digest_a_later_read_uses(self):
         """--update caches the digest; the reload answers from it, not by computing."""
         from kgraph.update import incremental_update
 
         with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, 'repo')
+            src = os.path.join(td, "repo")
             os.makedirs(src)
-            with open(os.path.join(src, 'lib.py'), 'w', encoding='utf-8') as f:
+            with open(os.path.join(src, "lib.py"), "w", encoding="utf-8") as f:
                 f.write('"""lib."""\ndef helper() -> int:\n    return 1\n')
-            with open(os.path.join(src, 'main.py'), 'w', encoding='utf-8') as f:
-                f.write('"""main."""\nfrom lib import helper\n\n'
-                        'def run() -> int:\n    return helper()\n')
-            db_path = os.path.join(td, 'graph.sqlite')
-            incremental_update(db_path, mem_db_path=os.path.join(td, 'missing.sqlite'),
-                               source_dir=src, ast=True, include_all=True)
+            with open(os.path.join(src, "main.py"), "w", encoding="utf-8") as f:
+                f.write('"""main."""\nfrom lib import helper\n\ndef run() -> int:\n    return helper()\n')
+            db_path = os.path.join(td, "graph.sqlite")
+            incremental_update(
+                db_path, mem_db_path=os.path.join(td, "missing.sqlite"), source_dir=src, ast=True, include_all=True
+            )
             loaded = kgraph.load_from_graph_db(db_path)
-            self.assertTrue(loaded.meta.communities,
-                            '--update left no community digest for a 2-file repo')
+            self.assertTrue(loaded.meta.communities, "--update left no community digest for a 2-file repo")
             result = kgraph.community_view(loaded.to_dict())
-            self.assertEqual(result['source'], 'digest')
+            self.assertEqual(result["source"], "digest")
             # The cache carries the method it was built with, not a default.
-            self.assertEqual(loaded.meta.community_method, 'leiden_like')
+            self.assertEqual(loaded.meta.community_method, "leiden_like")
 
     @staticmethod
     def _cached():
-        return kgraph.Graph.from_dict({
-            'nodes': [{'id': 'a', 'label': 'Alpha', 'type': 'topic'}],
-            'meta': {'communities': [{'id': 'community_0', 'label': 'Cached · Theme',
-                                      'size': 1, 'members': ['a'],
-                                      'central_nodes': [{'id': 'a', 'label': 'Alpha',
-                                                         'composite_score': 0.5}],
-                                      'god_nodes': [], 'boundary_edges': [],
-                                      'boundary_edge_count': 0}]},
-        })
+        return kgraph.Graph.from_dict(
+            {
+                "nodes": [{"id": "a", "label": "Alpha", "type": "topic"}],
+                "meta": {
+                    "communities": [
+                        {
+                            "id": "community_0",
+                            "label": "Cached · Theme",
+                            "size": 1,
+                            "members": ["a"],
+                            "central_nodes": [{"id": "a", "label": "Alpha", "composite_score": 0.5}],
+                            "god_nodes": [],
+                            "boundary_edges": [],
+                            "boundary_edge_count": 0,
+                        }
+                    ]
+                },
+            }
+        )
 
 
 class CommunityDigestValidationTests(unittest.TestCase):
     def test_a_digest_naming_absent_nodes_is_reported_as_stale(self):
         from kgraph.validate import validate_graph
 
-        findings = validate_graph({
-            'nodes': [{'id': 'a', 'label': 'A'}],
-            'meta': {'communities': [{'id': 'community_0', 'label': 'T', 'size': 2,
-                                      'members': ['a', 'ghost']}]},
-        })
-        warnings = [f['message'] for f in findings if f['severity'] == 'warning']
-        self.assertTrue(any('stale' in msg and 'ghost' in msg for msg in warnings), warnings)
+        findings = validate_graph(
+            {
+                "nodes": [{"id": "a", "label": "A"}],
+                "meta": {"communities": [{"id": "community_0", "label": "T", "size": 2, "members": ["a", "ghost"]}]},
+            }
+        )
+        warnings = [f["message"] for f in findings if f["severity"] == "warning"]
+        self.assertTrue(any("stale" in msg and "ghost" in msg for msg in warnings), warnings)
         # A stale digest is a warning, never a rejection: the payload is valid.
-        self.assertFalse([f for f in findings if f['severity'] == 'error'])
+        self.assertFalse([f for f in findings if f["severity"] == "error"])
 
     def test_a_fresh_digest_produces_no_staleness_finding(self):
         from kgraph.validate import validate_graph
 
-        findings = validate_graph({
-            'nodes': [{'id': 'a', 'label': 'A'}],
-            'meta': {'communities': [{'id': 'community_0', 'label': 'T', 'size': 1,
-                                      'members': ['a']}]},
-        })
-        self.assertFalse([f for f in findings if 'stale' in f.get('message', '')])
+        findings = validate_graph(
+            {
+                "nodes": [{"id": "a", "label": "A"}],
+                "meta": {"communities": [{"id": "community_0", "label": "T", "size": 1, "members": ["a"]}]},
+            }
+        )
+        self.assertFalse([f for f in findings if "stale" in f.get("message", "")])
 
 
 # ══════════════ GRAPHRAG-ARCH-007: source lineage ══════════════
@@ -2206,121 +2325,178 @@ class SourceLineageReadPathTests(unittest.TestCase):
 
     def test_explain_node_returns_sources_per_edge(self):
         graph = {
-            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'},
-                      {'id': 'c', 'label': 'Gamma'}],
-            'edges': [
-                {'from': 'a', 'to': 'b', 'label': 'links', 'sources': ['file:one.md']},
-                {'from': 'a', 'to': 'c', 'label': 'links',
-                 'sources': ['file:one.md', 'memory:m1']},
+            "nodes": [{"id": "a", "label": "Alpha"}, {"id": "b", "label": "Beta"}, {"id": "c", "label": "Gamma"}],
+            "edges": [
+                {"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]},
+                {"from": "a", "to": "c", "label": "links", "sources": ["file:one.md", "memory:m1"]},
             ],
         }
-        explanation = kgraph.explain_node(graph, 'a')
-        by_target = {c['target']: c for c in explanation['outbound_connections']}
-        self.assertEqual(by_target['b']['sources'], ['file:one.md'])
-        self.assertEqual(by_target['c']['sources'], ['file:one.md', 'memory:m1'])
+        explanation = kgraph.explain_node(graph, "a")
+        by_target = {c["target"]: c for c in explanation["outbound_connections"]}
+        self.assertEqual(by_target["b"]["sources"], ["file:one.md"])
+        self.assertEqual(by_target["c"]["sources"], ["file:one.md", "memory:m1"])
 
     def test_explain_node_reports_a_missing_source_list_as_empty(self):
         """An edge written before the field existed must not crash the reader."""
         graph = {
-            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'}],
-            'edges': [{'from': 'a', 'to': 'b', 'label': 'links'}],
+            "nodes": [{"id": "a", "label": "Alpha"}, {"id": "b", "label": "Beta"}],
+            "edges": [{"from": "a", "to": "b", "label": "links"}],
         }
-        explanation = kgraph.explain_node(graph, 'a')
-        self.assertEqual(explanation['outbound_connections'][0]['sources'], [])
-        self.assertIsNone(explanation['node']['community'])
+        explanation = kgraph.explain_node(graph, "a")
+        self.assertEqual(explanation["outbound_connections"][0]["sources"], [])
+        self.assertIsNone(explanation["node"]["community"])
 
     def test_explain_node_names_the_nodes_community(self):
-        graph = kgraph.Graph.from_dict({
-            'nodes': [{'id': 'a', 'label': 'Alpha'}],
-            'meta': {'communities': [{'id': 'community_0', 'label': 'Cached · Theme',
-                                      'size': 1, 'members': ['a']}]},
-        })
-        explanation = kgraph.explain_node(graph, 'a')
-        self.assertEqual(explanation['node']['community'],
-                         {'id': 'community_0', 'label': 'Cached · Theme', 'size': 1})
-        self.assertIn('Community: Cached · Theme (community_0, 1 members)',
-                      kgraph.format_explain(explanation))
+        graph = kgraph.Graph.from_dict(
+            {
+                "nodes": [{"id": "a", "label": "Alpha"}],
+                "meta": {
+                    "communities": [{"id": "community_0", "label": "Cached · Theme", "size": 1, "members": ["a"]}]
+                },
+            }
+        )
+        explanation = kgraph.explain_node(graph, "a")
+        self.assertEqual(explanation["node"]["community"], {"id": "community_0", "label": "Cached · Theme", "size": 1})
+        self.assertIn("Community: Cached · Theme (community_0, 1 members)", kgraph.format_explain(explanation))
 
     def test_format_explain_prints_the_asserting_source(self):
         graph = {
-            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'},
-                      {'id': 'c', 'label': 'Gamma'}],
-            'edges': [{'from': 'a', 'to': 'b', 'label': 'links', 'sources': ['file:one.md']},
-                      # b -> c hit the array bound: merge_sources keeps the first
-                      # MAX_SOURCES_PER_ELEMENT keys and records the TRUE count in
-                      # metadata, which is the only place a reader can see it.
-                      {'from': 'b', 'to': 'c', 'label': 'links',
-                       'sources': ['file:two.md'], 'metadata': {'sources_overflow': 900}}],
+            "nodes": [{"id": "a", "label": "Alpha"}, {"id": "b", "label": "Beta"}, {"id": "c", "label": "Gamma"}],
+            "edges": [
+                {"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]},
+                # b -> c hit the array bound: merge_sources keeps the first
+                # MAX_SOURCES_PER_ELEMENT keys and records the TRUE count in
+                # metadata, which is the only place a reader can see it.
+                {
+                    "from": "b",
+                    "to": "c",
+                    "label": "links",
+                    "sources": ["file:two.md"],
+                    "metadata": {"sources_overflow": 900},
+                },
+            ],
         }
-        text = kgraph.format_explain(kgraph.explain_node(graph, 'b'))
-        self.assertIn('source: file:two.md', text)
-        self.assertIn('(capped: 1 of 900)', text)
+        text = kgraph.format_explain(kgraph.explain_node(graph, "b"))
+        self.assertIn("source: file:two.md", text)
+        self.assertIn("(capped: 1 of 900)", text)
         # ...and a connection whose list was NOT capped says nothing about a cap, so
         # the marker's presence is the claim.
-        self.assertNotIn('capped', kgraph.format_explain(kgraph.explain_node(graph, 'a')))
+        self.assertNotIn("capped", kgraph.format_explain(kgraph.explain_node(graph, "a")))
 
 
 class SourceLineagePersistenceTests(unittest.TestCase):
     def test_round_trip_preserves_sources_and_the_version_stamp(self):
-        from kgraph.graph_db import (load_from_graph_db, read_sources_version,
-                                     save_to_graph_db)
+        from kgraph.graph_db import load_from_graph_db, read_sources_version, save_to_graph_db
         from kgraph.constants import SOURCES_VERSION
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
-            save_to_graph_db(db, {
-                'nodes': [{'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']}],
-                'edges': [{'from': 'a', 'to': 'b', 'label': 'links',
-                           'sources': ['file:one.md']}],
-            })
+            db = os.path.join(td, "graph.sqlite")
+            save_to_graph_db(
+                db,
+                {
+                    "nodes": [
+                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                        {"id": "b", "label": "Beta", "sources": ["file:one.md"]},
+                    ],
+                    "edges": [{"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]}],
+                },
+            )
             self.assertEqual(read_sources_version(db), SOURCES_VERSION)
             loaded = load_from_graph_db(db)
-        self.assertEqual(loaded.nodes[0].sources, ['file:one.md'])
-        self.assertEqual(loaded.edges[0].sources, ['file:one.md'])
+        self.assertEqual(loaded.nodes[0].sources, ["file:one.md"])
+        self.assertEqual(loaded.edges[0].sources, ["file:one.md"])
 
     def test_a_row_without_sources_loads_as_unknown_and_is_announced(self):
         from kgraph.graph_db import init_graph_db, load_from_graph_db
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
+            db = os.path.join(td, "graph.sqlite")
             init_graph_db(db)
             conn = sqlite3.connect(db)
             try:
                 # A graph written before the lineage field existed: no
                 # sources_version stamp and no sources key in the payload.
-                conn.execute("INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)",
-                             ('a', 'Alpha', '{"type": "topic"}'))
-                conn.execute("INSERT INTO graph_edges(source, target, label, payload)"
-                             " VALUES (?, ?, ?, ?)", ('a', 'b', 'links', None))
+                conn.execute(
+                    "INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)", ("a", "Alpha", '{"type": "topic"}')
+                )
+                conn.execute(
+                    "INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)", ("b", "Beta", '{"type": "topic"}')
+                )
+                conn.execute(
+                    "INSERT INTO graph_edges(source, target, label, payload) VALUES (?, ?, ?, ?)",
+                    ("a", "b", "links", None),
+                )
                 conn.commit()
             finally:
                 conn.close()
-            with self.assertLogs('kgraph.graph_db', level='WARNING') as captured:
+            with self.assertLogs("kgraph.graph_db", level="WARNING") as captured:
                 loaded = load_from_graph_db(db)
         self.assertEqual(loaded.nodes[0].sources, [])
         self.assertEqual(loaded.edges[0].sources, [])
-        self.assertTrue(any('no source lineage' in line for line in captured.output),
-                        captured.output)
+        self.assertTrue(any("no source lineage" in line for line in captured.output), captured.output)
+
+    def test_load_drops_a_legacy_dangling_edge_and_names_it(self):
+        """A graph written before the endpoint invariant is repaired on read, loudly."""
+        from kgraph.graph_db import init_graph_db, load_from_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "graph.sqlite")
+            init_graph_db(db)
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute(
+                    "INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)", ("a", "Alpha", '{"type": "topic"}')
+                )
+                conn.execute(
+                    "INSERT INTO graph_edges(source, target, label, payload) VALUES (?, ?, ?, ?)",
+                    ("a", "missing", "links", None),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            with self.assertLogs("kgraph.graph_db", level="WARNING") as captured:
+                loaded = load_from_graph_db(db)
+        self.assertEqual(loaded.edges, [])
+        self.assertTrue(any("dangling edge" in line for line in captured.output), captured.output)
+
+    def test_save_refuses_a_dangling_edge_before_the_destructive_write(self):
+        from kgraph.graph_db import load_from_graph_db, save_to_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "graph.sqlite")
+            save_to_graph_db(db, {"nodes": [{"id": "keep", "label": "Keep"}], "edges": []})
+            with self.assertRaises(ValueError):
+                save_to_graph_db(
+                    db,
+                    {
+                        "nodes": [{"id": "a", "label": "A"}],
+                        "edges": [{"from": "a", "to": "missing", "label": "links"}],
+                    },
+                )
+            # The good graph survived: validation precedes the DELETE.
+            self.assertEqual([n.id for n in load_from_graph_db(db).nodes], ["keep"])
 
     def test_removing_a_source_from_the_persisted_graph_subtracts_one(self):
         from kgraph.graph_db import load_from_graph_db, save_to_graph_db
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
-            save_to_graph_db(db, {
-                'nodes': [
-                    {'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']},
-                    {'id': 'b', 'label': 'Beta', 'sources': ['file:one.md', 'file:two.md']},
-                ],
-                'edges': [{'from': 'b', 'to': 'a', 'label': 'links',
-                           'sources': ['file:one.md']}],
-            })
+            db = os.path.join(td, "graph.sqlite")
+            save_to_graph_db(
+                db,
+                {
+                    "nodes": [
+                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                        {"id": "b", "label": "Beta", "sources": ["file:one.md", "file:two.md"]},
+                    ],
+                    "edges": [{"from": "b", "to": "a", "label": "links", "sources": ["file:one.md"]}],
+                },
+            )
             graph = load_from_graph_db(db)
-            graph.remove_source('file:one.md')
+            graph.remove_source("file:one.md")
             save_to_graph_db(db, graph)
             reloaded = load_from_graph_db(db)
-        self.assertEqual([n.id for n in reloaded.nodes], ['b'])
-        self.assertEqual(reloaded.nodes[0].sources, ['file:two.md'])
+        self.assertEqual([n.id for n in reloaded.nodes], ["b"])
+        self.assertEqual(reloaded.nodes[0].sources, ["file:two.md"])
         self.assertEqual(reloaded.edges, [])
 
     def test_removing_a_source_invalidates_the_cached_community_digest(self):
@@ -2330,63 +2506,64 @@ class SourceLineagePersistenceTests(unittest.TestCase):
         from kgraph.graph_db import load_from_graph_db, save_to_graph_db
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
-            save_to_graph_db(db, {
-                'nodes': [
-                    {'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']},
-                    {'id': 'b', 'label': 'Beta', 'sources': ['file:two.md']},
-                ],
-                'edges': [],
-                'meta': {'community_method': 'leiden_like',
-                         'communities': [{'id': 'c0', 'label': 'A and B',
-                                          'members': ['a', 'b'], 'size': 2}]},
-            })
+            db = os.path.join(td, "graph.sqlite")
+            save_to_graph_db(
+                db,
+                {
+                    "nodes": [
+                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                        {"id": "b", "label": "Beta", "sources": ["file:two.md"]},
+                    ],
+                    "edges": [],
+                    "meta": {
+                        "community_method": "leiden_like",
+                        "communities": [{"id": "c0", "label": "A and B", "members": ["a", "b"], "size": 2}],
+                    },
+                },
+            )
             graph = load_from_graph_db(db)
             self.assertEqual(len(graph.meta.communities), 1)
-            graph.remove_source('file:one.md')
+            graph.remove_source("file:one.md")
             save_to_graph_db(db, graph)
             reloaded = load_from_graph_db(db)
-        self.assertEqual([n.id for n in reloaded.nodes], ['b'])
+        self.assertEqual([n.id for n in reloaded.nodes], ["b"])
         self.assertEqual(reloaded.meta.communities, [])
-        self.assertEqual(reloaded.meta.community_method, '')
+        self.assertEqual(reloaded.meta.community_method, "")
 
 
 class AstSourceLineageTests(unittest.TestCase):
     def test_ast_nodes_and_edges_carry_the_defining_file_as_source(self):
         with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, 'repo')
+            src = os.path.join(td, "repo")
             os.makedirs(src)
-            with open(os.path.join(src, 'lib.sh'), 'w', encoding='utf-8') as f:
-                f.write('function helper() { echo hi; }\n')
-            with open(os.path.join(src, 'main.sh'), 'w', encoding='utf-8') as f:
-                f.write('helper\n')
+            with open(os.path.join(src, "lib.sh"), "w", encoding="utf-8") as f:
+                f.write("function helper() { echo hi; }\n")
+            with open(os.path.join(src, "main.sh"), "w", encoding="utf-8") as f:
+                f.write("helper\n")
             graph = kgraph.extract_repo_graph(src)
 
-        nodes = {n['id']: n for n in graph['nodes']}
-        self.assertEqual(nodes['ast_file:lib-sh']['sources'], ['file:lib.sh'])
-        self.assertEqual(nodes['ast_func:bash:helper']['sources'], ['file:lib.sh'])
+        nodes = {n["id"]: n for n in graph["nodes"]}
+        self.assertEqual(nodes["ast_file:lib-sh"]["sources"], ["file:lib.sh"])
+        self.assertEqual(nodes["ast_func:bash:helper"]["sources"], ["file:lib.sh"])
         # A name-keyed call node aggregates every caller, so it carries no source.
-        self.assertEqual(nodes['ast_call:bash:helper']['sources'], [])
+        self.assertEqual(nodes["ast_call:bash:helper"]["sources"], [])
 
-        edges = {(e['source'], e['target'], e.get('label')): e for e in graph['edges']}
-        self.assertEqual(edges[('ast_file:lib-sh', 'ast_func:bash:helper', 'defines')]['sources'],
-                         ['file:lib.sh'])
-        self.assertEqual(edges[('ast_file:main-sh', 'ast_call:bash:helper', 'calls')]['sources'],
-                         ['file:main.sh'])
+        edges = {(e["source"], e["target"], e.get("label")): e for e in graph["edges"]}
+        self.assertEqual(edges[("ast_file:lib-sh", "ast_func:bash:helper", "defines")]["sources"], ["file:lib.sh"])
+        self.assertEqual(edges[("ast_file:main-sh", "ast_call:bash:helper", "calls")]["sources"], ["file:main.sh"])
         # Derived by name resolution, not asserted by a document.
-        self.assertEqual(edges[('ast_call:bash:helper', 'ast_func:bash:helper', 'calls')]['sources'],
-                         [])
+        self.assertEqual(edges[("ast_call:bash:helper", "ast_func:bash:helper", "calls")]["sources"], [])
 
     def test_ast_source_key_is_repo_relative_not_absolute(self):
         with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, 'repo')
-            os.makedirs(os.path.join(src, 'nested'))
-            with open(os.path.join(src, 'nested', 'lib.sh'), 'w', encoding='utf-8') as f:
-                f.write('function helper() { echo hi; }\n')
+            src = os.path.join(td, "repo")
+            os.makedirs(os.path.join(src, "nested"))
+            with open(os.path.join(src, "nested", "lib.sh"), "w", encoding="utf-8") as f:
+                f.write("function helper() { echo hi; }\n")
             graph = kgraph.extract_repo_graph(src)
-        node = next(n for n in graph['nodes'] if n['id'].startswith('ast_file:'))
-        self.assertEqual(node['sources'], ['file:nested/lib.sh'])
-        self.assertNotIn(str(src), node['sources'][0])
+        node = next(n for n in graph["nodes"] if n["id"].startswith("ast_file:"))
+        self.assertEqual(node["sources"], ["file:nested/lib.sh"])
+        self.assertNotIn(str(src), node["sources"][0])
 
 
 class MemoryRegistrySourceLineageTests(unittest.TestCase):
@@ -2399,63 +2576,79 @@ class MemoryRegistrySourceLineageTests(unittest.TestCase):
         conn = sqlite3.connect(path)
         builder = GraphBuilder()
         try:
-            mi._load_from_registry_db(conn, builder, registry='home', include_all=include_all)
+            mi._load_from_registry_db(conn, builder, registry="home", include_all=include_all)
         finally:
             conn.close()
         return builder.build()
 
     def test_memory_and_chunk_records_name_themselves_as_sources(self):
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             TestRegistryAdapter()._make_registry(path)
             graph = self._import(path)
         nodes = {n.id: n for n in graph.nodes}
-        self.assertEqual(nodes['memory:mem-1'].sources, ['memory:mem-1'])
-        self.assertEqual(nodes['memory:native:chunk-1'].sources, ['chunk:chunk-1'])
+        self.assertEqual(nodes["memory:mem-1"].sources, ["memory:mem-1"])
+        self.assertEqual(nodes["memory:native:chunk-1"].sources, ["chunk:chunk-1"])
         # A claim is consolidated out of its memory, so the memory asserts it.
-        self.assertEqual(nodes['claim:mem-1:slot-1'].sources, ['memory:mem-1'])
-        self.assertEqual(nodes['belief:bel-1'].sources, ['memory:mem-1'])
+        self.assertEqual(nodes["claim:mem-1:slot-1"].sources, ["memory:mem-1"])
+        self.assertEqual(nodes["belief:bel-1"].sources, ["memory:mem-1"])
 
     def test_derived_edges_carry_the_record_that_asserted_them(self):
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             TestRegistryAdapter()._make_registry(path)
             graph = self._import(path)
         edges = {(e.source, e.target, e.label): e for e in graph.edges}
         # The native chunk (not a uuid) is what mentioned the actor.
-        self.assertEqual(edges[('memory:native:chunk-1', 'entity:hal', 'mentions')].sources,
-                         ['chunk:chunk-1'])
-        self.assertEqual(edges[('memory:mem-1', 'claim:mem-1:slot-1', 'claims')].sources,
-                         ['memory:mem-1'])
+        self.assertEqual(edges[("memory:native:chunk-1", "entity:hal", "mentions")].sources, ["chunk:chunk-1"])
+        self.assertEqual(edges[("memory:mem-1", "claim:mem-1:slot-1", "claims")].sources, ["memory:mem-1"])
 
     def test_entity_relationship_evidence_is_lifted_out_of_metadata(self):
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             TestRegistryAdapter()._make_registry(path)
             conn = sqlite3.connect(path)
             try:
-                conn.execute("INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)",
-                             ('a', 'b', 'related_to', 2, '["mem-1", "native:chunk-1"]', 0.8))
+                conn.executemany(
+                    "INSERT INTO memory_entities VALUES (?,?,?,?,?,?,?)",
+                    [
+                        ("a", "person", "Alpha", "alpha", "active", 0.9, "[]"),
+                        ("b", "person", "Beta", "beta", "active", 0.9, "[]"),
+                    ],
+                )
+                conn.execute(
+                    "INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)",
+                    ("a", "b", "related_to", 2, '["mem-1", "native:chunk-1"]', 0.8),
+                )
                 conn.commit()
             finally:
                 conn.close()
             graph = self._import(path)
-        edge = next(e for e in graph.edges if (e.source, e.target) == ('entity:a', 'entity:b'))
-        self.assertEqual(edge.sources, ['chunk:chunk-1', 'memory:mem-1'])
+        edge = next(e for e in graph.edges if (e.source, e.target) == ("entity:person:alpha", "entity:person:beta"))
+        self.assertEqual(edge.sources, ["chunk:chunk-1", "memory:mem-1"])
 
     def test_unparseable_evidence_leaves_the_edge_without_lineage(self):
         with tempfile.TemporaryDirectory() as td:
-            path = os.path.join(td, 'registry.sqlite')
+            path = os.path.join(td, "registry.sqlite")
             TestRegistryAdapter()._make_registry(path)
             conn = sqlite3.connect(path)
             try:
-                conn.execute("INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)",
-                             ('a', 'b', 'related_to', 1, '{not json}', 0.5))
+                conn.executemany(
+                    "INSERT INTO memory_entities VALUES (?,?,?,?,?,?,?)",
+                    [
+                        ("a", "person", "Alpha", "alpha", "active", 0.9, "[]"),
+                        ("b", "person", "Beta", "beta", "active", 0.9, "[]"),
+                    ],
+                )
+                conn.execute(
+                    "INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)",
+                    ("a", "b", "related_to", 1, "{not json}", 0.5),
+                )
                 conn.commit()
             finally:
                 conn.close()
             graph = self._import(path)
-        edge = next(e for e in graph.edges if (e.source, e.target) == ('entity:a', 'entity:b'))
+        edge = next(e for e in graph.edges if (e.source, e.target) == ("entity:person:alpha", "entity:person:beta"))
         self.assertEqual(edge.sources, [])
 
 
@@ -2464,22 +2657,26 @@ class SourceLineageCliTests(unittest.TestCase):
         from kgraph.graph_db import load_from_graph_db, save_to_graph_db
 
         with tempfile.TemporaryDirectory() as td:
-            db = os.path.join(td, 'graph.sqlite')
-            save_to_graph_db(db, {
-                'nodes': [
-                    {'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']},
-                    {'id': 'b', 'label': 'Beta', 'sources': ['file:two.md']},
-                ],
-                'edges': [{'from': 'b', 'to': 'a', 'label': 'links', 'sources': ['file:two.md']}],
-            })
+            db = os.path.join(td, "graph.sqlite")
+            save_to_graph_db(
+                db,
+                {
+                    "nodes": [
+                        {"id": "a", "label": "Alpha", "sources": ["file:one.md"]},
+                        {"id": "b", "label": "Beta", "sources": ["file:two.md"]},
+                    ],
+                    "edges": [{"from": "b", "to": "a", "label": "links", "sources": ["file:two.md"]}],
+                },
+            )
             result = subprocess.run(
-                [sys.executable, '-m', 'kgraph', 'remove-source', '--graph-db', db,
-                 '--remove-source', 'file:one.md'],
-                cwd=SCRIPT_DIR, capture_output=True, text=True,
+                [sys.executable, "-m", "kgraph", "remove-source", "--graph-db", db, "--remove-source", "file:one.md"],
+                cwd=SCRIPT_DIR,
+                capture_output=True,
+                text=True,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Removed source 'file:one.md'", result.stdout)
-            self.assertIn('1 nodes deleted', result.stdout)
+            self.assertIn("1 nodes deleted", result.stdout)
             reloaded = load_from_graph_db(db)
-        self.assertEqual([n.id for n in reloaded.nodes], ['b'])
+        self.assertEqual([n.id for n in reloaded.nodes], ["b"])
         self.assertEqual(reloaded.edges, [])

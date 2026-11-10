@@ -90,10 +90,12 @@ class TestGraphNode:
         assert node.type_confidence == 0.96
         assert node.typed_summary == {"project": "Launcher reliability"}
         with pytest.raises(ValidationError):
-            GraphNode.model_validate({
-                "id": "n1",
-                "typed_summary": {"project": 7},
-            })
+            GraphNode.model_validate(
+                {
+                    "id": "n1",
+                    "typed_summary": {"project": 7},
+                }
+            )
 
     def test_projection_fields_are_declared(self):
         # degree/importance are DECLARED GraphNode fields (set by
@@ -143,10 +145,14 @@ class TestGraphEdge:
         assert edge.label == "links"
 
     def test_source_target_preferred_over_from_to(self):
-        edge = GraphEdge.model_validate({
-            "source": "x", "target": "y",
-            "from": "a", "to": "b",
-        })
+        edge = GraphEdge.model_validate(
+            {
+                "source": "x",
+                "target": "y",
+                "from": "a",
+                "to": "b",
+            }
+        )
         assert edge.source == "x"
         assert edge.target == "y"
 
@@ -161,10 +167,14 @@ class TestGraphEdge:
             GraphEdge.model_validate({"from": value, "to": "n2"})
 
     def test_provenance_source_moved_to_origin(self):
-        edge = GraphEdge.model_validate({
-            "from": "n1", "to": "n2",
-            "source": "ast", "label": "calls",
-        })
+        edge = GraphEdge.model_validate(
+            {
+                "from": "n1",
+                "to": "n2",
+                "source": "ast",
+                "label": "calls",
+            }
+        )
         assert edge.source == "n1"
         assert edge.target == "n2"
         assert edge.origin == "ast"
@@ -232,20 +242,24 @@ class TestGraph:
         assert g.edges[0].target == "n2"
 
     def test_node_by_id_returns_matching_node(self):
-        g = Graph(nodes=[
-            GraphNode(id="a", label="A"),
-            GraphNode(id="b", label="B"),
-        ])
+        g = Graph(
+            nodes=[
+                GraphNode(id="a", label="A"),
+                GraphNode(id="b", label="B"),
+            ]
+        )
         found = g.node_by_id("a")
         assert found is not None
         assert found.label == "A"
         assert g.node_by_id("z") is None
 
     def test_node_ids_returns_all_ids(self):
-        g = Graph(nodes=[
-            GraphNode(id="a", label="A"),
-            GraphNode(id="b", label="B"),
-        ])
+        g = Graph(
+            nodes=[
+                GraphNode(id="a", label="A"),
+                GraphNode(id="b", label="B"),
+            ]
+        )
         assert g.node_ids() == {"a", "b"}
 
     def test_to_dict_round_trip(self):
@@ -269,14 +283,16 @@ class TestGraph:
         with pytest.raises(ValidationError):
             GraphMeta.model_validate({"nodeCount": "2"})
 
-        GraphNode.model_validate({
-            "id": "n1",
-            "metadata": {
-                "sources_overflow": 3,
-                "confidence": 0.8,
-                "source_memory_ids": '["memory:m1"]',
-            },
-        })
+        GraphNode.model_validate(
+            {
+                "id": "n1",
+                "metadata": {
+                    "sources_overflow": 3,
+                    "confidence": 0.8,
+                    "source_memory_ids": '["memory:m1"]',
+                },
+            }
+        )
         for invalid_metadata in (
             {"sources_overflow": "3"},
             {"confidence": "0.8"},
@@ -311,19 +327,19 @@ class TestGraph:
             "members": ["a", "b"],
             "size": 2,
         }
-        assert GraphMeta.model_validate({"communities": [community]}).model_dump()[
-            "communities"
-        ] == [community]
+        assert GraphMeta.model_validate({"communities": [community]}).model_dump()["communities"] == [community]
         for invalid in (
             {**community, "size": "2"},
             {**community, "unexpected": True},
-            {**community, "central_nodes": [{"id": "a", "label": "Alpha",
-                                               "composite_score": 0.5, "unexpected": 1}]},
-            {**community, "boundary_edges": [{"source": "a", "target": "x",
-                                                "label": "links", "direction": "sideways"}]},
+            {**community, "central_nodes": [{"id": "a", "label": "Alpha", "composite_score": 0.5, "unexpected": 1}]},
+            {
+                **community,
+                "boundary_edges": [{"source": "a", "target": "x", "label": "links", "direction": "sideways"}],
+            },
         ):
             with pytest.raises(ValidationError):
                 GraphMeta.model_validate({"communities": [invalid]})
+
 
 # ── GraphBuilder ───────────────────────────────────────────────────────
 
@@ -339,6 +355,8 @@ class TestGraphBuilder:
 
     def test_add_edge_dedup_skips_duplicate_from_to(self):
         b = GraphBuilder()
+        b.add_node({"id": "a", "label": "A"})
+        b.add_node({"id": "b", "label": "B"})
         b.add_edge({"from": "a", "to": "b", "label": "links"})
         b.add_edge({"from": "a", "to": "b", "label": "links"})
         g = b.build()
@@ -346,6 +364,8 @@ class TestGraphBuilder:
 
     def test_add_edge_different_labels_not_deduped(self):
         b = GraphBuilder()
+        b.add_node({"id": "a", "label": "A"})
+        b.add_node({"id": "b", "label": "B"})
         b.add_edge({"from": "a", "to": "b", "label": "links"})
         b.add_edge({"from": "a", "to": "b", "label": "calls"})
         g = b.build()
@@ -390,9 +410,10 @@ class TestGraphBuilder:
     def test_accepts_pydantic_models(self):
         b = GraphBuilder()
         b.add_node(GraphNode(id="n1", label="A"))
+        b.add_node(GraphNode(id="n2", label="B"))
         b.add_edge(GraphEdge(source="n1", target="n2", label="x"))
         g = b.build()
-        assert len(g.nodes) == 1
+        assert len(g.nodes) == 2
         assert len(g.edges) == 1
 
 
@@ -490,6 +511,8 @@ def _node(graph: Graph, node_id: str) -> GraphNode:
 class TestGraphBuilderSourceUnion:
     def test_add_edge_unions_sources_of_a_duplicate_edge(self):
         b = GraphBuilder()
+        b.add_node({"id": "a", "label": "A"})
+        b.add_node({"id": "b", "label": "B"})
         b.add_edge({"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]})
         b.add_edge({"from": "a", "to": "b", "label": "links", "sources": ["file:two.md"]})
         g = b.build()
@@ -506,25 +529,40 @@ class TestGraphBuilderSourceUnion:
 
     def test_merge_unions_rather_than_dropping_the_second_assertion(self):
         b = GraphBuilder()
-        b.merge({"nodes": [{"id": "n", "label": "N", "sources": ["file:one.md"]}],
-                 "edges": [{"from": "n", "to": "x", "label": "links", "sources": ["file:one.md"]}]})
-        b.merge({"nodes": [{"id": "n", "label": "N", "sources": ["file:two.md"]}],
-                 "edges": [{"from": "n", "to": "x", "label": "links", "sources": ["file:two.md"]}]})
+        b.merge(
+            {
+                "nodes": [
+                    {"id": "n", "label": "N", "sources": ["file:one.md"]},
+                    {"id": "x", "label": "X", "sources": ["file:one.md"]},
+                ],
+                "edges": [{"from": "n", "to": "x", "label": "links", "sources": ["file:one.md"]}],
+            }
+        )
+        b.merge(
+            {
+                "nodes": [{"id": "n", "label": "N", "sources": ["file:two.md"]}],
+                "edges": [{"from": "n", "to": "x", "label": "links", "sources": ["file:two.md"]}],
+            }
+        )
         g = b.build()
         assert g.nodes[0].sources == ["file:one.md", "file:two.md"]
         assert g.edges[0].sources == ["file:one.md", "file:two.md"]
 
     def test_semantic_dedup_unions_sources_of_collapsed_edges(self):
         b = GraphBuilder()
-        b.add_node({"id": "topic:one", "label": "Graph Layout", "type": "topic",
-                    "sources": ["file:one.md"]})
-        b.add_node({"id": "topic:two", "label": "Graph Layout", "type": "topic",
-                    "inferred_type": True, "sources": ["file:two.md"]})
+        b.add_node({"id": "topic:one", "label": "Graph Layout", "type": "topic", "sources": ["file:one.md"]})
+        b.add_node(
+            {
+                "id": "topic:two",
+                "label": "Graph Layout",
+                "type": "topic",
+                "inferred_type": True,
+                "sources": ["file:two.md"],
+            }
+        )
         b.add_node({"id": "topic:other", "label": "Other", "type": "topic"})
-        b.add_edge({"from": "topic:one", "to": "topic:other", "label": "covers topic",
-                    "sources": ["file:one.md"]})
-        b.add_edge({"from": "topic:two", "to": "topic:other", "label": "covers topic",
-                    "sources": ["file:two.md"]})
+        b.add_edge({"from": "topic:one", "to": "topic:other", "label": "covers topic", "sources": ["file:one.md"]})
+        b.add_edge({"from": "topic:two", "to": "topic:other", "label": "covers topic", "sources": ["file:two.md"]})
         b.deduplicate_semantic()
         g = b.build()
         assert [n.id for n in g.nodes] == ["topic:one", "topic:other"]
@@ -538,20 +576,21 @@ class TestRemoveSource:
 
     @staticmethod
     def _graph() -> Graph:
-        return Graph.from_dict({
-            "nodes": [
-                {"id": "n1", "label": "N1", "sources": ["file:one.md"]},
-                {"id": "n2", "label": "N2", "sources": ["file:one.md", "file:two.md"]},
-                {"id": "n3", "label": "N3", "sources": []},
-                {"id": "n4", "label": "N4", "sources": ["file:three.md"]},
-            ],
-            "edges": [
-                {"from": "n1", "to": "n2", "label": "links", "sources": ["file:two.md"]},
-                {"from": "n2", "to": "n4", "label": "links", "sources": ["file:one.md"]},
-                {"from": "n2", "to": "n3", "label": "links",
-                 "sources": ["file:one.md", "file:two.md"]},
-            ],
-        })
+        return Graph.from_dict(
+            {
+                "nodes": [
+                    {"id": "n1", "label": "N1", "sources": ["file:one.md"]},
+                    {"id": "n2", "label": "N2", "sources": ["file:one.md", "file:two.md"]},
+                    {"id": "n3", "label": "N3", "sources": []},
+                    {"id": "n4", "label": "N4", "sources": ["file:three.md"]},
+                ],
+                "edges": [
+                    {"from": "n1", "to": "n2", "label": "links", "sources": ["file:two.md"]},
+                    {"from": "n2", "to": "n4", "label": "links", "sources": ["file:one.md"]},
+                    {"from": "n2", "to": "n3", "label": "links", "sources": ["file:one.md", "file:two.md"]},
+                ],
+            }
+        )
 
     def test_subtracts_exactly_one_source_and_deletes_only_what_empties(self):
         g = self._graph()
@@ -567,8 +606,7 @@ class TestRemoveSource:
         edge_keys = {(e.source, e.target) for e in g.edges}
         assert edge_keys == {("n2", "n3")}
         assert g.edges[0].sources == ["file:two.md"]
-        assert counts == {"nodes_removed": 1, "nodes_updated": 1,
-                          "edges_removed": 2, "edges_updated": 1}
+        assert counts == {"nodes_removed": 1, "nodes_updated": 1, "edges_removed": 2, "edges_updated": 1}
 
     def test_rolling_back_one_of_several_sources_removes_nothing_else(self):
         g = self._graph()
@@ -606,29 +644,29 @@ class TestSemanticCollapseUnification:
         assert normalize_semantic_label("WSL") == "wsl"
         assert normalize_semantic_label("gw") == "gw"
 
-        three = collapse_semantic_duplicates(
-            Graph.from_dict({"nodes": self._same_label_pair("wsl"), "edges": []}))
+        three = collapse_semantic_duplicates(Graph.from_dict({"nodes": self._same_label_pair("wsl"), "edges": []}))
         assert [n.id for n in three.nodes] == ["a"]  # exactly 3 chars → one concept
 
-        two = collapse_semantic_duplicates(
-            Graph.from_dict({"nodes": self._same_label_pair("gw"), "edges": []}))
+        two = collapse_semantic_duplicates(Graph.from_dict({"nodes": self._same_label_pair("gw"), "edges": []}))
         assert [n.id for n in two.nodes] == ["a", "b"]  # 2 chars → fragments, kept apart
 
     def test_collapse_bounds_the_source_union_and_records_the_overflow(self):
         """States the wrong outcome: an unbounded union stores 80 keys with nothing
         saying the array was capped, so a reader takes a partial list for the whole."""
         nodes = [
-            {"id": "a", "label": "Big Concept", "type": "topic",
-             "sources": [f"file:a{i:03d}.md" for i in range(40)]},
-            {"id": "b", "label": "Big Concept", "type": "topic",
-             "sources": [f"file:b{i:03d}.md" for i in range(40)]},
+            {"id": "a", "label": "Big Concept", "type": "topic", "sources": [f"file:a{i:03d}.md" for i in range(40)]},
+            {"id": "b", "label": "Big Concept", "type": "topic", "sources": [f"file:b{i:03d}.md" for i in range(40)]},
         ]
         graph = collapse_semantic_duplicates(Graph.from_dict({"nodes": nodes, "edges": []}))
         assert [n.id for n in graph.nodes] == ["a"]
         canonical = graph.nodes[0]
         assert len(canonical.sources) == MAX_SOURCES_PER_ELEMENT
-        assert canonical.sources == sorted({f"file:a{i:03d}.md" for i in range(40)}
-                                           | {f"file:b{i:03d}.md" for i in range(40)})[:MAX_SOURCES_PER_ELEMENT]
+        assert (
+            canonical.sources
+            == sorted({f"file:a{i:03d}.md" for i in range(40)} | {f"file:b{i:03d}.md" for i in range(40)})[
+                :MAX_SOURCES_PER_ELEMENT
+            ]
+        )
         sources_overflow = canonical.metadata.get("sources_overflow")
         assert sources_overflow is not None
         assert sources_overflow == 80
@@ -641,6 +679,10 @@ class TestSemanticCollapseUnification:
             builder.add_node(node)
         builder.deduplicate_semantic()
         from_builder = [n.id for n in builder.build().nodes]
-        direct = [n.id for n in collapse_semantic_duplicates(
-            Graph.from_dict({"nodes": self._same_label_pair("wsl"), "edges": []})).nodes]
+        direct = [
+            n.id
+            for n in collapse_semantic_duplicates(
+                Graph.from_dict({"nodes": self._same_label_pair("wsl"), "edges": []})
+            ).nodes
+        ]
         assert from_builder == direct == ["a"]

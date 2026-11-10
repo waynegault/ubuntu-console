@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-11-09): inline JSON parsing uses the repository-venv resolver
+#       (tools/python-runtime.sh), not bare `python3`.  AUD-008 routed five callers
+#       through it; this script regressed the rule when it was added.
 #   v5 (2026-11-08): Wayne's ruling — the sweep model is cheaper-inference's
 #       deepseek-v4.1-flash-1017, not the direct deepseek/deepseek-flash lane.
 #       Only the default moved; TAC_SWEEP_PRIMARY still overrides.
@@ -28,6 +31,11 @@
 # wrapper and the resume supervisor may both call restore, and either may run after a SIGKILL.
 set -uo pipefail
 
+_FLEET_REPO_ROOT="$(cd "$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$_FLEET_REPO_ROOT/tools/python-runtime.sh"
+FLEET_PYTHON="$(_tac_python_path "$_FLEET_REPO_ROOT")"
+
 STATE_DIR="${TAC_STATE_DIR:-$HOME/.local/state/tactical-console}"
 STATE="$STATE_DIR/fleet-model.saved"
 SWEEP_PRIMARY="${TAC_SWEEP_PRIMARY:-cheaper-inference/deepseek-v4.1-flash-1017}"
@@ -41,7 +49,7 @@ die() { warn "fleet-model: $*"; exit 2; }
 # _current_primary - the fleet's primary model id as the config holds it, or empty when
 # the config cannot be read (the caller refuses rather than switching blind).
 _current_primary() {
-    python3 - "$CONFIG" <<'PY'
+    "$FLEET_PYTHON" - "$CONFIG" <<'PY'
 import json, sys
 try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))

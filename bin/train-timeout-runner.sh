@@ -41,9 +41,9 @@
 #
 #   -p <pidfile>       Write the trainer's PID here (external monitoring).
 #   -l <logfile>       Append structured start/exit lines here.
-#   -L <lockfile>      Card lock to hold (default $LLM_BENCH_LOCK_FILE).  Pass "" to
-#                      run UNSUPERVISED of the card lock (no claim, no cleanup);
-#                      say so in the log when you do.
+#   -L <lockfile>      Card lock marker to write (default $LLM_BENCH_LOCK_FILE); the
+#                      flock itself is on <lockfile>.mutex, which is never removed.
+#                      Pass "" to run UNSUPERVISED (no claim, no cleanup).
 #   -T <seconds>       Timeout for the trainer (default 0 = no timeout).
 #   -k <grace>         Seconds between SIGTERM and SIGKILL on timeout (default 30).
 #   -c <clear-script>  VRAM release helper (default bin/llama-gpu-clear.sh).
@@ -59,7 +59,10 @@
 #
 # AI INSTRUCTION: Increment the Module Version on any change; increment VERSION
 # for significant edits.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-10): the card claim flocks ${lockfile}.mutex (never unlinked) and
+#     keeps $lockfile as the PID marker.  Removing the flocked file on release let
+#     a waiter hold the old inode while another process locked a fresh file.
 #   v2 (2026-09-27): it also REFUSES when another agent's run holds the investigator's GPU
 #   flock, which "register as a known tenant, exactly as a bench does" requires - the
 #   bench (11e:960) and autotune (run-autotune-batch.sh:184/210) both refuse that way, and
@@ -92,6 +95,12 @@ while getopts ":p:l:L:T:k:c:V" _opt; do
     esac
 done
 shift $((OPTIND - 1))
+
+# Derived AFTER option parsing: `-L` overrides $lockfile, and a mutex computed
+# before that would keep guarding the default path while the marker moved.
+# The flock lives on this sibling, which is never removed; $lockfile is the PID
+# marker the bench, watchdog and health probes read.
+lock_mutex="${lockfile}.mutex"
 
 if (( $# == 0 )); then
     echo "train-timeout-runner: no command given (see the header for usage)" >&2
@@ -195,7 +204,7 @@ fi
 # --- Claim the card -----------------------------------------------------------
 if [[ -n "$lockfile" ]]; then
     if command -v flock >/dev/null 2>&1; then
-        exec {lock_fd}>"$lockfile" || { __ttr_log "ERROR" "cannot open lock $lockfile"; exit 3; }
+        exec {lock_fd}>"$lock_mutex" || { __ttr_log "ERROR" "cannot open lock $lock_mutex"; exit 3; }
         if ! flock -w "${LLM_BENCH_LOCK_WAIT_SECONDS:-5}" "$lock_fd"; then
             __ttr_log "ERROR" "the card is already claimed (lock: $lockfile) - refusing to become a second tenant"
             echo "train-timeout-runner: card already claimed ($lockfile)" >&2

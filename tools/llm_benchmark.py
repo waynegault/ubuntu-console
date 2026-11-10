@@ -85,7 +85,8 @@ def _gpu_metadata(gpu_index: int) -> tuple[str | None, str | None]:
         result = subprocess.run(
             [
                 "nvidia-smi",
-                "--id", str(gpu_index),
+                "--id",
+                str(gpu_index),
                 "--query-gpu=name,driver_version",
                 "--format=csv,noheader",
             ],
@@ -94,7 +95,7 @@ def _gpu_metadata(gpu_index: int) -> tuple[str | None, str | None]:
             text=True,
             timeout=3,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None, None
     first_line = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
     name, separator, driver = first_line.partition(",")
@@ -120,9 +121,7 @@ def _load_workloads(path: Path, default_max_tokens: int) -> list[dict[str, Any]]
             raise BenchmarkError(f"{path}:{line_number}: each workload must be an object")
         unknown = set(row) - {"id", "prompt", "system", "max_tokens", "temperature"}
         if unknown:
-            raise BenchmarkError(
-                f"{path}:{line_number}: unknown field(s): {', '.join(sorted(unknown))}"
-            )
+            raise BenchmarkError(f"{path}:{line_number}: unknown field(s): {', '.join(sorted(unknown))}")
         workload_id, prompt = row.get("id"), row.get("prompt")
         if not isinstance(workload_id, str) or not workload_id.strip():
             raise BenchmarkError(f"{path}:{line_number}: id must be a non-empty string")
@@ -146,13 +145,15 @@ def _load_workloads(path: Path, default_max_tokens: int) -> list[dict[str, Any]]
             raise BenchmarkError(f"{path}:{line_number}: temperature must be a finite number >= 0")
 
         seen_ids.add(workload_id)
-        workloads.append({
-            "id": workload_id,
-            "prompt": prompt,
-            "system": system,
-            "max_tokens": max_tokens,
-            "temperature": float(temperature),
-        })
+        workloads.append(
+            {
+                "id": workload_id,
+                "prompt": prompt,
+                "system": system,
+                "max_tokens": max_tokens,
+                "temperature": float(temperature),
+            }
+        )
 
     if not workloads:
         raise BenchmarkError(f"{path}: at least one workload is required")
@@ -195,7 +196,7 @@ def _read_system_memory() -> tuple[int | None, int | None]:
         total = values.get("MemTotal")
         available = values.get("MemAvailable")
         return (total - available, total) if total is not None and available is not None else (None, total)
-    except (OSError, ValueError, IndexError):
+    except OSError, ValueError, IndexError:
         return None, None
 
 
@@ -208,7 +209,7 @@ def _read_cpu_counters() -> tuple[int, int] | None:
         total = sum(counters)
         idle = counters[3] + (counters[4] if len(counters) > 4 else 0)
         return total, idle
-    except (OSError, ValueError, IndexError):
+    except OSError, ValueError, IndexError:
         return None
 
 
@@ -217,7 +218,8 @@ def _read_gpu_sample(gpu_index: int) -> tuple[int | None, int | None]:
         result = subprocess.run(
             [
                 "nvidia-smi",
-                "--id", str(gpu_index),
+                "--id",
+                str(gpu_index),
                 "--query-gpu=memory.used,utilization.gpu",
                 "--format=csv,noheader,nounits",
             ],
@@ -226,7 +228,7 @@ def _read_gpu_sample(gpu_index: int) -> tuple[int | None, int | None]:
             text=True,
             timeout=2,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None, None
     first_line = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
     fields = [part.strip() for part in first_line.split(",")]
@@ -266,7 +268,8 @@ class _ResourceMonitor:
             if total_delta > 0:
                 current = max(0.0, min(100.0, 100 * (total_delta - idle_delta) / total_delta))
                 self.peak_cpu_utilization_pct = max(
-                    self.peak_cpu_utilization_pct or 0.0, current,
+                    self.peak_cpu_utilization_pct or 0.0,
+                    current,
                 )
         self._previous_cpu = cpu
         gpu_memory, gpu_util = _read_gpu_sample(self.gpu_index)
@@ -297,9 +300,7 @@ class _ResourceMonitor:
             "peak_system_memory_bytes": self.peak_memory_bytes,
             "system_memory_total_bytes": self.memory_total_bytes,
             "peak_system_cpu_utilization_pct": (
-                round(self.peak_cpu_utilization_pct, 2)
-                if self.peak_cpu_utilization_pct is not None
-                else None
+                round(self.peak_cpu_utilization_pct, 2) if self.peak_cpu_utilization_pct is not None else None
             ),
             "peak_gpu_memory_mib": self.peak_gpu_memory_mib,
             "peak_gpu_utilization_pct": self.peak_gpu_utilization_pct,
@@ -316,13 +317,15 @@ def _request_stream(
     if workload["system"]:
         messages.append({"role": "system", "content": workload["system"]})
     messages.append({"role": "user", "content": workload["prompt"]})
-    request_data = json.dumps({
-        "messages": messages,
-        "max_tokens": workload["max_tokens"],
-        "temperature": workload["temperature"],
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }).encode("utf-8")
+    request_data = json.dumps(
+        {
+            "messages": messages,
+            "max_tokens": workload["max_tokens"],
+            "temperature": workload["temperature"],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+    ).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -425,13 +428,17 @@ def _summarize(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "observed_prompt_tokens_per_second",
     ):
         values = [sample[metric] for sample in successful if isinstance(sample.get(metric), (int, float))]
-        summary[metric] = None if not values else {
-            "median": round(statistics.median(values), 4),
-            "p90": round(_percentile(values, 0.9), 4),
-            "min": round(min(values), 4),
-            "max": round(max(values), 4),
-            "stdev": round(statistics.pstdev(values), 4),
-        }
+        summary[metric] = (
+            None
+            if not values
+            else {
+                "median": round(statistics.median(values), 4),
+                "p90": round(_percentile(values, 0.9), 4),
+                "min": round(min(values), 4),
+                "max": round(max(values), 4),
+                "stdev": round(statistics.pstdev(values), 4),
+            }
+        )
     return summary
 
 
@@ -549,7 +556,11 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 with monitor:
                     futures = [
                         executor.submit(
-                            _request_stream, endpoint, workload, args.timeout, args.api_key,
+                            _request_stream,
+                            endpoint,
+                            workload,
+                            args.timeout,
+                            args.api_key,
                         )
                         for _ in range(args.concurrency)
                     ]
@@ -560,9 +571,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                             "worker": worker_index,
                             "sample": group_index - args.warmups if not warmup else group_index,
                             "warmup": warmup,
-                            "prompt_sha256": hashlib.sha256(
-                                workload["prompt"].encode("utf-8")
-                            ).hexdigest(),
+                            "prompt_sha256": hashlib.sha256(workload["prompt"].encode("utf-8")).hexdigest(),
                             "started_at": started_at,
                         }
                         try:
@@ -572,11 +581,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                         measurements.append(item)
                         samples.append(item)
                 group_elapsed = time.perf_counter() - group_started
-                group_tokens = sum(
-                    row.get("completion_tokens", 0)
-                    for row in measurements
-                    if row["status"] == "ok"
-                )
+                group_tokens = sum(row.get("completion_tokens", 0) for row in measurements if row["status"] == "ok")
                 group_failures = sum(row["status"] != "ok" for row in measurements)
                 group = {
                     "group": group_index,
@@ -585,9 +590,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                     "elapsed_ms": round(group_elapsed * 1000, 3),
                     "completion_tokens": group_tokens,
                     "decode_tokens_per_second": (
-                        round(group_tokens / group_elapsed, 4)
-                        if group_elapsed > 0 and not group_failures
-                        else None
+                        round(group_tokens / group_elapsed, 4) if group_elapsed > 0 and not group_failures else None
                     ),
                     "failure_count": group_failures,
                 }
@@ -595,12 +598,12 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 groups.append(group)
         summary = _summarize(samples)
         group_rates = [
-            group["decode_tokens_per_second"]
-            for group in groups
-            if not group["warmup"] and group["status"] == "ok"
+            group["decode_tokens_per_second"] for group in groups if not group["warmup"] and group["status"] == "ok"
         ]
         summary["concurrency_group_decode_tokens_per_second"] = (
-            None if not group_rates else {
+            None
+            if not group_rates
+            else {
                 "median": round(statistics.median(group_rates), 4),
                 "p90": round(_percentile(group_rates, 0.9), 4),
                 "min": round(min(group_rates), 4),
@@ -608,18 +611,19 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 "stdev": round(statistics.pstdev(group_rates), 4),
             }
         )
-        artifact["workloads"].append({
-            "id": workload["id"],
-            "samples": samples,
-            "groups": groups,
-            "summary": summary,
-        })
+        artifact["workloads"].append(
+            {
+                "id": workload["id"],
+                "samples": samples,
+                "groups": groups,
+                "summary": summary,
+            }
+        )
 
     artifact["status"] = (
         "complete"
         if all(
-            row["summary"]["failure_count"] == 0
-            and all(group["status"] == "ok" for group in row["groups"])
+            row["summary"]["failure_count"] == 0 and all(group["status"] == "ok" for group in row["groups"])
             for row in artifact["workloads"]
         )
         else "failed"
@@ -674,9 +678,28 @@ def _load_artifact(path: Path) -> dict[str, Any]:
 #: Two-sided 95% Student-t critical values, keyed by degrees of freedom. A table rather than a
 #: dependency: this tool imports no scipy, and a compare must not need one installed to decide.
 _T95: dict[int, float] = {
-    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306,
-    9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
-    16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086, 25: 2.060, 30: 2.042,
+    1: 12.706,
+    2: 4.303,
+    3: 3.182,
+    4: 2.776,
+    5: 2.571,
+    6: 2.447,
+    7: 2.365,
+    8: 2.306,
+    9: 2.262,
+    10: 2.228,
+    11: 2.201,
+    12: 2.179,
+    13: 2.160,
+    14: 2.145,
+    15: 2.131,
+    16: 2.120,
+    17: 2.110,
+    18: 2.101,
+    19: 2.093,
+    20: 2.086,
+    25: 2.060,
+    30: 2.042,
 }
 
 
@@ -709,6 +732,29 @@ def _measured_rates(row: dict[str, Any], metric: str) -> list[float]:
     return values
 
 
+def _concurrency_group_rates(row: dict[str, Any]) -> list[float]:
+    """The successful, non-warmup GROUP decode rates for one workload.
+
+    Concurrency throughput is measured per group: a group is one wave of N
+    simultaneous requests, so its rate is the wave's aggregate, not any single
+    sample's.  The summary carries the same number as
+    ``concurrency_group_decode_tokens_per_second``, but the interval needs the
+    per-group population.  Reading it from ``samples`` (where the key never
+    exists) is what silently demoted every concurrent comparison to the median
+    rule with a sample count of zero.
+    """
+    values: list[float] = []
+    for group in row.get("groups") or []:
+        if not isinstance(group, dict) or group.get("warmup"):
+            continue
+        if group.get("status") != "ok":
+            continue
+        value = group.get("decode_tokens_per_second")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            values.append(float(value))
+    return values
+
+
 def welch_interval(baseline: list[float], current: list[float]) -> dict[str, Any] | None:
     """95% Welch interval for the DROP (baseline mean minus current mean).
 
@@ -728,8 +774,13 @@ def welch_interval(baseline: list[float], current: list[float]) -> dict[str, Any
     diff = mean1 - mean2
     if term1 + term2 == 0:
         return {
-            "drop": diff, "low": diff, "high": diff, "df": None, "t": None,
-            "n_baseline": n1, "n_current": n2,
+            "drop": diff,
+            "low": diff,
+            "high": diff,
+            "df": None,
+            "t": None,
+            "n_baseline": n1,
+            "n_current": n2,
         }
     df = (term1 + term2) ** 2 / ((term1**2) / (n1 - 1) + (term2**2) / (n2 - 1))
     t = _t_critical_95(df)
@@ -751,33 +802,28 @@ def compare_artifacts(baseline_path: Path, current_path: Path, threshold_pct: fl
     if baseline.get("status") != "complete" or current.get("status") != "complete":
         return {
             "compatible": False,
-            "mismatches": {"status": {
-                "baseline": baseline.get("status"),
-                "current": current.get("status"),
-            }},
+            "mismatches": {
+                "status": {
+                    "baseline": baseline.get("status"),
+                    "current": current.get("status"),
+                }
+            },
             "regressions": [],
         }
     old_manifest = baseline["manifest"]
     new_manifest = current["manifest"]
-    mismatches = [
-        field for field in COMPATIBILITY_FIELDS if old_manifest.get(field) != new_manifest.get(field)
-    ]
+    mismatches = [field for field in COMPATIBILITY_FIELDS if old_manifest.get(field) != new_manifest.get(field)]
     if mismatches:
         return {
             "compatible": False,
             "mismatches": {
-                field: {"baseline": old_manifest.get(field), "current": new_manifest.get(field)}
-                for field in mismatches
+                field: {"baseline": old_manifest.get(field), "current": new_manifest.get(field)} for field in mismatches
             },
             "regressions": [],
         }
 
-    old_rows: dict[str, dict[str, Any]] = {
-        row["id"]: row for row in baseline["workloads"]
-    }
-    new_rows: dict[str, dict[str, Any]] = {
-        row["id"]: row for row in current["workloads"]
-    }
+    old_rows: dict[str, dict[str, Any]] = {row["id"]: row for row in baseline["workloads"]}
+    new_rows: dict[str, dict[str, Any]] = {row["id"]: row for row in current["workloads"]}
     regressions: list[dict[str, Any]] = []
     checked: list[dict[str, Any]] = []
     for workload_id in sorted(old_rows):
@@ -790,25 +836,37 @@ def compare_artifacts(baseline_path: Path, current_path: Path, threshold_pct: fl
             old_metric = old_summary.get(metric_name)
             new_metric = new_summary.get(metric_name)
             if not isinstance(old_metric, dict) or not isinstance(new_metric, dict):
-                regressions.append({
-                    "workload_id": workload_id,
-                    "metric": metric_name,
-                    "error": "missing metric summary",
-                })
+                regressions.append(
+                    {
+                        "workload_id": workload_id,
+                        "metric": metric_name,
+                        "error": "missing metric summary",
+                    }
+                )
                 continue
             old_tps, new_tps = old_metric.get("median"), new_metric.get("median")
             if (
-                isinstance(old_tps, bool) or not isinstance(old_tps, (int, float)) or old_tps <= 0
-                or isinstance(new_tps, bool) or not isinstance(new_tps, (int, float)) or new_tps <= 0
+                isinstance(old_tps, bool)
+                or not isinstance(old_tps, (int, float))
+                or old_tps <= 0
+                or isinstance(new_tps, bool)
+                or not isinstance(new_tps, (int, float))
+                or new_tps <= 0
             ):
-                regressions.append({
-                    "workload_id": workload_id,
-                    "metric": metric_name,
-                    "error": "invalid metric median",
-                })
+                regressions.append(
+                    {
+                        "workload_id": workload_id,
+                        "metric": metric_name,
+                        "error": "invalid metric median",
+                    }
+                )
                 continue
-            old_rates = _measured_rates(old_rows[workload_id], metric_name)
-            new_rates = _measured_rates(new_rows.get(workload_id, {}), metric_name)
+            if metric_name == "concurrency_group_decode_tokens_per_second":
+                old_rates = _concurrency_group_rates(old_rows[workload_id])
+                new_rates = _concurrency_group_rates(new_rows.get(workload_id, {}))
+            else:
+                old_rates = _measured_rates(old_rows[workload_id], metric_name)
+                new_rates = _measured_rates(new_rows.get(workload_id, {}), metric_name)
             interval = welch_interval(old_rates, new_rates)
             low_pct: float | None = None
             high_pct: float | None = None

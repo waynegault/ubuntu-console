@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 42
+# Module Version: 43
+#   v43 (2026-11-10): the state write uses a per-writer mktemp file, not the
+#     shared "${LLM_REGISTRY}.tmp" that 11a's other writers also used.
 #   v42 (2026-11-09): profile_save takes the GPU carve as its 33rd argument and records it in
 #     col 48 (`gpu_carve`, MiB, the card total this boot).  Wayne, 2026-11-08: a tps figure
 #     must name its carve — rows certified at 24 GiB and at 32 GiB were indistinguishable in
@@ -871,6 +873,8 @@ function __llm_autotune_mark_state() {
         warn "autotune: backup FAILED ($_bk_err) — continuing with no rollback copy at $_bk_dest"
     fi
 
+    local _reg_tmp
+    _reg_tmp=$(mktemp "${LLM_REGISTRY}.tmp.XXXXXX") || return 1
     awk -F'|' -v f="$model_file" -v st="$state" -v header="$LLM_REGISTRY_HEADER" '
         BEGIN { OFS="|"; print header; ncols = split(header, _hdr, "|") }
         $1 == "#" { next }
@@ -878,13 +882,13 @@ function __llm_autotune_mark_state() {
             if (NF >= 20 && NF < ncols) { for (i = NF + 1; i <= ncols; i++) $i = "" }
             if ($3 == f) { $44 = st }
             print
-        }' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
+        }' "$LLM_REGISTRY" > "$_reg_tmp" || { rm -f "$_reg_tmp"; return 1; }
 
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]; then
+    if [[ -s "$_reg_tmp" ]] && [[ "$(wc -l < "$_reg_tmp")" -ge 2 ]]; then
         # swallow-ok: a failed mv leaves the original registry in place and the read-back below refuses
-        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY" 2>/dev/null || { rm -f "${LLM_REGISTRY}.tmp"; return 1; }
+        mv "$_reg_tmp" "$LLM_REGISTRY" 2>/dev/null || { rm -f "$_reg_tmp"; return 1; }
     else
-        rm -f "${LLM_REGISTRY}.tmp"
+        rm -f "$_reg_tmp"
         return 1
     fi
 

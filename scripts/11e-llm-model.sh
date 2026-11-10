@@ -1,7 +1,17 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 110
+# Module Version: 113
+#   v113 (2026-11-10): `model default` reports FAILURE when the default-model write
+#     fails.  It printed [SET TO: …] unconditionally after an unchecked redirect, so
+#     a read-only or missing directory produced a success line for no write.
+#   v112 (2026-11-10): the bench lock is a flock on a NEVER-UNLINKED ${lock}.mutex,
+#     with the old lock path kept as the PID marker every probe reads.  Removing
+#     the flocked file on release let a waiter hold the old inode while a third
+#     process locked a fresh file, so two benches could run.
+#   v111 (2026-11-10): the model-shell PID file uses LLM_MODELSHELL_PID_DIR (one
+#     constant) instead of the hardcoded /tmp literal, so a test can sandbox it and
+#     the writer and 11d's reaper cannot disagree about the path.
 #   v110 (2026-11-09): `model info` binds and shows gpu_carve (col 48).  The carve is what makes
 #   a recorded tps comparable: the same model certified at 24 GiB and at 32 GiB are two different
 #   numbers, and the row is the only place that says which pool a figure came from.  Columns 46-47
@@ -1089,9 +1099,13 @@ function __model_default() {
 
     local _n name file _rest
     IFS='|' read -r _n name file _rest <<< "$entry"
-    # swallow-ok: a best-effort mkdir: the write on the next line fails loudly if the directory is missing
+    # swallow-ok: a best-effort mkdir: the write below is checked and reports its own failure
     mkdir -p "$(dirname "$LLM_DEFAULT_FILE")" 2>/dev/null
-    echo "$file" > "$LLM_DEFAULT_FILE"
+    if ! printf '%s\n' "$file" > "$LLM_DEFAULT_FILE"
+    then
+        __tac_info "Error" "[FAILED to record the default model in $LLM_DEFAULT_FILE]" "$C_Error"
+        return 1
+    fi
     # swallow-ok: best-effort registry sync: the default-setting reports its own result
     __llm_registry_sync_state >/dev/null 2>&1 || true
     __tac_info "Default Model" "[SET TO: $name]" "$C_Success"
@@ -2385,7 +2399,7 @@ function __model_use_launch_server() {
     disown
     # Save the model subshell PID so __model_stop can kill it.
     # Include our own PID to prevent stale PIDs from overlapping runs.
-    echo "$model_shell_pid" > "/tmp/llm-modelshell.$$.pid"
+    echo "$model_shell_pid" > "${LLM_MODELSHELL_PID_DIR:-/tmp}/llm-modelshell.$$.pid"
 
     # The pointer holds the model FILE NAME — the row's identity.  It used to hold the row
     # NUMBER, which `model scan` reassigns: a scan between a launch and a later read
@@ -2823,7 +2837,8 @@ function __model_stop() {
     # We read all /tmp/llm-modelshell.*.pid files (including caller-specific
     # and legacy) and kill every subshell tree found. This handles stale PID
     # files from overlapping/previous runs.
-    for _ms_kf in /tmp/llm-modelshell.*.pid /tmp/llm-modelshell.pid
+    for _ms_kf in "${LLM_MODELSHELL_PID_DIR:-/tmp}"/llm-modelshell.*.pid \
+                  "${LLM_MODELSHELL_PID_DIR:-/tmp}"/llm-modelshell.pid
     do
         [[ -f "$_ms_kf" ]] || continue
         _ms_pid=$(< "$_ms_kf")
@@ -3369,6 +3384,12 @@ function __model_bench() {
     # ---------------------------------------------------------------------------
     local bench_pid_file="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
     local bench_lock_file="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+    # The MUTEX is a separate, never-unlinked file: flock's guarantee is attached
+    # to the inode, so removing the file on release lets a waiter keep the old
+    # inode while a third process locks a fresh one — two benches at once.  The
+    # $bench_lock_file stays what every existing probe reads: a PID MARKER that
+    # exists only while the mutex is held.
+    local bench_mutex="${bench_lock_file}.mutex"
     local bench_lock_wait_seconds="${LLM_BENCH_LOCK_WAIT_SECONDS:-5}"
     # The timer suspended for the duration of a bench.  Overridable so a test CAN point it
     # at a name that cannot exist: this bench used to stop and start the REAL user service,
@@ -3383,8 +3404,8 @@ function __model_bench() {
     local bench_lock_fd=""
     if command -v flock >/dev/null 2>&1
     then
-        exec {bench_lock_fd}>"$bench_lock_file" || {
-            __tac_info "Bench" "[Unable to open lock file: $bench_lock_file]" "$C_Error"
+        exec {bench_lock_fd}>"$bench_mutex" || {
+            __tac_info "Bench" "[Unable to open lock file: $bench_mutex]" "$C_Error"
             return 1
         }
         if ! flock -w "$bench_lock_wait_seconds" "$bench_lock_fd"

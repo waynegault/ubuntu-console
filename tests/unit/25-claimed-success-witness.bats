@@ -59,6 +59,10 @@ setup() {
     export LLM_KEEPER_DIR="$SANDBOX/state/keepers"
     export LLM_BENCH_LOCK_FILE="$SANDBOX/state/llm-bench.lock"
     export LLM_AUTOTUNE_LOCK_FILE="$SANDBOX/state/llm-autotune.lock"
+    # `model stop` reaps every PID file in this directory.  Sandbox it: otherwise
+    # the cases had to SKIP whenever the operator had a live `model use` session.
+    export LLM_MODELSHELL_PID_DIR="$SANDBOX/state/modelshell"
+    mkdir -p "$LLM_MODELSHELL_PID_DIR"
     export LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$SANDBOX/state/cuda.suspend"
     export LLM_PORT="$(_free_port)"
     rm -f "$ACTIVE_LLM_FILE" "$LLM_TPS_CACHE" "$SANDBOX/state/gpu_check.json" 2>/dev/null || true
@@ -267,10 +271,8 @@ _a_backend_alive() {
 
 # ── item 3: the CLI reports FAILURE, not success ───────────────────────────
 @test "model stop: a port still served after the teardown is FAILURE, not STOPPED" {
-    # A guard, not a nicety: the function also reaps /tmp/llm-modelshell.*.pid
-    # trees, and one may belong to a live `model use` session that this suite must
-    # not stop.
-    compgen -G "/tmp/llm-modelshell.*.pid" >/dev/null && skip "a live model-use session exists"
+    # LLM_MODELSHELL_PID_DIR is sandboxed in setup, so this case can run even
+    # when the operator has a live `model use` session on the real /tmp.
     _load_console
     _stub_killers
     _no_backends
@@ -284,7 +286,6 @@ _a_backend_alive() {
 }
 
 @test "model stop: a surviving backend is FAILURE even with the port free" {
-    compgen -G "/tmp/llm-modelshell.*.pid" >/dev/null && skip "a live model-use session exists"
     _load_console
     _stub_killers
     _a_backend_alive
@@ -298,7 +299,6 @@ _a_backend_alive() {
 
 @test "model stop: a stop that really landed still reports STOPPED" {
     # The other half of the guard: a witness that always fails is not a witness.
-    compgen -G "/tmp/llm-modelshell.*.pid" >/dev/null && skip "a live model-use session exists"
     _load_console
     _stub_killers
     _no_backends

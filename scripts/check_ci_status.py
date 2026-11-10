@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import importlib
 import os
 import re
 import shutil
@@ -63,6 +64,12 @@ from pathlib import Path
 logger = logging.getLogger("check_ci_status")
 
 REPO_DIR = Path(__file__).resolve().parent.parent
+if str(REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_DIR))
+# Loaded through importlib: a plain `from tools.fsutil import ...` here would be
+# an E402 import after the sys.path bootstrap, which the repo bans.
+_fsutil = importlib.import_module("tools.fsutil")
+atomic_write_text = _fsutil.atomic_write_text
 #: The baseline lives with the other baselines (tools/*-baseline.*); only the
 #: checker is Python, and Python sources live under scripts/ (pyproject.toml).
 BASELINE_FILE = REPO_DIR / "tools" / "ci-status-baseline.txt"
@@ -73,9 +80,7 @@ CACHE_FILE = REPO_DIR / ".git" / "console-ci-status.json"
 _BASELINE_FORMAT = "workflow=<name> | owner=<owner> | card=<card> | expiry=YYYY-MM-DD | reason"
 
 #: Run conclusions that count as a red branch.
-RED_CONCLUSIONS: frozenset[str] = frozenset(
-    {"failure", "timed_out", "startup_failure", "action_required"}
-)
+RED_CONCLUSIONS: frozenset[str] = frozenset({"failure", "timed_out", "startup_failure", "action_required"})
 
 _META_FIELD_RE = re.compile(r"^(owner|card|expiry)=(.+)$")
 
@@ -220,14 +225,7 @@ class Report:
     @property
     def green(self) -> bool:
         """True only when every workflow has a verdict for the tip, and none is red."""
-        return not (
-            self.red
-            or self.expired_entries
-            or self.dark
-            or self.unknown
-            or self.superseded
-            or self.pending
-        )
+        return not (self.red or self.expired_entries or self.dark or self.unknown or self.superseded or self.pending)
 
 
 def parse_baseline(text: str) -> list[BaselineEntry]:
@@ -244,9 +242,7 @@ def parse_baseline(text: str) -> list[BaselineEntry]:
         head, _, tail = line.partition("|")
         workflow = head.strip()
         if not workflow.startswith("workflow="):
-            raise ValueError(
-                f"{BASELINE_FILE}:{lineno}: expected 'workflow=<name>', got {workflow!r}"
-            )
+            raise ValueError(f"{BASELINE_FILE}:{lineno}: expected 'workflow=<name>', got {workflow!r}")
         fields: dict[str, str] = {"workflow": workflow.split("=", 1)[1].strip()}
         for part in tail.split("|"):
             part = part.strip()
@@ -259,16 +255,10 @@ def parse_baseline(text: str) -> list[BaselineEntry]:
                 fields["reason"] = (fields.get("reason", "") + " " + part).strip()
         missing = [k for k in ("owner", "card", "expiry") if not fields.get(k)]
         if missing:
-            raise ValueError(
-                f"{BASELINE_FILE}:{lineno}: missing {', '.join(missing)}; "
-                f"format is {_BASELINE_FORMAT}"
-            )
+            raise ValueError(f"{BASELINE_FILE}:{lineno}: missing {', '.join(missing)}; format is {_BASELINE_FORMAT}")
         expiry = _iso_date(fields["expiry"])
         if expiry is None:
-            raise ValueError(
-                f"{BASELINE_FILE}:{lineno}: expiry must be YYYY-MM-DD, "
-                f"got {fields['expiry']!r}"
-            )
+            raise ValueError(f"{BASELINE_FILE}:{lineno}: expiry must be YYYY-MM-DD, got {fields['expiry']!r}")
         entries.append(
             BaselineEntry(
                 workflow=fields["workflow"],
@@ -299,11 +289,13 @@ def newest_per_workflow(runs: list[dict]) -> list[WorkflowStatus]:
         status = run.get("status") or ""
         sha = run.get("headSha") or ""
         current_any = newest_any.get(workflow)
-        if current_any is None or (
-            created is not None
-            and current_any[0] is not None
-            and created > current_any[0]
-        ):
+        # An unparseable `createdAt` cannot be ordered.  It may fill an empty slot, but
+        # it must never displace a run whose time is known: a malformed timestamp used
+        # to win every comparison and could make an OLD run look like the newest one.
+        newer_than_any = current_any is None or (
+            created is not None and (current_any[0] is None or created > current_any[0])
+        )
+        if newer_than_any:
             newest_any[workflow] = (created, status, sha)
         if status != "completed":
             continue
@@ -311,12 +303,10 @@ def newest_per_workflow(runs: list[dict]) -> list[WorkflowStatus]:
         if conclusion == "cancelled":
             continue
         current = newest_completed.get(workflow)
-        if (
-            current is not None
-            and current.created_at is not None
-            and created is not None
-            and created <= current.created_at
-        ):
+        if created is None:
+            if current is not None:
+                continue
+        elif current is not None and current.created_at is not None and created <= current.created_at:
             continue
         newest_completed[workflow] = WorkflowStatus(
             workflow=workflow,
@@ -499,9 +489,7 @@ def _gh_environment(executable: str) -> dict[str, str] | None:
     if real_cli is None:
         return None
     env = os.environ.copy()
-    env["PATH"] = os.pathsep.join(
-        (str(Path(real_cli).parent), env.get("PATH", ""))
-    )
+    env["PATH"] = os.pathsep.join((str(Path(real_cli).parent), env.get("PATH", "")))
     return env
 
 
@@ -610,25 +598,20 @@ def _write_cache(report: Report) -> None:
         # Cached too, not just red: a replay that forgets these would claim GREEN for a tip
         # whose runs had not finished when the probe was taken.  Only the baseline filtering
         # is meant to be re-applied on replay.
-        "pending": [
-            {"workflow": s.workflow, "sha": s.pending_sha} for s in report.pending
-        ],
-        "superseded": [
-            {"workflow": s.workflow, "sha": s.head_sha} for s in report.superseded
-        ],
+        "pending": [{"workflow": s.workflow, "sha": s.pending_sha} for s in report.pending],
+        "superseded": [{"workflow": s.workflow, "sha": s.head_sha} for s in report.superseded],
         "dark": report.dark,
         "dark_reason": report.dark_reason,
         "newest_push_run_at": (
-            report.newest_push_run_at.isoformat()
-            if report.newest_push_run_at is not None
-            else None
+            report.newest_push_run_at.isoformat() if report.newest_push_run_at is not None else None
         ),
         "local_sha": report.local_sha,
         "awaiting_push_reason": report.awaiting_push_reason,
     }
     try:
-        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CACHE_FILE.write_text(json.dumps(payload, indent=2) + "\n")
+        # Atomic: a crash mid-write used to leave partial JSON, which the reader
+        # treated as "no cache" and silently lost the stale-feed high-water mark.
+        atomic_write_text(CACHE_FILE, json.dumps(payload, indent=2) + "\n")
     except OSError:
         logger.debug("could not write CI status cache", exc_info=True)
 
@@ -641,7 +624,7 @@ def _read_cache_payload() -> dict | None:
     """
     try:
         payload = json.loads(CACHE_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         logger.debug("no usable CI status cache", exc_info=True)
         return None
     return payload if isinstance(payload, dict) else None
@@ -664,9 +647,7 @@ def _read_cache(ttl_seconds: int, payload: dict | None = None) -> dict | None:
     return payload
 
 
-def _feed_went_backwards(
-    newest_run_at: datetime | None, watermark: datetime | None
-) -> bool:
+def _feed_went_backwards(newest_run_at: datetime | None, watermark: datetime | None) -> bool:
     """True when a probe reports a newest run OLDER than one already observed.
 
     The runs feed is monotonic in time, so a response whose newest run predates a
@@ -707,10 +688,7 @@ def _print_report(report: Report) -> None:
             f"{status.head_sha[:12]} ({status.conclusion}), not the pushed tip"
         )
     for status in report.pending:
-        print(
-            f"  no verdict yet  : {status.workflow} — the newest run for "
-            f"{status.pending_sha[:12]} has not completed"
-        )
+        print(f"  no verdict yet  : {status.workflow} — the newest run for {status.pending_sha[:12]} has not completed")
     if report.dark:
         print(f"  DARK            : {report.dark_reason}")
     if report.awaiting_push:
@@ -732,10 +710,7 @@ def _print_report(report: Report) -> None:
         if report.awaiting_push:
             print("  OK              : no unexempted red; local HEAD awaits a push")
         elif report.awaiting_push_unverified:
-            print(
-                "  OK              : no unexempted red in the cached probe; "
-                "push state not re-checked"
-            )
+            print("  OK              : no unexempted red in the cached probe; push state not re-checked")
         else:
             print("  OK              : every workflow has a verdict for the pushed tip")
     elif not report.red and not report.expired_entries and not report.unknown:
@@ -749,26 +724,18 @@ def _to_json(report: Report) -> str:
             "branch": report.branch,
             "tip_sha": report.tip_sha,
             "local_sha": report.local_sha,
-            "red": [
-                {"workflow": s.workflow, "conclusion": s.conclusion, "url": s.url}
-                for s in report.red
-            ],
+            "red": [{"workflow": s.workflow, "conclusion": s.conclusion, "url": s.url} for s in report.red],
             "exempted": [
-                {"workflow": s.workflow, "card": e.card, "expiry": e.expiry.isoformat()}
-                for s, e in report.exempted
+                {"workflow": s.workflow, "card": e.card, "expiry": e.expiry.isoformat()} for s, e in report.exempted
             ],
             "expired_exemptions": [
                 {"workflow": e.workflow, "expired": e.expiry.isoformat(), "card": e.card}
                 for e in report.expired_entries
             ],
             "no_verdict_yet": [
-                {"workflow": s.workflow, "reason": "superseded", "sha": s.head_sha}
-                for s in report.superseded
+                {"workflow": s.workflow, "reason": "superseded", "sha": s.head_sha} for s in report.superseded
             ]
-            + [
-                {"workflow": s.workflow, "reason": "pending", "sha": s.pending_sha}
-                for s in report.pending
-            ],
+            + [{"workflow": s.workflow, "reason": "pending", "sha": s.pending_sha} for s in report.pending],
             "dark": report.dark,
             "dark_reason": report.dark_reason,
             "awaiting_push": report.awaiting_push,
@@ -862,9 +829,7 @@ def main(argv: list[str] | None = None) -> int:
         # already parks.
         for name in cached.get("red", []):
             status = WorkflowStatus(name, "failure", "", None, "")
-            exemption = next(
-                (e for e in entries if e.workflow == name and not e.expired), None
-            )
+            exemption = next((e for e in entries if e.workflow == name and not e.expired), None)
             if exemption is None:
                 report.red.append(status)
             else:
@@ -961,7 +926,7 @@ def main(argv: list[str] | None = None) -> int:
                 _RETRY_BACKOFF_S,
             )
             _sleep(_RETRY_BACKOFF_S)
-        if runs is None:   # unreachable: the loop sets runs or re-raises
+        if runs is None:  # unreachable: the loop sets runs or re-raises
             raise CiStatusUnknown("run list unavailable after retries")
     except CiStatusUnknown as exc:
         msg = (
@@ -981,11 +946,7 @@ def main(argv: list[str] | None = None) -> int:
     # A feed that moved BACKWARDS cannot describe the current branch, so this is a
     # stale/partial response — not a red branch and not a dark one.  Refuse to
     # conclude anything from it, and do NOT lower the high-water mark by caching it.
-    if (
-        newest_push_run_at is not None
-        and watermark is not None
-        and _feed_went_backwards(newest_push_run_at, watermark)
-    ):
+    if newest_push_run_at is not None and watermark is not None and _feed_went_backwards(newest_push_run_at, watermark):
         reason = (
             f"stale run feed: newest push run reported "
             f"{newest_push_run_at.isoformat()} but a previous probe already saw "

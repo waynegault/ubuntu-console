@@ -86,9 +86,18 @@ MIN_SEMANTIC_KEY_LEN = 3
 
 # Node types eligible for semantic collapse.  One declaration: the ingest path and
 # the view path grouped on their own copies of this set.
-DEFAULT_SEMANTIC_TYPES = frozenset({
-    "topic", "project", "decision", "issue", "outcome", "organization", "place", "person",
-})
+DEFAULT_SEMANTIC_TYPES = frozenset(
+    {
+        "topic",
+        "project",
+        "decision",
+        "issue",
+        "outcome",
+        "organization",
+        "place",
+        "person",
+    }
+)
 
 
 def source_key(kind: str, locator: str) -> str:
@@ -197,7 +206,10 @@ class GraphNode(SourceLineage):
     """
 
     model_config = ConfigDict(
-        extra="forbid", strict=True, validate_assignment=True, populate_by_name=True,
+        extra="forbid",
+        strict=True,
+        validate_assignment=True,
+        populate_by_name=True,
     )
 
     id: str
@@ -331,7 +343,10 @@ class GraphEdge(SourceLineage):
     """
 
     model_config = ConfigDict(
-        extra="forbid", strict=True, validate_assignment=True, populate_by_name=True,
+        extra="forbid",
+        strict=True,
+        validate_assignment=True,
+        populate_by_name=True,
     )
 
     source: str
@@ -517,6 +532,15 @@ class Graph(BaseModel):
     def node_ids(self) -> set[str]:
         return {n.id for n in self.nodes}
 
+    def _prune_prefixes(self, prefixes: tuple[str, ...]) -> set[str]:
+        """Drop nodes whose id starts with *prefixes* and every incident edge."""
+        doomed = {n.id for n in self.nodes if n.id and n.id.startswith(prefixes)}
+        if not doomed:
+            return doomed
+        self.nodes = [n for n in self.nodes if n.id not in doomed]
+        self.edges = [e for e in self.edges if e.source not in doomed and e.target not in doomed]
+        return doomed
+
     def prune_ast_nodes(self) -> None:
         """Drop AST-derived nodes (id prefix ``ast_``) and their edges.
 
@@ -525,14 +549,53 @@ class Graph(BaseModel):
         slug formats, deleted files, or other source directories — would
         otherwise accumulate across incremental rebuilds.
         """
-        ast_ids = {n.id for n in self.nodes if n.id and n.id.startswith("ast_")}
-        if not ast_ids:
-            return
-        self.nodes = [n for n in self.nodes if n.id not in ast_ids]
-        self.edges = [
-            e for e in self.edges
-            if e.source not in ast_ids and e.target not in ast_ids
-        ]
+        self._prune_prefixes(("ast_",))
+
+    def prune_memory_nodes(self) -> None:
+        """Drop every memory-store-derived node and its incident edges.
+
+        The memory import is the owner of these nodes: an edited memory must be
+        re-read (``GraphBuilder.add_node`` keeps the first node's fields, so a
+        merge alone would preserve the stale label), and a deleted memory or
+        chunk must disappear rather than accumulate forever.
+
+        A node is memory-derived when the importer marked ``origin`` as
+        ``memory_db``, or — for graphs written before that marker was set — when
+        it is not AST-derived and at least one of its source documents is a
+        ``memory:``/``chunk:``/``file:`` key.  Nodes with no such provenance
+        (user edits, life-index records) are preserved.
+
+        The cached community digest describes the structure this call changes,
+        so it is cleared; a stale digest naming removed nodes is itself a
+        validation warning.
+        """
+        prefixes = (
+            "memory:",
+            "chunk:",
+            "file:",
+            "actor:",
+            "topic:",
+            "entity:",
+            "claim:",
+            "belief:",
+            "synthesis:",
+            "open_loop:",
+        )
+        doomed: set[str] = set()
+        for node in self.nodes:
+            if not node.id or node.id.startswith("ast_"):
+                continue
+            if (
+                node.id.startswith(prefixes)
+                or node.origin == "memory_db"
+                or any(s.startswith(("memory:", "chunk:", "file:")) for s in node.sources)
+            ):
+                doomed.add(node.id)
+        if doomed:
+            self.nodes = [n for n in self.nodes if n.id not in doomed]
+            self.edges = [e for e in self.edges if e.source not in doomed and e.target not in doomed]
+            self.meta.communities = []
+            self.meta.community_method = ""
 
     def remove_source(self, key: str) -> dict[str, int]:
         """Subtract exactly one source document from the graph.
@@ -618,6 +681,7 @@ class Graph(BaseModel):
 # view path (projection._enrich_graph_payload) call these, so "is this the same
 # concept?" can only be answered one way (card 27b55b6f).
 
+
 def normalize_semantic_label(label: str, life_index: dict | None = None) -> str:
     """The normalised grouping key for *label*: stopwords/punctuation, then aliases.
 
@@ -655,8 +719,9 @@ def normalize_semantic_label(label: str, life_index: dict | None = None) -> str:
     return text
 
 
-def collapse_semantic_duplicates(graph: Graph, life_index: dict | None = None,
-                                 allowed_types: set[str] | frozenset[str] | None = None) -> Graph:
+def collapse_semantic_duplicates(
+    graph: Graph, life_index: dict | None = None, allowed_types: set[str] | frozenset[str] | None = None
+) -> Graph:
     """Collapse semantically-equivalent nodes, remapping and merging their edges.
 
     Nodes are grouped by ``(type, normalize_semantic_label(label))``; a group is
@@ -687,12 +752,14 @@ def collapse_semantic_duplicates(graph: Graph, life_index: dict | None = None,
     for members in groups.values():
         if len(members) < 2:
             continue
-        members.sort(key=lambda n: (
-            bool(n.inferred_type) if n.inferred_type is not None else False,  # non-inferred first
-            -(float(n.type_confidence) if n.type_confidence is not None else 1.0),  # highest confidence first
-            -len(n.label or ""),  # longest label first
-            n.id or "",
-        ))
+        members.sort(
+            key=lambda n: (
+                bool(n.inferred_type) if n.inferred_type is not None else False,  # non-inferred first
+                -(float(n.type_confidence) if n.type_confidence is not None else 1.0),  # highest confidence first
+                -len(n.label or ""),  # longest label first
+                n.id or "",
+            )
+        )
         canonical = members[0]
         cid = canonical.id or ""
         merged_desc_parts: list[str] = []
@@ -815,9 +882,7 @@ class GraphBuilder:
 
     # ── semantic deduplication ──
 
-    def deduplicate_semantic(self,
-                              life_index: dict | None = None,
-                              allowed_types: set[str] | None = None) -> None:
+    def deduplicate_semantic(self, life_index: dict | None = None, allowed_types: set[str] | None = None) -> None:
         """Collapse semantically-equivalent nodes in the builder state, merging edges.
 
         Use *before* ``build()`` so the persisted graph carries no semantic
@@ -830,14 +895,28 @@ class GraphBuilder:
         ``sources_overflow`` record apply on this path too.  Metadata from
         dropped nodes merges into the canonical node's ``description``.
         """
-        collapsed = collapse_semantic_duplicates(
-            self.build(), life_index=life_index, allowed_types=allowed_types)
+        collapsed = collapse_semantic_duplicates(self.build(), life_index=life_index, allowed_types=allowed_types)
         self._nodes = {n.id: n for n in collapsed.nodes if n.id}
         self._edges = {(e.source, e.target, e.label or "related"): e for e in collapsed.edges}
 
     # ── build ──
 
-    def build(self) -> Graph:
+    def build(self, *, strict_endpoints: bool = True) -> Graph:
+        """Build the graph, refusing edges whose endpoints are not nodes.
+
+        The invariant is checked HERE rather than in ``add_edge`` so emission
+        order does not matter: a producer may name an edge before its node, but
+        the finished graph must not carry a dangling edge.  A dangling edge is
+        invisible to every endpoint-resolving view while still inflating counts,
+        and it is exactly how the registry relationship path silently produced
+        unusable data.
+        """
+        if strict_endpoints:
+            missing = dangling_edges(self._nodes.values(), self._edges.values())
+            if missing:
+                sample = "; ".join(f"{e.source} -> {e.target} [{e.label}]" for e in missing[:5])
+                more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+                raise ValueError(f"{len(missing)} edge(s) reference missing nodes: {sample}{more}")
         return Graph(
             nodes=list(self._nodes.values()),
             edges=list(self._edges.values()),
@@ -848,6 +927,18 @@ class GraphBuilder:
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
+
+
+def dangling_edges(nodes: Iterable[GraphNode], edges: Iterable[GraphEdge]) -> list[GraphEdge]:
+    """Edges whose source or target is not one of *nodes*.
+
+    ONE definition for three boundaries: ``GraphBuilder.build`` (refuse a new
+    graph), ``save_to_graph_db`` (refuse to persist one), and
+    ``load_from_graph_db`` (repair a graph written before the invariant existed).
+    """
+    ids = {node.id for node in nodes if node.id}
+    return [edge for edge in edges if edge.source not in ids or edge.target not in ids]
+
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 

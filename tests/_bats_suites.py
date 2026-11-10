@@ -9,12 +9,41 @@ scripts/_module-list.sh keeps for the two shell loaders.
 Deliberately neither a pytest test module nor a unittest one: the name does not match
 ``test*.py``, so both runners import it instead of collecting it as a suite.
 """
+
 from __future__ import annotations
 
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def resolve_bats() -> str:
+    """The bats executable as an absolute path, or a named failure.
+
+    Both bridges need the same answer: PATH first, then the install paths
+    ``tools/install-bats.sh`` uses.  A bare ``bats`` failed every case in a
+    caller whose PATH omitted ``~/.local/bin`` (the VS Code extension host is
+    exactly such a caller — 1,759 false reds, measured 2026-11-05), and the
+    unittest bridge carried that bug until this helper existed.
+    """
+    found = shutil.which("bats")
+    if found:
+        return found
+    for candidate in (
+        Path.home() / ".local/bin/bats",
+        Path("/usr/local/bin/bats"),
+        Path("/usr/bin/bats"),
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    raise FileNotFoundError(
+        "bats not found on PATH or in ~/.local/bin, /usr/local/bin, /usr/bin — install it with tools/install-bats.sh"
+    )
+
+
 SUITES_TSV = Path(__file__).resolve().parent / "bats-suites.tsv"
 _COLUMNS = "pattern, marker, per_case_timeout_s, file_timeout_s"
 
@@ -44,16 +73,14 @@ def load_suites() -> list[BatsSuite]:
         fields = line.split("\t")
         if len(fields) != 4:
             raise ValueError(
-                f"{SUITES_TSV.name}:{lineno}: expected 4 tab-separated fields "
-                f"({_COLUMNS}); got {len(fields)}"
+                f"{SUITES_TSV.name}:{lineno}: expected 4 tab-separated fields ({_COLUMNS}); got {len(fields)}"
             )
         pattern, marker, per_case, whole_file = fields
         try:
             per_case_s, whole_file_s = int(per_case), int(whole_file)
         except ValueError as exc:
             raise ValueError(
-                f"{SUITES_TSV.name}:{lineno}: the timeouts must be integers, got "
-                f"{per_case!r} and {whole_file!r}"
+                f"{SUITES_TSV.name}:{lineno}: the timeouts must be integers, got {per_case!r} and {whole_file!r}"
             ) from exc
         suites.append(BatsSuite(pattern, marker, per_case_s, whole_file_s))
     if not suites:
