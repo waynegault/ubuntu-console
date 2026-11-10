@@ -17,6 +17,37 @@ from tests.e2e.helpers.mock_hardware import emulate_asus_spark, emulate_dell_xps
 from tests.e2e.helpers.mock_procfs import VirtualProcfs
 
 
+# Every adversarial case below proves a BYPASS by reading /proc/1/comm outside the virtual
+# filesystem and asserting the value came from the host.  Comparing it against the FAKED name
+# only works on a box whose PID 1 is something else: on this one systemd IS PID 1 (AGENTS.md
+# lists systemd, exe and init as valid supervisors), so a real bypass read "systemd" — the very
+# value the test faked — and five cases failed while the code under test was correct.
+#
+# So the fake name is a SENTINEL no host can be, and the host's own name is the positive
+# oracle: a bypass must read the host's value AND must not read the sentinel.
+SENTINEL = "vproc-sentinel-pid1"
+
+
+def _read_host_pid1() -> str:
+    """This host's PID 1 name, read with the real open."""
+    with open("/proc/1/comm", encoding="utf-8") as fh:
+        return fh.read().strip()
+
+
+# Read at IMPORT, before any case patches builtins.open: a read taken inside a virtual fs
+# answers with the virtual value.  My first cut of this helper called it from inside the
+# `with` block, so the oracle read the sentinel and the collision check fired on itself.
+HOST_PID1 = _read_host_pid1()
+
+
+def _assert_host_leak(observed: str) -> None:
+    """The read escaped to the host: it is the host's PID 1, and it is not the sentinel."""
+    # A sentinel that equalled the host name would make every case here vacuous.
+    assert SENTINEL != HOST_PID1, "the sentinel collides with this host's PID 1 name"
+    assert observed == HOST_PID1, f"expected the host's PID 1 ({HOST_PID1!r}), got {observed!r}"
+    assert observed != SENTINEL, "the virtual value leaked instead of the host's"
+
+
 # --- Challenge 1: Context Manager Re-entrancy Failure ---
 
 
@@ -28,15 +59,15 @@ def test_adversarial_reentrancy_deactivates_outer_procfs() -> None:
         Entering `with v:` twice and exiting the inner block calls `v.stop()`, which resets
         `builtins.open` to `_orig_open` and `_is_active = False` while outer block is still active.
     """
-    vproc = VirtualProcfs(pid_1_comm="systemd")
+    vproc = VirtualProcfs(pid_1_comm=SENTINEL)
     with vproc:
         assert vproc._is_active is True
-        assert open("/proc/1/comm", encoding="utf-8").read().strip() == "systemd"
+        assert open("/proc/1/comm", encoding="utf-8").read().strip() == SENTINEL
 
         # Re-enter the same context manager
         with vproc:
             assert vproc._is_active is True
-            assert open("/proc/1/comm", encoding="utf-8").read().strip() == "systemd"
+            assert open("/proc/1/comm", encoding="utf-8").read().strip() == SENTINEL
 
         # Vulnerability manifest: inner exit called vproc.stop()
         # The outer block is now unpatched!
@@ -44,8 +75,7 @@ def test_adversarial_reentrancy_deactivates_outer_procfs() -> None:
         # Reading /proc/1/comm now falls through to host kernel procfs!
         with open("/proc/1/comm", encoding="utf-8") as f:
             leaked_comm = f.read().strip()
-        # On WSL2 host this is 'exe' or 'init', NOT 'systemd'
-        assert leaked_comm != "systemd"
+        _assert_host_leak(leaked_comm)
 
 
 # --- Challenge 2: Nested Hardware Emulator State Pollution ---
@@ -92,14 +122,14 @@ def test_adversarial_bytes_path_bypasses_virtual_procfs() -> None:
         For bytes `b'/proc/1/comm'`, `str(path)` evaluates to `"b'/proc/1/comm'"`,
         which does NOT start with `"/proc"`. The call falls through to real open().
     """
-    vproc = VirtualProcfs(pid_1_comm="systemd", fallback_to_real=False)
+    vproc = VirtualProcfs(pid_1_comm=SENTINEL, fallback_to_real=False)
     vproc.start()
     try:
         # 1. open(bytes) bypasses VirtualProcfs and reads host PID 1
         with open(b"/proc/1/comm") as f:
             host_comm = f.read().strip()
-        # It read the host PID 1 (e.g. 'exe'), completely ignoring VirtualProcfs
-        assert host_comm != "systemd"
+        # It read the host PID 1, completely ignoring VirtualProcfs
+        _assert_host_leak(host_comm)
 
         # 2. os.listdir(bytes) bypasses VirtualProcfs even when fallback_to_real=False
         entries = os.listdir(b"/proc")
@@ -119,16 +149,16 @@ def test_adversarial_unnormalized_proc_path_slashes() -> None:
         falling through to host or raising FileNotFoundError when fallback_to_real=False.
     """
     # Test under fallback_to_real=False
-    with VirtualProcfs(pid_1_comm="systemd", fallback_to_real=False):
+    with VirtualProcfs(pid_1_comm=SENTINEL, fallback_to_real=False):
         with pytest.raises(FileNotFoundError, match="No such file or directory: '/proc//1/comm'"):
             open("/proc//1/comm")
 
     # Test under fallback_to_real=True: falls through to host
-    with VirtualProcfs(pid_1_comm="systemd", fallback_to_real=True):
+    with VirtualProcfs(pid_1_comm=SENTINEL, fallback_to_real=True):
         with open("/proc//1/comm", encoding="utf-8") as f:
             host_comm = f.read().strip()
-        # Falls through to host procfs ('exe') instead of 'systemd'
-        assert host_comm != "systemd"
+        # Falls through to host procfs instead of the sentinel
+        _assert_host_leak(host_comm)
 
 
 # --- Challenge 4: pathlib.Path Bypass via io.open ---
@@ -143,14 +173,14 @@ def test_adversarial_pathlib_io_open_bypass() -> None:
         Any module using `pathlib.Path("/proc/...")` (e.g. tools/llm_benchmark.py)
         reads the host filesystem directly.
     """
-    with VirtualProcfs(pid_1_comm="systemd"):
+    with VirtualProcfs(pid_1_comm=SENTINEL):
         # builtins.open works
         with open("/proc/1/comm", encoding="utf-8") as f:
-            assert f.read().strip() == "systemd"
+            assert f.read().strip() == SENTINEL
 
         # pathlib.Path bypasses VirtualProcfs!
         path_comm = pathlib.Path("/proc/1/comm").read_text(encoding="utf-8").strip()
-        assert path_comm != "systemd"
+        _assert_host_leak(path_comm)
 
 
 # --- Challenge 5: Incomplete Filesystem Hierarchy & Inode Type Mismatch ---
@@ -268,12 +298,13 @@ def test_adversarial_default_fallback_leaks_host_pid1_status() -> None:
         Under fallback_to_real=True (the default), opening /proc/1/status
         reads the host system's PID 1 status (e.g. Name: exe under WSL2).
     """
-    with VirtualProcfs(pid_1_comm="systemd", fallback_to_real=True):
+    with VirtualProcfs(pid_1_comm=SENTINEL, fallback_to_real=True):
         with open("/proc/1/status", encoding="utf-8") as f:
             status_content = f.read()
         first_line = status_content.splitlines()[0]
-        # Leaked host PID 1 status name:
-        assert "Name:\texe" in first_line or "Name:\tinit" in first_line
+        # Leaked host PID 1 status name — the HOST's, whatever this box calls PID 1.
+        assert first_line == f"Name:\t{HOST_PID1}", f"expected the host's Name, got {first_line!r}"
+        assert SENTINEL not in status_content, "the virtual PID 1 name leaked into status"
 
 
 # --- Challenge 8: Subprocess Mock in MockHardwareEmulator vs CLI Contracts ---

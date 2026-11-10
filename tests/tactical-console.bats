@@ -877,12 +877,24 @@ EOF
 }
 
 @test "calc: __calc_gpu_layers returns 0 for large model (> VRAM)" {
-    # Sized from the card, not a fixed 8 GiB: on a unified-memory host the pool is far
-    # larger than 8 GiB, so a hardcoded size is not "> VRAM" there and the case would
-    # assert the opposite of its own name (measured 2026-11-04 on the 96 GiB arm64 box).
-    local usable=$(( $(__tac_vram_total_bytes) * VRAM_USABLE_PCT / 100 ))
-    result=$(__calc_gpu_layers $((usable + 1)) 40 "llama")
-    [[ "$result" -eq 0 ]]
+    # The bound is HOST-DEPENDENT, so pin both kinds with the pure function instead of
+    # asking whichever profile this box carries.  A discrete card is judged against usable
+    # VRAM; a SHARED-memory host against guest RAM less the reserve (measured 2026-11-10: a
+    # 50.9 GiB dense model served with -ngl 999 on a 32,768 MiB pool).  Asking the ambient
+    # profile made this case assert the opposite of its own name here: 30 GiB "exceeds" a
+    # 32 GiB card and is nowhere near 102.5 GiB of guest RAM.
+    local vram=$(( 32 * 1024 * 1024 * 1024 ))
+    local guest=$(( 128 * 1024 * 1024 * 1024 ))
+    local reserve_mb=12288
+    local reserve=$(( reserve_mb * 1024 * 1024 ))
+    local over_card=$(( vram * 95 / 100 + 1 ))
+    export LLAMA_FIT_KEEP_RESERVE_MB="$reserve_mb"
+    # Discrete card: larger than the usable VRAM -> CPU only.
+    [ "$(__gpu_layers_fit "$over_card" 40 llama "$vram" "$guest" 0)" -eq 0 ]
+    # Shared pool: the same size is inside guest RAM, so it offloads fully...
+    [ "$(__gpu_layers_fit "$over_card" 40 llama "$vram" "$guest" 1)" -eq 999 ]
+    # ...and only a model past the guest budget is CPU-only there.
+    [ "$(__gpu_layers_fit "$(( guest - reserve + 1 ))" 40 llama "$vram" "$guest" 1)" -eq 0 ]
 }
 
 @test "calc: __calc_gpu_layers returns total_layers for MoE arch" {

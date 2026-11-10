@@ -26,6 +26,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -927,11 +928,40 @@ def test_tier2_f13_03_tac_python_override_invalid_path_fails_127() -> None:
     assert "not executable" in res.stderr or "TAC_PYTHON" in res.stderr
 
 
-def test_tier2_f13_04_clean_environment_no_path() -> None:
-    """Verifies python-runtime resolution with completely empty PATH fails closed."""
-    cmd = 'bash -c "PATH= source tools/python-runtime.sh && _tac_python_path /nonexistent_repo_dir"'
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=str(REPO_ROOT))
-    assert res.returncode != 0
+def test_tier2_f13_04_clean_environment_no_path(tmp_path: Path) -> None:
+    """With no PATH the repo's own venv still answers; with neither venv nor PATH it fails closed.
+
+    The old premise — "empty PATH fails" — was wrong for any checkout that has a venv: the
+    resolver probes `<repo>/.venv/bin/python3` by ABSOLUTE path, which is the whole point of
+    it (and is why a runner with no .venv on PATH still finds the right interpreter).  Measured
+    2026-11-10: it answered `/home/wayne/ubuntu-console/.venv/bin/python3` with `PATH=` set.
+    """
+    helper = REPO_ROOT / "tools" / "python-runtime.sh"
+    # The child's PATH is empty, so `bash` itself must be resolved HERE — passing a bare
+    # name would make subprocess look for it in the empty PATH and die before the test ran.
+    bash = shutil.which("bash")
+    assert bash, "bash is required for this case"
+
+    # (a) A checkout WITH a venv: PATH is irrelevant, the absolute venv path answers.
+    res = subprocess.run(
+        [bash, "-c", 'source "$1" && _tac_python_path "$2"', "_", str(helper), str(REPO_ROOT)],
+        capture_output=True,
+        text=True,
+        env={"PATH": ""},
+    )
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip().startswith(str(REPO_ROOT / ".venv")), res.stdout
+
+    # (b) No venv, no TAC_PYTHON, no PATH: fail closed rather than inventing an interpreter.
+    res = subprocess.run(
+        [bash, "-c", 'source "$1" && _tac_python_path "$2"', "_", str(helper), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env={"PATH": ""},
+        cwd=str(tmp_path),
+    )
+    assert res.returncode != 0, f"expected a refusal, got {res.stdout!r}"
+    assert "no repository venv" in res.stderr, res.stderr
 
 
 def test_tier2_f13_05_empty_repo_root_argument() -> None:

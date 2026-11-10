@@ -500,12 +500,22 @@ def test_tier1_f5_02_glowmarkt_collector_import_zero_mutation(tmp_path: Path) ->
     """F5: Importing glowmarkt-collector does not touch or create ~/.openclaw/."""
     repo_root = Path(__file__).resolve().parent.parent.parent
     collector_file = repo_root / "nas/butler/scripts/glowmarkt-collector.py"
+    # The claim is that the IMPORT mutates nothing — not that the target is absent.  Asking
+    # "does it exist" fails on any box where the collector has legitimately run, which is
+    # every box in service: measured 2026-11-10 the directory existed, and the case read
+    # that as a regression.  Capture the state, import, and compare.
+    real_target = Path("/home/wayne/.openclaw/workspace/memory/shared/electricity-usage")
+    existed_before = real_target.exists()
+    listing_before = sorted(p.name for p in real_target.iterdir()) if existed_before else []
     spec = importlib.util.spec_from_file_location("glowmarkt_isolated_smoke", collector_file)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    real_target = Path("/home/wayne/.openclaw/workspace/memory/shared/electricity-usage")
-    assert not real_target.exists()
+    assert real_target.exists() == existed_before, "the import created or removed the target"
+    if existed_before:
+        assert sorted(p.name for p in real_target.iterdir()) == listing_before, (
+            "the import wrote into the collector's real target"
+        )
 
 
 @pytest.mark.e2e
