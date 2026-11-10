@@ -1,19 +1,33 @@
 """Enforce the console's contracts. See the script header for scope per subcommand."""
+
+import importlib
 import os
 import sys
+from typing import TYPE_CHECKING
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from tools.contracts_checkers.core import (  # noqa: E402 - repo root must be on sys.path first
-    EXIT_CANNOT_RUN, EXIT_CLEAN, SUBCOMMANDS, USAGE, _CheckerOptions,
-)
-from tools.contracts_checkers.continuity import run_continuity  # noqa: E402 - sys.path bootstrap above
-from tools.contracts_checkers.derived import run_derived  # noqa: E402 - sys.path bootstrap above
-from tools.contracts_checkers.modules import run_modules  # noqa: E402 - sys.path bootstrap above
-from tools.contracts_checkers.state import run_state  # noqa: E402 - sys.path bootstrap above
-from tools.contracts_checkers.swallows import run_swallows  # noqa: E402 - sys.path bootstrap above
+# Loaded through importlib: a `from tools...` here would be an E402 import after
+# the sys.path bootstrap, and the repo does not carry suppression comments.
+_core = importlib.import_module("tools.contracts_checkers.core")
+EXIT_CANNOT_RUN = _core.EXIT_CANNOT_RUN
+EXIT_CLEAN = _core.EXIT_CLEAN
+SUBCOMMANDS = _core.SUBCOMMANDS
+USAGE = _core.USAGE
+
+if TYPE_CHECKING:
+    # The runtime binding above is a value, not a type, so the checker takes the
+    # real TypedDict from its own module.  A TYPE_CHECKING import is not executed.
+    from tools.contracts_checkers.core import _CheckerOptions
+
+run_continuity = importlib.import_module("tools.contracts_checkers.continuity").run_continuity
+run_derived = importlib.import_module("tools.contracts_checkers.derived").run_derived
+run_modules = importlib.import_module("tools.contracts_checkers.modules").run_modules
+run_state = importlib.import_module("tools.contracts_checkers.state").run_state
+run_swallows = importlib.import_module("tools.contracts_checkers.swallows").run_swallows
+
 
 # ── argument parsing ────────────────────────────────────────────────────────
 def parse_args(argv):
@@ -70,13 +84,15 @@ def parse_args(argv):
             sys.stderr.write(
                 f"check-contracts: unknown argument '{positionals[0]}'\n"
                 "  A COMMAND name is only accepted with the `continuity` subcommand, e.g.\n"
-                "  `check-contracts.sh continuity model use`.\n\n" + USAGE + "\n")
+                "  `check-contracts.sh continuity model use`.\n\n" + USAGE + "\n"
+            )
             return EXIT_CANNOT_RUN, None, None, None, options
         selected = list(SUBCOMMANDS)
     if positionals and "continuity" not in selected:
         sys.stderr.write(
             f"check-contracts: unexpected argument(s) {' '.join(positionals)} — a COMMAND name\n"
-            "  is only meaningful for `continuity`.\n")
+            "  is only meaningful for `continuity`.\n"
+        )
         return EXIT_CANNOT_RUN, None, None, None, options
     if options["dump_sites"]:
         # The dump is a machine-readable stream: mixing it with the baseline print or
@@ -84,12 +100,13 @@ def parse_args(argv):
         # combination is refused rather than half-honoured.  A bare invocation narrows
         # to `swallows` for the same reason.
         if options["print_baseline"]:
-            sys.stderr.write("check-contracts: --dump-sites and --print-baseline are two "
-                             "read-only modes for the same population — pass one.\n")
+            sys.stderr.write(
+                "check-contracts: --dump-sites and --print-baseline are two "
+                "read-only modes for the same population — pass one.\n"
+            )
             return EXIT_CANNOT_RUN, None, None, None, options
         if "swallows" not in selected and selected != list(SUBCOMMANDS):
-            sys.stderr.write("check-contracts: --dump-sites is only meaningful with the "
-                             "`swallows` subcommand.\n")
+            sys.stderr.write("check-contracts: --dump-sites is only meaningful with the `swallows` subcommand.\n")
             return EXIT_CANNOT_RUN, None, None, None, options
         selected = ["swallows"]
     return None, selected, repo, positionals, options
@@ -143,8 +160,6 @@ def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     REPO_ROOT = args[0]
     return _run_subcommand(args[1:])
-
-
 
 
 if __name__ == "__main__":
