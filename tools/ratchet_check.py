@@ -4,7 +4,6 @@ Every counter is a pure function of one file's text, so --selftest can exercise 
 a fixture instead of on the repo.  The corpus-wide number is their sum.
 """
 
-import importlib
 import os
 import re
 import subprocess
@@ -16,16 +15,57 @@ import sys
 # check mode.  They are not a fallback for a caller that forgot an argument:
 # running the program with too few arguments still raises.
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO not in sys.path:
-    sys.path.insert(0, REPO)
-# Loaded through importlib: a plain `from tools.fsutil import ...` would be an
-# E402 import after the sys.path bootstrap, which the repo bans.
-_fsutil = importlib.import_module("tools.fsutil")
-atomic_write_text = _fsutil.atomic_write_text
+try:
+    from tools.fsutil import atomic_write_text
+except ModuleNotFoundError:
+    from fsutil import atomic_write_text  # type: ignore[no-redef]
 BASELINE = os.path.join(REPO, "tools", "ratchet-baseline.tsv")
 MODE = "check"
 
 CORPUS = re.compile(r"\.(sh|bashrc)$|^bin/")
+
+# `^bin/` counts as shell, but a non-shell tool may live there — `bin/cuda-context-probe`
+# is Python.  Counted as shell, its CALL lines `probe_torch()`, `probe_ctypes()` and
+# `main()` read as head-only definitions (FUNC_DEF allows `name()` at end of line), so 9.5
+# rose by 3 for a file containing no shell at all (measured 2026-11-10, on a change-set
+# that had added the file).  The shebang decides for a `bin/` file with no shell suffix;
+# `.sh`/`.bashrc` are shell whatever their first line says.
+SHELL_SUFFIX = re.compile(r"\.(sh|bashrc)$")
+SHEBANG_LINE = re.compile(r"^#!\s*(.+)$")
+
+
+def _shebang_interpreter(first_line: str) -> str:
+    """The interpreter a shebang names, reading THROUGH `env`.
+
+    `#!/usr/bin/env bash` names bash, not env: taking the first token drops every script
+    written that way — measured 2026-11-10, my first cut of this filter excluded 13 real
+    bash scripts and only the two Python tools by accident.
+    """
+    m = SHEBANG_LINE.match(first_line.rstrip("\n"))
+    if not m:
+        return ""
+    toks = m.group(1).split()
+    if not toks:
+        return ""
+    interp = os.path.basename(toks[0])
+    if interp == "env":
+        rest = [t for t in toks[1:] if not t.startswith("-")]
+        interp = os.path.basename(rest[0]) if rest else ""
+    return interp
+
+
+def _is_shell_corpus(rel: str, first_line: str) -> bool:
+    """True when this corpus entry is a shell script the §18.3 counters describe."""
+    if SHELL_SUFFIX.search(rel):
+        return True
+    interp = _shebang_interpreter(first_line)
+    if not interp:
+        # No shebang: a `bin/` file with no extension has always been counted, and an
+        # unreadable answer must not silently drop a script from the corpus.
+        return True
+    return interp in ("bash", "sh", "dash", "ksh", "zsh") or interp.endswith("sh")
+
+
 COMMENT = re.compile(r"^\s*#")
 LONG_LINE = 120
 FUNC_LONG_LINES = 100
@@ -363,6 +403,18 @@ def write_baseline(path, counts):
 def corpus_counts():
     files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
     files = [f for f in files if CORPUS.search(f)]
+    kept = []
+    for rel in files:
+        try:
+            with open(os.path.join(REPO, rel), encoding="utf-8", errors="replace") as fh:
+                first = fh.readline()
+        except OSError:
+            # An unreadable script stays in the corpus: dropping it silently would lower
+            # every count and hide the file.  The counting loop below reports the error.
+            first = ""
+        if _is_shell_corpus(rel, first):
+            kept.append(rel)
+    files = kept
     counts = {}
     for cid, _desc, fn in COUNTERS:
         total = 0
