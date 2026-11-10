@@ -15,49 +15,32 @@ import warnings
 from contextlib import contextmanager
 from typing import Any, Generator, TypeVar
 
-try:
-    from pydantic import BaseModel, ValidationError
-except ImportError:
-    BaseModel = Any  # type: ignore
-    ValidationError = Exception  # type: ignore
+from pydantic import BaseModel, ValidationError
 
-T = TypeVar("T", bound=Any)
+M = TypeVar("M", bound=BaseModel)
 
 
-def assert_valid_pydantic(model_cls: type[T], data: Any) -> T:
-    """Validate that data satisfies model_cls and round-trips cleanly."""
-    if hasattr(model_cls, "model_validate"):
-        instance = model_cls.model_validate(data)
-    elif isinstance(data, dict):
-        instance = model_cls(**data)
-    else:
-        instance = model_cls(data)
+def assert_valid_pydantic(model_cls: type[M], data: Any) -> M:
+    """Validate that data satisfies the Pydantic v2 model_cls and round-trips cleanly.
 
-    # Verify serialization
-    if hasattr(instance, "model_dump"):
-        dumped = instance.model_dump()
-        assert dumped is not None, f"model_dump returned None for {model_cls}"
-    elif hasattr(instance, "dict"):
-        dumped = instance.dict()
-        assert dumped is not None, f"dict returned None for {model_cls}"
-
+    Pydantic v2 only: the repo has no v1 models, so a v1-style `.dict()` branch would be
+    a compatibility shim for something that does not exist.
+    """
+    instance = model_cls.model_validate(data)
+    dumped = instance.model_dump()
+    assert model_cls.model_validate(dumped) == instance, f"{model_cls.__name__} did not round-trip"
     return instance
 
 
 def assert_validation_error(
-    model_cls: type[Any],
+    model_cls: type[BaseModel],
     data: Any,
     field_name: str | None = None,
     match: str | None = None,
-) -> Any:
-    """Validate that instantiating model_cls with data raises ValidationError on field_name."""
+) -> ValidationError:
+    """Validate that model_cls.model_validate(data) raises ValidationError on field_name."""
     try:
-        if hasattr(model_cls, "model_validate"):
-            model_cls.model_validate(data)
-        elif isinstance(data, dict):
-            model_cls(**data)
-        else:
-            model_cls(data)
+        model_cls.model_validate(data)
     except ValidationError as exc:
         if field_name is not None:
             field_locs = []

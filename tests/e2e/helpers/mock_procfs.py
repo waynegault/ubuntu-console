@@ -186,7 +186,9 @@ class VirtualProcfs:
                 if isinstance(val, Exception):
                     raise val
 
-                data: bytes = val  # type: ignore
+                if not isinstance(val, bytes):
+                    raise TypeError(f"virtual procfs entry {path_str} holds {type(val).__name__}, not bytes")
+                data = val
                 if "b" in mode:
                     bio = io.BytesIO(data)
                     return bio
@@ -219,7 +221,9 @@ class VirtualProcfs:
                     raise val()
                 if isinstance(val, Exception):
                     raise val
-                return val  # type: ignore
+                if not isinstance(val, str):
+                    raise TypeError(f"virtual readlink entry {path_str} holds {type(val).__name__}, not str")
+                return val
 
             if not self.fallback_to_real:
                 raise FileNotFoundError(2, f"No such file or directory: '{path_str}'")
@@ -268,10 +272,13 @@ class VirtualProcfs:
         self._orig_listdir = os.listdir
         self._orig_exists = os.path.exists
 
-        builtins.open = self._intercept_open  # type: ignore
-        os.readlink = self._intercept_readlink  # type: ignore
-        os.listdir = self._intercept_listdir  # type: ignore
-        os.path.exists = self._intercept_exists  # type: ignore
+        # setattr rather than assignment: the interceptors' signatures are deliberately
+        # wider than typeshed's overloads, and setattr states the patch without a
+        # `# type: ignore` hiding any other error on the line.
+        setattr(builtins, "open", self._intercept_open)
+        setattr(os, "readlink", self._intercept_readlink)
+        setattr(os, "listdir", self._intercept_listdir)
+        setattr(os.path, "exists", self._intercept_exists)
         self._is_active = True
         return self
 
@@ -279,10 +286,10 @@ class VirtualProcfs:
         """Deactivate and restore original functions."""
         if not self._is_active:
             return
-        builtins.open = self._orig_open  # type: ignore
-        os.readlink = self._orig_readlink  # type: ignore
-        os.listdir = self._orig_listdir  # type: ignore
-        os.path.exists = self._orig_exists  # type: ignore
+        setattr(builtins, "open", self._orig_open)
+        setattr(os, "readlink", self._orig_readlink)
+        setattr(os, "listdir", self._orig_listdir)
+        setattr(os.path, "exists", self._orig_exists)
         self._is_active = False
 
     def apply(self, monkeypatch: Any) -> VirtualProcfs:
