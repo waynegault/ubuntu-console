@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 set -euo pipefail
 
 # Guardrail: ubuntu-console should not contain investigator implementation code.

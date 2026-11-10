@@ -3,6 +3,8 @@
 # ==============================================================================
 # normalize-fixture.sh
 # ==============================================================================
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 # Purpose: Strip dynamic/environment-specific values from golden fixture files
 #          so Bash vs PowerShell outputs can be diffed on semantics only.
 #

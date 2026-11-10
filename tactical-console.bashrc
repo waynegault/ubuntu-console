@@ -2,6 +2,8 @@
 # ==============================================================================
 # ~/.bashrc
 # ==============================================================================
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 # Purpose:        Tactical Console Profile (Interactive shell configuration)
 # Author:         Wayne
 # Last modified:  2026-10-30
