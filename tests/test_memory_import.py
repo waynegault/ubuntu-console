@@ -726,6 +726,34 @@ class TestMemoryImportConceptConfig(unittest.TestCase):
                 self.assertIn("concept config unavailable", logs.output[0])
 
 
+class TestConceptKeyFolding(unittest.TestCase):
+    """The three concept keys share one mechanical rule, and their differences are stated.
+
+    Catches the old shape: three copies of "lower, collapse, replace, trim" that
+    differed only in which characters they kept, so a label's key depended on
+    which code path happened to see it.
+    """
+
+    def test_fold_text_collapses_case_and_space_and_trims_edges(self):
+        from kgraph.constants import fold_text
+
+        self.assertEqual(fold_text("  Cleanup,  TASK!!  "), "cleanup task")
+
+    def test_the_default_fold_drops_punctuation_a_canonical_name_keeps(self):
+        from kgraph.constants import fold_text, normalize_canonical_name
+
+        self.assertEqual(fold_text("node_1.2: three"), "node 1 2 three")
+        self.assertEqual(normalize_canonical_name("node_1.2: three"), "node_1.2: three")
+
+    def test_a_semantic_label_and_a_canonical_name_agree_on_a_plain_phrase(self):
+        """Catches the two paths drifting on a label that carries no alias or stopword."""
+        from kgraph.constants import normalize_canonical_name
+        from kgraph.models import normalize_semantic_label
+
+        for label in ("cleanup task", "rotation plan", "launcher reliability"):
+            self.assertEqual(normalize_semantic_label(label), normalize_canonical_name(label), label)
+
+
 _LONG_MEMORY_CONTENT = "Long " + ("memory content " * 8)
 
 

@@ -9,11 +9,22 @@ import sys
 logger = logging.getLogger(__name__)
 
 
-def normalize_canonical_name(text: str) -> str:
+def fold_text(text: str, *, allowed: str = r"a-z0-9\s-") -> str:
+    """Lowercase, collapse whitespace, drop characters outside ``allowed``, trim edges.
+
+    The mechanical half of every concept key in this package.  It lives in one
+    place because three callers had three copies that differed only in the
+    character class they kept, and a difference that is not stated is a
+    difference nobody can review.
+    """
     norm = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    norm = re.sub(r"[^a-z0-9\s._:-]", " ", norm)
-    norm = re.sub(r"\s+", " ", norm).strip(" .:-")
-    return norm
+    norm = re.sub(rf"[^{allowed}]", " ", norm)
+    return re.sub(r"\s+", " ", norm).strip(" .:-")
+
+
+def normalize_canonical_name(text: str) -> str:
+    """A display-safe canonical key: keeps ``. _ : -`` because a name may carry them."""
+    return fold_text(text, allowed=r"a-z0-9\s._:-")
 
 
 # The registries that ACTUALLY exist on this box (measured 2026-10-17, KG-SOURCE-001).  Two

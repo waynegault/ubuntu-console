@@ -36,6 +36,7 @@ from .constants import (
     LOW_VALUE_CONCEPTS,
     SCAFFOLDING_LABELS,
     WRAPPER_TERMS,
+    fold_text,
     load_concept_config,
     normalize_canonical_name,
 )
@@ -561,8 +562,7 @@ class _MemoryStoreIngest:
             clean,
         )
         clean = re.sub(r"\b(?:that|which|still|just|basically|really)\b", "", clean)
-        clean = re.sub(r"[^a-z0-9\s-]", " ", clean)
-        clean = re.sub(r"\s+", " ", clean).strip(" .:-")
+        clean = fold_text(clean)
         if not clean or clean in SCAFFOLDING_LABELS:
             return None
 

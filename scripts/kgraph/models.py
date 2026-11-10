@@ -22,7 +22,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .constants import CONCEPT_ALIASES, STOPWORDS
+from .constants import CONCEPT_ALIASES, STOPWORDS, fold_text
 
 # ── Source lineage (GRAPHRAG-ARCH-007) ─────────────────────────────────
 # REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
@@ -699,8 +699,7 @@ def normalize_semantic_label(label: str, life_index: dict | None = None) -> str:
     # the single source for concept classification (item 11.14); `sorted` keeps the
     # generated alternation deterministic across runs.
     text = re.sub(r"\b(?:%s)\b" % "|".join(sorted(STOPWORDS)), " ", text)
-    text = re.sub(r"[^a-z0-9\s-]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip(" .:-")
+    text = fold_text(text)
     if not text:
         return ""
     for alias, canonical in CONCEPT_ALIASES.items():
