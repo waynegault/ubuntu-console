@@ -16,7 +16,7 @@ import logging
 import os
 
 from .community import compute_centrality, detect_communities, find_god_nodes
-from .models import Graph
+from .models import Graph, as_graph
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,7 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
     Returns:
         Markdown report text.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     title = kwargs.get("title", "Knowledge Graph Report")
     outpath = kwargs.get("outpath")

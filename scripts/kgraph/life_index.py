@@ -18,7 +18,7 @@ from .constants import (
     LIFE_ROOT_DEFAULT,
     normalize_canonical_name,
 )
-from .models import Graph, GraphEdge, source_key
+from .models import Graph, GraphEdge, as_graph, source_key
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +186,7 @@ def load_relations(life_root: str | None = None) -> dict:
 
 def merge_relations(graph: Graph | dict, life_root: str | None = None) -> Graph:
     """Inject explicit relation edges into the graph."""
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     relations = load_relations(life_root).get("relations", [])
     if not relations:

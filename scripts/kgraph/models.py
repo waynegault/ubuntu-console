@@ -947,6 +947,17 @@ def slugify(text: str) -> str:
     return _SLUG_RE.sub("-", (text or "").lower()).strip("-")
 
 
+def as_graph(value: Graph | dict[str, Any]) -> Graph:
+    """A ``Graph`` from either a model or a JSON payload.
+
+    Every public entry in this package takes ``Graph | dict`` because the CLI, the
+    MCP server and the HTTP server each hold a payload at their own boundary.  The
+    coercion is one function so that boundary is one place to change, not the
+    thirteen copies it used to be.
+    """
+    return value if isinstance(value, Graph) else Graph.from_dict(value)
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars per token for English)."""
     return max(1, len(text or "") // 4)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from html import escape
 
-from .models import Graph
+from .models import Graph, as_graph
 
 
 def generate_call_flow_mermaid(graph: Graph | dict, **kwargs) -> str:
@@ -20,8 +20,7 @@ def generate_call_flow_mermaid(graph: Graph | dict, **kwargs) -> str:
     Filters to nodes with 'function', 'class', 'module' types plus
     their call edges.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     title = kwargs.get("title", "Call Flow")
 
@@ -81,8 +80,7 @@ def generate_call_flow_mermaid(graph: Graph | dict, **kwargs) -> str:
 
 def generate_call_flow_html(graph: Graph | dict, **kwargs) -> str:
     """Generate a full HTML page with embedded Mermaid call flow."""
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     title = kwargs.get("title", "Call Flow — kgraph")
     mermaid_code = generate_call_flow_mermaid(graph, title=title)

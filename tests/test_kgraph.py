@@ -2694,3 +2694,30 @@ class SourceLineageCliTests(unittest.TestCase):
             reloaded = load_from_graph_db(db)
         self.assertEqual([n.id for n in reloaded.nodes], ["b"])
         self.assertEqual(reloaded.edges, [])
+
+
+class AsGraphTests(unittest.TestCase):
+    """One boundary helper, used by every public entry that takes Graph | dict."""
+
+    def test_a_payload_becomes_a_graph(self):
+        from kgraph.models import as_graph
+
+        graph = as_graph({"nodes": [{"id": "a", "label": "A"}], "edges": []})
+        self.assertEqual([n.id for n in graph.nodes], ["a"])
+
+    def test_a_graph_passes_through_unconverted(self):
+        """Catches a needless re-validation that would drop fields the model carries."""
+        from kgraph.models import Graph, as_graph
+
+        graph = Graph.from_dict({"nodes": [{"id": "a", "label": "A"}], "edges": []})
+        self.assertIs(as_graph(graph), graph)
+
+    def test_a_non_graph_non_payload_is_refused(self):
+        """Catches silent tolerance of junk reaching a read path."""
+        from typing import Any
+
+        from kgraph.models import as_graph
+
+        bad: Any = "not a graph"
+        with self.assertRaises(Exception):
+            as_graph(bad)

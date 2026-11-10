@@ -20,7 +20,7 @@ from collections import deque
 from typing import Any
 
 from .community import community_for_node
-from .models import ConfidenceLevel, Graph, GraphEdge, GraphNode
+from .models import ConfidenceLevel, Graph, GraphEdge, GraphNode, as_graph
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
     Returns:
         List of matching node dicts, each carrying ``match`` and ``score``, best first.
     """
-    g = Graph.from_dict(graph) if isinstance(graph, dict) else graph
+    g = as_graph(graph)
 
     match_type = kwargs.get("match_type", "any")
     max_results = kwargs.get("max_results", 50)
@@ -369,8 +369,7 @@ def find_path_result(
         ran cannot interpret the answer.  An unknown mode raises ``ValueError``
         rather than silently answering with a different one.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     normalized = str(mode).strip().lower()
     if normalized not in _PATH_MODES:
@@ -454,8 +453,7 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
     source list hit the array bound also carries ``sources_overflow`` — the true count
     — so a truncated list is never read as the whole set.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     # Find node
     target_node: GraphNode | None = graph.node_by_id(node_id)

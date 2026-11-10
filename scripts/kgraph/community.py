@@ -31,7 +31,7 @@ import warnings
 from typing import Any
 
 from .constants import COMMUNITY_DIGEST_VERSION
-from .models import CommunityBoundaryEdge, CommunityRecord, Graph
+from .models import CommunityBoundaryEdge, CommunityRecord, Graph, as_graph
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +106,7 @@ def detect_communities(graph: Graph | dict, method: str = "leiden_like", **kwarg
     Returns:
         Updated Graph with meta.communities populated.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     if not _NX_AVAILABLE:
         logger.debug("community detection skipped: networkx unavailable")
@@ -183,8 +182,7 @@ def compute_centrality(graph: Graph | dict) -> dict:
 
     Returns a dict mapping node_id -> {degree, betweenness, eigenvector, label}.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     if not _NX_AVAILABLE:
         logger.debug("centrality skipped: networkx unavailable")
@@ -346,8 +344,7 @@ def digest_communities(
 
     A graph with no detected communities is returned unchanged.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     if not graph.meta.communities:
         return graph
@@ -400,8 +397,7 @@ def digest_communities(
 
 def community_for_node(graph: Graph | dict, node_id: str) -> CommunityRecord | None:
     """The community record containing *node_id*, or None when it is unclustered."""
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
     for community in graph.meta.communities:
         if node_id in (community.get("members") or []):
             return community
@@ -423,8 +419,7 @@ def community_view(graph: Graph | dict, community_id: str = "") -> dict:
     edges).  ``source`` names where the membership came from: ``"digest"`` when
     it was cached with the graph, ``"computed"`` when this call had to detect it.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     source = "digest"
     if not graph.meta.communities:

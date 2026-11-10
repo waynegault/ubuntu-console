@@ -16,7 +16,7 @@ from .constants import (
     CANONICAL_RELATION_LABELS,
     is_summary_edge_label,
 )
-from .models import ConfidenceLevel, Graph, GraphEdge
+from .models import ConfidenceLevel, Graph, GraphEdge, as_graph
 
 # ── Label sets for classification ─────────────────────────────────────
 # AST_EDGE_LABELS and CANONICAL_RELATION_LABELS are the single declarations in
@@ -117,8 +117,7 @@ def tag_confidence(graph: Graph | dict) -> Graph:
     :data:`COOCCURRENCE_INFERRED_MIN`) are UN-CALIBRATED hand-picked defaults —
     see the note above them for what a real calibration would need.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     for edge in graph.edges:
         if edge.confidence is None:
@@ -177,8 +176,7 @@ def _determine_confidence(edge: GraphEdge) -> ConfidenceLevel:
 
 def confidence_stats(graph: Graph | dict) -> dict:
     """Return a breakdown of confidence levels across graph edges."""
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     stats: dict[str, int] = {
         ConfidenceLevel.EXTRACTED.value: 0,

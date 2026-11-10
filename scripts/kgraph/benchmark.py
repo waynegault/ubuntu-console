@@ -11,7 +11,7 @@ import json
 import logging
 import os
 
-from .models import Graph, estimate_tokens
+from .models import Graph, as_graph, estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,7 @@ def benchmark_graph_vs_raw(graph: Graph | dict, source_files: list[str] | None =
     Returns:
         Dict with benchmark results.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    graph = as_graph(graph)
 
     nodes = graph.nodes
     edges = graph.edges
