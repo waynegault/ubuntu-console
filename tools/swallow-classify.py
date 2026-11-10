@@ -122,19 +122,21 @@ REF: "Towards Spec-Driven Test Automation: Part 1" (Gal Arav, TDS, 2026-09-24) �
 """
 
 import argparse
+import importlib
 import json
 import os
 import random
 import re
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 
 # The site scanner lives in the checker; this tool reads its JSONL dump so the two
 # can never disagree about what a site is (see the module docstring).
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CHECKER = os.path.join(TOOL_DIR, "check-contracts.sh")
+if TOOL_DIR not in sys.path:
+    sys.path.insert(0, TOOL_DIR)
+_llm = importlib.import_module("llm_client")
 DUMP_TIMEOUT = 300.0
 DEFAULT_ENDPOINT = "http://127.0.0.1:18084"
 ENDPOINT_ENV = "SWALLOW_CLASSIFY_ENDPOINT"
@@ -204,48 +206,86 @@ def parse_args(argv):
         prog="swallow-classify.py",
         description="Propose `# swallow-ok:` reasons for swallow sites (never a gate).",
     )
-    parser.add_argument("--repo", default=None,
-                        help="checkout to read (default: the repo this tool lives in)")
-    parser.add_argument("--endpoint", default=None,
-                        help=f"loopback model base URL (default ${ENDPOINT_ENV} or "
-                             f"{DEFAULT_ENDPOINT})")
-    parser.add_argument("--model", default=None,
-                        help="model name; by default read from the endpoint's /v1/models "
-                             "(the report marks a discovered model UNPINNED)")
-    parser.add_argument("--limit", type=int, default=20,
-                        help="ask about at most N unique site-lines, classified first "
-                             "(0 = every site-line)")
-    parser.add_argument("--only", choices=("all", "classified", "unclassified"), default="all",
-                        help="restrict which sites are asked about (default: all)")
-    parser.add_argument("--sample", choices=SAMPLES, default="corpus",
-                        help="which sites to ask about: corpus = dump order (default, so an "
-                             "old result stays reproducible), random = a seeded shuffle, "
-                             "stratified = every file, in proportion")
-    parser.add_argument("--seed", type=int, default=0,
-                        help="seed for --sample random|stratified and --split (default 0; "
-                             "the same command always produces the same plan)")
-    parser.add_argument("--split", choices=SPLITS, default="all",
-                        help="use only the tune or the heldout half of the LABELLED pool "
-                             "(stratified by file, alternating after a seeded shuffle), so a "
-                             "prompt is tuned on one half and measured on the other")
-    parser.add_argument("--prompt", choices=tuple(PROMPTS), default="v1",
-                        help="v1 = the original question (default, byte-identical so the "
-                             "first measurement stays reproducible); v2 = asks for the LATER "
-                             "CONSEQUENCE and forbids restating the syntax")
-    parser.add_argument("--bar", type=float, default=DEFAULT_BAR,
-                        help=f"agreement %% a 'useful filter' must clear on labelled sites "
-                             f"(default {DEFAULT_BAR:g}, a CHOSEN bar, not derived)")
-    parser.add_argument("--baseline-only", action="store_true",
-                        help="print the deterministic human baseline and make NO model call")
-    parser.add_argument("--labels", default=None,
-                        help="TSV `file:line<TAB>benign|masking`: the model's verdict must "
-                             "agree with every row, or the run exits 1 (a self-check for the "
-                             "battery; never a verdict on the tree)")
+    parser.add_argument("--repo", default=None, help="checkout to read (default: the repo this tool lives in)")
+    parser.add_argument(
+        "--endpoint", default=None, help=f"loopback model base URL (default ${ENDPOINT_ENV} or {DEFAULT_ENDPOINT})"
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="model name; by default read from the endpoint's /v1/models "
+        "(the report marks a discovered model UNPINNED)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="ask about at most N unique site-lines, classified first (0 = every site-line)",
+    )
+    parser.add_argument(
+        "--only",
+        choices=("all", "classified", "unclassified"),
+        default="all",
+        help="restrict which sites are asked about (default: all)",
+    )
+    parser.add_argument(
+        "--sample",
+        choices=SAMPLES,
+        default="corpus",
+        help="which sites to ask about: corpus = dump order (default, so an "
+        "old result stays reproducible), random = a seeded shuffle, "
+        "stratified = every file, in proportion",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="seed for --sample random|stratified and --split (default 0; "
+        "the same command always produces the same plan)",
+    )
+    parser.add_argument(
+        "--split",
+        choices=SPLITS,
+        default="all",
+        help="use only the tune or the heldout half of the LABELLED pool "
+        "(stratified by file, alternating after a seeded shuffle), so a "
+        "prompt is tuned on one half and measured on the other",
+    )
+    parser.add_argument(
+        "--prompt",
+        choices=tuple(PROMPTS),
+        default="v1",
+        help="v1 = the original question (default, byte-identical so the "
+        "first measurement stays reproducible); v2 = asks for the LATER "
+        "CONSEQUENCE and forbids restating the syntax",
+    )
+    parser.add_argument(
+        "--bar",
+        type=float,
+        default=DEFAULT_BAR,
+        help=f"agreement %% a 'useful filter' must clear on labelled sites "
+        f"(default {DEFAULT_BAR:g}, a CHOSEN bar, not derived)",
+    )
+    parser.add_argument(
+        "--baseline-only", action="store_true", help="print the deterministic human baseline and make NO model call"
+    )
+    parser.add_argument(
+        "--labels",
+        default=None,
+        help="TSV `file:line<TAB>benign|masking`: the model's verdict must "
+        "agree with every row, or the run exits 1 (a self-check for the "
+        "battery; never a verdict on the tree)",
+    )
     parser.add_argument("--out", default=None, help="write the report here (default: stdout)")
-    parser.add_argument("--timeout", type=float, default=HTTP_TIMEOUT_DEFAULT,
-                        help=f"per-request timeout in seconds (default {HTTP_TIMEOUT_DEFAULT:g})")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="print the prompt for the first site to ask about, then exit")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=HTTP_TIMEOUT_DEFAULT,
+        help=f"per-request timeout in seconds (default {HTTP_TIMEOUT_DEFAULT:g})",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print the prompt for the first site to ask about, then exit"
+    )
     return parser.parse_args(argv)
 
 
@@ -275,7 +315,10 @@ def read_sites(repo):
         raise RuntimeError(f"the site scanner is missing: {CHECKER}")
     completed = subprocess.run(
         [CHECKER, "swallows", "--dump-sites", "--repo", repo],
-        capture_output=True, text=True, timeout=DUMP_TIMEOUT, check=False,
+        capture_output=True,
+        text=True,
+        timeout=DUMP_TIMEOUT,
+        check=False,
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -300,18 +343,12 @@ def http_get_json(url, timeout):
     layer — never the global `urllib`/`subprocess` modules, so unrelated calls in the
     same process still run and their failures still surface.
     """
-    with urllib.request.urlopen(url, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return _llm.get_url(url, timeout=timeout)
 
 
 def http_post_json(url, payload, timeout):
     """One JSON POST (the model call the tests replace).  See http_get_json."""
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return _llm.post_url(url, payload, timeout=timeout)
 
 
 def discover_model(endpoint, timeout):
@@ -353,8 +390,7 @@ def parse_verdict(text):
 
 def ask_model(site, endpoint, model, timeout, prompt_name):
     """ONE narrow question about ONE site line; the verdict is assembled by the caller."""
-    prompt = PROMPTS[prompt_name].format(
-        text=site["text"], patterns=", ".join(site["patterns"]))
+    prompt = PROMPTS[prompt_name].format(text=site["text"], patterns=", ".join(site["patterns"]))
     payload = {
         "model": model,
         "temperature": 0.0,
@@ -447,7 +483,8 @@ def stratified_allocation(strata, limit):
     if limit < len(files):
         raise RuntimeError(
             f"--sample stratified with --limit {limit} cannot cover every file: the pool has "
-            f"{len(files)} file(s), so the smallest covering limit is {len(files)}")
+            f"{len(files)} file(s), so the smallest covering limit is {len(files)}"
+        )
     allocation = {name: 1 for name in files}
     remaining = limit - len(files)
     capacity = {name: len(strata[name]) - 1 for name in files}
@@ -478,12 +515,18 @@ def stratified_selection(pool, limit, seed):
         picked.sort(key=lambda site: site["line"])
         chosen.append(picked)
     # Round-robin across files, so a run that is cut short still spans the strata.
-    ordered = [site for index in range(max(len(group) for group in chosen))
-               for group in chosen if index < len(group) for site in [group[index]]]
-    plan = [f"               {name}: {allocation[name]} of {len(strata[name])}"
-            for name in strata]
-    plan.append(f"               rule: stratified by file, proportional with a floor of 1, "
-                f"seed={seed}; {len(strata)} file(s) covered")
+    ordered = [
+        site
+        for index in range(max(len(group) for group in chosen))
+        for group in chosen
+        if index < len(group)
+        for site in [group[index]]
+    ]
+    plan = [f"               {name}: {allocation[name]} of {len(strata[name])}" for name in strata]
+    plan.append(
+        f"               rule: stratified by file, proportional with a floor of 1, "
+        f"seed={seed}; {len(strata)} file(s) covered"
+    )
     return ordered, plan
 
 
@@ -524,13 +567,13 @@ def split_labelled(pool, split, seed):
         rng = random.Random(f"{seed}:split:{name}")
         shuffled = sorted(sites, key=lambda site: site["line"])
         rng.shuffle(shuffled)
-        half = [site for index, site in enumerate(shuffled)
-                if (index % 2 == 0) == (split == "tune")]
+        half = [site for index, site in enumerate(shuffled) if (index % 2 == 0) == (split == "tune")]
         half.sort(key=lambda site: site["line"])
         keep.extend(half)
         counts.append(f"               {name}: {len(half)} of {len(sites)}")
-    plan = [f"               rule: alternating deal inside each file after a seeded shuffle, "
-            f"seed={seed}; split={split}"]
+    plan = [
+        f"               rule: alternating deal inside each file after a seeded shuffle, seed={seed}; split={split}"
+    ]
     plan.extend(counts)
     return keep, plan
 
@@ -546,24 +589,30 @@ def filter_verdict(asked, verdicts, bar):
     benign = sum(1 for site in labelled if verdicts[site_key(site)][0] == "benign")
     masking = sum(1 for site in labelled if verdicts[site_key(site)][0] == "masking")
     parsed = benign + masking
-    lines = [f"BAR            {bar:g}% agreement on labelled sites — a CHOSEN bar (not derived "
-             f"from data); change it with --bar"]
+    lines = [
+        f"BAR            {bar:g}% agreement on labelled sites — a CHOSEN bar (not derived "
+        f"from data); change it with --bar"
+    ]
     if not labelled:
-        lines.append("FILTER         NO LABELLED SITE IN THIS RUN — this run cannot measure "
-                     "agreement at all")
+        lines.append("FILTER         NO LABELLED SITE IN THIS RUN — this run cannot measure agreement at all")
         return None, parsed, benign, lines
     if parsed == 0:
-        lines.append(f"FILTER         NO MEASUREMENT — {len(labelled)} labelled site(s) asked and "
-                     f"not one parsed verdict")
+        lines.append(
+            f"FILTER         NO MEASUREMENT — {len(labelled)} labelled site(s) asked and not one parsed verdict"
+        )
         return None, parsed, benign, lines
     rate = 100.0 * benign / parsed
     if rate >= bar:
-        lines.append(f"FILTER         USABLE as a filter at this bar: {rate:.1f}% >= {bar:g}% "
-                     f"({benign}/{parsed} labelled site(s) agreed, model benign)")
+        lines.append(
+            f"FILTER         USABLE as a filter at this bar: {rate:.1f}% >= {bar:g}% "
+            f"({benign}/{parsed} labelled site(s) agreed, model benign)"
+        )
     else:
-        lines.append(f"FILTER         UNFILTERED — {rate:.1f}% < {bar:g}% ({benign}/{parsed} "
-                     f"labelled site(s) agreed): the proposals are NOT usable as a filter and a "
-                     f"human must read every one")
+        lines.append(
+            f"FILTER         UNFILTERED — {rate:.1f}% < {bar:g}% ({benign}/{parsed} "
+            f"labelled site(s) agreed): the proposals are NOT usable as a filter and a "
+            f"human must read every one"
+        )
     return rate, parsed, benign, lines
 
 
@@ -586,16 +635,12 @@ def baseline_section(sites):
         f"unique site-line(s),",
         f"               in {files_with_sites} file(s) that carry a site",
         f"               {len(classified)} classified · {len(unclassified)} unclassified hit(s)",
-        "               patterns: " + ", ".join(f"{name} {count}"
-                                              for name, count in sorted(patterns.items())),
-        f"HUMAN BASELINE {len(labelled_lines)} classified site-line(s) / {len(classified)} "
-        f"classified site-hit(s)",
+        "               patterns: " + ", ".join(f"{name} {count}" for name, count in sorted(patterns.items())),
+        f"HUMAN BASELINE {len(labelled_lines)} classified site-line(s) / {len(classified)} classified site-hit(s)",
         f"               {len(reasons)} distinct reason(s); marker placement: {line_above} "
         f"line-above, {same_line} same-line; unweighable reason(s): {unweighable}",
-        "               0 masking — this corpus carries no negative label, so BENIGN is the "
-        "only human",
-        "               verdict a marker can express; the masking side is the model's to "
-        "nominate,",
+        "               0 masking — this corpus carries no negative label, so BENIGN is the only human",
+        "               verdict a marker can express; the masking side is the model's to nominate,",
         "               for a human to ratify (never inferred from production data here).",
         f"               {len(unlabelled_lines)} unclassified site-line(s) await a proposal.",
     ]
@@ -609,17 +654,32 @@ def count_verdicts(asked, verdicts):
     return benign, masking, unparsed
 
 
-def report_lines(repo, raw_sites, asked, verdicts, endpoint, model, model_pinned, sample,
-                 seed, split, prompt_name, bar, plan_lines, split_lines):
+def report_lines(
+    repo,
+    raw_sites,
+    asked,
+    verdicts,
+    endpoint,
+    model,
+    model_pinned,
+    sample,
+    seed,
+    split,
+    prompt_name,
+    bar,
+    plan_lines,
+    split_lines,
+):
     """The whole report: baseline, the sampling rule, the model comparison, the candidates."""
-    lines = ["swallow-classify — PROPOSAL report (no gate; the count/baseline in",
-             "`check-contracts.sh swallows` is the only enforcement)",
-             f"REPO           {repo}",
-             ""]
+    lines = [
+        "swallow-classify — PROPOSAL report (no gate; the count/baseline in",
+        "`check-contracts.sh swallows` is the only enforcement)",
+        f"REPO           {repo}",
+        "",
+    ]
     lines.extend(baseline_section(raw_sites))
     lines.append("")
-    lines.append(f"SAMPLING       --sample {sample} --seed {seed} --limit "
-                 f"{len(asked) if asked else 0} asked")
+    lines.append(f"SAMPLING       --sample {sample} --seed {seed} --limit {len(asked) if asked else 0} asked")
     lines.extend(plan_lines)
     lines.append(f"SPLIT          --split {split}")
     lines.extend(split_lines)
@@ -629,33 +689,40 @@ def report_lines(repo, raw_sites, asked, verdicts, endpoint, model, model_pinned
     # The model is named in the header so a change under the run is visible in the
     # diff (card 9fa9e818): a run whose model came from /v1/models is marked UNPINNED,
     # because the lane's served model can change between runs with no bench evidence.
-    pin_note = ("pinned via --model" if model_pinned
-                else "UNPINNED — discovered from /v1/models; pass --model to pin")
+    pin_note = "pinned via --model" if model_pinned else "UNPINNED — discovered from /v1/models; pass --model to pin"
     lines.append(f"MODEL          {endpoint} model={model} ({pin_note})")
-    lines.append(f"               asked {len(asked)} unique site-line(s): {benign} benign · "
-                 f"{masking} masking · {unparsed} unparsed (a non-answer is never counted as "
-                 f"benign)")
+    lines.append(
+        f"               asked {len(asked)} unique site-line(s): {benign} benign · "
+        f"{masking} masking · {unparsed} unparsed (a non-answer is never counted as "
+        f"benign)"
+    )
     classified_asked = [site for site in asked if site["classified"]]
     if classified_asked:
         agree = [site for site in classified_asked if verdicts[site_key(site)][0] == "benign"]
         disagree = [site for site in classified_asked if verdicts[site_key(site)][0] == "masking"]
         unknown = [site for site in classified_asked if verdicts[site_key(site)][0] is None]
-        lines.append(f"AGREEMENT      on the {len(classified_asked)} classified site-line(s) "
-                     f"asked: {len(agree)} agree (model benign, human marker), {len(disagree)} "
-                     f"disagree (model masking), {len(unknown)} unparsed")
+        lines.append(
+            f"AGREEMENT      on the {len(classified_asked)} classified site-line(s) "
+            f"asked: {len(agree)} agree (model benign, human marker), {len(disagree)} "
+            f"disagree (model masking), {len(unknown)} unparsed"
+        )
     rate, parsed, agreed, filter_lines = filter_verdict(asked, verdicts, bar)
     lines.extend(filter_lines)
     if rate is not None:
-        lines.append(f"               (agreement is measured on LABELLED sites only; "
-                     f"{parsed} parsed verdict(s), {agreed} agreed)")
+        lines.append(
+            f"               (agreement is measured on LABELLED sites only; "
+            f"{parsed} parsed verdict(s), {agreed} agreed)"
+        )
     candidates = [site for site in asked if verdicts[site_key(site)][0] == "masking"]
     lines.append("")
     lines.append(f"MASKING CANDIDATES (ratify or reject)  {len(candidates)}")
     for site in candidates:
         _verdict, reason = verdicts[site_key(site)]
         origin = "human-labelled benign" if site["classified"] else "unclassified"
-        lines.append(f"  {site_key(site)} [{', '.join(site['patterns'])}] ({origin}) "
-                     f"{reason or 'model gave no weighable reason'}")
+        lines.append(
+            f"  {site_key(site)} [{', '.join(site['patterns'])}] ({origin}) "
+            f"{reason or 'model gave no weighable reason'}"
+        )
         lines.append(f"      {site['text']}")
     proposals = [site for site in asked if verdicts[site_key(site)][0] == "benign"]
     lines.append("")
@@ -666,8 +733,7 @@ def report_lines(repo, raw_sites, asked, verdicts, endpoint, model, model_pinned
     unparsed_sites = [site for site in asked if verdicts[site_key(site)][0] is None]
     if unparsed_sites:
         lines.append("")
-        lines.append(f"UNPARSED (the model did not answer in the required form)  "
-                     f"{len(unparsed_sites)}")
+        lines.append(f"UNPARSED (the model did not answer in the required form)  {len(unparsed_sites)}")
         for site in unparsed_sites:
             lines.append(f"  {site_key(site)} [{', '.join(site['patterns'])}] {site['text']}")
     return lines
@@ -683,8 +749,7 @@ def read_labels(path):
                 continue
             parts = stripped.split("\t")
             if len(parts) != 2 or parts[1].strip() not in VERDICTS:
-                raise RuntimeError(f"{path}:{number}: expected `<file>:<line><TAB>benign|masking`, "
-                                   f"got {stripped!r}")
+                raise RuntimeError(f"{path}:{number}: expected `<file>:<line><TAB>benign|masking`, got {stripped!r}")
             where = parts[0].strip()
             if not re.match(r"^.+:\d+$", where):
                 raise RuntimeError(f"{path}:{number}: `{where}` is not `<file>:<line>`")
@@ -734,46 +799,60 @@ def run(argv):
     # `--split` cuts the LABELLED pool, so it is only meaningful where labelled sites
     # are in the pool: refuse rather than silently using the whole pool.
     if args.split != "all" and args.only == "unclassified":
-        raise RuntimeError("--split applies to the LABELLED pool; use --only classified "
-                           "(or --only all) with it")
+        raise RuntimeError("--split applies to the LABELLED pool; use --only classified (or --only all) with it")
     pool, split_lines = split_labelled(pool, args.split, args.seed)
     asked, plan_lines = select_pool(pool, args.sample, args.limit, args.seed)
     if not asked:
-        raise RuntimeError(f"no site matches --only {args.only}"
-                           + (f" and --split {args.split}" if args.split != "all" else ""))
+        raise RuntimeError(
+            f"no site matches --only {args.only}" + (f" and --split {args.split}" if args.split != "all" else "")
+        )
 
     if args.dry_run:
         # Before model discovery on purpose: showing the prompt must not need a lane.
-        print(PROMPTS[args.prompt].format(text=asked[0]["text"],
-                                          patterns=", ".join(asked[0]["patterns"])))
+        print(PROMPTS[args.prompt].format(text=asked[0]["text"], patterns=", ".join(asked[0]["patterns"])))
         return 0
 
     model = args.model or discover_model(endpoint, args.timeout)
     verdicts = {}
     for site in asked:
         verdicts[site_key(site)] = ask_model(site, endpoint, model, args.timeout, args.prompt)
-    lines = report_lines(repo, raw_sites, asked, verdicts, endpoint, model,
-                         bool(args.model), args.sample,
-                         args.seed, args.split, args.prompt, args.bar, plan_lines, split_lines)
+    lines = report_lines(
+        repo,
+        raw_sites,
+        asked,
+        verdicts,
+        endpoint,
+        model,
+        bool(args.model),
+        args.sample,
+        args.seed,
+        args.split,
+        args.prompt,
+        args.bar,
+        plan_lines,
+        split_lines,
+    )
 
     if args.labels:
         labels = read_labels(args.labels)
         disagreements = label_disagreements(labels, asked, verdicts)
         lines.append("")
-        lines.append(f"LABEL CHECK    {args.labels}: {len(labels)} label(s), "
-                     f"{len(disagreements)} disagreement(s)")
+        lines.append(f"LABEL CHECK    {args.labels}: {len(labels)} label(s), {len(disagreements)} disagreement(s)")
         for key, label, verdict, site in disagreements:
             where = f"{key[0]}:{key[1]}"
             if site is None:
-                lines.append(f"  NOT ASKED  {where} labelled {label} — the label cannot be "
-                             f"checked, so the measurement is incomplete")
+                lines.append(
+                    f"  NOT ASKED  {where} labelled {label} — the label cannot be "
+                    f"checked, so the measurement is incomplete"
+                )
             else:
-                lines.append(f"  MISMATCH   {where} labelled {label}, model said "
-                             f"{verdict or 'unparsed'} — an unparsed verdict does not satisfy "
-                             f"a label")
+                lines.append(
+                    f"  MISMATCH   {where} labelled {label}, model said "
+                    f"{verdict or 'unparsed'} — an unparsed verdict does not satisfy "
+                    f"a label"
+                )
         if disagreements:
-            lines.append(f"  The comparison FAILED: {len(disagreements)} labelled site(s) "
-                         f"disagree with the model.")
+            lines.append(f"  The comparison FAILED: {len(disagreements)} labelled site(s) disagree with the model.")
     write_report(args.out, lines)
     if args.labels:
         return 1 if disagreements else 0
@@ -795,7 +874,8 @@ def main(argv=None):
     """Run, converting a cannot-run into exit 2 with the reason on stderr."""
     try:
         return run(sys.argv[1:] if argv is None else argv)
-    except (RuntimeError, urllib.error.URLError, TimeoutError, OSError) as exc:
+    # LLMClientError is a RuntimeError, so the first clause covers a failed call.
+    except (RuntimeError, TimeoutError, OSError) as exc:
         sys.stderr.write(f"swallow-classify: cannot run: {exc}\n")
         return 2
 

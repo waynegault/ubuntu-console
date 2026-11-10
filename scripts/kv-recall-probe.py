@@ -42,18 +42,22 @@ REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 import random
 import re
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("kv-recall-probe")
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+_llm = importlib.import_module("tools.llm_client")
 
 # Bumping this invalidates nothing, but it IS recorded: a baseline measured by an older
 # probe is not comparable to a newer one, and the version is what makes that visible.
@@ -66,9 +70,7 @@ BASELINE_HEADER = "#model\tkv_type\tdepth\tctx_tokens\trecall\ttrials\tprobe_ver
 # The needle and the questions asked about it.  Deliberately a FACT with an exact answer,
 # so scoring is exact rather than a judgement call: the question is "did the long-context
 # read survive", not "was the answer good".
-NEEDLE_TEMPLATE = (
-    "Note for the case file: the maintenance access code for {tag} is {code}."
-)
+NEEDLE_TEMPLATE = "Note for the case file: the maintenance access code for {tag} is {code}."
 QUESTION = (
     "Using only the document above, what is the maintenance access code for {tag}? "
     "Reply with the code alone on the last line."
@@ -118,9 +120,7 @@ def validate_depths(depths: tuple[float, ...]) -> tuple[float, ...]:
     return depths
 
 
-def build_haystack(
-    plan: ProbePlan, depth: float, needle: str
-) -> tuple[str, int]:
+def build_haystack(plan: ProbePlan, depth: float, needle: str) -> tuple[str, int]:
     """Plant ``needle`` at ``depth`` of a context of about ``plan.ctx_tokens``.
 
     Returns the document and the needle's 1-based position among its lines, so a test can
@@ -187,22 +187,15 @@ def score_answer(answer: str, code: str) -> bool:
 def ask_server(base_url: str, prompt: str, timeout: float) -> tuple[str, int | None]:
     """One chat completion.  Returns (text, prompt_tokens) — the token count is the
     server's, and None when it did not report one."""
-    url = base_url.rstrip("/") + "/v1/chat/completions"
-    body = json.dumps(
-        {
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-            "max_tokens": 64,
-        }
-    ).encode()
-    req = urllib.request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - operator-supplied loopback URL
-        data = json.loads(resp.read().decode())
-    text = data["choices"][0]["message"]["content"]
-    usage = data.get("usage") or {}
-    prompt_tokens = usage.get("prompt_tokens")
+    payload = {
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 64,
+    }
+    data = _llm.post_chat(base_url.rstrip("/") + "/v1", payload, timeout=timeout)
+    text = _llm.extract_text(data)
+    usage = data.get("usage")
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
     return text, (int(prompt_tokens) if isinstance(prompt_tokens, int) else None)
 
 
@@ -214,9 +207,7 @@ def run_plan(plan: ProbePlan, base_url: str, code: str, timeout: float) -> list[
         needle = NEEDLE_TEMPLATE.format(tag="the A-17 bundle", code=code)
         document, position = build_haystack(plan, depth, needle)
         prompt = f"{document}\n\n{QUESTION.format(tag='the A-17 bundle')}"
-        logger.debug(
-            "depth %.2f -> needle at line %d of %d", depth, position, document.count("\n") + 1
-        )
+        logger.debug("depth %.2f -> needle at line %d of %d", depth, position, document.count("\n") + 1)
         text, prompt_tokens = ask_server(base_url, prompt, timeout)
         results.append(
             DepthResult(
@@ -295,9 +286,7 @@ def record_baseline(path: Path, plan: ProbePlan, results: list[DepthResult]) -> 
     path.write_text("\n".join(body) + "\n")
 
 
-def check_baseline(
-    path: Path, plan: ProbePlan, results: list[DepthResult], tolerance: float
-) -> list[str]:
+def check_baseline(path: Path, plan: ProbePlan, results: list[DepthResult], tolerance: float) -> list[str]:
     """Compare this run against the record for the same (model, kv_type, depth).
 
     A depth with no recorded row is reported as unrecorded and never as a pass: silence
@@ -309,8 +298,7 @@ def check_baseline(
         key = (plan.model, plan.kv_type, f"{result.depth:.2f}")
         if key not in recorded:
             failures.append(
-                f"{plan.model}/{plan.kv_type} depth {result.depth:.2f}: no recorded recall"
-                " — unrecorded is not passing"
+                f"{plan.model}/{plan.kv_type} depth {result.depth:.2f}: no recorded recall — unrecorded is not passing"
             )
             continue
         want = float(recorded[key])
@@ -326,31 +314,38 @@ def check_baseline(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # An explicit description rather than __doc__: __doc__ is Optional[str], so a module
     # that ever lost its docstring would crash here rather than print help.
-    parser = argparse.ArgumentParser(
-        description="Measure long-context retrieval recall per KV-cache precision"
+    parser = argparse.ArgumentParser(description="Measure long-context retrieval recall per KV-cache precision")
+    parser.add_argument(
+        "--base-url", default="http://127.0.0.1:18083", help="a llama.cpp server ALREADY running at --kv-type"
     )
-    parser.add_argument("--base-url", default="http://127.0.0.1:18083",
-                        help="a llama.cpp server ALREADY running at --kv-type")
     parser.add_argument("--model", default="", help="label for the record (required to record)")
-    parser.add_argument("--kv-type", default="",
-                        help="the server's --cache-type-k/v, e.g. q8_0 or q4_0 (required to run)")
-    parser.add_argument("--ctx-tokens", type=int, default=4096,
-                        help="target context size (words are estimated; the record carries"
-                             " the server's own prompt_tokens when it reports one)")
-    parser.add_argument("--depths", default=",".join(f"{d}" for d in DEFAULT_DEPTHS),
-                        help="comma-separated positions in (0,1)")
+    parser.add_argument(
+        "--kv-type", default="", help="the server's --cache-type-k/v, e.g. q8_0 or q4_0 (required to run)"
+    )
+    parser.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=4096,
+        help="target context size (words are estimated; the record carries"
+        " the server's own prompt_tokens when it reports one)",
+    )
+    parser.add_argument(
+        "--depths", default=",".join(f"{d}" for d in DEFAULT_DEPTHS), help="comma-separated positions in (0,1)"
+    )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--code", default="7394", help="the needle's exact answer")
     parser.add_argument("--timeout", type=float, default=120.0)
-    parser.add_argument("--record", type=Path, default=None,
-                        help="merge this run into a baseline TSV")
-    parser.add_argument("--check", type=Path, default=None,
-                        help="fail when any depth's recall is below the recorded one")
-    parser.add_argument("--tolerance", type=float, default=0.0,
-                        help="allowed drop against the recorded recall (default: none)")
+    parser.add_argument("--record", type=Path, default=None, help="merge this run into a baseline TSV")
+    parser.add_argument(
+        "--check", type=Path, default=None, help="fail when any depth's recall is below the recorded one"
+    )
+    parser.add_argument(
+        "--tolerance", type=float, default=0.0, help="allowed drop against the recorded recall (default: none)"
+    )
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="build the prompt and report the plan; never contact a server")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="build the prompt and report the plan; never contact a server"
+    )
     args = parser.parse_args(argv)
     args.depths = tuple(float(d) for d in str(args.depths).split(",") if d.strip())
     return args
@@ -372,8 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     if (args.record or args.check) and not args.model:
-        print("kv-recall-probe: --model is required to record or check a baseline",
-              file=sys.stderr)
+        print("kv-recall-probe: --model is required to record or check a baseline", file=sys.stderr)
         return 2
 
     plan = ProbePlan(
@@ -387,18 +381,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         needle = NEEDLE_TEMPLATE.format(tag="the A-17 bundle", code=args.code)
         document, position = build_haystack(plan, depths[0], needle)
-        print(f"plan: model={plan.model} kv_type={plan.kv_type} ctx~{plan.ctx_tokens} tokens"
-              f" depths={list(depths)}")
-        print(f"needle at line {position} of {document.count(chr(10)) + 1}"
-              f" (first depth {depths[0]:.2f})")
-        print(f"estimated prompt words: {len(document.split())} (server count is what"
-              " the record carries)")
+        print(f"plan: model={plan.model} kv_type={plan.kv_type} ctx~{plan.ctx_tokens} tokens depths={list(depths)}")
+        print(f"needle at line {position} of {document.count(chr(10)) + 1} (first depth {depths[0]:.2f})")
+        print(f"estimated prompt words: {len(document.split())} (server count is what the record carries)")
         return 2
 
     code = args.code
     try:
         results = run_plan(plan, args.base_url, code, args.timeout)
-    except (urllib.error.URLError, TimeoutError, OSError, KeyError, json.JSONDecodeError) as exc:
+    except (_llm.LLMClientError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         print(f"kv-recall-probe: the server did not answer usefully: {exc}", file=sys.stderr)
         return 3
 
@@ -412,9 +403,7 @@ def main(argv: list[str] | None = None) -> int:
             "seed": plan.seed,
         },
         "per_depth": [
-            {"depth": r.depth, "hit": r.hit, "prompt_tokens": r.prompt_tokens,
-             "answer": r.answer}
-            for r in results
+            {"depth": r.depth, "hit": r.hit, "prompt_tokens": r.prompt_tokens, "answer": r.answer} for r in results
         ],
         **summarise(results),
     }
@@ -430,13 +419,16 @@ def main(argv: list[str] | None = None) -> int:
         report["failures"] = failures
         print(json.dumps(report, indent=2))
     else:
-        print(f"KV recall — model={plan.model} kv_type={plan.kv_type}"
-              f" ctx~{plan.ctx_tokens}")
+        print(f"KV recall — model={plan.model} kv_type={plan.kv_type} ctx~{plan.ctx_tokens}")
         for r in results:
-            print(f"  depth {r.depth:.2f}  {'HIT ' if r.hit else 'MISS'}"
-                  f"  prompt_tokens={r.prompt_tokens if r.prompt_tokens is not None else '?'}")
-        print(f"  {summarise(results)['hits']}/{len(results)} depths recalled"
-              "  (the aggregate is NOT the result — the cliff hides in the average)")
+            print(
+                f"  depth {r.depth:.2f}  {'HIT ' if r.hit else 'MISS'}"
+                f"  prompt_tokens={r.prompt_tokens if r.prompt_tokens is not None else '?'}"
+            )
+        print(
+            f"  {summarise(results)['hits']}/{len(results)} depths recalled"
+            "  (the aggregate is NOT the result — the cliff hides in the average)"
+        )
         for failure in failures:
             print(f"  REGRESSION: {failure}", file=sys.stderr)
 

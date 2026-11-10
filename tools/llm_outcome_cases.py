@@ -71,9 +71,7 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,15 +81,17 @@ if REPO_ROOT not in sys.path:
 
 _fsutil = importlib.import_module("tools.fsutil")
 atomic_write_text = _fsutil.atomic_write_text
+_llm = importlib.import_module("tools.llm_client")
 
-from tools.llm_task_quality import (  # noqa: E402 - repo root must be on sys.path first
-    CODE_BAD_ARGUMENTS,
-    CODE_EMPTY,
-    CODE_OK,
-    CODE_RAW_SYNTAX,
-    CODE_WRONG_SHAPE,
-    check_response,
-)
+# Imported through importlib: a plain `from tools...` would be an E402 import
+# after the sys.path bootstrap, which the repo bans.
+_task_quality = importlib.import_module("tools.llm_task_quality")
+CODE_BAD_ARGUMENTS = _task_quality.CODE_BAD_ARGUMENTS
+CODE_EMPTY = _task_quality.CODE_EMPTY
+CODE_OK = _task_quality.CODE_OK
+CODE_RAW_SYNTAX = _task_quality.CODE_RAW_SYNTAX
+CODE_WRONG_SHAPE = _task_quality.CODE_WRONG_SHAPE
+check_response = _task_quality.check_response
 
 # Outcomes.  One per response, never pooled in the report.
 OUTCOME_CORRECT = "correct"
@@ -709,23 +709,14 @@ def _post_chat(base_url: str, model: str, prompt: str, timeout: float) -> Any:
     host = urllib.parse.urlsplit(base_url).hostname or ""
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise SystemExit(f"refusing to send case prompts to a non-loopback URL: {base_url}")
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 256,
-            "stream": False,
-        }
-    ).encode()
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode())
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": 256,
+        "stream": False,
+    }
+    return _llm.post_chat(base_url, payload, timeout=timeout)
 
 
 def _select_model(entries: Any, explicit: str | None) -> tuple[str, bool]:
@@ -753,11 +744,11 @@ def _resolve_model(base_url: str, explicit: str | None, timeout: float) -> tuple
     host = urllib.parse.urlsplit(base_url).hostname or ""
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise SystemExit(f"refusing to discover a model from a non-loopback URL: {base_url}")
-    request = urllib.request.Request(f"{base_url.rstrip('/')}/models")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = json.loads(response.read().decode())
-    data = body.get("data") if isinstance(body, dict) else None
-    return _select_model(data, explicit)
+    try:
+        entries = _llm.get_models(base_url, timeout=timeout)
+    except _llm.LLMClientError as exc:
+        raise SystemExit(f"cannot read {base_url}/models: {exc}") from exc
+    return _select_model(entries, explicit)
 
 
 def main() -> int:
@@ -834,7 +825,7 @@ def main() -> int:
         for case in selected:
             try:
                 response = _post_chat(args.base_url, model, case.prompt, args.timeout)
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            except _llm.LLMClientError as exc:
                 results.append(
                     CaseResult(
                         case_id=case.id,

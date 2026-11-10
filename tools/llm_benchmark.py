@@ -12,17 +12,23 @@ import os
 import platform
 import statistics
 import subprocess
+import importlib
 import sys
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Loaded through importlib so this file keeps working both as a module and as the
+# script it is invoked as (`python3 tools/llm_benchmark.py`), where only tools/ is
+# on sys.path.
+_llm = (
+    importlib.import_module("llm_client") if __package__ in (None, "") else importlib.import_module("tools.llm_client")
+)
 
 
 SCHEMA_VERSION = 1
@@ -317,59 +323,30 @@ def _request_stream(
     if workload["system"]:
         messages.append({"role": "system", "content": workload["system"]})
     messages.append({"role": "user", "content": workload["prompt"]})
-    request_data = json.dumps(
-        {
-            "messages": messages,
-            "max_tokens": workload["max_tokens"],
-            "temperature": workload["temperature"],
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-    ).encode("utf-8")
-    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    request = urllib.request.Request(endpoint, data=request_data, headers=headers, method="POST")
+    payload = {
+        "messages": messages,
+        "max_tokens": workload["max_tokens"],
+        "temperature": workload["temperature"],
+        "stream_options": {"include_usage": True},
+    }
     start = time.perf_counter()
     first_token: float | None = None
     usage: dict[str, Any] | None = None
-    server_error: str | None = None
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            for raw_line in response:
-                line = raw_line.decode("utf-8", errors="strict").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    continue
-                try:
-                    event = json.loads(data)
-                except json.JSONDecodeError as exc:
-                    raise BenchmarkError("server returned malformed SSE JSON") from exc
-                if not isinstance(event, dict):
-                    raise BenchmarkError("server returned a non-object SSE event")
-                if "error" in event:
-                    server_error = "inference server returned an error event"
-                    break
-                event_usage = event.get("usage")
-                if isinstance(event_usage, dict):
-                    usage = event_usage
-                choices = event.get("choices")
-                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-                    delta = choices[0].get("delta")
-                    content = delta.get("content") if isinstance(delta, dict) else None
-                    if isinstance(content, str) and content and first_token is None:
-                        first_token = time.perf_counter()
-    except urllib.error.HTTPError as exc:
-        raise BenchmarkError(f"HTTP {exc.code} from local inference server") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        for chunk in _llm.stream_url(endpoint, payload, timeout=timeout_seconds, api_key=api_key):
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if chunk.content and first_token is None:
+                first_token = time.perf_counter()
+            if chunk.done:
+                break
+    except _llm.LLMServerError as exc:
+        raise BenchmarkError(f"inference server returned an error: {exc}") from exc
+    except _llm.LLMClientError as exc:
         raise BenchmarkError(f"local inference request failed: {exc}") from exc
     end = time.perf_counter()
 
-    if server_error:
-        raise BenchmarkError(f"inference server returned an error: {server_error}")
     if first_token is None:
         raise BenchmarkError("stream ended without a content token")
     if usage is None:

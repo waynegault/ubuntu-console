@@ -31,9 +31,8 @@ import importlib
 import json
 import statistics
 import sys
+import threading
 import time
-import urllib.error
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,8 +42,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 _fsutil = importlib.import_module("tools.fsutil")
 atomic_write_text = _fsutil.atomic_write_text
-
-UA = "bench-openai-endpoint/1"
+_llm = importlib.import_module("tools.llm_client")
 
 # One coding prompt and one prose prompt, deliberately short in prompt tokens so
 # the measurement is dominated by DECODE, which is what this box is bound on.
@@ -67,32 +65,15 @@ def now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def post_json(url: str, body: dict, timeout: float) -> dict[str, Any]:
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
-
-
-def get_json(url: str, timeout: float = 20) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
-
-
 def resolve_model(base_url: str, explicit: str | None) -> tuple[str, bool]:
     """The model to bench, and whether the caller PINNED it."""
     if explicit:
         return explicit, True
     try:
-        data = get_json(base_url.rstrip("/") + "/models")
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        items = _llm.get_models(base_url, timeout=20)
+    except _llm.LLMClientError as exc:
         raise SystemExit(f"cannot read {base_url}/models: {exc}") from exc
-    items = data.get("data") or []
-    if not items:
-        raise SystemExit(f"{base_url}/models returned no models; pass --model")
-    first = items[0]
-    model = first.get("id") if isinstance(first, dict) else None
+    model = items[0].get("id")
     if not model:
         raise SystemExit(f"{base_url}/models did not name an id; pass --model")
     return str(model), False
@@ -109,13 +90,12 @@ def one_request(base_url, model, prompt, max_tokens, temperature, seed, timeout)
         "stream": False,
     }
     started = time.perf_counter()
-    payload = post_json(base_url.rstrip("/") + "/chat/completions", body, timeout)
+    payload = _llm.post_chat(base_url, body, timeout=timeout)
     elapsed = time.perf_counter() - started
-    usage = payload.get("usage") or {}
-    ct = usage.get("completion_tokens")
-    if not isinstance(ct, int) or ct <= 0:
-        raise RuntimeError(f"no numeric completion_tokens (usage={usage!r})")
-    return ct, usage.get("prompt_tokens"), elapsed
+    usage = _llm.extract_usage(payload)
+    if usage["completion_tokens"] <= 0:
+        raise RuntimeError(f"no completion tokens (usage={payload.get('usage')!r})")
+    return usage["completion_tokens"], usage["prompt_tokens"], elapsed
 
 
 def bench_single(args, model):
@@ -149,8 +129,6 @@ def bench_single(args, model):
 
 def bench_concurrent(args, model, concurrency: int):
     """W rounds of concurrent simultaneous requests; aggregate throughput."""
-    import threading
-
     prompt = PROMPTS[args.prompt]
     rounds = args.rounds
     results: list[dict] = []
