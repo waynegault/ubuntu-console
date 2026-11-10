@@ -9,13 +9,14 @@ helpers, so both the entrypoint and implementation modules are covered directly.
 Both tools are import-safe; their CLIs read arguments only when ``main`` is called.
 """
 
-import importlib.util
 import io
 import os
-import sys
 from contextlib import redirect_stderr, redirect_stdout
+from typing import Any
 
 import pytest
+
+from _test_harness import load_script
 
 from tools import fsutil
 from tools.contracts_checkers.continuity import validate_decision_records
@@ -27,14 +28,9 @@ TOOLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(TOOLS)
 
 
-def _import_tool(module_name):
+def _import_tool(module_name: str) -> Any:
     """Import a tool program by path without mutating process arguments."""
-    spec = importlib.util.spec_from_file_location(module_name, os.path.join(TOOLS, f"{module_name}.py"))
-    assert spec is not None and spec.loader is not None, module_name
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_script(os.path.join(TOOLS, f"{module_name}.py"), module_name)
 
 
 def test_ratchet_counters_are_pure_functions_of_a_files_text():

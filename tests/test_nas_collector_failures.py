@@ -14,7 +14,6 @@ NAS-only dep.
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import io
 import json
 import logging
@@ -27,13 +26,14 @@ from typing import Any
 import pytest
 
 from _paths import REPO_ROOT
+from _test_harness import load_script
 
 NAS = Path(REPO_ROOT) / "nas" / "butler" / "scripts"
 
 
 def _ensure_path() -> None:
     if str(NAS) not in sys.path:
-        sys.path.insert(0, str(NAS))
+        sys.path.append(str(NAS))
 
 
 def _butler_common() -> Any:
@@ -43,16 +43,7 @@ def _butler_common() -> Any:
 
 def _load(module_name: str, filename: str) -> Any:
     _ensure_path()
-    spec = importlib.util.spec_from_file_location(module_name, NAS / filename)
-    assert spec is not None and spec.loader is not None, f"cannot load {filename}"
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules[spec.name]
-        raise
-    return module
+    return load_script(NAS / filename, module_name)
 
 
 class _URLError(OSError):
@@ -472,6 +463,8 @@ _IMPORT_SAFE = [
     ("nas_smoke_air", "air-monitor-influx-collector.py"),
     ("nas_smoke_scale2", "mi-scale-2-collector.py"),
     ("nas_smoke_oauth", "read-myair-otp-graph-oauth.py"),
+    ("nas_smoke_it500", "it500-influx-collector.py"),
+    ("nas_smoke_glow", "glowmarkt-collector.py"),
 ]
 
 

@@ -66,7 +66,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import re
@@ -76,16 +75,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
-_fsutil = importlib.import_module("tools.fsutil")
-atomic_write_text = _fsutil.atomic_write_text
-_llm = importlib.import_module("tools.llm_client")
-
-# Imported through importlib: a plain `from tools...` would be an E402 import
-# after the sys.path bootstrap, which the repo bans.
-_task_quality = importlib.import_module("tools.llm_task_quality")
+try:
+    from tools.fsutil import atomic_write_text
+    from tools import llm_client as _llm
+    from tools import llm_task_quality as _task_quality
+except ModuleNotFoundError:
+    from fsutil import atomic_write_text  # type: ignore[no-redef]
+    import llm_client as _llm  # type: ignore[no-redef]
+    import llm_task_quality as _task_quality  # type: ignore[no-redef]
 CODE_BAD_ARGUMENTS = _task_quality.CODE_BAD_ARGUMENTS
 CODE_EMPTY = _task_quality.CODE_EMPTY
 CODE_OK = _task_quality.CODE_OK

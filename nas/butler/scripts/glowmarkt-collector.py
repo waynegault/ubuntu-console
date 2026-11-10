@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Version: 1.3.3
+# Version: 1.3.4
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
+#   v1.3.4 (2026-11-10): Defer directory creation to runtime write operations,
+#   preventing side effects at module import time.
 #   v1.3.3 (2026-10-03, card 974f99ff): write_influx posts through the shared
 #   lib.butler_common.post_line_protocol instead of a private request/header copy.
 #   v1.3.2 (2026-10-03, card b296c75c): write_influx logs the URLError instead of
@@ -43,9 +45,7 @@ RESOURCE_ID = "df862991-4379-4efa-9661-865b3056ec48"
 SECRETS_FILE = Path(os.environ.get("SECRETS_FILE", "/home/wayne/.openclaw/secrets.json"))
 TOKEN_FILE = Path(os.environ.get("GLOWMARKT_TOKEN_FILE", "/home/wayne/.openclaw/credentials/glowmarkt/token.json"))
 
-DATA_DIR = Path(
-    os.environ.get("GLOWMARKT_DATA_DIR", "/home/wayne/.openclaw/workspace/memory/shared/electricity-usage")
-)
+DATA_DIR = Path(os.environ.get("GLOWMARKT_DATA_DIR", "/home/wayne/.openclaw/workspace/memory/shared/electricity-usage"))
 LATEST_FILE = DATA_DIR / "latest.json"
 HISTORY_FILE = DATA_DIR / "events.jsonl"
 CURSOR_FILE = DATA_DIR / "cursor.json"
@@ -56,11 +56,13 @@ INFLUX_DB = os.environ.get("INFLUXDB_DB", "electricity_usage")
 INFLUX_URL = f"http://{INFLUX_HOST}:{INFLUX_PORT}/write?db={INFLUX_DB}"
 INFLUX_MEASUREMENT = "glowmarkt_consumption"
 
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+def _ensure_data_dir() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
+
 
 def _load_creds() -> dict[str, str]:
     """Load Glowmarkt credentials: each field from env, else the secrets file.
@@ -117,7 +119,7 @@ def _load_cached_token() -> str | None:
             expiry = datetime.fromisoformat(valid_to.replace("Z", "+00:00"))
             if datetime.now(timezone.utc) < expiry - timedelta(hours=1):
                 return token
-    except (json.JSONDecodeError, KeyError, ValueError):
+    except json.JSONDecodeError, KeyError, ValueError:
         # A corrupt/expired token cache is expected on first run; re-auth follows.
         logger.debug("cached Glowmarkt token unusable; re-authenticating", exc_info=True)
     return None
@@ -125,6 +127,7 @@ def _load_cached_token() -> str | None:
 
 def _save_token(token_data: dict[str, Any]) -> None:
     """Cache JWT token to file."""
+    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.write_text(json.dumps(token_data, indent=2))
     TOKEN_FILE.chmod(0o600)
 
@@ -150,6 +153,7 @@ def get_token(force_refresh: bool = False) -> str:
 
 
 # ── Data Retrieval ────────────────────────────────────────────────────────────
+
 
 def _api_get(path: str, token: str, timeout: int = 45) -> dict[str, Any]:
     """Make authenticated GET request to Glowmarkt API."""
@@ -189,6 +193,7 @@ def fetch_consumption(
 
 # ── InfluxDB ──────────────────────────────────────────────────────────────────
 
+
 def write_influx(lines: list[str]) -> int | None:
     """Write line protocol data to InfluxDB. Returns HTTP status or None."""
     if not lines:
@@ -205,6 +210,7 @@ def write_influx(lines: list[str]) -> int | None:
 
 # ── State Management ─────────────────────────────────────────────────────────
 
+
 def _load_cursor() -> dict[str, Any]:
     """Load the last successful cursor position."""
     if CURSOR_FILE.exists():
@@ -219,6 +225,7 @@ def _load_cursor() -> dict[str, Any]:
 
 def _save_cursor(last_interval_end: str) -> None:
     """Save cursor position after successful collection."""
+    _ensure_data_dir()
     cursor = {
         "lastIntervalEnd": last_interval_end,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
@@ -228,11 +235,13 @@ def _save_cursor(last_interval_end: str) -> None:
 
 def _append_history(record: dict[str, Any]) -> None:
     """Append a collection result to the append-only history file."""
+    _ensure_data_dir()
     with HISTORY_FILE.open("a") as f:
         f.write(json.dumps(record) + "\n")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
 
 def collect_once() -> dict[str, Any]:
     """Perform one collection cycle and return results."""
@@ -304,7 +313,7 @@ def collect_once() -> dict[str, Any]:
             continue  # Skip zero readings (no consumption in that interval)
         try:
             val = float(val)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             continue
         iso_ts = datetime.fromtimestamp(ts_unix, tz=timezone.utc).isoformat()
         tags = f"source=glowmarkt,resource={resource_id},meter={METER_ID}"
@@ -353,6 +362,7 @@ def collect_once() -> dict[str, Any]:
     _append_history(result)
 
     # Write latest
+    _ensure_data_dir()
     LATEST_FILE.write_text(json.dumps(result, indent=2) + "\n")
 
     return result
@@ -360,6 +370,7 @@ def collect_once() -> dict[str, Any]:
 
 def main() -> int:
     import argparse
+
     parser = argparse.ArgumentParser(description="Glowmarkt electricity collector")
     parser.add_argument("--force-auth", action="store_true", help="Force re-authentication")
     parser.add_argument("--test-auth", action="store_true", help="Test authentication only")

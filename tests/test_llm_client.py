@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import io
 import json
-import threading
+import urllib.error
 from unittest import mock
 
 import pytest
 
+from _test_harness import SilentHTTPHandler, ephemeral_http_server
 from tools import llm_client
 
 
@@ -92,24 +93,24 @@ def test_an_http_error_carries_its_status():
     A real loopback server, not a patched urlopen: the mapping under test lives in
     the code that calls urlopen, so replacing urlopen would test the double.
     """
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    class _NotFound(BaseHTTPRequestHandler):
+    class _NotFound(SilentHTTPHandler):
         def do_GET(self):
             self.send_response(404)
             self.end_headers()
 
-        def log_message(self, _format, *_args):
-            return
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _NotFound)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with ephemeral_http_server(_NotFound) as (_server, base_url):
         with pytest.raises(llm_client.LLMClientError) as exc_info:
-            llm_client.get_models(f"http://127.0.0.1:{server.server_port}/v1", timeout=5)
+            llm_client.get_models(f"{base_url}/v1", timeout=5)
         assert exc_info.value.status == 404
-    finally:
-        server.shutdown()
-        thread.join(timeout=3)
-        server.server_close()
+
+
+def test_http_error_closes_response_resource():
+    """Catches an HTTPError socket or temporary file leak when status is non-2xx."""
+    mock_err = urllib.error.HTTPError("http://127.0.0.1:1/v1/models", 500, "Internal Server Error", {}, io.BytesIO(b""))
+    mock_err.close = mock.MagicMock(wraps=mock_err.close)
+
+    with mock.patch("urllib.request.urlopen", side_effect=mock_err):
+        with pytest.raises(llm_client.LLMClientError):
+            llm_client.get_url("http://127.0.0.1:1/v1/models", timeout=1)
+    mock_err.close.assert_called_once()

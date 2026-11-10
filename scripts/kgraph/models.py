@@ -131,7 +131,10 @@ def _canonical_identifier(value: Any, *, field_name: str) -> str:
     """Accept string IDs and SQLite integer IDs, but no other coercions."""
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise ValueError(f"{field_name} must be a string or integer identifier")
-    return str(value)
+    text = str(value)
+    if not text.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    return text
 
 
 # ── Node ───────────────────────────────────────────────────────────────
@@ -212,7 +215,7 @@ class GraphNode(SourceLineage):
         populate_by_name=True,
     )
 
-    id: str
+    id: str = Field(..., min_length=1)
     label: str = ""
     type: str = "unknown"
     content_preview: str = ""
@@ -349,8 +352,8 @@ class GraphEdge(SourceLineage):
         populate_by_name=True,
     )
 
-    source: str
-    target: str
+    source: str = Field(..., min_length=1)
+    target: str = Field(..., min_length=1)
     label: str = "related"
     origin: str = ""
     semantic_score: float | None = None
@@ -531,6 +534,27 @@ class Graph(BaseModel):
 
     def node_ids(self) -> set[str]:
         return {n.id for n in self.nodes}
+
+    def validate_referential_integrity(self) -> list[str]:
+        """Return referential integrity error messages for any edge endpoint absent from nodes."""
+        known = self.node_ids()
+        violations: list[str] = []
+        for idx, edge in enumerate(self.edges):
+            if edge.source not in known:
+                violations.append(
+                    f"Referential integrity violation at edges[{idx}]: source {edge.source!r} not in nodes"
+                )
+            if edge.target not in known:
+                violations.append(
+                    f"Referential integrity violation at edges[{idx}]: target {edge.target!r} not in nodes"
+                )
+        return violations
+
+    def assert_referential_integrity(self) -> None:
+        """Raise ValueError if any edge references a non-existent node ID."""
+        violations = self.validate_referential_integrity()
+        if violations:
+            raise ValueError("; ".join(violations))
 
     def _prune_prefixes(self, prefixes: tuple[str, ...]) -> set[str]:
         """Drop nodes whose id starts with *prefixes* and every incident edge."""

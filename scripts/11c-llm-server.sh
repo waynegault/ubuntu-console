@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 20
+#   v20 (2026-11-10): __llm_health_timeout scales for a VERY large checkpoint.  Every model of
+#     3 GB or more was given the same 180 s, which is a 3B-model figure: measured on this box,
+#     a 50.9 GiB BF16 checkpoint became healthy in 171 s warm and was still loading after 7
+#     minutes alongside a CI suite, and the wait then killed the lane mid-load and reported
+#     "FAILED OR TIMEOUT".  15 GB+ now gets 12 s per GiB (300 s floor, LLM_HEALTH_TIMEOUT_MAX
+#     cap, default 900), so the budget follows the load instead of the tier below it.
 # Module Version: 19
 #   v19 (2026-11-07): __llm_wait_for_health takes the launched server's pid and returns 2
 #   when it dies while waiting.  Measured the same day: a cudaMalloc failure killed the
@@ -38,6 +45,8 @@ __TAC_MOD_11C_LLM_SERVER_LOADED=1
 readonly _MODEL_SIZE_LARGE=30       # 3.0GB+ — large model, longer startup
 readonly _MODEL_SIZE_MEDIUM=20      # 2.0GB+ — medium model, moderate startup
 readonly _MODEL_SIZE_SMALL=15       # 1.5GB+ — small model, fast startup
+# 15GB+ — a load whose floor is the file's own size (disk read + upload), not a tier.
+readonly _MODEL_SIZE_HUGE=150
 readonly _GPU_OFFLOAD_DISABLED=0    # gpu_layers = 0 means CPU-only mode
 
 # ---- Special-case model names (for custom settings/behavior) ----
@@ -535,6 +544,22 @@ function __llm_health_timeout() {
     elif [[ "$name" == "$_MODEL_QWEN35_4B" ]]
     then
         timeout=180
+    elif (( size_tenths >= _MODEL_SIZE_HUGE ))
+    then
+        # A load this size is bounded by reading and placing the weights, so the budget is
+        # derived from the file: 12 s per GiB, never below 300 s.  LLM_HEALTH_TIMEOUT names
+        # the budget outright for a box whose disk is slower than that; LLM_HEALTH_TIMEOUT_MAX
+        # is only a CEILING on the derived figure (a cap cannot grant headroom).
+        if [[ "${LLM_HEALTH_TIMEOUT:-}" =~ ^[0-9]+$ ]] && (( LLM_HEALTH_TIMEOUT > 0 ))
+        then
+            printf '%s\n' "$LLM_HEALTH_TIMEOUT"
+            return
+        fi
+        timeout=$(( size_tenths / 10 * 12 ))
+        (( timeout < 300 )) && timeout=300
+        local _cap="${LLM_HEALTH_TIMEOUT_MAX:-900}"
+        [[ "$_cap" =~ ^[0-9]+$ ]] || _cap=900
+        (( _cap > 0 && timeout > _cap )) && timeout=$_cap
     elif (( size_tenths >= _MODEL_SIZE_LARGE ))
     then
         timeout=180

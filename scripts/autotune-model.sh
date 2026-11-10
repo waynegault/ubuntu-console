@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 128
+#   v128 (2026-11-10): the start-ctx derivation is TWO-SIDED (card bf92711c, host half).  The
+#     probe's ctx still comes from the KV math against the GPU pool, but the run now also
+#     prices what it must hold in GUEST RAM — weights that `ngl` leaves un-offloaded plus the
+#     staging a split set needs — against MemAvailable, before any launch.  Over the stated
+#     bound it refuses with `insufficient_host_ram` and BOTH numbers; inside the bound but
+#     above the tight band it drops the probe to MIN_CTX and says which pool is binding.
+#     Measured 2026-11-03: a 39.8 GB row plus an --flash-attn off retry took the guest to the
+#     kernel OOM killer 7 times in 25 min, killing openclaw-gateway.service, while every log
+#     line named the card.  The host figure now comes from the same apply pass as the pool
+#     (host-profile v12), not from a separate read of /proc/meminfo.
 # Module Version: 127
 #   v127 (2026-11-10): the EXIT trap puts back the lanes this run stood down.  The watchdog
 #     cannot: its recover() DEFERS while a heavy job holds the box (LLAMA-LANE-CONTENTION-001)
@@ -547,6 +558,8 @@ installed build knows the name (strings <libllama.so> | grep <name>): if it does
 incomplete or misnamed (re-convert or obtain a matching GGUF); if it does not, rebuild llama.cpp" ;;
         insufficient_host_staging) printf "the largest shard cannot be staged in host memory \
 (split GGUFs stage one shard; guest RAM is the wall, not VRAM)" ;;
+        insufficient_host_ram) printf "the row's HOST footprint (weights not offloaded at this \
+ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not the GPU pool" ;;
         loader_crash_unknown) printf "the launch died with no OOM witness and no load signature \
 (unexplained — stopped without a descent, so nothing was measured)" ;;
         window_timeout)     printf "the readiness window expired with no error signature \
@@ -971,8 +984,16 @@ BUDGET=$(( FREE_VRAM - MODEL_MB - 200 ))
 # which is how a 60.9 GB row reached the kernel OOM killer with 8 kills and no line
 # saying memory was finite.  Printing both costs one read and makes the next refusal
 # (or kill) attributable from the log alone.
+# Prefer the figure host-profile took in the SAME pass as the GPU pool (v12).  The two are
+# then two readings of one moment; the /proc read is the fallback for a shell that never
+# loaded the profile (a standalone copy, a test harness).
+if [[ "${TAC_HOST_RAM_AVAIL_BYTES:-}" =~ ^[0-9]+$ ]] && (( TAC_HOST_RAM_AVAIL_BYTES > 0 ))
+then
+    _HOST_AVAIL_MB=$(( TAC_HOST_RAM_AVAIL_BYTES / 1048576 ))
+else
     # swallow-ok: an unreadable /proc/meminfo is reported by the UNREADABLE branch below
-_HOST_AVAIL_MB=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)
+    _HOST_AVAIL_MB=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)
+fi
 if [[ "$_HOST_AVAIL_MB" =~ ^[0-9]+$ ]]
 then
     echo "  pools: gpu ${VRAM_TOTAL} MiB (free ${FREE_VRAM}) | host avail ${_HOST_AVAIL_MB} MiB | model ${MODEL_MB} MiB"
@@ -1018,6 +1039,60 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
         _kv_dim=$(cut -d'|' -f7 <<< "$_meta")
         _kv_mb=$(__kv_mb_per_1k "${_n_layers:-0}" "${_kv_heads:-0}" "${_kv_dim:-0}")
         echo "  kv geometry: layers=${_n_layers:-0} kv_heads=${_kv_heads:-0} head_dim=${_kv_dim:-0} -> ${_kv_mb} MiB/1k"
+        # BOTH DIRECTIONS OF THE FALLBACK, SAID.  A header without the two keys still gets the
+        # shape-agnostic constant, but the run must not present that as geometry: for a GQA
+        # model the constant is high, for a 32-KV-head model it is low, and silence about
+        # which one was used is how the old estimate was wrong invisibly.
+        if declare -f __kv_geometry_known &>/dev/null \
+           && ! __kv_geometry_known "${_kv_heads:-0}" "${_kv_dim:-0}"; then
+            warn "  kv geometry: absent from the GGUF header — falling back to the shape-agnostic" \
+                 "${_kv_mb} MiB/1k constant (KV heads and head dim are unknown for this file)"
+        fi
+        # THE SECOND BUDGET (card bf92711c).  Everything above prices the probe against the GPU
+        # pool.  The guest holds a different set: the weights `ngl` leaves un-offloaded, plus the
+        # staging a split set needs.  A run admitted on the card alone is exactly the shape that
+        # OOM-killed this box (2026-11-03: 39.8 GB row + FA-off retry, 7 gateway kills in 25 min).
+        # So the same derivation is bounded on the host side too, with both numbers named.
+        if declare -f __autotune_host_weight_bytes &>/dev/null \
+           && declare -f __autotune_host_budget_verdict &>/dev/null; then
+            _host_weights_bytes=$(__autotune_host_weight_bytes "$MODEL_BYTES" "${_n_layers:-0}" "${BENCH_NGL:-999}")
+            [[ "$_host_weights_bytes" =~ ^[0-9]+$ ]] || _host_weights_bytes=0
+            _host_need_bytes=$(( _host_weights_bytes + ${_staged_bytes:-0} ))
+            _host_need_mb=$(( _host_need_bytes / 1048576 ))
+            _host_weights_mb=$(( _host_weights_bytes / 1048576 ))
+            _host_factor="${LLM_AUTOTUNE_HOST_FACTOR_PCT:-100}"
+            _host_tight="${LLM_AUTOTUNE_HOST_TIGHT_PCT:-75}"
+            _host_verdict=$(__autotune_host_budget_verdict "$_host_need_bytes" \
+                "$(( ${_HOST_AVAIL_MB:-0} * 1048576 ))" "$_host_factor" "$_host_tight")
+            _staging_mb=$(( ${_staged_bytes:-0} / 1048576 ))
+            _host_detail="host footprint ${_host_need_mb} MiB (weights ${_host_weights_mb} MiB"
+            _host_detail+=" not offloaded at ngl=${BENCH_NGL:-999} + staging ${_staging_mb} MiB)"
+            _host_detail+=" exceeds MemAvailable ${_HOST_AVAIL_MB} MiB at the stated factor ${_host_factor}%"
+            case "$_host_verdict" in
+                refuse)
+                    _preflight_refuse insufficient_host_ram 1 "$_host_detail"
+                    ;;
+                clamp)
+                    # Above the tight band but inside the bound: go ahead, ask for the least the
+                    # model can serve, and name the pool that decided it.  The weights term is
+                    # set by ngl and cannot be shrunk by a ctx, which is why the hard case above
+                    # REFUSES rather than descending.
+                    _HOST_CTX_CLAMP=1
+                    warn "  host budget: footprint ${_host_need_mb} MiB (weights" \
+                         "${_host_weights_mb} MiB at ngl=${BENCH_NGL:-999} + staging ${_staging_mb} MiB)" \
+                         "is above ${_host_tight}% of MemAvailable ${_HOST_AVAIL_MB} MiB — probing at" \
+                         "MIN_CTX; the HOST, not the card, is the binding pool"
+                    ;;
+                unknown)
+                    warn "  host budget: MemAvailable UNREADABLE — no host-side verdict this run" \
+                         "(the GPU pool was still measured)"
+                    ;;
+                *)
+                    echo "  host budget: footprint ${_host_need_mb} MiB vs MemAvailable" \
+                         "${_HOST_AVAIL_MB} MiB (factor ${_host_factor}%) — fits"
+                    ;;
+            esac
+        fi
     else
         _native_ctx=""
         _kv_mb=$(__kv_mb_per_1k "0")
@@ -1073,6 +1148,13 @@ if ! declare -f __autotune_ctx_bounds &>/dev/null || ! declare -f __autotune_des
 fi
 read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
     "$START_CTX" "${_native_ctx:-}" "${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}" "$MIN_CTX")
+
+# The host verdict's clamp lands here, after the bounds: both the start AND the ceiling drop to
+# MIN_CTX, so the run cannot climb back into a footprint the host already said was tight.
+if [[ "${_HOST_CTX_CLAMP:-0}" == "1" ]]; then
+    START_CTX=$MIN_CTX
+    MAX_CTX=$MIN_CTX
+fi
 
 # Comma-format numbers (standalone helpers — no outer-scope capture)
 fmt() { printf "%'d" "$1"; }

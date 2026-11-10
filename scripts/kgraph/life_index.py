@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from .constants import (
     LIFE_ROOT_DEFAULT,
     normalize_canonical_name,
@@ -21,6 +23,27 @@ from .constants import (
 from .models import Graph, GraphEdge, as_graph, source_key
 
 logger = logging.getLogger(__name__)
+
+
+class LifeIndexRecord(BaseModel):
+    """Validated record from canonical-concepts.json or life directory."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    slug: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    type: str = "topic"
+    path: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    status: str = "active"
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _coerce_aliases(cls, value: Any) -> list[str]:
+        if value is None or not isinstance(value, list):
+            return []
+        return [str(item) for item in value]
+
 
 # Singular type for each life-index directory. `people` is irregular — a blind
 # `type_dir[:-1]` yields "peopl" — and the rest of the codebase's type

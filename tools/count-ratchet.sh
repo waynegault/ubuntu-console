@@ -48,7 +48,7 @@
 # and the run fails if any counter disagrees.
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -70,14 +70,10 @@ case "${1:-}" in
         ;;
 esac
 
-# Prefer the repo's venv python: it is the interpreter the rest of this repo's
-# tooling resolves, and the one CI installs deps into (card dd96b63f — this
-# wrapper used bare `python3`).
-_python="python3"
-if [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
-    _python="$REPO_ROOT/.venv/bin/python3"
-fi
-if ! command -v "$_python" >/dev/null 2>&1; then
+# Prefer the repo's venv python through the shared python-runtime resolver.
+# shellcheck source=tools/python-runtime.sh
+source "$REPO_ROOT/tools/python-runtime.sh"
+if ! _python="$(_tac_python_path "$REPO_ROOT")"; then
     echo "ERROR: python3 is required (the counters parse shell, and are not line greps)." >&2
     exit 2
 fi

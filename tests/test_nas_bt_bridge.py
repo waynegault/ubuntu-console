@@ -15,13 +15,14 @@ suppression is needed.
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 import types
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+
+from _test_harness import load_script
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -71,18 +72,7 @@ def _install_nas_dep_stubs() -> None:
 def _load_bridge() -> types.ModuleType:
     """Import the hyphenated bridge script by path (its name is not a module name)."""
     _install_nas_dep_stubs()
-    spec = importlib.util.spec_from_file_location(
-        "nas_bt_bridge", REPO_ROOT / "nas" / "butler" / "bt-bridge" / "nas-bt-mqtt-bridge.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules[spec.name]
-        raise
-    return module
+    return load_script(REPO_ROOT / "nas" / "butler" / "bt-bridge" / "nas-bt-mqtt-bridge.py", "nas_bt_bridge")
 
 
 #: The loaded module.  Typed Any so the tests reach its functions without naming a

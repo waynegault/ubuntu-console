@@ -45,12 +45,15 @@ import pytest
 import _bats_suites
 
 REPO_ROOT = _bats_suites.REPO_ROOT
-BATS_EXECUTABLE = _bats_suites.resolve_bats()
+BATS_EXECUTABLE: str | None = _bats_suites.resolve_bats()
 
 # Host-coupled: these cases run the shell suites against this box's live services
 # and filesystem.  The push lane runs `-m "not host_coupled"`; PR/dispatch and the
 # nightly BATS lane run them in full.
-pytestmark = pytest.mark.host_coupled
+pytestmark = [
+    pytest.mark.host_coupled,
+    pytest.mark.skipif(BATS_EXECUTABLE is None, reason="bats executable not found"),
+]
 TESTS_DIR = REPO_ROOT / "tests"
 # Set to 1 to run the suites that are excluded by default (see the module docstring).
 RUN_ALL_ENV = "TAC_UNITTEST_ALL"
@@ -103,6 +106,7 @@ def _run_suite(path: Path, timeout_s: int) -> tuple[int, str]:
     """
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
+    assert BATS_EXECUTABLE is not None, "bats executable not found"
     cmd = [BATS_EXECUTABLE, "--tap", str(path)]
     proc = subprocess.Popen(
         cmd,
@@ -154,6 +158,8 @@ def _make_case(suite: _bats_suites.BatsSuite, path: Path) -> Callable[[unittest.
     """Generate one unittest case that runs *path* as a whole file."""
 
     def _case(self: unittest.TestCase) -> None:
+        if BATS_EXECUTABLE is None:
+            self.skipTest("bats executable not found")
         excluded = _EXCLUDED_BY_DEFAULT.get(path.stem)
         if excluded is not None and os.environ.get(RUN_ALL_ENV) != "1":
             self.skipTest(f"excluded by default: {excluded} (set {RUN_ALL_ENV}=1 to run it)")

@@ -14,7 +14,8 @@ fixture with zero tensors is sufficient, tiny, and text-free of binaries — gen
 test time rather than committed.
 
 Usage: make-gguf-fixture.py <case> <out-path>
-Cases: both-keys | rope-only | general-ctx | plain-ctx | no-ctx | junk-name
+Cases: both-keys | rope-only | general-ctx | plain-ctx | no-ctx | junk-name |
+       kv-geometry | kv-array | no-kv
 """
 
 import struct
@@ -23,6 +24,7 @@ import sys
 TYPE_U32 = 4
 TYPE_U64 = 10
 TYPE_STRING = 8
+TYPE_ARRAY = 9
 
 CASES = {
     # The 2026-09-16 bug: the real window AND the rope-scaling original.  The parser
@@ -57,6 +59,33 @@ CASES = {
         ("general.architecture", TYPE_STRING, "llama"),
         ("llama.block_count", TYPE_U32, 24),
     ],
+    # KV GEOMETRY (card bf92711c).  Qwen3-Coder-30B's shape: 48 layers, 4 KV heads, head
+    # dim 128.  The autotune must price the KV cache from these three numbers rather than
+    # the shape-agnostic n_layers*2.0 constant — 50.88 MiB/1k against the constant's 96.
+    "kv-geometry": [
+        ("general.architecture", TYPE_STRING, "qwen2"),
+        ("qwen2.block_count", TYPE_U32, 48),
+        ("qwen2.context_length", TYPE_U32, 131072),
+        ("qwen2.attention.head_count_kv", TYPE_U32, 4),
+        ("qwen2.attention.key_length", TYPE_U32, 128),
+    ],
+    # The ARRAY form MoE architectures write (gpt-oss, Mixtral): head_count_kv as a
+    # per-layer array.  The parser's array branch is what reads it; without that branch the
+    # geometry reads as ABSENT on exactly the models whose KV cost is largest.
+    "kv-array": [
+        ("general.architecture", TYPE_STRING, "gpt-oss"),
+        ("gpt-oss.block_count", TYPE_U32, 36),
+        ("gpt-oss.context_length", TYPE_U32, 131072),
+        ("gpt-oss.attention.head_count_kv", TYPE_ARRAY, [8, 8, 8, 8]),
+        ("gpt-oss.attention.key_length", TYPE_U32, 128),
+    ],
+    # A header with NO KV keys at all: the fallback direction.  The estimate must still
+    # answer (the old constant) and the caller must be able to SAY it fell back.
+    "no-kv": [
+        ("general.architecture", TYPE_STRING, "llama"),
+        ("llama.block_count", TYPE_U32, 24),
+        ("llama.context_length", TYPE_U32, 8192),
+    ],
     # A GGUF whose own metadata carries a junk `general.name` — what Unsloth/HF merges
     # write into a file ("Unsloth_Gguf_Bs7Prgf5", "Hf Model", "Merged").  `model scan`
     # composes each registry row from these, so the scan tests need a fixture whose name
@@ -80,6 +109,11 @@ def encode(key, vtype, value):
         out += struct.pack("<I", value)
     elif vtype == TYPE_U64:
         out += struct.pack("<Q", value)
+    elif vtype == TYPE_ARRAY:
+        # GGUF array: element type (u32), count (u64), then the elements.  The parser reads
+        # element 0 for the KV geometry and skips the rest by element width.
+        out += struct.pack("<I", TYPE_U32) + struct.pack("<Q", len(value))
+        out += b"".join(struct.pack("<I", v) for v in value)
     else:
         raise ValueError(f"unsupported fixture type {vtype}")
     return out

@@ -2,6 +2,8 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
+# Module Version: 57
+#   v57 (2026-11-10): TAC_PYTHON resolves .venv/bin/python3 first before .venv/bin/python.
 # Module Version: 56
 #   v56 (2026-11-10): LLM_MODELSHELL_PID_DIR — one declaration for the directory the
 #     `model use` wrapper writes its PID file into.  11e (writer) and 11d (stale-lock
@@ -222,7 +224,9 @@ export LLAMA_ARCHIVE_DIR="${LLAMA_ARCHIVE_DIR:-$LLAMA_DRIVE_ROOT/archive}"
 export LLM_SERVER_PYTHON_BIN="${LLM_SERVER_PYTHON_BIN:-python3}"
 # TAC_PYTHON: project .venv Python when available, else system python3.
 # All inline Python calls in scripts/ and bin/ should use this.
-if [[ -x "$TACTICAL_REPO_ROOT/.venv/bin/python" ]]; then
+if [[ -x "$TACTICAL_REPO_ROOT/.venv/bin/python3" ]]; then
+    export TAC_PYTHON="$TACTICAL_REPO_ROOT/.venv/bin/python3"
+elif [[ -x "$TACTICAL_REPO_ROOT/.venv/bin/python" ]]; then
     export TAC_PYTHON="$TACTICAL_REPO_ROOT/.venv/bin/python"
 else
     export TAC_PYTHON="python3"

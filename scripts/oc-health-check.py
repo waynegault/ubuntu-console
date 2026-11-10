@@ -782,16 +782,29 @@ def _check_wsl_dns() -> dict[str, object]:
     }
 
 
+def _default_llm_service_port() -> int:
+    """Resolve the default LLM service port from the active box profile when set, else 18081."""
+    active_id = os.environ.get("LLM_HOST_PROFILE", "").strip() or os.environ.get("TAC_HOST_PROFILE_ID", "").strip()
+    if active_id:
+        try:
+            from tools.box import get_hardware_profile
+
+            return get_hardware_profile(active_id).serving.primary_port
+        except Exception:
+            pass
+    return 18081
+
+
 def build_report() -> dict[str, object]:
     oc_port = int(os.getenv("OC_PORT", "18789"))
     # Probe the PRODUCTION lane, not the scratch port.  LLM_PORT (8081) is where `so`
     # loads a duplicate on demand; the gateway actually talks to LLM_SERVICE_PORT
-    # (llama-xe-minicpm5-1b-chat.service on 18081), so 8081 is closed whenever the
-    # production lane is serving — checking it reported a healthy local stack as a
-    # warning (same defect class already fixed in 09e-oc-health.sh).  The 18081
-    # default stands alone for callers outside the console, where only
-    # LLM_SERVICE_PORT is defined.
-    llm_port = int(os.getenv("LLM_SERVICE_PORT", "18081"))
+    # (llama-xe-minicpm5-1b-chat.service on 18081, or 18087 on Asus RTX Spark), so 8081 is
+    # closed whenever the production lane is serving — checking it reported a healthy local
+    # stack as a warning (same defect class already fixed in 09e-oc-health.sh).  When
+    # LLM_SERVICE_PORT is unset, consult the active box profile or fall back to 18081.
+    raw_llm_port = os.getenv("LLM_SERVICE_PORT")
+    llm_port = int(raw_llm_port) if raw_llm_port is not None else _default_llm_service_port()
 
     checks: list[dict[str, object]] = [
         _check_openclaw_cli(),

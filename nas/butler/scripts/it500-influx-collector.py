@@ -30,13 +30,24 @@ ATTR_HEATING_STATE = "A87"
 ATTR_OFF_MODE = "A89"
 ATTR_HOT_WATER_STATUS = "C45"
 
-SECRETS = Path("/mnt/HD/HD_a2/butler/openclaw/secrets.json")
+SECRETS = Path(
+    os.environ.get(
+        "IT500_SECRETS_FILE",
+        os.environ.get("SECRETS_FILE", "/mnt/HD/HD_a2/butler/openclaw/secrets.json"),
+    )
+)
 INFLUX_URL = os.environ.get("THERMOSTAT_INFLUX_URL", "http://127.0.0.1:8086/write?db=sensor_data")
-OUT_DIR = Path("/mnt/HD/HD_a2/butler/openclaw-data/thermostat")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+OUT_DIR = Path(os.environ.get("IT500_DATA_DIR", "/mnt/HD/HD_a2/butler/openclaw-data/thermostat"))
 
 
-def _json_request(url: str, *, method: str = "GET", headers: dict[str, str] | None = None, payload: dict | None = None, timeout: int = 30) -> dict:
+def _json_request(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    payload: dict | None = None,
+    timeout: int = 30,
+) -> dict:
     data = None
     req_headers = dict(headers or {})
     if payload is not None:
@@ -136,6 +147,7 @@ def main() -> int:
         "hot_water_enabled": hot_water_enabled,
         "influxStatus": status,
     }
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / "latest.json").write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
     with (OUT_DIR / "events.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(out) + "\n")

@@ -110,7 +110,7 @@ def _ppid(pid: int) -> int:
             for line in fh:
                 if line.startswith("PPid:"):
                     return int(line.split()[1])
-    except (OSError, ValueError, IndexError):
+    except OSError, ValueError, IndexError:
         return 0
     return 0
 
@@ -133,7 +133,10 @@ def _parent_is_systemd(parent: int) -> bool:
         return True
     try:
         with open(f"/proc/{parent}/comm", encoding="utf-8", errors="replace") as fh:
-            return fh.read().strip() == "systemd"
+            comm = fh.read().strip()
+            if parent == 1:
+                return comm in ("systemd", "exe", "init")
+            return comm == "systemd"
     except OSError:
         return False
 
@@ -180,9 +183,7 @@ def scan_work(report: Report) -> None:
         # probe, not the work it is looking for.  Keyed on the script's own basename,
         # because the literal `restart-safety.py` this replaced went dead the moment the
         # file was renamed to oc-restart-check.py.
-        if os.path.basename(argv[0]).startswith("python") and any(
-            os.path.basename(a) == SELF_NAME for a in argv
-        ):
+        if os.path.basename(argv[0]).startswith("python") and any(os.path.basename(a) == SELF_NAME for a in argv):
             continue
         report.work.append(f"pid={pid} cwd={_cwd(pid)}: {cmdline[:120]}")
 
@@ -201,21 +202,45 @@ def scan_gpu(report: Report) -> None:
         report.unreadable.append(f"nvidia-smi could not be run: {exc}")
         return
     if proc.returncode != 0:
-        report.unreadable.append(
-            f"nvidia-smi exited {proc.returncode}: {proc.stderr.strip()[:120]}"
-        )
+        report.unreadable.append(f"nvidia-smi exited {proc.returncode}: {proc.stderr.strip()[:120]}")
         return
+    seen_pids: set[int] = set()
     for line in proc.stdout.splitlines():
         pid_text = line.strip()
         if not pid_text.isdigit():
             continue
         pid = int(pid_text)
+        seen_pids.add(pid)
         argv = _argv(pid)
         where = " ".join(argv)[:100] if argv else "(cmdline unreadable)"
         if _is_systemd_managed(pid):
             report.lanes.append(f"pid={pid} {where}")
         else:
             report.foreign_gpu.append(f"pid={pid} {where}")
+
+    # On WSL2 unified-memory hosts (Asus RTX Spark), nvidia-smi --query-compute-apps
+    # returns empty even when CUDA llama-server lanes are active. Fall back to /proc.
+    if not seen_pids:
+        for pid in _pids():
+            if pid == SELF:
+                continue
+            try:
+                exe = os.readlink(f"/proc/{pid}/exe")
+            except OSError:
+                exe = ""
+            if "build-opencl" in exe:
+                continue
+            argv = _argv(pid)
+            is_llama = os.path.basename(exe) == "llama-server" or (
+                bool(argv) and os.path.basename(argv[0]) == "llama-server"
+            )
+            if not is_llama:
+                continue
+            where = " ".join(argv)[:100] if argv else "(cmdline unreadable)"
+            if _is_systemd_managed(pid):
+                report.lanes.append(f"pid={pid} {where}")
+            else:
+                report.foreign_gpu.append(f"pid={pid} {where}")
 
 
 def gather() -> Report:

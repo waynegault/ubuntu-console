@@ -21,7 +21,6 @@ The contract asserted here is the one a caller reads:
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
 import subprocess
 import sys
@@ -31,24 +30,11 @@ from typing import Any
 
 import pytest
 
+from _test_harness import load_script
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-
-def _load_checker() -> Any:
-    """Import scripts/oc-health-check.py by path (its name is not a module name)."""
-    spec = importlib.util.spec_from_file_location("oc_health_check", REPO_ROOT / "scripts" / "oc-health-check.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules[spec.name]
-        raise
-    return module
-
-
-checker = _load_checker()
+checker = load_script(REPO_ROOT / "scripts" / "oc-health-check.py", "oc_health_check")
 
 
 # --- module-local fakes -----------------------------------------------------

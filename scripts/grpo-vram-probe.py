@@ -52,6 +52,7 @@ import argparse
 import importlib
 import json
 import logging
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -61,6 +62,23 @@ logger = logging.getLogger("grpo-vram-probe")
 TOTAL_VRAM_MB = 4096
 #: The reserve the autotune idiom holds back: 20 % of the free VRAM it found.
 RESERVE_FRACTION = 0.20
+
+
+def resolve_total_vram_mb(profile_id: str | None = None) -> int:
+    """Resolve effective VRAM ceiling from active hardware box profile or default to 4096 MiB."""
+    active_id = (
+        profile_id
+        or os.environ.get("LLM_HOST_PROFILE", "").strip()
+        or os.environ.get("TAC_HOST_PROFILE_ID", "").strip()
+    )
+    if not active_id:
+        return TOTAL_VRAM_MB
+    try:
+        from tools.box import get_hardware_profile
+
+        return get_hardware_profile(active_id).total_memory_mb
+    except Exception:
+        return TOTAL_VRAM_MB
 
 
 def gpu_used_mb() -> int | None:
@@ -78,7 +96,7 @@ def gpu_used_mb() -> int | None:
             check=False,
             timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         logger.debug("nvidia-smi unavailable", exc_info=True)
         return None
     text = (proc.stdout or "").strip().splitlines()
@@ -106,6 +124,7 @@ class Budget:
     activations_mb: int = 0
     rollouts_mb: int = 0
     peak_used_mb: int = 0
+    total_vram_mb: int = field(default_factory=resolve_total_vram_mb)
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -123,20 +142,20 @@ class Budget:
     @property
     def reserve_mb(self) -> int:
         """20 % of the free VRAM at baseline, as the autotune idiom holds it back."""
-        free = max(TOTAL_VRAM_MB - self.baseline_mb, 0)
+        free = max(self.total_vram_mb - self.baseline_mb, 0)
         return int(free * RESERVE_FRACTION)
 
     @property
     def headroom_mb(self) -> int:
-        """Free VRAM left at the measured peak, against the 4 GB card."""
-        return TOTAL_VRAM_MB - self.peak_used_mb
+        """Free VRAM left at the measured peak, against the card or unified pool."""
+        return self.total_vram_mb - self.peak_used_mb
 
     @property
     def verdict(self) -> str:
         """comfortable / edge / does-not-fit, against the reserve rule."""
-        if self.peak_used_mb + self.reserve_mb <= TOTAL_VRAM_MB:
+        if self.peak_used_mb + self.reserve_mb <= self.total_vram_mb:
             return "comfortable"
-        if self.peak_used_mb <= TOTAL_VRAM_MB:
+        if self.peak_used_mb <= self.total_vram_mb:
             return "edge"
         return "does-not-fit"
 
@@ -147,6 +166,7 @@ def build_configs(model_id: str, lora_r: int) -> tuple[object, object]:
     Kept in one place so ``--dry-run`` can print exactly what a real run would use.
     """
     import torch
+
     # peft lives ONLY in the isolated training env (docs/grpo-training-env.md), never in
     # this repo's .venv by design.  Resolved BY NAME at runtime, so neither mypy nor
     # pyright needs a suppression for a module that is deliberately absent here — a
@@ -183,6 +203,7 @@ def build_configs(model_id: str, lora_r: int) -> tuple[object, object]:
 def measure(model_id: str, args: argparse.Namespace) -> Budget:
     """Load, adapt, step and generate once, recording each phase's cost."""
     import torch
+
     # Same reason as in build_configs: peft is in the training env, not this repo's
     # .venv, so it is resolved by name rather than statically imported.
     _peft = importlib.import_module("peft")
@@ -205,9 +226,7 @@ def measure(model_id: str, args: argparse.Namespace) -> Budget:
     budget.baseline_mb = before
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id, quantization_config=quant, device_map={"": 0}
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quant, device_map={"": 0})
     after_load = gpu_used_mb()
     if after_load is None:
         raise RuntimeError("nvidia-smi cannot report VRAM after the load")
@@ -234,9 +253,7 @@ def measure(model_id: str, args: argparse.Namespace) -> Budget:
         raise RuntimeError("nvidia-smi cannot report VRAM after the LoRA attach")
     budget.adapters_mb = max(after_lora - after_prep, 0)
 
-    optim = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad], lr=1e-4
-    )
+    optim = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-4)
 
     # One training step at the requested ctx.  The AdamW state appears only after the
     # first step, and it is reported ANALYTICALLY (2 fp32 moments per trainable
@@ -245,9 +262,7 @@ def measure(model_id: str, args: argparse.Namespace) -> Budget:
     # is the point; mixing them would make both uncheckable.
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     budget.optimizer_mb = (2 * 4 * n_trainable) // (1024 * 1024)
-    budget.notes.append(
-        f"optimizer state is analytic: 2 x fp32 x {n_trainable} trainable params"
-    )
+    budget.notes.append(f"optimizer state is analytic: 2 x fp32 x {n_trainable} trainable params")
 
     torch.cuda.reset_peak_memory_stats()
     ids = torch.randint(0, 1000, (1, args.ctx), device="cuda")
@@ -261,10 +276,7 @@ def measure(model_id: str, args: argparse.Namespace) -> Budget:
     if step_peak is None:
         raise RuntimeError("nvidia-smi cannot report VRAM after the step")
     budget.activations_mb = max(step_peak - after_lora - budget.optimizer_mb, 0)
-    budget.notes.append(
-        f"one fwd+bwd at ctx={args.ctx} (gradient checkpointing on): "
-        f"peak {step_peak} MiB used"
-    )
+    budget.notes.append(f"one fwd+bwd at ctx={args.ctx} (gradient checkpointing on): peak {step_peak} MiB used")
 
     # The rollouts: G sampled completions from ONE compact prompt.
     torch.cuda.reset_peak_memory_stats()
@@ -292,8 +304,7 @@ def measure(model_id: str, args: argparse.Namespace) -> Budget:
 def render(budget: Budget) -> str:
     """Human table for the measured budget."""
     lines = [
-        f"{budget.model}  (ctx={budget.ctx}, lora_r={budget.lora_r}, "
-        f"G={budget.rollouts}, gen={budget.gen_tokens})",
+        f"{budget.model}  (ctx={budget.ctx}, lora_r={budget.lora_r}, G={budget.rollouts}, gen={budget.gen_tokens})",
         f"  baseline        {budget.baseline_mb:>6} MiB",
         f"  weights (4-bit) {budget.weights_mb:>6} MiB",
         f"  high-precision  {budget.hiprec_mb:>6} MiB   (fp32 non-quantized parts)",
@@ -304,7 +315,7 @@ def render(budget: Budget) -> str:
         "  -------------------------------",
         f"  trainable       {budget.trainable_mb:>6} MiB   (weights+adapters+optim+acts+G)",
         f"  reserve (20%)   {budget.reserve_mb:>6} MiB",
-        f"  PEAK used       {budget.peak_used_mb:>6} MiB of {TOTAL_VRAM_MB}",
+        f"  PEAK used       {budget.peak_used_mb:>6} MiB of {budget.total_vram_mb}",
         f"  headroom        {budget.headroom_mb:>6} MiB",
         f"  verdict         {budget.verdict}",
     ]

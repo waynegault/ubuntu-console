@@ -16,35 +16,18 @@ per case, and the module-local ``sys`` reference is patched rather than the glob
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
-import sys
 import types
 from pathlib import Path
 
 import pytest
 
+from _test_harness import load_script
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-
-def _load_scan() -> types.ModuleType:
-    """Import tools/qwen-hooks/shell-command-scan.py by path (not a module name)."""
-    spec = importlib.util.spec_from_file_location(
-        "shell_command_scan", REPO_ROOT / "tools" / "qwen-hooks" / "shell-command-scan.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules[spec.name]
-        raise
-    return module
-
-
-scan = _load_scan()
+scan = load_script(REPO_ROOT / "tools" / "qwen-hooks" / "shell-command-scan.py", "shell_command_scan")
 
 
 def _run(command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:

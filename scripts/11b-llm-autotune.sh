@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 44
+#   v44 (2026-11-10): the SECOND budget (card bf92711c, host half).  __autotune_host_weight_bytes
+#     and __autotune_host_budget_verdict are pure functions: the part of a row's weights that
+#     lands in GUEST RAM rather than the GPU pool, and the verdict comparing that footprint
+#     against MemAvailable.  autotune-model.sh refused nothing on the host side before this —
+#     it sized the probe from FREE_VRAM alone, which is how a 39.8 GB row plus an --flash-attn
+#     off retry drove the guest into the kernel OOM killer (7 gateway kills in 25 min) with
+#     every log line naming a pool that was not the binding one.
 # Module Version: 43
 #   v43 (2026-11-10): the state write uses a per-writer mktemp file, not the
 #     shared "${LLM_REGISTRY}.tmp" that 11a's other writers also used.
@@ -83,7 +91,8 @@
 # @exports: __llm_autotune_done_for_model,
 #   __llm_autotune_profile_save, __llm_autotune_mark_state,
 #   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry,
-#   __autotune_ctx_bounds, __autotune_window_policy
+#   __autotune_ctx_bounds, __autotune_window_policy,
+#   __autotune_host_weight_bytes, __autotune_host_budget_verdict
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_11B_LLM_AUTOTUNE_LOADED:-}" ]] && return 0
@@ -1010,6 +1019,65 @@ function __kv_mb_per_1k() {
         awk -v L="$n_layers" 'BEGIN{printf "%.2f", L * 2.0}'
     else
         echo "48.0"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_host_weight_bytes — the part of a row's weights that lands in GUEST RAM.
+#   args: model_bytes n_layers ngl
+#   stdout: bytes (0 when every layer is offloaded, or when either count is unknown)
+# The GPU pool holds the OFFLOADED layers; whatever `ngl` leaves behind is resident in the
+# guest, and on a unified host that is the small side (98304 MiB pool vs 29.8 GiB host on the
+# 2026-11-03 boot).  ngl >= n_layers means nothing is left in host RAM — including the 999
+# "max offload" sentinel every bench spawn uses.  Unknown geometry returns 0 rather than a
+# guess: this number can refuse a run, and a refusal must be arithmetic, not a guess.
+# ---------------------------------------------------------------------------
+function __autotune_host_weight_bytes() {
+    local model="${1:-0}" layers="${2:-0}" ngl="${3:-999}"
+    [[ "$model" =~ ^[0-9]+$ ]] || model=0
+    [[ "$layers" =~ ^[0-9]+$ ]] || layers=0
+    [[ "$ngl" =~ ^[0-9]+$ ]] || ngl=999
+    if (( model == 0 || layers == 0 || ngl >= layers ))
+    then
+        printf '0\n'
+        return 0
+    fi
+    (( ngl < 0 )) && ngl=0
+    awk -v m="$model" -v L="$layers" -v n="$ngl" 'BEGIN{printf "%d", (m * (L - n)) / L}'
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_host_budget_verdict — does the host side admit this run?
+#   args: footprint_bytes avail_bytes [factor_pct] [tight_pct]
+#   stdout: fits | clamp | refuse | unknown
+# footprint is what the run must hold in GUEST RAM (weights not offloaded + staging), and
+# avail is MemAvailable.  factor_pct is the stated bound — the default 100 says the footprint
+# may not exceed MemAvailable at all; a caller may lower it to keep headroom.  tight_pct is
+# the band below the bound where the run still goes ahead but asks for the SMALLEST probe,
+# because the host, not the card, is the side that would decide the failure.  `unknown` is
+# returned for an unreadable MemAvailable: no arithmetic means no verdict, and the caller
+# says so instead of pretending the host was measured.
+# ---------------------------------------------------------------------------
+function __autotune_host_budget_verdict() {
+    local need="${1:-0}" avail="${2:-0}" factor="${3:-100}" tight="${4:-75}"
+    [[ "$need" =~ ^[0-9]+$ ]] || need=0
+    [[ "$avail" =~ ^[0-9]+$ ]] || avail=0
+    [[ "$factor" =~ ^[0-9]+$ ]] && (( factor >= 1 && factor <= 100 )) || factor=100
+    [[ "$tight" =~ ^[0-9]+$ ]] && (( tight >= 0 && tight <= 100 )) || tight=75
+    (( tight > factor )) && tight=$factor
+    if (( avail == 0 ))
+    then
+        printf 'unknown\n'
+        return 0
+    fi
+    if (( need > avail * factor / 100 ))
+    then
+        printf 'refuse\n'
+    elif (( need > avail * tight / 100 ))
+    then
+        printf 'clamp\n'
+    else
+        printf 'fits\n'
     fi
 }
 

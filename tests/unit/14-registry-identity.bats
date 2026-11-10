@@ -32,6 +32,10 @@ setup() {
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
     source "$REPO_ROOT/scripts/_startup-env.sh"
     source "$REPO_ROOT/scripts/prompt-sets.sh"
+    # The scan calls __calc_gpu_layers/__calc_ctx_size, which live in 11d; without it the
+    # suite would leave the row's placement columns empty and test the scan against a
+    # console that does not exist.
+    source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
     source "$REPO_ROOT/scripts/11e-llm-model.sh"
     export LLM_REGISTRY="$TMPDIR_BATS/models.conf"
     export LLAMA_MODEL_DIR="$TMPDIR_BATS/active"
@@ -470,6 +474,91 @@ __row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
     [ "$status" -eq 1 ]
 }
 
+# ------------------------------------------------------------------------------
+# `model scan` must not give a multimodal PROJECTOR a registry row.
+# Measured 2026-11-10: mmproj-BF16.gguf (931 MB, arch `clip`) is over the scan's 300 MB
+# floor, so it registered as a SECOND row named "Qwen3.8-27B" beside the 50.9 GiB model
+# of the same name.  That row can never load — the launcher hands a projector to
+# llama.cpp as --mmproj, never as -m — and it is selectable by every registry consumer.
+# ------------------------------------------------------------------------------
+
+@test "model scan: on a shared-memory host the fit budget is the GUEST, not the carve" {
+    # Criterion (measured 2026-11-10 on the RTX Spark box): a 50.9 GiB dense model LOADED
+    # AND SERVED with -ngl 999 on a 32,768 MiB pool, because there the pool is a reservation
+    # backed by the guest's own RAM.  The scan judged it against the carve instead, so every
+    # rescan re-marked the row CPU-only and silently undid the launch (it did, twice).
+    #
+    # Fails if: the decision is taken against the card on a shared-memory host, or if the
+    # reserve is dropped (an 80 GiB model would then "fit" an 86 GiB guest and be asked for
+    # a full offload it cannot back).
+    local GiB=$(( 1024 * 1024 * 1024 ))
+    local card=$(( 32 * GiB )) guest=$(( 86 * GiB ))
+    # 50 GiB: inside the guest budget (86 - 12 = 74), outside the 32 GiB carve.
+    [ "$(__gpu_layers_fit $(( 50 * GiB )) 65 qwen35 "$card" "$guest" 0)" = "0" ] \
+        || { echo "the non-shared arm stopped using the card's carve"; return 1; }
+    [ "$(__gpu_layers_fit $(( 50 * GiB )) 65 qwen35 "$card" "$guest" 1)" = "999" ] \
+        || { echo "the shared arm did not use the guest budget"; return 1; }
+    # 80 GiB: beyond the guest budget once the reserve is kept.
+    [ "$(__gpu_layers_fit $(( 80 * GiB )) 65 qwen35 "$card" "$guest" 1)" = "0" ] \
+        || { echo "the reserve was dropped: a model larger than the guest was offloaded"; return 1; }
+    # The MoE arm is unchanged: the caller decides placement from the layer count.
+    [ "$(__gpu_layers_fit $(( 80 * GiB )) 40 qwen35moe "$card" "$guest" 1)" = "40" ] \
+        || { echo "the MoE arm changed"; return 1; }
+    # An unreadable guest falls back to the card, not to a guess.
+    [ "$(__gpu_layers_fit $(( 50 * GiB )) 65 qwen35 "$card" "" 1)" = "0" ] \
+        || { echo "a missing guest total did not fall back to the card"; return 1; }
+}
+
+@test "model scan: a projector is recognised by its name, in either case and any path" {
+    # The launcher's own candidate list is mmproj-F16.gguf / mmproj-BF16.gguf / mmproj*.gguf,
+    # so the predicate has to match what the launcher would actually pass.
+    run __model_is_projector "mmproj-BF16.gguf"
+    [ "$status" -eq 0 ]
+    run __model_is_projector "mmproj-F16.gguf"
+    [ "$status" -eq 0 ]
+    run __model_is_projector "MMPROJ-f16.gguf"
+    [ "$status" -eq 0 ]
+    run __model_is_projector "/store/active/mmproj-model-f16.gguf"
+    [ "$status" -eq 0 ]
+    # Control: the weights beside it are not a projector.
+    run __model_is_projector "Qwen3.8-27B-BF16-00001-of-00002.gguf"
+    [ "$status" -eq 1 ]
+    run __model_is_projector "/store/active/Qwen3.8-27B-UD-Q4_K_M.gguf"
+    [ "$status" -eq 1 ]
+}
+
+@test "model scan: a speculative draft head (mtp- / dflash) is recognised and skipped" {
+    run __model_is_draft_head "mtp-Qwen3.8-27B-Q4_0.gguf"
+    [ "$status" -eq 0 ]
+    run __model_is_draft_head "/store/active/Qwen3.8-27B-DFlash2-Q4_K_M.gguf"
+    [ "$status" -eq 0 ]
+    run __model_is_draft_head "Qwen3.8-27B-UD-Q4_K_M.gguf"
+    [ "$status" -eq 1 ]
+}
+
+@test "model scan: a projector beside its weights does not become a row" {
+    truncate -s 400M "$LLAMA_MODEL_DIR/Qwen3.8-27B-BF16-00001-of-00002.gguf"
+    truncate -s 400M "$LLAMA_MODEL_DIR/Qwen3.8-27B-BF16-00002-of-00002.gguf"
+    truncate -s 400M "$LLAMA_MODEL_DIR/mmproj-BF16.gguf"
+    # The walk and the filter are what this pins; the parser has its own coverage.
+    __gguf_metadata() { printf 'Qwen3.8-27B|qwen35|65|262144|32\n'; }
+
+    run __model_scan
+    [ "$status" -eq 0 ] || { echo "scan failed: $output"; return 1; }
+
+    # Exactly one row, and it is the model — not the projector.
+    [ "$(awk -F'|' '$1 ~ /^[0-9]+$/ {n++} END {print n+0}' "$LLM_REGISTRY")" -eq 1 ] \
+        || { echo "expected one row, got:"; grep -v '^#' "$LLM_REGISTRY"; return 1; }
+    [ "$(awk -F'|' '$3 ~ /mmproj/ {n++} END {print n+0}' "$LLM_REGISTRY")" -eq 0 ] \
+        || { echo "the projector registered as a model:"; grep -F 'mmproj' "$LLM_REGISTRY"; return 1; }
+    [ "$(awk -F'|' '$3 == "Qwen3.8-27B-BF16-00001-of-00002.gguf" {print $3}' "$LLM_REGISTRY")" \
+        = "Qwen3.8-27B-BF16-00001-of-00002.gguf" ] \
+        || { echo "the model itself was not registered:"; grep -v '^#' "$LLM_REGISTRY"; return 1; }
+    # The row is sized as the whole two-shard set, so the projector's bytes never leak in.
+    [ "$(awk -F'|' '$3 ~ /^Qwen3\.8-27B-BF16/ {print $4}' "$LLM_REGISTRY")" = "0.8G" ] \
+        || { echo "the split size is wrong: $(awk -F'|' '$3 ~ /^Qwen3\.8-27B-BF16/ {print $4}' "$LLM_REGISTRY")"; return 1; }
+}
+
 @test "8d144104: a save records the MEASURING binary's build, and keeps the one it replaced" {
     # Criterion — Wayne, 2026-11-04, verbatim: "Bench rows should carry build identity", given
     # "for the avoidance of doubt".  So: every certified row records the build it was measured
@@ -503,4 +592,79 @@ __row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
     __llm_autotune_profile_save "${_args[@]}" "0.9.1-dev (build 170, commit aaaaaaa)"
     row=$(awk -F'|' '$3 == "beta.gguf" {print; exit}' "$LLM_REGISTRY")
     [ "$(cut -d'|' -f47 <<< "$row")" = "0.9.0-dev (build 166, commit 3ed7284f2)" ]
+}
+
+@test "sharded lifecycle: __model_row_files resolves all shards of a split row, and single files unchanged" {
+    truncate -s 10M "$LLAMA_MODEL_DIR/Split-Model-00001-of-00003.gguf"
+    truncate -s 10M "$LLAMA_MODEL_DIR/Split-Model-00002-of-00003.gguf"
+    truncate -s 10M "$LLAMA_MODEL_DIR/Split-Model-00003-of-00003.gguf"
+    truncate -s 10M "$LLAMA_MODEL_DIR/alpha.gguf"
+
+    run __model_row_files "$LLAMA_MODEL_DIR" "Split-Model-00001-of-00003.gguf"
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 3 ]
+    [ "${lines[0]}" = "$LLAMA_MODEL_DIR/Split-Model-00001-of-00003.gguf" ]
+    [ "${lines[1]}" = "$LLAMA_MODEL_DIR/Split-Model-00002-of-00003.gguf" ]
+    [ "${lines[2]}" = "$LLAMA_MODEL_DIR/Split-Model-00003-of-00003.gguf" ]
+
+    # Single-file control
+    run __model_row_files "$LLAMA_MODEL_DIR" "alpha.gguf"
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 1 ]
+    [ "${lines[0]}" = "$LLAMA_MODEL_DIR/alpha.gguf" ]
+}
+
+@test "sharded lifecycle: model archive and model delete act on every shard of a split row" {
+    truncate -s 10M "$LLAMA_MODEL_DIR/Split-Model-00001-of-00002.gguf"
+    truncate -s 10M "$LLAMA_MODEL_DIR/Split-Model-00002-of-00002.gguf"
+    export LLAMA_ARCHIVE_DIR="$TMPDIR_BATS/archived"
+    export LLAMA_DRIVE_ROOT="$TMPDIR_BATS"
+    export ACTIVE_LLM_FILE="$TMPDIR_BATS/active_llm"
+    export LLM_DEFAULT_FILE="$TMPDIR_BATS/default_llm"
+    mkdir -p "$LLAMA_ARCHIVE_DIR"
+    printf '4|Split-Model|Split-Model-00001-of-00002.gguf|0.1G|Q4_K_M/q8_0/q8_0|qwen35|999|4096|8|1024|256|1|256|native|auto|on|0|no|no|no|0|0|0|0|0|0|||||||||||||||||||||\n' >> "$LLM_REGISTRY"
+
+    # Archive row 4: both shards move to LLAMA_ARCHIVE_DIR
+    __model_archive 4 <<< "y"
+    [ ! -f "$LLAMA_MODEL_DIR/Split-Model-00001-of-00002.gguf" ]
+    [ ! -f "$LLAMA_MODEL_DIR/Split-Model-00002-of-00002.gguf" ]
+    [ -f "$LLAMA_ARCHIVE_DIR/Split-Model-00001-of-00002.gguf" ]
+    [ -f "$LLAMA_ARCHIVE_DIR/Split-Model-00002-of-00002.gguf" ]
+
+    # Put both shards back and test __model_delete
+    mv "$LLAMA_ARCHIVE_DIR"/Split-Model-*-of-00002.gguf "$LLAMA_MODEL_DIR/"
+    printf '4|Split-Model|Split-Model-00001-of-00002.gguf|0.1G|Q4_K_M/q8_0/q8_0|qwen35|999|4096|8|1024|256|1|256|native|auto|on|0|no|no|no|0|0|0|0|0|0|||||||||||||||||||||\n' >> "$LLM_REGISTRY"
+
+    __model_delete 4 <<< "y"
+    [ ! -f "$LLAMA_MODEL_DIR/Split-Model-00001-of-00002.gguf" ]
+    [ ! -f "$LLAMA_MODEL_DIR/Split-Model-00002-of-00002.gguf" ]
+}
+
+@test "sharded lifecycle: model download expands a subfolder shard spec and routes through llm-pull" {
+    export __LLAMA_DRIVE_MOUNTED=1
+    export LLAMA_ARCHIVE_DIR="$TMPDIR_BATS/archived"
+    export LLAMA_DRIVE_ROOT="$TMPDIR_BATS"
+    export TACTICAL_REPO_ROOT="$REPO_ROOT"
+    mkdir -p "$LLAMA_ARCHIVE_DIR" "$TMPDIR_BATS/bin"
+
+    cat > "$TMPDIR_BATS/bin/hf" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+    cat > "$TMPDIR_BATS/bin/llm-pull" <<'STUB'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" > "$LLM_MODELS_DIR/.pull-recorded"
+truncate -s 400M "$LLM_MODELS_DIR/Split-New-00001-of-00002.gguf"
+truncate -s 400M "$LLM_MODELS_DIR/Split-New-00002-of-00002.gguf"
+STUB
+    chmod +x "$TMPDIR_BATS/bin/hf" "$TMPDIR_BATS/bin/llm-pull"
+    PATH="$TMPDIR_BATS/bin:$PATH"
+    __gguf_metadata() { printf 'Split-New|qwen35|40|131072|32\n'; }
+
+    run __model_download "unsloth/Split-New-GGUF:BF16/Split-New-00001-of-00002.gguf"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$LLAMA_MODEL_DIR/.pull-recorded")" = "unsloth/Split-New-GGUF|BF16/Split-New-*-of-00002.gguf" ]
+    [ -f "$LLAMA_MODEL_DIR/Split-New-00001-of-00002.gguf" ]
+    [ -f "$LLAMA_MODEL_DIR/Split-New-00002-of-00002.gguf" ]
+    [ "$(awk -F'|' '$3 == "Split-New-00001-of-00002.gguf" {print $4}' "$LLM_REGISTRY")" = "0.8G" ]
 }

@@ -14,6 +14,8 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 31
+#   v31 (2026-11-10): CI Verdict Gate resolves interpreter through tools/python-runtime.sh.
 # Module Version: 30
 #   v30 (2026-11-07): a Hook Path Guard stage. core.hooksPath into a linked worktree,
 #   or unset, meant the gates judged another tree or none — green about the wrong scope.
@@ -335,7 +337,18 @@ _tac_lint_coverage_guard() {
 # syntax error, which reds the whole-tree gate for every pusher (measured
 # 2026-10-19 on bin/autotune-resume-quiet-gate.py).  The Python gate is ruff+mypy.
 _tac_is_shell() {
-    [[ "$1" != *.py ]]
+    # bin/cuda-context-probe (2026-11-10, card c7e15c7a) is a Python tool with no
+    # extension — the CUDA context mint bin/gpu-passthrough-check.sh calls. A shebang
+    # test is how a reviewer tells it from an extensionless shell entry point (gh, so).
+    local _rel="${1#"$REPO_ROOT"/}"
+    case "$_rel" in
+        *.py) return 1 ;;
+    esac
+    # swallow-ok: an unreadable or absent file yields no shebang and falls through
+    if [[ "$_rel" == bin/* ]] && head -1 "$REPO_ROOT/$_rel" 2>/dev/null | grep -q python; then
+        return 1
+    fi
+    return 0
 }
 
 # _tac_in_lint_scope — Is a shellcheck-reported path inside the repo's lint
@@ -836,11 +849,9 @@ if [[ "${1:-}" == "--staged" ]]
 then
     echo "  SKIP  staged run — the verdict check needs egress; CI and a manual run enforce it"
 else
-    _ci_status_py="$REPO_ROOT/.venv/bin/python3"
-    if [[ ! -x "$_ci_status_py" ]]
-    then
-        _ci_status_py="python3"
-    fi
+    # shellcheck source=tools/python-runtime.sh
+    source "$REPO_ROOT/tools/python-runtime.sh"
+    _ci_status_py="$(_tac_python_path "$REPO_ROOT")"
     # --cache-ttl 0: the probe's own cache is 600 s by default, and this gate judges
     # the PUSHED TIP — reusing a verdict from up to ten minutes ago means judging the
     # PREVIOUS tip.  Measured 2026-10-11 (load 16.2): a cached read reported the

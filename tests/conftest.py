@@ -19,6 +19,8 @@ from typing import Any, Protocol
 
 import pytest
 
+from _test_harness import ephemeral_http_server, load_script
+
 # pytest must NOT collect tests/test_bats_unittest.py.  That module is the stdlib
 # runner: it generates one case per BATS suite FILE and runs each whole file, so
 # collecting it here as well would run every suite a second time — the same suites,
@@ -532,3 +534,15 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
                 f"{'y' if len(stale) == 1 else 'ies'} whose test no longer collects\033[0m"
             )
     _save_durations(baselines)
+
+
+@pytest.fixture
+def script_loader() -> Callable[..., Any]:
+    """Fixture providing the dynamic script loader."""
+    return load_script
+
+
+@pytest.fixture
+def http_server() -> Callable[..., Any]:
+    """Fixture providing the ephemeral HTTP server context manager."""
+    return ephemeral_http_server

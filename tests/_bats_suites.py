@@ -20,8 +20,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def resolve_bats() -> str:
-    """The bats executable as an absolute path, or a named failure.
+_cached_bats: str | None = None
+_bats_checked: bool = False
+
+
+def resolve_bats(*, required: bool = False) -> str | None:
+    """The bats executable as an absolute path, or None (or FileNotFoundError if required).
 
     Both bridges need the same answer: PATH first, then the install paths
     ``tools/install-bats.sh`` uses.  A bare ``bats`` failed every case in a
@@ -29,19 +33,27 @@ def resolve_bats() -> str:
     exactly such a caller — 1,759 false reds, measured 2026-11-05), and the
     unittest bridge carried that bug until this helper existed.
     """
-    found = shutil.which("bats")
-    if found:
-        return found
-    for candidate in (
-        Path.home() / ".local/bin/bats",
-        Path("/usr/local/bin/bats"),
-        Path("/usr/bin/bats"),
-    ):
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    raise FileNotFoundError(
-        "bats not found on PATH or in ~/.local/bin, /usr/local/bin, /usr/bin — install it with tools/install-bats.sh"
-    )
+    global _cached_bats, _bats_checked
+    if not _bats_checked:
+        found = shutil.which("bats")
+        if found:
+            _cached_bats = found
+        else:
+            for candidate in (
+                Path.home() / ".local/bin/bats",
+                Path("/usr/local/bin/bats"),
+                Path("/usr/bin/bats"),
+            ):
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    _cached_bats = str(candidate)
+                    break
+        _bats_checked = True
+
+    if _cached_bats is None and required:
+        raise FileNotFoundError(
+            "bats not found on PATH or in ~/.local/bin, /usr/local/bin, /usr/bin — install it with tools/install-bats.sh"
+        )
+    return _cached_bats
 
 
 SUITES_TSV = Path(__file__).resolve().parent / "bats-suites.tsv"
@@ -56,6 +68,14 @@ class BatsSuite:
     marker: str
     per_case_timeout_s: int
     file_timeout_s: int
+
+    @property
+    def name(self) -> str:
+        return self.marker
+
+    @property
+    def timeout_seconds(self) -> int:
+        return self.per_case_timeout_s
 
 
 def load_suites() -> list[BatsSuite]:

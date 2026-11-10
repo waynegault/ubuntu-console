@@ -43,7 +43,7 @@ Environment=LLAMA_CUDA_SERVER_BIN=%h/llama.cpp/build-cuda/bin/llama-server
 # REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
 # (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
 # CARD: SWITCH-CONSOLE-METRICS-001
-ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf --alias qwen3-coder-30b-gpu --port 18087 --host 127.0.0.1 --ctx-size 262144 --batch-size 2048 --ubatch-size 512 --threads 12 --parallel 4 --kv-unified --cache-ram 0 -ctk q8_0 -ctv q8_0 --flash-attn on --jinja --metrics -ngl 99
+ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf --alias qwen3-coder-30b-gpu --port 18087 --host 127.0.0.1 --ctx-size 262144 --batch-size 2048 --ubatch-size 512 --threads 10 --parallel 4 --kv-unified --cache-ram 0 -ctk q8_0 -ctv q8_0 --flash-attn on --jinja --metrics -ngl 999
 # Model load is 18.6 GiB from disk through the Windows driver into VRAM; the CPU tier
 # needed 600 s cold, so this gets the same.
 Restart=always

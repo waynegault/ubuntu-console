@@ -1,6 +1,38 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 119
+#   v119 (2026-11-10): (1) `model scan` skips speculative draft heads (`__model_is_draft_head`:
+#     `mtp-*.gguf` / `*dflash*.gguf`) just as v116 skips `mmproj*.gguf`, so auxiliary draft
+#     heads do not register as standalone chat rows.  (2) `__model_use_build_command` passes
+#     `--fit off` in serve mode on a shared-memory host when the row is already certified
+#     (`autotuned=yes`) and full-offloaded (`moe_offload_flag` empty), matching the certified
+#     `autotune-model.sh` argv and avoiding `llama_params_fit`'s double-load penalty (~121 s ->
+#     ~8 s on `#5 Qwen3.8-27B` + `draft-mtp`) and WDDM carve window shrinkage.
+# Module Version: 118
+#   v118 (2026-11-10): multi-file GGUF support across `model download`, `model delete`, and
+#     `model archive`.  (1) `__model_row_files` resolves all on-disk shards of a split row
+#     (`-00001-of-NNNNN.gguf` -> shards `1..N`), so `model delete` and `model archive` remove
+#     or move the entire shard set instead of leaving shards `2..N` orphaned in the store.
+#     (2) `__model_download` accepts repo-relative subdirectory paths (e.g. `BF16/Model.gguf`)
+#     and globs while still rejecting `..` traversal, auto-expands a single shard spec
+#     (`-00001-of-NNNNN.gguf`) to its full `-*-of-NNNNN.gguf` set, and routes subfolder/shard
+#     downloads through `llm-pull` so they land flat in `$LLAMA_MODEL_DIR` before `__model_scan`.
+# Module Version: 117
+#   v117 (2026-11-10): (1) `llm-build` promotes compute 12.1 (Blackwell GB10 / RTX Spark N1X)
+#     to `121a-real` (or honors a matching `LLAMA_CUDA_ARCH` suffix) and reads
+#     `LLAMA_CUDA_FA_QUANTS` (set to `all` on `asus-n1n-rtx-spark`, the upstream replacement
+#     for the deprecated `GGML_CUDA_FA_ALL_QUANTS=ON`).  (2) `__model_use_build_command` keeps
+#     `mmap` enabled (`use_no_mmap=0`) under `auto` mode on shared-memory hosts with a native
+#     non-mount model store for single-file GPU-offloaded GGUFs, avoiding the double-read
+#     anonymous-RAM penalty of `--load-mode none` + `--fit on`.
+# Module Version: 116
+#   v116 (2026-11-10): `model scan` skips a multimodal projector.  The walk takes every
+#     *.gguf over the 300 MB floor, and a projector is one of those, so mmproj-BF16.gguf
+#     (931 MB, arch `clip`) registered as a SECOND row named "Qwen3.8-27B" beside the
+#     50.9 GiB model of the same name — a row that can never load, since llama.cpp is
+#     handed it as --mmproj, not as -m.  `__model_is_projector` matches the basename,
+#     case-insensitively, because the launcher's own candidate list is mmproj*.gguf.
 # Module Version: 115
 #   v115 (2026-11-10): the @extractable note above model() said "~500 lines"; measured,
 #     the function is 242, so the note named a function twice its real size and made the
@@ -489,6 +521,33 @@ function __model_scan_row_bytes() {
     printf '%s\n' "$_fbytes"
 }
 
+# __model_row_files <dir> <rel> — print every existing on-disk file belonging to a registry row.
+# For a single-file GGUF, prints <dir>/<rel> when present.  For a split GGUF row
+# (<stem>-00001-of-NNNNN.gguf), prints every existing shard 1..N in that file's directory so
+# `model delete` and `model archive` act on the whole shard set instead of orphaning shards 2..N.
+function __model_row_files() {
+    local _dir="$1" _rel="$2" _sub="" _fname _i _expected _prefix _want _cand
+    [[ "$_rel" == */* ]] && _sub="${_rel%/*}"
+    _fname="${_rel##*/}"
+    if [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]]
+    then
+        _expected=$(( 10#${BASH_REMATCH[2]} ))
+        if (( _expected > 1 ))
+        then
+            _prefix="${_fname%-[0-9][0-9][0-9][0-9][0-9]-of-*.gguf}"
+            for (( _i = 1; _i <= _expected; _i++ ))
+            do
+                printf -v _want '%s-%05d-of-%05d.gguf' "$_prefix" "$_i" "$_expected"
+                _cand="$_dir/${_sub:+$_sub/}$_want"
+                [[ -f "$_cand" ]] && printf '%s\n' "$_cand"
+            done
+            return 0
+        fi
+    fi
+    [[ -f "$_dir/$_rel" ]] && printf '%s\n' "$_dir/$_rel"
+    return 0
+}
+
 # __model_is_embedding — true when a GGUF is an embedding export, which must never become a
 # registry row (Wayne, 2026-11-05: "we really shouldnt have any embedding models in this
 # registry").  TWO signals, because the arch alone is not enough: EmbeddingGemma names itself
@@ -506,6 +565,29 @@ function __model_is_embedding() {
     esac
     # swallow-ok: an unreadable file yields no match, i.e. "not an embedding export", which the scan then handles as before
     dd if="$fpath" bs=262144 count=1 2>/dev/null | grep -qa 'pooling_type'
+}
+
+# __model_is_projector <path> — true when a GGUF is a multimodal PROJECTOR, which is not a
+# model and must never become a registry row.  It rides beside its weights and the launcher
+# passes it as --mmproj (__model_use_build_command); the scan walks every *.gguf over the
+# 300 MB floor, so without this a projector registers as a chat row of its own.
+# Measured 2026-11-10: mmproj-BF16.gguf (931 MB, arch `clip`) scanned as a SECOND row named
+# "Qwen3.8-27B", beside the 50.9 GiB model of the same name, and could never load.
+# Matched on the BASENAME, case-insensitively: the launcher's own candidate list is
+# `mmproj-F16.gguf` / `mmproj-BF16.gguf` / `mmproj*.gguf`, and exporters vary the case.
+# Pure on purpose, like its neighbours, so a test can exercise it without the console.
+function __model_is_projector() {
+    local _base="${1##*/}"
+    [[ "${_base,,}" == *mmproj* ]]
+}
+
+# __model_is_draft_head <path> — true when a GGUF is a speculative-decoding draft head
+# (`mtp-*.gguf` or `*dflash*.gguf`), which is passed via `--spec-draft-model` beside its
+# target model and must never register as a standalone chat row in `models.conf`.
+function __model_is_draft_head() {
+    local _base="${1##*/}"
+    local _lc="${_base,,}"
+    [[ "$_lc" == mtp-* || "$_lc" == *dflash* ]]
 }
 
 # __model_split_shard_walk <dir> — every split-GGUF shard under the store, excluding the
@@ -661,6 +743,20 @@ function __model_scan() {
         # the first shard's row carries the group's summed size (see the helper above).
         [[ -n "$fbytes" ]] || continue
         (( fbytes < 300000000 )) && continue
+
+        # A projector is not a model: it rides beside its weights and is passed as
+        # --mmproj, so a row for one is a model that can never load.  Checked before the
+        # metadata read, because the decision does not need it.
+        if __model_is_projector "$fname"
+        then
+            __tac_info "Skipping" "multimodal projector $rel — a projector is not a model" "$C_Dim"
+            continue
+        fi
+        if __model_is_draft_head "$fname"
+        then
+            __tac_info "Skipping" "speculative draft head $rel — a draft head is not a standalone model" "$C_Dim"
+            continue
+        fi
 
         local meta
         meta=$(__gguf_metadata "$gguf")
@@ -2095,7 +2191,15 @@ function __model_use_build_command() {
                     cmd+=("--fit" "on" "--fit-target" "256") ;;
             esac
         else
-            cmd+=("--fit" "on" "--fit-target" "$fit_target_mb")
+            if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" \
+               && "${autotuned:-}" == "yes" \
+               && -z "${moe_offload_flag:-}" \
+               && "${LLAMA_FIT_MODE:-auto}" != "on" ]]
+            then
+                cmd+=("--fit" "off")
+            else
+                cmd+=("--fit" "on" "--fit-target" "$fit_target_mb")
+            fi
         fi
         cmd+=("--flash-attn" "$flash_attn_mode")
         cmd+=("--jinja")
@@ -2232,7 +2336,13 @@ function __model_use_build_command() {
             use_no_mmap=0
             ;;
         auto|*)
-            if [[ "$arch" == *"moe"* ]] || (( free_vram_mb > 0 && free_vram_mb < 1500 ))
+            if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" \
+               && "${TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT:-1}" == "0" \
+               && -z "${moe_offload_flag:-}" \
+               && ! "$model_path" =~ -[0-9]{5}-of-[0-9]{5}\.gguf$ ]]
+            then
+                use_no_mmap=0
+            elif [[ "$arch" == *"moe"* ]] || (( free_vram_mb > 0 && free_vram_mb < 1500 ))
             then
                 use_no_mmap=1
             elif grep -qi microsoft /proc/version 2>/dev/null
@@ -4476,11 +4586,18 @@ function __model_delete() {
 
     __tac_info "Delete" "#${target} ${name}" "$C_Warning"
     __tac_info "File" "$fpath" "$C_Dim"
+    local -a _del_files=()
+    mapfile -t _del_files < <(__model_row_files "$LLAMA_MODEL_DIR" "$file")
+    if (( ${#_del_files[@]} > 1 ))
+    then
+        __tac_info "Shards" "[${#_del_files[@]} shard files in set]" "$C_Dim"
+    fi
     if [[ -f "$fpath" ]]
     then
         local fsize_bytes
+        fsize_bytes=$(__model_scan_row_bytes "$LLAMA_MODEL_DIR" "$file")
         # swallow-ok: an unreadable size reads as 0 bytes, which the caller reports rather than mistaking for a full file
-        fsize_bytes=$(stat --format=%s "$fpath" 2>/dev/null || echo 0)
+        [[ "$fsize_bytes" =~ ^[0-9]+$ ]] || fsize_bytes=$(stat --format=%s "$fpath" 2>/dev/null || echo 0)
         local fsize
         fsize=$(awk "BEGIN{printf \"%.1fG\", $fsize_bytes/1024/1024/1024}")
         __tac_info "Size" "$fsize" "$C_Dim"
@@ -4502,15 +4619,16 @@ function __model_delete() {
     # serving, and after a rescan the number would match a different row — either leaving
     # this server running on a file about to be removed, or stopping the wrong one.
     local active_file=""
-    active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+    # swallow-ok: absent pointer file means no model is currently recorded as active
+    active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null || true)
     if [[ -n "$active_file" && "$file" == "$active_file" ]]
     then
         __model_stop
     fi
 
-    if [[ -f "$fpath" ]]
+    if (( ${#_del_files[@]} > 0 ))
     then
-        if rm -f "$fpath" 2>/dev/null
+        if rm -f "${_del_files[@]}" 2>/dev/null
         then
             __tac_info "File" "[DELETED]" "$C_Success"
         else
@@ -4620,8 +4738,10 @@ function __model_download() {
             continue
         fi
 
-        # Path traversal and format validation
-        if [[ "$dl_file" == *"/"* || "$dl_file" == *".."* ]]
+        # Path traversal validation: forbid '..' segments and absolute paths, while
+        # allowing repo-relative subfolder paths (e.g. BF16/Model-00001-of-00002.gguf)
+        # and globs, which are flattened into $LLAMA_MODEL_DIR via llm-pull below.
+        if [[ "$dl_file" == /* || "$dl_file" == *".."* ]]
         then
             printf '%s\n' \
                 "${C_Error}Error:${C_Reset} '$spec' - invalid filename (path traversal detected)"
@@ -4629,8 +4749,33 @@ function __model_download() {
             continue
         fi
 
-        local dest="$LLAMA_MODEL_DIR/$dl_file"
-        local archive_dest="$LLAMA_ARCHIVE_DIR/$dl_file"
+        # Multi-shard and subfolder normalization:
+        # 1. If the caller named a single shard (e.g. Model-00001-of-00003.gguf or
+        #    BF16/Model-00001-of-00003.gguf), expand the download pattern to the full
+        #    shard set (*-*-of-00003.gguf) so a split model is never downloaded half-complete.
+        # 2. Check existing active/archive files by the flattened basename (shard 00001 for
+        #    a split set).
+        local _dl_pattern="$dl_file"
+        local _check_base="${dl_file##*/}"
+        local _use_llm_pull=0
+        if [[ "$dl_file" == */* || "$dl_file" == *[\*\?\[]* ]]
+        then
+            _use_llm_pull=1
+        fi
+        if [[ "$dl_file" =~ ^(.*)-[0-9]{5}-of-([0-9]{5})\.gguf$ ]]
+        then
+            local _shard_stem="${BASH_REMATCH[1]}"
+            local _shard_tot="${BASH_REMATCH[2]}"
+            if (( 10#$_shard_tot > 1 ))
+            then
+                _dl_pattern="${_shard_stem}-*-of-${_shard_tot}.gguf"
+                _check_base="${_shard_stem##*/}-00001-of-${_shard_tot}.gguf"
+                _use_llm_pull=1
+            fi
+        fi
+
+        local dest="$LLAMA_MODEL_DIR/$_check_base"
+        local archive_dest="$LLAMA_ARCHIVE_DIR/$_check_base"
 
         if [[ -f "$QUANT_GUIDE" ]]
         then
@@ -4705,15 +4850,31 @@ function __model_download() {
                     local have_gb=$(( d_avail_bytes / 1024 / 1024 / 1024 ))
                     printf '%s\n' \
                         "${C_Error}Error:${C_Reset} Not enough space" \
-                        "for $dl_file (need ~${need_gb}G, only ${have_gb}G free on M:)"
+                        "for $dl_file (need ~${need_gb}G, only ${have_gb}G free on ${LLAMA_DRIVE_ROOT})"
                     ((++fail))
                     continue
                 fi
             fi
         fi
 
-        __tac_info "Downloading" "$dl_repo ${ARROW_R} $dl_file" "$C_Highlight"
-        if hf download "$dl_repo" "$dl_file" --local-dir "$LLAMA_MODEL_DIR"
+        __tac_info "Downloading" "$dl_repo ${ARROW_R} $_dl_pattern" "$C_Highlight"
+        if (( _use_llm_pull ))
+        then
+            local _pull_bin
+            # swallow-ok: absent llm-pull on PATH falls back to the repo's bin/llm-pull below
+            _pull_bin="$(command -v llm-pull 2>/dev/null || true)"
+            [[ -z "$_pull_bin" && -x "${TACTICAL_REPO_ROOT:-}/bin/llm-pull" ]] \
+                && _pull_bin="${TACTICAL_REPO_ROOT}/bin/llm-pull"
+            if [[ -n "$_pull_bin" ]] \
+               && LLM_MODELS_DIR="$LLAMA_MODEL_DIR" "$_pull_bin" "$dl_repo" "$_dl_pattern"
+            then
+                __tac_info "OK" "$_dl_pattern" "$C_Success"
+                ((++ok))
+            else
+                __tac_info "FAIL" "$dl_repo $_dl_pattern" "$C_Error"
+                ((++fail))
+            fi
+        elif hf download "$dl_repo" "$dl_file" --local-dir "$LLAMA_MODEL_DIR"
         then
             __tac_info "OK" "$dl_file" "$C_Success"
             ((++ok))
@@ -4780,6 +4941,12 @@ function __model_archive() {
     __tac_info "Archive" "#${target} ${name}" "$C_Warning"
     __tac_info "From" "$fpath" "$C_Dim"
     __tac_info "To" "$archive_dir/$file" "$C_Dim"
+    local -a _arc_files=()
+    mapfile -t _arc_files < <(__model_row_files "$LLAMA_MODEL_DIR" "$file")
+    if (( ${#_arc_files[@]} > 1 ))
+    then
+        __tac_info "Shards" "[${#_arc_files[@]} shard files in set]" "$C_Dim"
+    fi
     if (( dry_run ))
     then
         __tac_info "Dry Run" "[Would move file and renumber registry only]" "$C_Warning"
@@ -4795,16 +4962,17 @@ function __model_archive() {
 
     # Same reasoning as delete: the running model is identified by FILE name.
     local active_file=""
-    active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+    # swallow-ok: absent pointer file means no model is currently recorded as active
+    active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null || true)
     if [[ -n "$active_file" && "$file" == "$active_file" ]]
     then
         __model_stop
     fi
 
     mkdir -p "$archive_dir"
-    if [[ -f "$fpath" ]]
+    if (( ${#_arc_files[@]} > 0 ))
     then
-        if mv "$fpath" "$archive_dir/" 2>/dev/null
+        if mv "${_arc_files[@]}" "$archive_dir/" 2>/dev/null
         then
             __tac_info "File" "[MOVED]" "$C_Success"
         else
@@ -5543,17 +5711,24 @@ function llm-build() {
     if [[ "$_cuda_cap" =~ ^[0-9]+\.[0-9]+$ ]]
     then
         cuda_arch="${_cuda_cap/./}"
+        # Blackwell GB10 / RTX Spark N1X (compute 12.1): target 121a-real so nvcc
+        # compiles architecture-accelerated sm_121a Tensor Core instructions directly.
+        if [[ "$cuda_arch" == "121" ]]
+        then
+            cuda_arch="${LLAMA_CUDA_ARCH:-121a-real}"
+        fi
     else
         cuda_arch="${LLAMA_CUDA_ARCH:-}"
         cuda_arch_src="host profile"
         if [[ -z "$cuda_arch" ]]
         then
             local guess_refusal="compute capability unreadable and LLAMA_CUDA_ARCH unset - refusing to guess"
-            __tac_info "Error" "${guess_refusal} (set LLAMA_CUDA_ARCH: 86 or 121)" "$C_Error"
+            __tac_info "Error" "${guess_refusal} (set LLAMA_CUDA_ARCH: 86 or 121a-real)" "$C_Error"
             return 1
         fi
     fi
-    __tac_info "CUDA" "building for sm_${cuda_arch} (${cuda_arch_src})" "$C_Dim"
+    local fa_quants="${LLAMA_CUDA_FA_QUANTS:-q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16}"
+    __tac_info "CUDA" "building for sm_${cuda_arch} (${cuda_arch_src}, fa_quants=${fa_quants})" "$C_Dim"
 
     # Configure with CMake (skip if --quick and CMakeCache exists)
     if [[ "$quick" != "true" || ! -f "$build_dir/CMakeCache.txt" ]]; then
@@ -5563,7 +5738,7 @@ function llm-build() {
             -DCMAKE_CUDA_ARCHITECTURES=${cuda_arch} \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_FA=ON \
-            -DGGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16" \
+            -DGGML_CUDA_FA_QUANTS="${fa_quants}" \
             -DGGML_CUDA_GRAPHS=ON \
             -DGGML_CUDA_NCCL=ON \
             -DGGML_CUDA_COMPRESSION_MODE=size \

@@ -1,18 +1,17 @@
 """Tests for the opt-in local LLM performance benchmark."""
 
 import json
-import threading
 import time
 from collections.abc import Mapping
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
+from _test_harness import SilentHTTPHandler, ephemeral_http_server
 from tools import llm_benchmark
 
 
-class _StreamingHandler(BaseHTTPRequestHandler):
+class _StreamingHandler(SilentHTTPHandler):
     def do_POST(self):
         length = int(self.headers["Content-Length"])
         request = json.loads(self.rfile.read(length))
@@ -46,15 +45,8 @@ class _StreamingHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def streaming_server():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _StreamingHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        thread.join(timeout=3)
-        server.server_close()
+    with ephemeral_http_server(_StreamingHandler) as (_server, base_url):
+        yield base_url
 
 
 def _write_artifact(path: Path, *, median: float, status: str = "complete", context: int = 4096):

@@ -24,6 +24,7 @@ import os
 import sys
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import mock_open
 
 import pytest
 
@@ -231,8 +232,8 @@ def test_parent_is_systemd_false_for_a_non_systemd_parent(
 ) -> None:
     fake_os = SimpleNamespace(path=os.path, readlink=lambda _p: "/usr/bin/python3")
     monkeypatch.setattr(probe, "os", fake_os)
-    # /proc/<this test process>/comm is the interpreter, so the fallback answers False.
-    assert probe._parent_is_systemd(os.getpid()) is False
+    monkeypatch.setattr(probe, "open", mock_open(read_data="python3\n"), raising=False)
+    assert probe._parent_is_systemd(4242) is False
 
 
 def test_parent_is_systemd_falls_back_to_comm_when_exe_is_unreadable(
@@ -245,8 +246,20 @@ def test_parent_is_systemd_falls_back_to_comm_when_exe_is_unreadable(
 
     fake_os = SimpleNamespace(path=os.path, readlink=_raise)
     monkeypatch.setattr(probe, "os", fake_os)
-    # pid 1 is the systemd service manager on this box; its comm is readable.
+    monkeypatch.setattr(probe, "open", mock_open(read_data="systemd\n"), raising=False)
     assert probe._parent_is_systemd(1) is True
+
+
+def test_parent_is_systemd_false_when_comm_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(_p: str, *args: Any, **kwargs: Any) -> Any:
+        raise OSError(13, "permission denied")
+
+    fake_os = SimpleNamespace(path=os.path, readlink=_raise)
+    monkeypatch.setattr(probe, "os", fake_os)
+    monkeypatch.setattr(probe, "open", _raise, raising=False)
+    assert probe._parent_is_systemd(1) is False
 
 
 def test_is_systemd_managed_uses_the_parent(monkeypatch: pytest.MonkeyPatch) -> None:

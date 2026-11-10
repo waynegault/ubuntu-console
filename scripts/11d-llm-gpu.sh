@@ -1,6 +1,23 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 51
+#   v51 (2026-11-10): __calc_ctx_size respects shared-memory host context ceiling
+#     (LLAMA_MAX_CTX_SIZE / 262144 on unified-memory boxes) instead of hardcoding 65536.
+# Module Version: 50
+#   v50 (2026-11-10): on a SHARED-MEMORY host, __calc_gpu_layers judges a dense model against
+#     the GUEST (MemTotal minus LLAMA_FIT_KEEP_RESERVE_MB), not the card's carve.  The pool
+#     there is a reservation backed by the guest's RAM, so the carve is not the allocation
+#     bound: a 50.9 GiB model served with -ngl 999 on a 32,768 MiB pool, yet every scan
+#     re-marked it CPU-only and undid the launch.  MemTotal rather than MemAvailable, because
+#     a scan can run while the model is resident.  The launch-time preflight still guards the
+#     live allocation.
+# Module Version: 49
+#   v49 (2026-11-10): a registry row's draft model now RESOLVES against the store.  The row
+#     names its file relative to $LLAMA_MODEL_DIR, but this builder passed the column
+#     through verbatim, so the launch carried `--spec-draft-model mtp-....gguf` while the
+#     server's cwd is the repo — a draft that cannot be found.  Measured on row 4; the
+#     absolute path, or a relative one that is not in the store, is left untouched.
 # Module Version: 48
 #   v48 (2026-11-10): __llm_cuda_server_pids delegates its /proc walk to the shared
 #     _tac_cuda_server_pids; the lanes-stopped declaration moved above the function's
@@ -131,7 +148,7 @@
 # @modular-section: llm-manager
 # @depends: constants, design-tokens, ui-engine, hooks, telemetry, llm-server
 # @exports: wake, gpu-status, gpu-check, __gguf_metadata, __calc_gpu_layers,
-#   __calc_ctx_size, __calc_threads, __quant_label, __tac_cleanup_stale_locks,
+#   __gpu_layers_fit, __calc_ctx_size, __calc_threads, __quant_label, __tac_cleanup_stale_locks,
 #   __gpu_clear_stale_processes, __llm_kill_cuda_llama_servers,
 #   __llm_stand_down_cuda_lanes, __llm_vram_holder_report,
 #   __llm_gpu_lock_path, __llm_gpu_lock_holder, __llm_gpu_foreign_owner,
@@ -1433,10 +1450,23 @@ function __tac_vram_total_bytes() {
 # Args: file_size_bytes total_layers [arch]
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {
+    local _mem_total
+    # swallow-ok: /proc/meminfo may be absent in a minimal test environment; empty falls back to usable_vram
+    _mem_total="$(awk '/^MemTotal:/{printf "%.0f", $2*1024}' /proc/meminfo 2>/dev/null)"
+    __gpu_layers_fit "$1" "$2" "${3:-}" \
+        "$(__tac_vram_total_bytes)" \
+        "$_mem_total" \
+        "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}"
+}
+
+# __gpu_layers_fit — the placement decision with every number PASSED IN (pure).
+# Split out of __calc_gpu_layers so a test can pin the card and the guest separately;
+# it reads no file, no card and no environment except the reserve knob.
+# Args: file_bytes total_layers arch vram_total_bytes mem_total_bytes shared(0|1)
+function __gpu_layers_fit() {
     local _file_bytes=$1 _total_layers=$2 _arch="${3:-}"
-    local _vram_total
-    _vram_total="$(__tac_vram_total_bytes)"
-    local usable_vram=$(( _vram_total * VRAM_USABLE_PCT / 100 ))
+    local _vram_total=$4 _mem_total=$5 _shared=$6
+    local usable_vram=$(( ${_vram_total:-0} * VRAM_USABLE_PCT / 100 ))
 
     # MoE: the layer count is returned WITHOUT a VRAM comparison (the caller decides
     # placement — see __model_use_fit_preflight in 11e, which adds --cpu-moe when the
@@ -1448,6 +1478,33 @@ function __calc_gpu_layers() {
     fi
 
     # Full offload when the model fits in usable VRAM, otherwise CPU-only.
+    #
+    # A SHARED-MEMORY host is judged against the GUEST, not the card: there the pool is a
+    # reservation backed by the guest's own RAM, so the card's figure is not the allocation
+    # bound.  Measured 2026-11-10 on the RTX Spark box: a 50.9 GiB dense model loaded and
+    # served with `-ngl 999` on a 32,768 MiB pool.  Judging it against the card here marks
+    # the row CPU-only, and the next `model scan` then silently undoes a launch that works
+    # (it did, twice).  MemTOTAL, not MemAvailable: a scan can run while the model is
+    # resident, and a load-dependent reading would flip the row back.  The launch-time
+    # `__model_use_fit_preflight` still guards the live allocation with the same reserve.
+    if [[ "$_shared" == "1" ]]
+    then
+        local _reserve_mb _budget
+        _reserve_mb="${LLAMA_FIT_KEEP_RESERVE_MB:-12288}"
+        [[ "$_reserve_mb" =~ ^[0-9]+$ ]] || _reserve_mb=12288
+        if [[ "$_mem_total" =~ ^[0-9]+$ ]] && (( _mem_total > 0 ))
+        then
+            _budget=$(( _mem_total - _reserve_mb * 1048576 ))
+            if (( _budget > 0 && _file_bytes <= _budget ))
+            then
+                echo 999
+            else
+                echo 0
+            fi
+            return
+        fi
+    fi
+
     if (( _file_bytes <= usable_vram ))
     then
         echo 999
@@ -1518,9 +1575,12 @@ function __calc_ctx_size() {
         if (( _native_ctx > 0 && _native_ctx < _est_ctx )); then
             _est_ctx=$_native_ctx
         fi
-        # Absolute ceiling: 64K for initial registration on a 4GB GPU.
+        # Absolute ceiling: 64K for initial registration on a 4GB GPU, or LLAMA_MAX_CTX_SIZE
+        # (256K default) on a shared-memory unified host.
         # Autotune will find the real optimum; this is just a realistic first guess.
-        (( _est_ctx > 65536 )) && _est_ctx=65536
+        local _max_ctx=65536
+        [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] && _max_ctx="${LLAMA_MAX_CTX_SIZE:-262144}"
+        (( _est_ctx > _max_ctx )) && _est_ctx=$_max_ctx
         echo "$_est_ctx"
     else
         # No VRAM available before freeing model weights, use a conservative fallback
@@ -1710,6 +1770,16 @@ function __spec_launch_flags() {
 
     local _type="${LLM_SPEC_TYPE:-${row_spec_type:-}}"
     local _draft="${LLM_SPEC_DRAFT_MODEL:-${row_spec_draft_model:-}}"
+    # A registry row names its file RELATIVE to the model store — that is the convention
+    # the row's own `file` column follows, and every consumer joins it to
+    # $LLAMA_MODEL_DIR.  The draft column was passed through verbatim, so the server (whose
+    # cwd is the repo, not the store) received `--spec-draft-model mtp-...gguf` and could
+    # not find it.  Measured 2026-11-10 on row 4.  Only a relative path that EXISTS under
+    # the store is rewritten: an absolute path, or one meant for another cwd, is untouched.
+    if [[ -n "$_draft" && "$_draft" != /* && -n "${LLAMA_MODEL_DIR:-}" && -e "$LLAMA_MODEL_DIR/$_draft" ]]
+    then
+        _draft="$LLAMA_MODEL_DIR/$_draft"
+    fi
     local _n_max="${LLM_SPEC_DRAFT_N_MAX:-${row_spec_n_max:-0}}"
     [[ "$_n_max" =~ ^[0-9]+$ ]] || _n_max=0
     local _ngl="${LLM_SPEC_DRAFT_NGL:-${row_spec_ngl:-0}}"

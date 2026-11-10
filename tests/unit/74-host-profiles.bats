@@ -119,6 +119,7 @@ selected_with() {
     local f id arch
     for f in "$PROFILE_DIR"/*.conf
     do
+        [[ "${f##*/}" == *-quant-guide.conf ]] && continue
         id="$(bash -c 'source "$1"; printf "%s" "${TAC_HOST_PROFILE_ID:-}"' _ "$f")"
         arch="$(bash -c 'source "$1"; printf "%s" "${TAC_HOST_PROFILE_ARCH:-}"' _ "$f")"
         [ "$id.conf" = "${f##*/}" ] \

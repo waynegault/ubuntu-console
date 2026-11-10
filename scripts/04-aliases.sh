@@ -2,6 +2,8 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
+# Module Version: 38
+#   v38 (2026-11-10): removed deprecated fgrep/egrep aliases (use grep -F / grep -E).
 # Module Version: 37
 #   v37 (2026-11-05): a repo-relative GGUF path (`Q2_0/x.gguf`) is routed through
 #   llm-pull too.  `--local-dir` recreates the repo's directory, so the file landed
@@ -57,11 +59,6 @@ function __os_fetch_cached() {
 # ---- Core OS Aliases ----
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
-# fgrep/egrep are deprecated in modern coreutils. These aliases ensure
-# backward compat if any inherited scripts call them. Safe to remove once
-# confirmed no scripts in ~/console or ~/.openclaw reference fgrep/egrep.
-alias fgrep='grep -F --color=auto'
-alias egrep='grep -E --color=auto'
 alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'

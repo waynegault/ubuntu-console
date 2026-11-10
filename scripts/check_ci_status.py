@@ -50,7 +50,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import importlib
 import os
 import re
 import shutil
@@ -64,12 +63,11 @@ from pathlib import Path
 logger = logging.getLogger("check_ci_status")
 
 REPO_DIR = Path(__file__).resolve().parent.parent
-if str(REPO_DIR) not in sys.path:
-    sys.path.insert(0, str(REPO_DIR))
-# Loaded through importlib: a plain `from tools.fsutil import ...` here would be
-# an E402 import after the sys.path bootstrap, which the repo bans.
-_fsutil = importlib.import_module("tools.fsutil")
-atomic_write_text = _fsutil.atomic_write_text
+try:
+    from tools.fsutil import atomic_write_text
+except ModuleNotFoundError:
+    sys.path.append(str(REPO_DIR))
+    from tools.fsutil import atomic_write_text
 #: The baseline lives with the other baselines (tools/*-baseline.*); only the
 #: checker is Python, and Python sources live under scripts/ (pyproject.toml).
 BASELINE_FILE = REPO_DIR / "tools" / "ci-status-baseline.txt"
@@ -102,6 +100,11 @@ _sleep = time.sleep
 
 #: One-line description for `--help` (and the module's own identity).
 _SUMMARY = "CI verdict gate (CI-WATCH-CONSOLE-001): a red main blocks the gate"
+
+
+def _normalize_summary(summary: str) -> str:
+    """Normalize whitespace in a summary string."""
+    return " ".join(summary.strip().split())
 
 
 def _iso_date(value: str) -> date | None:

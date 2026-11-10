@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+# AI INSTRUCTION: increment Version below on every edit.
+# Version: 1.0.0 (2026-11-10, card c7e15c7a GPU-WEDGE-ESCALATION-001)
+#
+# cuda-context-probe — does this environment actually mint a CUDA context?
+#
+# WHY THIS EXISTS
+#   nvidia-smi is a dlopen client of libcuda.so.1. It can enumerate devices while the
+#   loader resolves a libcuda that cannot talk to /dev/dxg, and it can fail while the
+#   card is healthy and serving under LD_LIBRARY_PATH. A check built on it measures
+#   loader order, not whether CUDA works. This probe calls the driver directly and
+#   creates a real context, allocates 4 KiB on it, writes to it, and destroys it. That
+#   is the smallest operation that distinguishes "no usable CUDA" from "no driver".
+#
+# BACKENDS
+#   ctypes (default): dlopen("libcuda.so.1") through the normal loader, so it obeys
+#     LD_LIBRARY_PATH and ldconfig exactly as a real CUDA process would. No compile
+#     step, no toolkit dependency.
+#   torch: set CUDA_PROBE_BACKEND=torch to use torch's own allocator instead. It is
+#     accepted as evidence (the card names it), but it is heavier and imports a
+#     framework before it can answer.
+#
+# EXIT CODES
+#   0  a CUDA context was created, written to, and destroyed
+#   1  the driver was reached but no usable context could be created (no device,
+#      /dev/dxg unavailable, context creation failed)
+#   3  the instrument itself is unavailable (libcuda.so.1 cannot be loaded, or the
+#      selected backend is missing). This is NOT a hardware verdict.
+#
+# STDOUT  one machine-readable line, e.g. "context=ok device=0 backend=ctypes"
+# STDERR  one line naming the step that failed and the driver's error name/code.
+
+from __future__ import annotations
+
+import ctypes
+import os
+import sys
+
+BACKEND = os.environ.get("CUDA_PROBE_BACKEND", "ctypes").strip().lower()
+VERSION = "1.0.0"
+
+
+def fail(code: int, line: str) -> None:
+    print(line, file=sys.stderr)
+    sys.exit(code)
+
+
+def cuda_error_name(cu, rc: int) -> str:
+    """Best-effort CUresult name; never let diagnostics turn a failure into a crash."""
+    try:
+        name = ctypes.c_char_p()
+        if cu.cuGetErrorName(rc, ctypes.byref(name)) == 0 and name.value:
+            return name.value.decode("utf-8", "replace")
+    except Exception:
+        pass
+    return f"CUDA_ERROR_{rc}"
+
+
+def probe_ctypes() -> None:
+    try:
+        cu = ctypes.CDLL("libcuda.so.1")
+    except OSError as exc:
+        fail(3, f"context=unavailable backend=ctypes detail=cannot-load-libcuda: {exc}")
+
+    # Use the v2 symbols where the driver has them; old drivers expose the
+    # unsuffixed names. Missing symbols mean the library is not a usable driver.
+    def sym(name: str):
+        fn = getattr(cu, name, None)
+        if fn is None:
+            fail(3, f"context=unavailable backend=ctypes detail=missing-symbol {name}")
+        return fn
+
+    cu_init = sym("cuInit")
+    get_count = sym("cuDeviceGetCount")
+    get_device = sym("cuDeviceGet")
+    ctx_create = getattr(cu, "cuCtxCreate_v2", None) or sym("cuCtxCreate")
+    mem_alloc = getattr(cu, "cuMemAlloc_v2", None) or sym("cuMemAlloc")
+    memset_d8 = getattr(cu, "cuMemsetD8_v2", None) or sym("cuMemsetD8")
+    mem_free = getattr(cu, "cuMemFree_v2", None) or sym("cuMemFree")
+    ctx_destroy = getattr(cu, "cuCtxDestroy_v2", None) or sym("cuCtxDestroy")
+
+    rc = cu_init(0)
+    if rc != 0:
+        fail(1, f"context=failed step=cuInit rc={rc} error={cuda_error_name(cu, rc)}")
+
+    count = ctypes.c_int(0)
+    rc = get_count(ctypes.byref(count))
+    if rc != 0:
+        fail(1, f"context=failed step=cuDeviceGetCount rc={rc} error={cuda_error_name(cu, rc)}")
+    if count.value < 1:
+        fail(1, "context=failed step=cuDeviceGetCount rc=0 error=no-device")
+
+    dev = ctypes.c_int(0)
+    rc = get_device(ctypes.byref(dev), 0)
+    if rc != 0:
+        fail(1, f"context=failed step=cuDeviceGet rc={rc} error={cuda_error_name(cu, rc)}")
+
+    ctx = ctypes.c_void_p()
+    rc = ctx_create(ctypes.byref(ctx), 0, dev)
+    if rc != 0 or not ctx:
+        fail(1, f"context=failed step=cuCtxCreate rc={rc} error={cuda_error_name(cu, rc)}")
+
+    ptr = ctypes.c_void_p()
+    rc = mem_alloc(ctypes.byref(ptr), ctypes.c_size_t(4096))
+    if rc != 0 or not ptr:
+        ctx_destroy(ctx)
+        fail(1, f"context=failed step=cuMemAlloc rc={rc} error={cuda_error_name(cu, rc)}")
+
+    rc = memset_d8(ptr, 1, ctypes.c_size_t(4096))
+    mem_free(ptr)
+    ctx_destroy(ctx)
+    if rc != 0:
+        fail(1, f"context=failed step=cuMemsetD8 rc={rc} error={cuda_error_name(cu, rc)}")
+
+    print(f"context=ok device={dev.value} backend=ctypes")
+
+
+def probe_torch() -> None:
+    try:
+        import torch
+    except Exception as exc:
+        fail(3, f"context=unavailable backend=torch detail=import-torch: {type(exc).__name__}: {exc}")
+    try:
+        # Same operation the card measured: allocate, write, reduce. is_available()
+        # alone is a capability query, not a context mint, so it is not used.
+        t = torch.zeros(8, device="cuda")
+        t.add_(1)
+        total = t.sum().item()
+    except Exception as exc:
+        fail(1, f"context=failed backend=torch detail={type(exc).__name__}: {exc}")
+    print(f"context=ok device=0 backend=torch sum={total:g}")
+
+
+def main() -> None:
+    if BACKEND not in ("ctypes", "torch"):
+        fail(3, f"context=unavailable detail=unknown-backend {BACKEND} (version {VERSION})")
+    if BACKEND == "torch":
+        probe_torch()
+    else:
+        probe_ctypes()
+
+
+if __name__ == "__main__":
+    main()

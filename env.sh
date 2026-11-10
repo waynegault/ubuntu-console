@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091  # the module loop sources _module-list.sh entries by name
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 21
+#   v21 (2026-11-10): LLM_SPEC_DRAFT_NGL defaults to empty (not 0) so per-row spec_draft_ngl
+#   in models.conf is respected by __spec_launch_flags instead of being overridden to CPU.
 # Module Version: 20
 #   v20 (2026-11-06): LLM_AUTOTUNE_KV_QUANTS gains f16/f16 as a candidate.  The sweep previously
 #   offered only quantised pairs, so the cache type could never be measured against the
@@ -144,7 +147,11 @@ export LLM_SPEC_DRAFT_MODEL="${LLM_SPEC_DRAFT_MODEL:-}"
 # LLM_SPEC_DRAFT_N_MAX: block size (num_speculative_tokens).  Autotune sweeps
 # this (LLM_AUTOTUNE_SPEC_N_MAX_LIST) and records the winner per model.
 export LLM_SPEC_DRAFT_N_MAX="${LLM_SPEC_DRAFT_N_MAX:-}"
-export LLM_SPEC_DRAFT_NGL="${LLM_SPEC_DRAFT_NGL:-0}"
+# EMPTY, not 0: `__spec_launch_flags` reads `${LLM_SPEC_DRAFT_NGL:-${row_spec_ngl:-0}}`,
+# and `:-` only falls through on an EMPTY value — so a "0" default here outranked every
+# registry row and pinned every draft to the CPU.  Measured 2026-11-10: row 4 carried
+# spec_draft_ngl=999 and the launch still emitted `--spec-draft-device none`.
+export LLM_SPEC_DRAFT_NGL="${LLM_SPEC_DRAFT_NGL:-}"
 export LLM_SPEC_DRAFT_DEVICE="${LLM_SPEC_DRAFT_DEVICE:-}"
 # Autotune block-size sweep candidates (SPEC-DEC-004).
 export LLM_AUTOTUNE_SPEC_N_MAX_LIST="${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-4 8 16 32}"

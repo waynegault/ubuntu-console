@@ -29,9 +29,65 @@ import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 USER_AGENT = "ubuntu-console-llm-client/1"
+
+
+class ChatMessage(BaseModel):
+    """OpenAI-compatible chat message."""
+
+    model_config = ConfigDict(extra="allow")
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+
+
+class ChatCompletionRequest(BaseModel):
+    """OpenAI-compatible chat completion request payload."""
+
+    model_config = ConfigDict(extra="allow")
+    model: str = ""
+    messages: list[ChatMessage]
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1)
+    stream: bool = False
+
+
+class UsageInfo(BaseModel):
+    """Token usage record from an OpenAI-compatible response."""
+
+    model_config = ConfigDict(extra="ignore")
+    prompt_tokens: int = Field(..., ge=0)
+    completion_tokens: int = Field(..., ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+    @field_validator("prompt_tokens", "completion_tokens", "total_tokens", mode="before")
+    @classmethod
+    def _reject_bool(cls, v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError("Boolean is not a valid integer token count")
+        return v
+
+
+class ChatChoice(BaseModel):
+    """Single choice in a non-streamed chat completion response."""
+
+    model_config = ConfigDict(extra="ignore")
+    index: int = 0
+    message: ChatMessage
+    finish_reason: str | None = None
+
+
+class ChatCompletionResponse(BaseModel):
+    """OpenAI-compatible chat completion response."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = ""
+    choices: list[ChatChoice]
+    usage: UsageInfo | None = None
 
 
 # A streamed event as the caller needs it: the delta text, the usage record the
@@ -86,6 +142,7 @@ def _open(url: str, *, data: bytes | None, timeout: float, api_key: str | None, 
         # module never invents one and never accepts a redirect to another host.
         return urllib.request.urlopen(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
+        exc.close()
         raise LLMClientError(f"HTTP {exc.code} from {url}", status=exc.code) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise LLMClientError(f"request to {url} failed: {exc}") from exc

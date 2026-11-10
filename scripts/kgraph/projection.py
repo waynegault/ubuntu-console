@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from .constants import (
     AST_EDGE_LABELS,
@@ -118,6 +121,18 @@ SEMANTIC_EDGE_BASE_THRESHOLD = 0.68
 SEMANTIC_EDGE_HIGH_DEGREE_THRESHOLD = 0.78
 SEMANTIC_EDGE_MED_DEGREE_THRESHOLD = 0.73
 SEMANTIC_EDGE_OVERRIDE_THRESHOLD = 0.88
+
+
+class ProjectedGraph(BaseModel):
+    """Pydantic schema for a projected knowledge graph view."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict, alias="_meta")
+
+
 SEMANTIC_FALLBACK_MIN_SCORE = 0.36
 SEMANTIC_INFERRED_NEIGHBOR_BUDGET_HIGH = 4
 SEMANTIC_INFERRED_NEIGHBOR_BUDGET_LOW = 3

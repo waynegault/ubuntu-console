@@ -20,29 +20,9 @@ import tempfile
 from unittest import mock
 
 from _paths import SCRIPT_DIR
+from _test_harness import FakeHTTPServer as _FakeHTTPServer
 
 import kgraph
-
-
-class _FakeHTTPServer:
-    """Captures the handler class serve_file builds, without listening.
-
-    Mirrors the stub in tests/_kgraph_fixtures.py: serve_file blocks in
-    serve_forever, so its (module-local) HTTPServer is replaced to obtain the real
-    handler class.  Only the module-local name is patched.
-    """
-
-    captured: dict = {}
-
-    def __init__(self, addr, handler):
-        _FakeHTTPServer.captured["handler"] = handler
-        self.server_address = (addr[0], addr[1] or 1)
-
-    def serve_forever(self):
-        pass
-
-    def shutdown(self):
-        pass
 
 
 def test_kgraph_is_importable_from_the_repo_scripts_dir() -> None:

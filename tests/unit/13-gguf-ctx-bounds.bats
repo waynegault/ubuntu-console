@@ -410,6 +410,85 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     __kv_geometry_known 4 128
 }
 
+# --- KV geometry, END TO END through a fixture GGUF ---------------------------
+# The cases above feed numbers to the estimate directly; these walk the same path a run
+# does — header -> __gguf_metadata fields 6/7 -> __kv_mb_per_1k — so a parser that stops
+# reporting the geometry cannot pass on the strength of the arithmetic alone.
+
+@test "kv-geometry: a fixture with known geometry yields the arithmetic byte count" {
+    local f; f="$(__fixture kv-geometry)"
+    [[ "$(__meta_field "$f" 3)" == "48" ]]
+    [[ "$(__meta_field "$f" 6)" == "4" ]]
+    [[ "$(__meta_field "$f" 7)" == "128" ]]
+    # 48 * 2 * 4 * 128 * 1.06 bytes/token, per 1k tokens.
+    [[ "$(__kv_mb_per_1k 48 4 128 1.06)" == "50.88" ]]
+    __kv_geometry_known 4 128
+}
+
+@test "kv-geometry: the ARRAY form MoE archs write is read, not skipped" {
+    # Fails if: the array branch stops reading element 0 — the geometry then reads as
+    # absent on exactly the models whose KV cost is largest (gpt-oss, Mixtral).
+    local f; f="$(__fixture kv-array)"
+    [[ "$(__meta_field "$f" 6)" == "8" ]]
+    [[ "$(__meta_field "$f" 7)" == "128" ]]
+    __kv_geometry_known 8 128
+}
+
+@test "kv-geometry: a header with NO KV keys still yields the old constant, and says so" {
+    # Both directions of the same acceptance: absent geometry is a FALLBACK, not a zero.
+    # The caller's warning is pinned by the predicate here; the number is the old constant.
+    local f; f="$(__fixture no-kv)"
+    [[ "$(__meta_field "$f" 6)" == "0" ]]
+    [[ "$(__meta_field "$f" 7)" == "0" ]]
+    ! __kv_geometry_known "$(__meta_field "$f" 6)" "$(__meta_field "$f" 7)"
+    [[ "$(__kv_mb_per_1k 24 0 0)" == "48.00" ]]
+}
+
+# --- the HOST budget (card bf92711c, second half) -----------------------------
+# __autotune_host_weight_bytes <model_bytes> <n_layers> <ngl>
+# The part of a row's weights that lands in GUEST RAM, not the GPU pool.
+
+@test "host-budget: full offload leaves nothing in host RAM" {
+    # -ngl 999 is what every bench spawn uses; it must not look like a host cost.
+    [ "$(__autotune_host_weight_bytes 40000000000 80 999)" = "0" ]
+    [ "$(__autotune_host_weight_bytes 40000000000 80 80)" = "0" ]
+}
+
+@test "host-budget: a partial offload puts the remainder in host RAM" {
+    # 40 GB over 80 layers at ngl=40: half the weights are host-resident.
+    [ "$(__autotune_host_weight_bytes 40000000000 80 40)" = "20000000000" ]
+    # ngl=0 is the CPU-only case: all of it.
+    [ "$(__autotune_host_weight_bytes 40000000000 80 0)" = "40000000000" ]
+}
+
+@test "host-budget: unknown geometry is 0 bytes, not a guess" {
+    # Fails if: a header with no block_count invents a host cost (or a refund).
+    [ "$(__autotune_host_weight_bytes 40000000000 0 40)" = "0" ]
+    [ "$(__autotune_host_weight_bytes 0 80 40)" = "0" ]
+}
+
+@test "host-budget: a footprint over MemAvailable REFUSES" {
+    # 39.8 GB of weights against 29.8 GiB available: the 2026-11-03 OOM shape.
+    [ "$(__autotune_host_budget_verdict 40000000000 32000000000 100 75)" = "refuse" ]
+}
+
+@test "host-budget: a footprint in the tight band CLAMPS, and a comfortable one fits" {
+    # 26 GB of 32 GB is above the 75% band but inside the bound.
+    [ "$(__autotune_host_budget_verdict 26000000000 32000000000 100 75)" = "clamp" ]
+    [ "$(__autotune_host_budget_verdict 20000000000 32000000000 100 75)" = "fits" ]
+}
+
+@test "host-budget: an unreadable MemAvailable is UNKNOWN, never a silent pass" {
+    # Fails if: a missing host reading is treated as infinite memory.
+    [ "$(__autotune_host_budget_verdict 40000000000 0 100 75)" = "unknown" ]
+}
+
+@test "host-budget: a lower stated factor refuses sooner" {
+    [ "$(__autotune_host_budget_verdict 26000000000 32000000000 90 75)" = "clamp" ]
+    [ "$(__autotune_host_budget_verdict 30000000000 32000000000 90 75)" = "refuse" ]
+    [ "$(__autotune_host_budget_verdict 30000000000 32000000000 100 75)" = "clamp" ]
+}
+
 # --- __autotune_spec_worth_keeping (spec-decode, 2026-11-03) -------------------
 # Criterion: a spec-decode block is only RECORDED when its draft actually placed tokens.
 # Measured on gpt-oss-120b: the sweep's own line read `block 4: 31.28 tps (accept len 0,

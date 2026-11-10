@@ -44,3 +44,23 @@ def atomic_write_text(path: str | os.PathLike[str], text: str, *, encoding: str 
         except OSError:
             logger.debug("could not remove temp file %s", tmp_path, exc_info=True)
         raise
+
+
+def atomic_write_bytes(path: str | os.PathLike[str], data: bytes) -> None:
+    """Write *data* bytes to *path* atomically with fsync."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace(tmp_path, target)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            logger.debug("could not remove temp file %s", tmp_path, exc_info=True)
+        raise

@@ -17,17 +17,20 @@ import _bats_suites
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _resolve_bats() -> str:
+def _resolve_bats() -> str | None:
     """The shared resolver, kept as a module-local name for existing callers."""
     return _bats_suites.resolve_bats()
 
 
-BATS_EXECUTABLE = _resolve_bats()
+BATS_EXECUTABLE: str | None = _resolve_bats()
 
 # Host-coupled: the generated cases execute shell suites against this box's live
 # services and filesystem.  The push lane runs `-m "not host_coupled"`; PR/dispatch
 # and the nightly BATS lane run them in full.
-pytestmark = pytest.mark.host_coupled
+pytestmark = [
+    pytest.mark.host_coupled,
+    pytest.mark.skipif(BATS_EXECUTABLE is None, reason="bats executable not found"),
+]
 #: How long a killed group may refuse to die between SIGTERM and SIGKILL.  The same figure
 #: test_bats_unittest uses for the same job, so the two bridges stop a run alike.
 _GROUP_STOP_GRACE_S = 5.0
@@ -179,6 +182,8 @@ def _run_bats(
     case into a file-wide failure — bats reports that case as
     ``not ok N name in Xms # timeout after Ns`` and carries on with the next one.
     """
+    if BATS_EXECUTABLE is None:
+        pytest.skip("bats executable not found")
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
     if per_test_timeout_s is not None:
@@ -483,6 +488,8 @@ def _make_test(
     bats_file = _BATS_BY_STEM[stem]
 
     def _test(request: pytest.FixtureRequest):
+        if BATS_EXECUTABLE is None:
+            pytest.skip("bats executable not found")
         results = _run_and_cache_bats(
             bats_file,
             per_test_timeout_s,
@@ -611,6 +618,8 @@ def test_bridge_parse_matches_bats_count() -> None:
     were both counted as declarations).  Comparing against the runner makes any such
     parse drift a test failure instead of a phantom test.
     """
+    if BATS_EXECUTABLE is None:
+        pytest.skip("bats executable not found")
     checked = 0
     for _suite, bats_file in _bats_suites.suite_files(_BATS_SUITES):
         real = int(
@@ -681,6 +690,8 @@ def test_bridge_parse_decodes_a_quoted_name_the_way_bats_reports_it(tmp_path) ->
     probe file rather than a restatement of the decode, so it fails on any future
     divergence between what the parser reads and what bats reports.
     """
+    if BATS_EXECUTABLE is None:
+        pytest.skip("bats executable not found")
     probe = tmp_path / "quoted-name.bats"
     probe.write_text(
         '#!/usr/bin/env bats\n@test "cl report: not \\"no ghost units\\"" {\n    true\n}\n',
@@ -693,7 +704,7 @@ def test_bridge_parse_decodes_a_quoted_name_the_way_bats_reports_it(tmp_path) ->
     assert _parse_bats_tests(probe, raw=True) == ['cl report: not \\"no ghost units\\"']
 
     result = subprocess.run(
-        ["bats", "--tap", "--timing", str(probe)],
+        [BATS_EXECUTABLE, "--tap", "--timing", str(probe)],
         capture_output=True,
         text=True,
         check=False,
@@ -711,6 +722,8 @@ def test_filtered_run_matches_a_case_whose_name_carries_an_escaped_quote() -> No
     result.  This runs the REAL filtered path, so it fails on the pre-fix code rather than
     restating the fix.
     """
+    if BATS_EXECUTABLE is None:
+        pytest.skip("bats executable not found")
     bats_file = REPO_ROOT / "tests" / "unit" / "32-report-rows-safety.bats"
     pairs = [
         (name, raw)
@@ -802,5 +815,7 @@ def test_bats_executable_is_resolved_by_absolute_path() -> None:
     bridge, reproduced outside VS Code with the same stripped PATH.  The observable is
     an absolute, executable path; WHICH path it is stays the resolver's business.
     """
+    if BATS_EXECUTABLE is None:
+        pytest.skip("bats executable not found")
     assert os.path.isabs(BATS_EXECUTABLE)
     assert os.access(BATS_EXECUTABLE, os.X_OK)

@@ -23,7 +23,10 @@ import os
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler
+from typing import Any, Literal
 from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from .query import (
     PATH_MODE_BFS,
@@ -40,6 +43,36 @@ from .validate import MAX_PAYLOAD_SIZE
 # Lazy imports to avoid circular dependency via __init__.py
 
 logger = logging.getLogger(__name__)
+
+
+class JsonRpcError(BaseModel):
+    """JSON-RPC 2.0 error payload."""
+
+    model_config = ConfigDict(extra="forbid")
+    code: int
+    message: str
+    data: Any = None
+
+
+class JsonRpcRequest(BaseModel):
+    """JSON-RPC 2.0 request envelope."""
+
+    model_config = ConfigDict(extra="forbid")
+    jsonrpc: Literal["2.0"] = "2.0"
+    method: str = Field(..., min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+    id: int | str | None = None
+
+
+class JsonRpcResponse(BaseModel):
+    """JSON-RPC 2.0 response envelope."""
+
+    model_config = ConfigDict(extra="forbid")
+    jsonrpc: Literal["2.0"] = "2.0"
+    result: Any = None
+    error: JsonRpcError | None = None
+    id: int | str | None = None
+
 
 # kgraph_report writes a file; confine it to a dedicated directory so a caller
 # cannot pick an arbitrary path (e.g. ~/.bashrc). Overridable via KG_REPORTS_DIR.
@@ -462,7 +495,7 @@ class MCPHandler(BaseHTTPRequestHandler):
         return _TOOL_LIST
 
 
-def build_mcp_handler(graph_payload: dict, graph_db_path: str) -> type[MCPHandler]:
+def build_mcp_handler(graph_payload: Any, graph_db_path: str = "") -> type[MCPHandler]:
     """Create the handler class for one server, carrying its graph state.
 
     The returned subclass owns a fresh rate-limiter list so two servers never

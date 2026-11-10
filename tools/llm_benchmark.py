@@ -910,6 +910,19 @@ def _nonnegative_int(value: str) -> int:
     return number
 
 
+def _default_concurrency() -> int:
+    """Resolve default benchmark concurrency from active box profile if configured, else 1."""
+    active_id = os.environ.get("LLM_HOST_PROFILE", "").strip() or os.environ.get("TAC_HOST_PROFILE_ID", "").strip()
+    if active_id:
+        try:
+            from tools.box import get_hardware_profile
+
+            return max(1, get_hardware_profile(active_id).serving.parallel_slots)
+        except Exception:
+            pass
+    return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -925,7 +938,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--context-size", type=_positive_int, required=True)
     run.add_argument("--max-tokens", type=_positive_int, default=256)
     run.add_argument("--repetitions", type=_positive_int, default=5)
-    run.add_argument("--concurrency", type=_positive_int, default=1)
+    run.add_argument("--concurrency", type=_positive_int, default=_default_concurrency())
     run.add_argument("--gpu-index", type=_nonnegative_int, default=0)
     run.add_argument("--warmups", type=int, default=1)
     run.add_argument("--timeout", type=float, default=300.0)

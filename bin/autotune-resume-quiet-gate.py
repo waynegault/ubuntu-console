@@ -33,6 +33,7 @@ Seams (pinned by tests/unit/66-autotune-quiet-gate.bats):
     FLEET_POLL_SECONDS    the wait interval in the default mode
     AUTOTUNE_RESUME_SCRIPT  what this execs once the fleet is quiet
 """
+
 from __future__ import annotations
 
 import glob
@@ -54,7 +55,7 @@ def _agent_name(db_path: str) -> str:
     parts = db_path.split(os.sep)
     try:
         return parts[parts.index("agents") + 1]
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         return "?"
 
 
@@ -73,8 +74,7 @@ def probe() -> tuple[int, list[str]]:
             con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
             try:
                 rows = con.execute(
-                    "select session_key, updated_at, created_at from session_windows"
-                    " where status='running'"
+                    "select session_key, updated_at, created_at from session_windows where status='running'"
                 ).fetchall()
             finally:
                 con.close()
@@ -102,6 +102,9 @@ def probe() -> tuple[int, list[str]]:
 
 
 def main() -> int:
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("usage: autotune-resume-quiet-gate.py [--check] [resume-args...]")
+        return 0
     check_only = "--check" in sys.argv
     args = [a for a in sys.argv[1:] if a != "--check"]
 

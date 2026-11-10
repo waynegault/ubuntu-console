@@ -148,7 +148,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-11-10, card c7e15c7a GPU-WEDGE-ESCALATION-001): the driver-fail-closed log line
+#     named a host fix for EVERY unavailable state. Measured 2026-11-02: a loader-order fault
+#     (native libcuda ahead of /usr/lib/wsl/lib) was logged as "passthrough is BROKEN ... the
+#     fix is host-side (wsl --shutdown)", which stops the gateway and all fourteen lanes and
+#     cannot fix it. The line now reads `diagnosis` from gpu-passthrough-check.sh's two-arm
+#     JSON: wedge names the host fix, libshadow/liborder name the in-VM fix and forbid the
+#     reboot, and an unattributed failure prescribes neither. Actuation unchanged.
 #   v29 (2026-11-10): the comment below named bin/gpu-passthrough-watch.sh, which is
 #     not tracked and not installed; gpu-passthrough-check.sh is the observe-only
 #     checker that exists.  Comment only — no behaviour change.
@@ -586,7 +593,11 @@ gpu_busy() {
 # reason that was wrong in one of the two situations.  Here the gate's verdict is
 # classified ONCE by the passthrough checker and logged, so the stated reason is
 # truthful:
-#   * state=unavailable -> the passthrough is BROKEN (a host-side fix, none here);
+#   * state=unavailable -> the context mint failed on BOTH arms (default and
+#                          LD_LIBRARY_PATH=/usr/lib/wsl/lib) and the loader order is
+#                          correct: the passthrough is BROKEN. A library fault is NOT
+#                          this case — see the two-arm rule in gpu-passthrough-check.sh,
+#                          and read `diagnosis` from the same JSON before naming a cause;
 #   * state=ok          -> the driver answers, so the fail-closed verdict was a
 #                          transient probe failure and the card is genuinely in use.
 #
@@ -719,27 +730,53 @@ gpu_classify_stamp() {
 gpu_classify_driver_failclosed() {
     gpu_driver_failclosed || return 0
     gpu_classify_due || return 0
-    local _json _rc _state _reason _dxg _crash _win _msg
+    local _json _rc _state _reason _dxg _crash _win _msg _diag
     _json=$("$GPU_PASSTHROUGH_CHECK" --json 2>/dev/null); _rc=$?
     _state=$(printf '%s' "$_json"  | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    _diag=$(printf '%s' "$_json"   | sed -n 's/.*"diagnosis"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
     _reason=$(printf '%s' "$_json" | sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
     _dxg=$(printf '%s' "$_json"   | sed -n 's/.*"dxg_failures"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
     _crash=$(printf '%s' "$_json" | sed -n 's/.*"wsl_crashes"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
     _win=$(printf '%s' "$_json"   | sed -n 's/.*"window_min"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
     [[ -n "$_state" ]] || _state="error"
+    [[ -n "$_diag" ]] || _diag="unclassified"
     [[ -n "$_reason" ]] || _reason="the classifier produced no JSON (rc=$_rc)"
     case "$_state" in
         unavailable)
-            _msg="GPU busy driver-level: classified UNAVAILABLE — the CUDA card's passthrough is BROKEN,"
-            _msg+=" not in use (${_reason}; dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min,"
-            _msg+=" via gpu-passthrough-check.sh)."
-            _msg+=" The lane is down on a DRIVER fault, not on a workload, so stopping it frees"
-            _msg+=" nothing and no local lane takes over; the fix is host-side"
-            _msg+=" (wsl --shutdown / GPU driver update)."
+            # The cause is named by the CHECK, not assumed here. Until 2026-11-10 this
+            # branch said "passthrough is BROKEN ... the fix is host-side (wsl --shutdown)"
+            # for every unavailable state, which is exactly the escalation the two-arm
+            # rule exists to stop: on a library fault that reboot stops the gateway and
+            # fixes nothing.
+            case "$_diag" in
+                wedge)
+                    _msg="GPU busy driver-level: classified UNAVAILABLE/WEDGE — a CUDA context could not be"
+                    _msg+=" minted on BOTH arms (default and LD_LIBRARY_PATH=/usr/lib/wsl/lib) and the loader"
+                    _msg+=" order is correct (${_reason}; dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min,"
+                    _msg+=" via gpu-passthrough-check.sh)."
+                    _msg+=" The lane is down on a DRIVER fault, not on a workload, so stopping it frees"
+                    _msg+=" nothing and no local lane takes over; the fix is host-side"
+                    _msg+=" (wsl --shutdown / GPU driver update)."
+                    ;;
+                libshadow|liborder)
+                    _msg="GPU busy driver-level: classified UNAVAILABLE/${_diag^^} — this is a LOADER fault,"
+                    _msg+=" NOT lost passthrough, and no reboot fixes it (${_reason};"
+                    _msg+=" dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min, via gpu-passthrough-check.sh)."
+                    _msg+=" The lane is held down only because the default environment cannot mint a context;"
+                    _msg+=" the fix is in-VM (ld.so.conf.d drop-in + ldconfig), never 'wsl --shutdown'."
+                    ;;
+                *)
+                    _msg="GPU busy driver-level: classified UNAVAILABLE but the CAUSE IS NOT ESTABLISHED"
+                    _msg+=" (diagnosis=${_diag}; ${_reason}; dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min,"
+                    _msg+=" via gpu-passthrough-check.sh)."
+                    _msg+=" Neither remedy is prescribed: a host restart on a loader fault fixes nothing and"
+                    _msg+=" costs the gateway. Re-run gpu-passthrough-check.sh --alert before escalating."
+                    ;;
+            esac
             log "$_msg"
             ;;
         ok)
-            _msg="GPU busy driver-level: classified OK — nvidia-smi answers, so the fail-closed"
+            _msg="GPU busy driver-level: classified OK — a CUDA context was created, so the fail-closed"
             _msg+=" verdict was a transient probe failure and the card is genuinely in use"
             _msg+=" (${_reason}; dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min)"
             log "$_msg"

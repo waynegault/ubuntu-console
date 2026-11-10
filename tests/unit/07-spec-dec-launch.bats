@@ -189,3 +189,72 @@ EOF
     [[ "$output" == *"d.gguf"* ]]
     [[ "$output" == *"--spec-draft-n-max"* ]]
 }
+
+# ------------------------------------------------------------------------------
+# Two defects measured 2026-11-10 while setting up Qwen3.8-27B BF16 + its MTP draft.
+# Both are "the row was read and then silently not honoured", the class SPEC-DEC-004
+# exists to prevent.
+# ------------------------------------------------------------------------------
+
+@test "spec-dec-004: a row's draft model resolves against the store, not the cwd" {
+    # Fails if: the column is passed through verbatim.  The server's cwd is the repo, so
+    # `--spec-draft-model mtp-....gguf` names a file that is not there and the draft never
+    # loads.  The row's own file column already follows this convention.
+    mkdir -p "$TMPDIR_BATS/store"
+    : > "$TMPDIR_BATS/store/draft-mtp.gguf"
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        LLAMA_MODEL_DIR="$2/store"
+        row_spec_type=draft-mtp row_spec_draft_model=draft-mtp.gguf __spec_launch_flags
+    ' _ "$REPO_ROOT" "$TMPDIR_BATS"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"$TMPDIR_BATS/store/draft-mtp.gguf"* ]] \
+        || { echo "the draft path was not resolved against the store: $output"; return 1; }
+    # Control: an ABSOLUTE path is left exactly as given.
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        LLAMA_MODEL_DIR="$2/store"
+        row_spec_type=draft-mtp row_spec_draft_model=/elsewhere/d.gguf __spec_launch_flags
+    ' _ "$REPO_ROOT" "$TMPDIR_BATS"
+    [[ "$output" == *"/elsewhere/d.gguf"* ]]
+    # Control: a relative path that is NOT in the store is not invented into one.
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        LLAMA_MODEL_DIR="$2/store"
+        row_spec_type=draft-mtp row_spec_draft_model=nowhere.gguf __spec_launch_flags
+    ' _ "$REPO_ROOT" "$TMPDIR_BATS"
+    [[ "$output" == *"nowhere.gguf"* ]]
+    [[ "$output" != *"$TMPDIR_BATS/store/nowhere.gguf"* ]]
+}
+
+@test "spec-dec-004: a row's draft ngl is not overridden by the exported default" {
+    # Fails if: env.sh's default is a non-empty "0".  `${LLM_SPEC_DRAFT_NGL:-...}` only
+    # falls through on EMPTY, so a "0" default outranked every row and CPU-pinned every
+    # draft — measured: the row carried 999 and the argv still said `--spec-draft-device none`.
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        unset LLM_SPEC_DRAFT_NGL
+        row_spec_type=draft-mtp row_spec_draft_model=/models/d.gguf row_spec_ngl=999 __spec_launch_flags
+    ' _ "$REPO_ROOT"
+    [[ "$output" == *"--spec-draft-ngl"* ]] && [[ "$output" == *"999"* ]] \
+        || { echo "the row's ngl did not reach the launch: $output"; return 1; }
+    [[ "$output" != *"--spec-draft-device"* ]]
+}
+
+@test "env.sh: LLM_SPEC_DRAFT_NGL is EMPTY by default so a row can set it" {
+    # The default lives in env.sh, which is the non-interactive library loader; sourcing it
+    # in a clean environment must leave the knob unset (empty), not "0".
+    run env -u LLM_SPEC_DRAFT_NGL bash -c '
+        set -u
+        source "$1/env.sh" >/dev/null 2>&1
+        printf "[%s]" "${LLM_SPEC_DRAFT_NGL:-}"
+    ' _ "$REPO_ROOT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "[]" ]] || { echo "the default is not empty: $output"; return 1; }
+    # Control: an explicit value still survives the default.
+    run env LLM_SPEC_DRAFT_NGL=24 bash -c '
+        source "$1/env.sh" >/dev/null 2>&1
+        printf "[%s]" "${LLM_SPEC_DRAFT_NGL:-}"
+    ' _ "$REPO_ROOT"
+    [[ "$output" == "[24]" ]]
+}

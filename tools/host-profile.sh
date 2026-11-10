@@ -28,6 +28,22 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 13
+#   v13 (2026-11-10): tac_host_profile_ids skips `*-quant-guide.conf` files in config/hosts.d
+#   so host-specific quantization guides can reside alongside host profiles without being
+#   enumerated as machine identities.
+# Module Version: 12
+#   v12 (2026-11-10): LLAMA_BUILD_DIR, LLAMA_CUDA_ARCH and LLAMA_CUDA_FA_QUANTS join the
+#   exported profile-owned set so `llm-build` receives the host profile's build tree,
+#   Blackwell `121a-real` target suffix and `all` FlashAttention quant list in every child shell.
+# Module Version: 12
+#   v12 (2026-11-10): TAC_HOST_RAM_AVAIL_BYTES — the HOST side of the same per-boot picture
+#   (card bf92711c).  v8 exported the GPU pool; autotune sized every row from that alone and
+#   the guest went to the kernel OOM killer with no log line naming it.  Both figures are now
+#   taken in the SAME apply pass, so a run compares two readings of one moment instead of a
+#   card figure from one source and a host figure from a shell that may be minutes older.
+#   Deliberately NOT boot-cached: MemAvailable is load-dependent, and a cached copy would
+#   hand every later shell the figure from boot, which is the opposite of what it measures.
 # Module Version: 11
 #   v11 (2026-11-05): LLAMA_LANE_KEEP_UNITS joins the clear/export set — it was omitted when
 #   the always-on lane was introduced (01-constants v50), so a parent shell's copy survived the
@@ -124,6 +140,7 @@ tac_host_profile_ids() {
     do
         [[ -f "$_f" ]] || continue
         _f="${_f##*/}"
+        [[ "$_f" == *-quant-guide.conf ]] && continue
         printf '%s\n' "${_f%.conf}"
     done | sort
 }
@@ -393,10 +410,35 @@ tac_host_gpu_pool_bytes() {
     printf '%s\n' "$(( _mb * 1048576 ))"
 }
 
+# tac_host_ram_avail_bytes — guest MemAvailable, in bytes, read NOW.
+# Unlike tac_host_gpu_pool_bytes this is NOT cached: a card's total is fixed for the boot,
+# while available RAM changes with every process that starts.  The cache there exists to
+# save an nvidia-smi fork; here a cached value would be a stale number that can REFUSE or
+# ADMIT a run on evidence from hours ago.  Returns 1 when /proc/meminfo cannot be read, so
+# the caller keeps its own fallback instead of sizing against a guess.
+tac_host_ram_avail_bytes() {
+    local _line _key _val _kb=""
+    if [[ -r /proc/meminfo ]]
+    then
+        while IFS= read -r _line
+        do
+            _key="${_line%%:*}" _val="${_line#*:}"
+            if [[ "$_key" == "MemAvailable" ]]
+            then
+                _val="${_val//[[:space:]]/}"
+                _kb="${_val%kB}"
+                break
+            fi
+        done < /proc/meminfo
+    fi
+    [[ "$_kb" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$(( _kb * 1024 ))"
+}
+
 # tac_host_profile_apply — clear the profile-owned facts, select a profile, source it and
 # export what the rest of the console reads.  Called once per shell.
 tac_host_profile_apply() {
-    local _id _file _facts _arch _cuda _render _pool
+    local _id _file _facts _arch _cuda _render _pool _ram
     unset LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT LLAMA_GPU_FREE_THRESHOLD_MIB \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
           LLAMA_THREAD_CAP LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
@@ -417,6 +459,16 @@ tac_host_profile_apply() {
         : "${TAC_HOST_GPU_POOL_BYTES:=$_pool}"
         export TAC_HOST_GPU_POOL_BYTES
     fi
+    # The HOST figure, taken in the same pass as the pool above.  Overwritten rather than
+    # `:=`: this is a live measurement, so an inherited copy describes an earlier moment in
+    # this shell's ancestry, and the whole point of pairing the two is that they are read
+    # together.  A caller that needs to state the figure (a test, an operator) still wins by
+    # exporting TAC_HOST_RAM_AVAIL_BYTES before the profile loads, exactly as with the pool.
+    if [[ ! "${TAC_HOST_RAM_AVAIL_BYTES:-}" =~ ^[0-9]+$ ]] && _ram="$(tac_host_ram_avail_bytes)"
+    then
+        TAC_HOST_RAM_AVAIL_BYTES="$_ram"
+    fi
+    [[ "${TAC_HOST_RAM_AVAIL_BYTES:-}" =~ ^[0-9]+$ ]] && export TAC_HOST_RAM_AVAIL_BYTES
     _facts="$(tac_host_facts)" || _facts=""
     if [[ -n "$_facts" ]]
     then
@@ -452,6 +504,7 @@ tac_host_profile_apply() {
            LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB LLAMA_THREAD_CAP \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
            LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
+           LLAMA_BUILD_DIR LLAMA_CUDA_ARCH LLAMA_CUDA_FA_QUANTS \
            LLM_REGISTRY LLM_STATE_DIR \
            HF_HOME HF_HUB_CACHE \
            TAC_HOST_PRIMARY_LANE VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL \
