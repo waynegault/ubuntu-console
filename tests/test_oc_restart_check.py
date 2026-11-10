@@ -136,9 +136,7 @@ def test_json_mode_carries_the_same_verdict(monkeypatch: pytest.MonkeyPatch, cap
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1
     assert payload["safe"] is False
-    assert payload["blockers"] == [
-        {"kind": "ci-worker", "detail": "pid=1 cwd=/x Runner.Worker"}
-    ]
+    assert payload["blockers"] == [{"kind": "ci-worker", "detail": "pid=1 cwd=/x Runner.Worker"}]
 
 
 def test_help_exits_zero(capsys: Any) -> None:
@@ -166,9 +164,7 @@ def test_scan_work_excludes_a_concurrent_copy_of_this_probe(
     # Catches the rename defect directly: a second copy of the probe, invoked while its
     # cmdline carries a marker word, must not be reported as the work it looks for.
     # The old `a.endswith("restart-safety.py")` literal failed this case.
-    report = _scan_one(
-        monkeypatch, ["/usr/bin/python3", "/tmp/copy/oc-restart-check.py", "pytest"]
-    )
+    report = _scan_one(monkeypatch, ["/usr/bin/python3", "/tmp/copy/oc-restart-check.py", "pytest"])
     assert report.work == []
     assert report.safe is True
 
@@ -283,10 +279,13 @@ def _argv_map(monkeypatch: pytest.MonkeyPatch, mapping: dict[int, list[str]]) ->
 def test_scan_workers_matches_argv0_and_excludes_itself(monkeypatch: pytest.MonkeyPatch) -> None:
     # Catches: a worker hidden from the report (a runner job killed by the restart reads
     # as a cancellation), and the probe reporting itself as a worker.
-    _argv_map(monkeypatch, {
-        4242: ["/home/runner/Runner.Worker"],
-        4243: ["/usr/bin/python3", "Runner.Worker"],  # marker NOT in argv[0]
-    })
+    _argv_map(
+        monkeypatch,
+        {
+            4242: ["/home/runner/Runner.Worker"],
+            4243: ["/usr/bin/python3", "Runner.Worker"],  # marker NOT in argv[0]
+        },
+    )
     report = _report()
     probe.scan_workers(report)
     assert report.workers == ["pid=4242 cwd=/cwd /home/runner/Runner.Worker"]
@@ -297,19 +296,23 @@ def test_scan_work_skips_empty_and_unrelated_then_reports_a_marker(
 ) -> None:
     # Catches: an unrelated process reported as work (a false blocker) and real bench
     # work missed (a false clearance).
-    _argv_map(monkeypatch, {
-        5001: [],                                   # nothing to read
-        5002: ["/bin/cat", "notes.txt"],            # no marker
-        5003: ["/usr/bin/python3", "bench-rows.sh"],  # marker in the command line
-    })
+    _argv_map(
+        monkeypatch,
+        {
+            5001: [],  # nothing to read
+            5002: ["/bin/cat", "notes.txt"],  # no marker
+            5003: ["/usr/bin/python3", "bench-rows.sh"],  # marker in the command line
+        },
+    )
     report = _report()
     probe.scan_work(report)
     assert len(report.work) == 1
     assert "bench-rows.sh" in report.work[0]
 
 
-def _fake_subprocess_run(returncode: int = 0, stdout: str = "", stderr: str = "",
-                         raise_exc: Exception | None = None) -> Any:
+def _fake_subprocess_run(
+    returncode: int = 0, stdout: str = "", stderr: str = "", raise_exc: Exception | None = None
+) -> Any:
     module = type(sys)("subprocess")
 
     class SubprocessError(Exception):

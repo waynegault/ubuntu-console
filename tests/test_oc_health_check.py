@@ -36,9 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def _load_checker() -> Any:
     """Import scripts/oc-health-check.py by path (its name is not a module name)."""
-    spec = importlib.util.spec_from_file_location(
-        "oc_health_check", REPO_ROOT / "scripts" / "oc-health-check.py"
-    )
+    spec = importlib.util.spec_from_file_location("oc_health_check", REPO_ROOT / "scripts" / "oc-health-check.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -125,7 +123,9 @@ def test_socket_table_true_when_ss_reports_a_listener(monkeypatch: pytest.Monkey
     monkeypatch.setattr(
         checker,
         "_run",
-        _fake_run(stdout="State Recv-Q Send-Q Local Address:Port Peer Address:Port\nLISTEN 0 4096 127.0.0.1:18789 0.0.0.0:*\n"),
+        _fake_run(
+            stdout="State Recv-Q Send-Q Local Address:Port Peer Address:Port\nLISTEN 0 4096 127.0.0.1:18789 0.0.0.0:*\n"
+        ),
     )
     assert checker._socket_table_listening(18789) is True
 
@@ -437,9 +437,7 @@ def test_health_post_bind_grace_is_the_decision_boundary(
     # At the grace the post-bind interval is still "normal"; one second past it, the
     # same evidence is the stalled signal.  The bound is a decision boundary, so both
     # sides of it are pinned.
-    _arm_unreachable(
-        monkeypatch, phase="starting", elapsed_s=400, bind_age_s=checker.GATEWAY_POST_BIND_GRACE_S
-    )
+    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=400, bind_age_s=checker.GATEWAY_POST_BIND_GRACE_S)
     assert checker._check_gateway_health(18789)["status"] == "starting"
     _arm_unreachable(
         monkeypatch,
@@ -472,9 +470,7 @@ def test_health_falls_back_to_the_bound_when_the_journal_has_gone_quiet(
     # bound the start is still "in progress"; just past it, with no journal verdict,
     # the same evidence is a fault — even though the port is bound, because a bound
     # listener with no journal verdict is not the post-bind state the grace measures.
-    _arm_unreachable(
-        monkeypatch, unset_phase=True, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S, bind_age_s=10
-    )
+    _arm_unreachable(monkeypatch, unset_phase=True, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S, bind_age_s=10)
     assert checker._check_gateway_health(18789)["status"] == "starting"
     _arm_unreachable(
         monkeypatch,
@@ -540,9 +536,7 @@ def test_health_is_starting_when_no_port_is_bound_inside_the_bound(
     # port as well made the earliest phase of a cold start (unit active, listener not
     # open yet) read FAIL — the same false red, one phase earlier.  An unbound port is
     # therefore STARTING, with the message naming the weaker evidence.
-    _arm_unreachable(
-        monkeypatch, phase="starting", port_bound=False, elapsed_s=200, bind_age_s=None
-    )
+    _arm_unreachable(monkeypatch, phase="starting", port_bound=False, elapsed_s=200, bind_age_s=None)
     check = checker._check_gateway_health(18789)
     assert check["status"] == "starting"
     assert check["details"]["port_bound"] is False
@@ -760,7 +754,9 @@ def test_build_report_shape_and_ports(monkeypatch: pytest.MonkeyPatch) -> None:
         "_check_jq",
         "_check_wsl_dns",
     ):
-        monkeypatch.setattr(checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}})
+        monkeypatch.setattr(
+            checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}}
+        )
 
     report = checker.build_report()
 
@@ -782,7 +778,9 @@ def test_build_report_follows_the_production_llm_lane(monkeypatch: pytest.Monkey
         "_check_jq",
         "_check_wsl_dns",
     ):
-        monkeypatch.setattr(checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}})
+        monkeypatch.setattr(
+            checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}}
+        )
 
     report = checker.build_report()
 
@@ -797,11 +795,21 @@ def test_build_report_follows_the_production_llm_lane(monkeypatch: pytest.Monkey
 
 
 def test_build_report_summary_is_worst_of_the_probes(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(checker, "_check_openclaw_cli", lambda: {"name": "a", "status": "ok", "message": "", "details": {}})
-    monkeypatch.setattr(checker, "_check_gateway_port", lambda p: {"name": "b", "status": "fail", "message": "", "details": {}})
-    monkeypatch.setattr(checker, "_check_gateway_health", lambda p: {"name": "c", "status": "ok", "message": "", "details": {}})
-    monkeypatch.setattr(checker, "_check_llm_port", lambda p: {"name": "d", "status": "ok", "message": "", "details": {}})
-    monkeypatch.setattr(checker, "_check_systemd_gateway", lambda: {"name": "e", "status": "ok", "message": "", "details": {}})
+    monkeypatch.setattr(
+        checker, "_check_openclaw_cli", lambda: {"name": "a", "status": "ok", "message": "", "details": {}}
+    )
+    monkeypatch.setattr(
+        checker, "_check_gateway_port", lambda p: {"name": "b", "status": "fail", "message": "", "details": {}}
+    )
+    monkeypatch.setattr(
+        checker, "_check_gateway_health", lambda p: {"name": "c", "status": "ok", "message": "", "details": {}}
+    )
+    monkeypatch.setattr(
+        checker, "_check_llm_port", lambda p: {"name": "d", "status": "ok", "message": "", "details": {}}
+    )
+    monkeypatch.setattr(
+        checker, "_check_systemd_gateway", lambda: {"name": "e", "status": "ok", "message": "", "details": {}}
+    )
     monkeypatch.setattr(checker, "_check_jq", lambda: {"name": "f", "status": "ok", "message": "", "details": {}})
     monkeypatch.setattr(checker, "_check_wsl_dns", lambda: {"name": "g", "status": "ok", "message": "", "details": {}})
     assert checker.build_report()["summary"] == "fail"
@@ -814,9 +822,7 @@ def test_build_report_summary_is_worst_of_the_probes(monkeypatch: pytest.MonkeyP
 # the row red.  Each case names the wrong outcome it catches.
 
 
-def _set_pairing(
-    monkeypatch: pytest.MonkeyPatch, generate_resolv: str | None, corp_dns: bool | None
-) -> None:
+def _set_pairing(monkeypatch: pytest.MonkeyPatch, generate_resolv: str | None, corp_dns: bool | None) -> None:
     """Pin the writer pairing so a probe case never reads the live box."""
     monkeypatch.setattr(checker, "_wsl_network_value", lambda *_a, **_k: generate_resolv)
     monkeypatch.setattr(checker, "_tailscale_corp_dns", lambda: corp_dns)
@@ -826,9 +832,7 @@ def test_dns_probe_is_informational_off_wsl(monkeypatch: pytest.MonkeyPatch) -> 
     # Catches: a CI/Linux runner being reported as a DNS fault because its resolver
     # arrangement differs from WSL's.
     monkeypatch.setattr(checker, "_is_wsl", lambda: False)
-    monkeypatch.setattr(
-        checker, "_resolv_nameservers", lambda *_a, **_k: pytest.fail("resolver read off WSL")
-    )
+    monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: pytest.fail("resolver read off WSL"))
     assert checker._check_wsl_dns()["status"] == "info"
 
 
@@ -892,7 +896,9 @@ def test_a_resolver_failure_reaches_the_exit_code(
         "_check_systemd_gateway",
         "_check_jq",
     ):
-        monkeypatch.setattr(checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}})
+        monkeypatch.setattr(
+            checker, name, lambda *_a, **_k: {"name": "x", "status": "ok", "message": "", "details": {}}
+        )
     monkeypatch.setattr(checker, "_is_wsl", lambda: True)
     _set_pairing(monkeypatch, "true", False)
     monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["100.100.100.100"])
@@ -923,9 +929,7 @@ def test_dns_probe_fails_when_tailscale_owns_dns_with_no_upstream(
     _set_pairing(monkeypatch, "false", True)
     monkeypatch.setattr(checker, "_resolv_nameservers", lambda *_a, **_k: ["100.100.100.100"])
     monkeypatch.setattr(checker, "_tailnet_has_global_resolvers", lambda: False)
-    monkeypatch.setattr(
-        checker, "_dns_canary_error", lambda: pytest.fail("canary ran before the config verdict")
-    )
+    monkeypatch.setattr(checker, "_dns_canary_error", lambda: pytest.fail("canary ran before the config verdict"))
     row = checker._check_wsl_dns()
     assert row["status"] == "fail"
     assert "no tailnet global nameserver" in row["message"]
@@ -1026,7 +1030,9 @@ def test_script_entrypoint_runs() -> None:
 
 
 def _main_with(monkeypatch: pytest.MonkeyPatch, summary: str) -> int:
-    monkeypatch.setattr(checker, "build_report", lambda: {"summary": summary, "checks": [], "ports": {}, "timestamp": 0})
+    monkeypatch.setattr(
+        checker, "build_report", lambda: {"summary": summary, "checks": [], "ports": {}, "timestamp": 0}
+    )
     return checker.main([])
 
 
@@ -1076,9 +1082,7 @@ def test_exit_mapping_covers_every_status_the_checker_can_emit() -> None:
         ("banana", 1),  # unrecognised -> the conservative default, never 0
     ],
 )
-def test_exit_code_contract(
-    monkeypatch: pytest.MonkeyPatch, summary: str, expected: int
-) -> None:
+def test_exit_code_contract(monkeypatch: pytest.MonkeyPatch, summary: str, expected: int) -> None:
     assert _main_with(monkeypatch, summary) == expected
 
 
@@ -1102,7 +1106,12 @@ def test_main_json_mode_emits_the_report(monkeypatch: pytest.MonkeyPatch, capsys
     monkeypatch.setattr(
         checker,
         "build_report",
-        lambda: {"summary": "ok", "checks": [{"name": "jq", "status": "ok", "message": "jq available", "details": {}}], "ports": {}, "timestamp": 0},
+        lambda: {
+            "summary": "ok",
+            "checks": [{"name": "jq", "status": "ok", "message": "jq available", "details": {}}],
+            "ports": {},
+            "timestamp": 0,
+        },
     )
     rc = checker.main(["--json"])
     payload = json.loads(capsys.readouterr().out)

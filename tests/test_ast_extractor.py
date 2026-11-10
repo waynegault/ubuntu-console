@@ -28,10 +28,13 @@ class TestAstExtractor(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.root = td.name
-        self._write("main.py", "import os\nimport helper\n\n"
-                               "class Greeter:\n    pass\n\n"
-                               "def hello(name):\n    print(name)\n    return len(name)\n\n"
-                               "async def aio():\n    pass\n")
+        self._write(
+            "main.py",
+            "import os\nimport helper\n\n"
+            "class Greeter:\n    pass\n\n"
+            "def hello(name):\n    print(name)\n    return len(name)\n\n"
+            "async def aio():\n    pass\n",
+        )
         self._write("helper.py", "def hello():\n    return 1\n")
         self._write("run.sh", "#!/bin/bash\nMY_VAR=1\ngreet() {\n  echo hi\n}\ngreet\n")
         self._write("pkg/mod.py", "def pkgfunc():\n    pass\n")
@@ -56,14 +59,22 @@ class TestAstExtractor(unittest.TestCase):
         # The fixture declares `class Greeter`.  Ids carry the language AND the name
         # verbatim, so this is ast_class:python:Greeter — not the old lowercased
         # 'greeter' slug, which also refused to round-trip.
-        for nid in ("ast_file:main-py", "ast_func:python:hello", "ast_class:python:Greeter",
-                    "ast_module:python:os", "ast_module:python:helper", "ast_call:python:print"):
+        for nid in (
+            "ast_file:main-py",
+            "ast_func:python:hello",
+            "ast_class:python:Greeter",
+            "ast_module:python:os",
+            "ast_module:python:helper",
+            "ast_call:python:print",
+        ):
             self.assertIn(nid, ids)
         edges = self._edges(result)
-        for edge in (("ast_file:main-py", "ast_func:python:hello", "defines"),
-                     ("ast_file:main-py", "ast_class:python:Greeter", "defines"),
-                     ("ast_file:main-py", "ast_module:python:os", "imports"),
-                     ("ast_file:main-py", "ast_call:python:print", "calls")):
+        for edge in (
+            ("ast_file:main-py", "ast_func:python:hello", "defines"),
+            ("ast_file:main-py", "ast_class:python:Greeter", "defines"),
+            ("ast_file:main-py", "ast_module:python:os", "imports"),
+            ("ast_file:main-py", "ast_call:python:print", "calls"),
+        ):
             self.assertIn(edge, edges)
         by_id = {n["id"]: n for n in result["nodes"]}
         # ``is_async``, not ``async``: the latter is a Python reserved word and
@@ -73,9 +84,11 @@ class TestAstExtractor(unittest.TestCase):
         self.assertFalse(by_id["ast_func:python:hello"]["is_async"])
         # Two identical calls collapse onto one node and one edge.
         self._write("twice.py", "def go():\n    pass\n\ngo()\ngo()\n")
-        calls = [(e["source"], e["target"], e["label"])
-                 for e in kgraph.extract_repo_graph(self.root)["edges"]
-                 if e["source"] == "ast_file:twice-py" and e["label"] == "calls"]
+        calls = [
+            (e["source"], e["target"], e["label"])
+            for e in kgraph.extract_repo_graph(self.root)["edges"]
+            if e["source"] == "ast_file:twice-py" and e["label"] == "calls"
+        ]
         self.assertEqual(calls, [("ast_file:twice-py", "ast_call:python:go", "calls")])
 
     def test_extracts_bash_variables_imports_and_call_links(self):
@@ -120,11 +133,11 @@ class TestAstExtractor(unittest.TestCase):
             result = kgraph.extract_repo_graph(empty)
         self.assertEqual((result["nodes"], result["_meta"]["files_parsed"]), ([], 0))
         full = kgraph.extract_repo_graph(self.root)
-        self.assertEqual((full["_meta"]["source"], set(full["_meta"]["languages"])),
-                         ("ast", {"python", "bash"}))
+        self.assertEqual((full["_meta"]["source"], set(full["_meta"]["languages"])), ("ast", {"python", "bash"}))
 
     def test_skips_files_whose_grammar_is_not_loaded(self):
         from kgraph import ast_extractor
+
         with mock.patch.object(ast_extractor, "_LANGUAGES", {"bash": ast_extractor._LANGUAGES["bash"]}):
             ids = self._ids(kgraph.extract_repo_graph(self.root))
         self.assertNotIn("ast_func:python:hello", ids)  # python grammar dropped
@@ -134,32 +147,43 @@ class TestAstExtractor(unittest.TestCase):
 class TestAstExtractorWithoutParser(unittest.TestCase):
     def test_node_text_returns_empty_on_decode_failure(self):
         from kgraph import ast_extractor
+
         fake = type("N", (), {"start_byte": 0, "end_byte": 2})()
         self.assertEqual(ast_extractor._node_text(fake, b"\xff\xfe"), "")
 
     def test_ast_available_false_without_grammars(self):
         from kgraph import ast_extractor
-        with mock.patch.object(ast_extractor, "_LANGUAGES", {}), \
-                mock.patch.object(ast_extractor, "_load_grammars", return_value={}):
+
+        with (
+            mock.patch.object(ast_extractor, "_LANGUAGES", {}),
+            mock.patch.object(ast_extractor, "_load_grammars", return_value={}),
+        ):
             self.assertFalse(ast_extractor.ast_available())
 
     def test_grammar_import_failure_disables_availability(self):
         from kgraph import ast_extractor
-        with mock.patch.object(ast_extractor, "_LANGUAGES", {}), \
-                mock.patch.object(ast_extractor, "_AST_AVAILABLE", True), \
-                mock.patch.dict(sys.modules, {"tree_sitter_bash": None}):
+
+        with (
+            mock.patch.object(ast_extractor, "_LANGUAGES", {}),
+            mock.patch.object(ast_extractor, "_AST_AVAILABLE", True),
+            mock.patch.dict(sys.modules, {"tree_sitter_bash": None}),
+        ):
             self.assertFalse(ast_extractor.ast_available())
 
     def test_extract_repo_graph_without_parser_returns_error(self):
         from kgraph import ast_extractor
-        with mock.patch.object(ast_extractor, "_AST_AVAILABLE", False), \
-                mock.patch.object(ast_extractor, "_LANGUAGES", {}):
+
+        with (
+            mock.patch.object(ast_extractor, "_AST_AVAILABLE", False),
+            mock.patch.object(ast_extractor, "_LANGUAGES", {}),
+        ):
             result = kgraph.extract_repo_graph("/tmp/does-not-exist-kgraph")
         self.assertEqual((result["nodes"], result["_meta"]["error"]), ([], "tree-sitter not available"))
 
     def test_extraction_helpers_guard_missing_grammars_and_languages(self):
         from kgraph import ast_extractor
         from kgraph.models import GraphBuilder
+
         builder = GraphBuilder()
         with mock.patch.object(ast_extractor, "_LANGUAGES", {}):
             ast_extractor._extract_bash_defs(None, b"", "a.sh", "f", builder, True, "file:a.sh")
@@ -173,6 +197,7 @@ class TestAstExtractorWithoutParser(unittest.TestCase):
     def test_link_call_defs_skips_unnamed_call_nodes(self):
         from kgraph import ast_extractor
         from kgraph.models import GraphBuilder
+
         builder = GraphBuilder()
         builder.add_node({"id": "ast_call:x", "label": "  ", "type": "call"})
         ast_extractor._link_call_defs(builder)

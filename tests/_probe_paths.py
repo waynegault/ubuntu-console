@@ -31,9 +31,7 @@ def load_probe(module_name: str, script_filename: str) -> Any:
     import of the same name re-reads the file rather than reusing a half-loaded
     module.
     """
-    spec = importlib.util.spec_from_file_location(
-        module_name, Path(REPO_ROOT) / "scripts" / script_filename
-    )
+    spec = importlib.util.spec_from_file_location(module_name, Path(REPO_ROOT) / "scripts" / script_filename)
     assert spec is not None and spec.loader is not None, f"cannot load {script_filename}"
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -43,5 +41,6 @@ def load_probe(module_name: str, script_filename: str) -> Any:
         del sys.modules[spec.name]
         raise
     return module
+
 
 # end of file

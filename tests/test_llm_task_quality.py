@@ -39,15 +39,8 @@ def _response(content: str) -> dict[str, object]:
 
 
 def test_legal_contract_requires_one_of_the_prompt_verdict_labels():
-    assert (
-        validate_response(
-            "legal", _response("Finding: VALIDATED — the evidence supports it.")
-        )
-        is None
-    )
-    assert (
-        validate_response("legal", _response("The claim is not supported.")) is not None
-    )
+    assert validate_response("legal", _response("Finding: VALIDATED — the evidence supports it.")) is None
+    assert validate_response("legal", _response("The claim is not supported.")) is not None
 
 
 def test_agentic_contract_accepts_declared_tools_and_arguments():
@@ -137,9 +130,7 @@ def test_prose_before_or_after_the_fence_is_not_tolerated():
     strict = check_response("agentic", _response(prose_then_fence))
     assert strict.code == CODE_FENCED_JSON_PROSE
     assert not strict.ok
-    tolerated = check_response(
-        "agentic", _response(prose_then_fence), tolerate_fence=True
-    )
+    tolerated = check_response("agentic", _response(prose_then_fence), tolerate_fence=True)
     assert not tolerated.ok
     assert tolerated.code == CODE_FENCED_JSON_PROSE
     assert tolerated.policy == POLICY_FENCE_TOLERATED
@@ -149,6 +140,5 @@ def test_fence_and_prose_codes_are_distinct_so_they_never_pool():
     surrounding = "```json\n" + json.dumps(_CALLS) + "\n```"
     with_prose = "Here is the plan:\n```json\n" + json.dumps(_CALLS) + "\n```"
     assert (
-        check_response("agentic", _response(surrounding)).code
-        != check_response("agentic", _response(with_prose)).code
+        check_response("agentic", _response(surrounding)).code != check_response("agentic", _response(with_prose)).code
     )

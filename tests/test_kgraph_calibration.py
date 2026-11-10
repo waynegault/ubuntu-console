@@ -75,9 +75,7 @@ class ExportIndependenceTests(unittest.TestCase):
 
         self.assertEqual(len(sample.rows), 1)
         row = sample.rows[0]
-        self.assertEqual(
-            set(row), {"edge_id", "source_label", "target_label", "relation", "real"}
-        )
+        self.assertEqual(set(row), {"edge_id", "source_label", "target_label", "relation", "real"})
         self.assertEqual(row["real"], "", "the label column must start blank")
         rendered = json.dumps(row)
         self.assertNotIn("0.731", rendered, "the score leaked into the labelling row")
@@ -89,29 +87,18 @@ class ExportIndependenceTests(unittest.TestCase):
         graph = _semantic([("topic:alpha", "topic:beta", 0.9)])
         sample = sample_scored_edges(graph, limit=10, seed=0)
         with tempfile.TemporaryDirectory() as directory:
-            paths = write_sample(
-                sample, directory, provenance={"graph_db": "synthetic"}
-            )
+            paths = write_sample(sample, directory, provenance={"graph_db": "synthetic"})
             names = sorted(os.path.basename(path) for path in paths)
             self.assertEqual(names, ["provenance.json", "sample.csv", "signals.json"])
-            with open(
-                os.path.join(directory, "sample.csv"), encoding="utf-8"
-            ) as handle:
+            with open(os.path.join(directory, "sample.csv"), encoding="utf-8") as handle:
                 text = handle.read()
-            self.assertNotIn(
-                "0.9", text, "the CSV with the human's column also carried the score"
-            )
-            with open(
-                os.path.join(directory, "provenance.json"), encoding="utf-8"
-            ) as handle:
+            self.assertNotIn("0.9", text, "the CSV with the human's column also carried the score")
+            with open(os.path.join(directory, "provenance.json"), encoding="utf-8") as handle:
                 provenance = json.load(handle)
             self.assertEqual(provenance["population"], 1)
 
     def test_export_is_deterministic_for_a_seed(self) -> None:
-        pairs = [
-            (f"topic:t{index}", "topic:shared", 0.6 + index / 100)
-            for index in range(30)
-        ]
+        pairs = [(f"topic:t{index}", "topic:shared", 0.6 + index / 100) for index in range(30)]
         first = sample_scored_edges(_semantic(pairs), limit=10, seed=7)
         second = sample_scored_edges(_semantic(list(reversed(pairs))), limit=10, seed=7)
         self.assertEqual(
@@ -216,16 +203,12 @@ class CurveTests(unittest.TestCase):
         # at 95% even with everything predicted, so the sweep lands on the lowest value —
         # the case where the floor does not actually locate a boundary.
         labels = {f"e{index}": index > 0 for index in range(20)}
-        signals = {
-            f"e{index}": {"semantic_score": 0.5 + index / 100} for index in range(20)
-        }
+        signals = {f"e{index}": {"semantic_score": 0.5 + index / 100} for index in range(20)}
         derived = derive(labels, signals, "semantic_score", min_sample=2)
         self.assertIsNotNone(derived.point)
         assert derived.point is not None
         self.assertEqual(derived.point.threshold, 0.5)
-        report = render_report(
-            [derived], min_precision=0.9, provenance={"sample": "unit"}
-        )
+        report = render_report([derived], min_precision=0.9, provenance={"sample": "unit"})
         self.assertIn("does not locate a boundary", report)
 
 
@@ -243,9 +226,7 @@ class LabelReadingTests(unittest.TestCase):
 
     def test_unreadable_and_unknown_rows_are_dropped(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            with open(
-                os.path.join(directory, "signals.json"), "w", encoding="utf-8"
-            ) as handle:
+            with open(os.path.join(directory, "signals.json"), "w", encoding="utf-8") as handle:
                 json.dump(
                     {
                         "a1": {"semantic_score": 0.8},
@@ -254,9 +235,7 @@ class LabelReadingTests(unittest.TestCase):
                     },
                     handle,
                 )
-            with open(
-                os.path.join(directory, "sample.csv"), "w", newline="", encoding="utf-8"
-            ) as handle:
+            with open(os.path.join(directory, "sample.csv"), "w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(
                     handle,
                     fieldnames=[
@@ -284,10 +263,7 @@ class RefusalTests(unittest.TestCase):
 
     def test_a_sample_below_the_floor_is_refused(self) -> None:
         labels = {f"e{index}": index % 2 == 0 for index in range(12)}
-        signals = {
-            ident: {"semantic_score": 0.5 + index / 100}
-            for index, ident in enumerate(labels)
-        }
+        signals = {ident: {"semantic_score": 0.5 + index / 100} for index, ident in enumerate(labels)}
         derived = derive(labels, signals, "semantic_score")
         self.assertIsNone(derived.point)
         self.assertIn("12 labelled edges", derived.refusal or "")
@@ -320,17 +296,11 @@ class CliBoundaryTests(unittest.TestCase):
 
     def test_an_unscored_graph_exits_2_with_the_reason(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            db = self._db(
-                directory, [{"from": "f:a.py", "to": "f:b.py", "label": "imports"}]
-            )
-            result = main(
-                ["--export", os.path.join(directory, "sample"), "--graph-db", db]
-            )
+            db = self._db(directory, [{"from": "f:a.py", "to": "f:b.py", "label": "imports"}])
+            result = main(["--export", os.path.join(directory, "sample"), "--graph-db", db])
             self.assertEqual(result.code, 2)
             self.assertIn("Nothing to calibrate", result.error)
-            self.assertFalse(
-                os.path.exists(os.path.join(directory, "sample", "sample.csv"))
-            )
+            self.assertFalse(os.path.exists(os.path.join(directory, "sample", "sample.csv")))
 
     def test_an_export_names_the_next_step(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -353,16 +323,12 @@ class CliBoundaryTests(unittest.TestCase):
 
     def test_scoring_a_small_sample_exits_2(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            with open(
-                os.path.join(directory, "signals.json"), "w", encoding="utf-8"
-            ) as handle:
+            with open(os.path.join(directory, "signals.json"), "w", encoding="utf-8") as handle:
                 json.dump(
                     {"a1": {"semantic_score": 0.8}, "a2": {"semantic_score": 0.2}},
                     handle,
                 )
-            with open(
-                os.path.join(directory, "sample.csv"), "w", newline="", encoding="utf-8"
-            ) as handle:
+            with open(os.path.join(directory, "sample.csv"), "w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(
                     handle,
                     fieldnames=[

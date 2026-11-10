@@ -36,12 +36,14 @@ class TestCallFlow(unittest.TestCase):
 
     def test_html_escapes_injected_node_label(self):
         graph = {
-            "nodes": [{
-                "id": "ast_func:x",
-                "label": "</script><script>alert(1)</script>",
-                "type": "function",
-                "source": "ast",
-            }],
+            "nodes": [
+                {
+                    "id": "ast_func:x",
+                    "label": "</script><script>alert(1)</script>",
+                    "type": "function",
+                    "source": "ast",
+                }
+            ],
             "edges": [],
         }
         html = kgraph.generate_call_flow_html(graph)

@@ -51,7 +51,7 @@ class TestBenchmark(unittest.TestCase):
         self.assertIn("=== Token-Reduction Benchmark ===", text)
         self.assertIn("Graph nodes: 3", text)
         self.assertIn("Graph edges: 2", text)
-        self.assertIn(f'Avg tokens/node: {result["avg_tokens_per_node"]}', text)
+        self.assertIn(f"Avg tokens/node: {result['avg_tokens_per_node']}", text)
 
 
 if __name__ == "__main__":

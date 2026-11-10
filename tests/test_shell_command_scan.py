@@ -47,9 +47,7 @@ def _load_scan() -> types.ModuleType:
 scan = _load_scan()
 
 
-def _run(
-    command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> tuple[int, str]:
+def _run(command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
     """Run the hook's main() over a shell command; return (exit status, stdout)."""
     payload = json.dumps({"tool_input": {"command": command}})
     # Module-local patch ONLY (Wayne's rule): main() reads the module's own `sys`
@@ -65,14 +63,14 @@ def _run(
 # module docstring documents; a classifier that misses one lets the hazard
 # through, which is exactly the failure that hung markdownlint for 120 s.
 _FLAGGED: list[tuple[str, str]] = [
-    ('markdownlint "$note"', "markdownlint"),   # empty-variable operand
-    ("jq", "jq"),                               # a linter with no target at all
-    ('jq "$file"', "jq"),                       # operand that is ONLY a variable
-    ("sudo jq", "jq"),                          # wrapper stripped before the tool
-    ("FOO=bar jq", "jq"),                       # leading env assignment
-    ("echo hi; jq", "jq"),                      # a second simple command
-    ("python3", "python3"),                     # a bare REPL
-    ("node", "node"),                           # a bare REPL
+    ('markdownlint "$note"', "markdownlint"),  # empty-variable operand
+    ("jq", "jq"),  # a linter with no target at all
+    ('jq "$file"', "jq"),  # operand that is ONLY a variable
+    ("sudo jq", "jq"),  # wrapper stripped before the tool
+    ("FOO=bar jq", "jq"),  # leading env assignment
+    ("echo hi; jq", "jq"),  # a second simple command
+    ("python3", "python3"),  # a bare REPL
+    ("node", "node"),  # a bare REPL
 ]
 
 
@@ -93,17 +91,17 @@ def test_flagged_commands_are_named(
 
 # ── commands that supply an operand / stdin must print NOTHING ─────────────
 _CLEAN: list[str] = [
-    "jq . file.json",                 # a real file operand
-    "markdownlint README.md",         # a real target
-    "python3 -c 'print(1)'",          # -c supplies the program
-    "python3 -m pytest tests/",       # -m supplies the module
-    "python3 -",                      # program on stdin, by design
-    "node -e 'console.log(1)'",       # -e supplies the program
-    "python3 script.py",              # a file operand
-    "jq --version",                   # info flag: prints and exits
-    "cat data.json | jq .",           # piped in: stdin is provided
-    "markdownlint <<EOF\n# t\nEOF",   # heredoc supplies stdin
-    "echo hi",                        # an unrelated command
+    "jq . file.json",  # a real file operand
+    "markdownlint README.md",  # a real target
+    "python3 -c 'print(1)'",  # -c supplies the program
+    "python3 -m pytest tests/",  # -m supplies the module
+    "python3 -",  # program on stdin, by design
+    "node -e 'console.log(1)'",  # -e supplies the program
+    "python3 script.py",  # a file operand
+    "jq --version",  # info flag: prints and exits
+    "cat data.json | jq .",  # piped in: stdin is provided
+    "markdownlint <<EOF\n# t\nEOF",  # heredoc supplies stdin
+    "echo hi",  # an unrelated command
 ]
 
 
@@ -160,6 +158,7 @@ def test_masked_status_is_not_flagged_for_a_redirect(
 
 
 # ── input robustness ───────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("raw", ["", "not json", "{}", '{"tool_input": {}}'])
 def test_unusable_input_is_silent(

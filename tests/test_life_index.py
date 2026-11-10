@@ -48,9 +48,13 @@ class TestLifeIndex(unittest.TestCase):
             with open(os.path.join(td, "relations.json"), "w") as f:
                 json.dump({"relations": [{"source": "alpha", "target": "beta", "rel": "related"}]}, f)
             graph = kgraph.merge_relations(
-                {"nodes": [{"id": "n1", "label": "Alpha", "slug": "alpha"},
-                           {"id": "n2", "label": "Beta", "slug": "beta"}],
-                 "edges": []},
+                {
+                    "nodes": [
+                        {"id": "n1", "label": "Alpha", "slug": "alpha"},
+                        {"id": "n2", "label": "Beta", "slug": "beta"},
+                    ],
+                    "edges": [],
+                },
                 life_root=td,
             )
         self.assertEqual(len(graph.edges), 1)
@@ -129,8 +133,7 @@ class TestLifeIndexScan(unittest.TestCase):
     def test_malformed_canonical_json_falls_back_to_the_dir_scan(self):
         with tempfile.TemporaryDirectory() as td:
             self._write(os.path.join(td, "canonical-concepts.json"), "{ not json")
-            self._write(os.path.join(td, "projects", "alpha.md"),
-                        "# Alpha\n- type: project\n")
+            self._write(os.path.join(td, "projects", "alpha.md"), "# Alpha\n- type: project\n")
             with mock.patch("kgraph.life_index.logger") as log:
                 index = kgraph.load_life_index(td)
             log.warning.assert_called()
@@ -140,19 +143,15 @@ class TestLifeIndexScan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self._write(
                 os.path.join(td, "canonical-concepts.json"),
-                json.dumps({"records": [{"title": "no slug"},
-                                        {"slug": "beta", "title": "Beta",
-                                         "type": "project"}]}),
+                json.dumps({"records": [{"title": "no slug"}, {"slug": "beta", "title": "Beta", "type": "project"}]}),
             )
             index = kgraph.load_life_index(td)
             self.assertEqual([r["slug"] for r in index["records"]], ["beta"])
 
     def test_slugless_canonical_records_fall_through_to_the_scan(self):
         with tempfile.TemporaryDirectory() as td:
-            self._write(os.path.join(td, "canonical-concepts.json"),
-                        json.dumps({"records": [{"title": "no slug"}]}))
-            self._write(os.path.join(td, "repos", "kgraph.md"),
-                        "# kgraph\n- type: repo\n")
+            self._write(os.path.join(td, "canonical-concepts.json"), json.dumps({"records": [{"title": "no slug"}]}))
+            self._write(os.path.join(td, "repos", "kgraph.md"), "# kgraph\n- type: repo\n")
             index = kgraph.load_life_index(td)
             self.assertEqual([r["slug"] for r in index["records"]], ["kgraph"])
 
@@ -174,29 +173,51 @@ class TestLifeRelations(unittest.TestCase):
 
     def test_merge_relations_skips_incomplete_and_unknown_slugs(self):
         with tempfile.TemporaryDirectory() as td:
-            self._write(os.path.join(td, "relations.json"), json.dumps({"relations": [
-                {"source": "alpha"},                     # no target
-                {"target": "beta"},                      # no source
-                {"source": "ghost", "target": "beta"},   # unknown source
-                {"source": "alpha", "target": "ghost"},  # unknown target
-            ]}))
+            self._write(
+                os.path.join(td, "relations.json"),
+                json.dumps(
+                    {
+                        "relations": [
+                            {"source": "alpha"},  # no target
+                            {"target": "beta"},  # no source
+                            {"source": "ghost", "target": "beta"},  # unknown source
+                            {"source": "alpha", "target": "ghost"},  # unknown target
+                        ]
+                    }
+                ),
+            )
             graph = kgraph.merge_relations(
-                {"nodes": [{"id": "n1", "label": "Alpha", "slug": "alpha"},
-                           {"id": "n2", "label": "Beta", "slug": "beta"}],
-                 "edges": []},
+                {
+                    "nodes": [
+                        {"id": "n1", "label": "Alpha", "slug": "alpha"},
+                        {"id": "n2", "label": "Beta", "slug": "beta"},
+                    ],
+                    "edges": [],
+                },
                 life_root=td,
             )
         self.assertEqual(graph.edges, [])
 
     def test_merge_relations_matches_a_canonical_slug(self):
         with tempfile.TemporaryDirectory() as td:
-            self._write(os.path.join(td, "relations.json"), json.dumps({"relations": [
-                {"source": "alpha", "target": "beta", "rel": "supersedes"},
-            ]}))
+            self._write(
+                os.path.join(td, "relations.json"),
+                json.dumps(
+                    {
+                        "relations": [
+                            {"source": "alpha", "target": "beta", "rel": "supersedes"},
+                        ]
+                    }
+                ),
+            )
             graph = kgraph.merge_relations(
-                {"nodes": [{"id": "n1", "label": "Alpha", "canonical_slug": "alpha"},
-                           {"id": "n2", "label": "Beta", "slug": "beta"}],
-                 "edges": []},
+                {
+                    "nodes": [
+                        {"id": "n1", "label": "Alpha", "canonical_slug": "alpha"},
+                        {"id": "n2", "label": "Beta", "slug": "beta"},
+                    ],
+                    "edges": [],
+                },
                 life_root=td,
             )
         self.assertEqual(len(graph.edges), 1)
@@ -206,13 +227,24 @@ class TestLifeRelations(unittest.TestCase):
 
     def test_merge_relations_does_not_duplicate_an_existing_edge(self):
         with tempfile.TemporaryDirectory() as td:
-            self._write(os.path.join(td, "relations.json"), json.dumps({"relations": [
-                {"source": "alpha", "target": "beta", "rel": "related"},
-            ]}))
+            self._write(
+                os.path.join(td, "relations.json"),
+                json.dumps(
+                    {
+                        "relations": [
+                            {"source": "alpha", "target": "beta", "rel": "related"},
+                        ]
+                    }
+                ),
+            )
             graph = kgraph.merge_relations(
-                {"nodes": [{"id": "n1", "label": "Alpha", "slug": "alpha"},
-                           {"id": "n2", "label": "Beta", "slug": "beta"}],
-                 "edges": [{"from": "n1", "to": "n2", "label": "related"}]},
+                {
+                    "nodes": [
+                        {"id": "n1", "label": "Alpha", "slug": "alpha"},
+                        {"id": "n2", "label": "Beta", "slug": "beta"},
+                    ],
+                    "edges": [{"from": "n1", "to": "n2", "label": "related"}],
+                },
                 life_root=td,
             )
         self.assertEqual(len(graph.edges), 1)

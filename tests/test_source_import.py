@@ -113,10 +113,8 @@ class TestStoreWriter(unittest.TestCase):
 
             conn = sqlite3.connect(db)
             try:
-                self.assertEqual(
-                    conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 1)
-                self.assertEqual(
-                    conn.execute("SELECT count(*) FROM source_meta").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT count(*) FROM source_meta").fetchone()[0], 1)
             finally:
                 conn.close()
 
@@ -125,24 +123,26 @@ class TestStoreWriter(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             db = os.path.join(tmp, "source.sqlite")
-            write_files_chunks([
-                SourceRecord(
-                    path="investigator/layer1/case-1.md",
-                    start_line=1,
-                    end_line=2,
-                    text="Case 1 fact",
-                    source_kind="investigator-layer1",
-                    source_date="2026-10-01",
-                    section="Facts",
-                    scope="case",
-                    metadata={"layer": "1", "case": "1"},
-                ),
-            ], db)
+            write_files_chunks(
+                [
+                    SourceRecord(
+                        path="investigator/layer1/case-1.md",
+                        start_line=1,
+                        end_line=2,
+                        text="Case 1 fact",
+                        source_kind="investigator-layer1",
+                        source_date="2026-10-01",
+                        section="Facts",
+                        scope="case",
+                        metadata={"layer": "1", "case": "1"},
+                    ),
+                ],
+                db,
+            )
             conn = sqlite3.connect(db)
             try:
                 row = conn.execute(
-                    "SELECT source_kind, source_date, section, scope, metadata"
-                    "  FROM source_meta"
+                    "SELECT source_kind, source_date, section, scope, metadata  FROM source_meta"
                 ).fetchone()
             finally:
                 conn.close()
@@ -163,16 +163,14 @@ class TestScoredEdgePath(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, "memory")
             os.makedirs(src)
-            with open(os.path.join(src, "2026-10-04.md"), "w",
-                      encoding="utf-8") as handle:
+            with open(os.path.join(src, "2026-10-04.md"), "w", encoding="utf-8") as handle:
                 handle.write(_CONCEPTS)
             db = os.path.join(tmp, "source.sqlite")
             import_source(MarkdownMemorySource(src), db, prune_prefix=src)
             graph = load_from_memory_db(db)
 
         scored = [
-            edge for edge in graph.edges
-            if edge.cooccurrence_count is not None or edge.semantic_score is not None
+            edge for edge in graph.edges if edge.cooccurrence_count is not None or edge.semantic_score is not None
         ]
         self.assertTrue(scored, "the imported store must feed the scored-edge path")
         sample = sample_scored_edges(graph, limit=5, seed=0)
@@ -187,27 +185,40 @@ class TestCliSeam(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, "memory")
             os.makedirs(src)
-            with open(os.path.join(src, "2026-10-05.md"), "w",
-                      encoding="utf-8") as handle:
+            with open(os.path.join(src, "2026-10-05.md"), "w", encoding="utf-8") as handle:
                 handle.write("# 2026-10-05\n\n## One\n\nA body.\n")
             db = os.path.join(tmp, "source.sqlite")
-            main([
-                "import-source", "--source", "markdown",
-                "--source-path", src, "--source-db", db,
-            ])
+            main(
+                [
+                    "import-source",
+                    "--source",
+                    "markdown",
+                    "--source-path",
+                    src,
+                    "--source-db",
+                    db,
+                ]
+            )
             self.assertTrue(os.path.exists(db))
             conn = sqlite3.connect(db)
             try:
-                self.assertEqual(
-                    conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 1)
             finally:
                 conn.close()
 
             dry = os.path.join(tmp, "dry.sqlite")
-            main([
-                "import-source", "--source", "markdown",
-                "--source-path", src, "--source-db", dry, "--dry-run",
-            ])
+            main(
+                [
+                    "import-source",
+                    "--source",
+                    "markdown",
+                    "--source-path",
+                    src,
+                    "--source-db",
+                    dry,
+                    "--dry-run",
+                ]
+            )
             self.assertFalse(os.path.exists(dry))
 
 
@@ -224,8 +235,7 @@ class TestDirectorySource(unittest.TestCase):
                 handle.write("<p>Hello <b>world</b></p>")
             with open(os.path.join(case, "skip.pdf"), "wb") as handle:
                 handle.write(b"%PDF-1.4")
-            records = list(DirectoryMemorySource(
-                tmp, source_kind="investigator-layer3").iter_records())
+            records = list(DirectoryMemorySource(tmp, source_kind="investigator-layer3").iter_records())
 
         self.assertEqual(len(records), 2)
         by_name = {os.path.basename(record.path): record for record in records}
@@ -244,8 +254,7 @@ class TestDirectorySource(unittest.TestCase):
                 handle.write("hi")
             with open(os.path.join(tmp, "long.md"), "w", encoding="utf-8") as handle:
                 handle.write("a long enough body")
-            records = list(DirectoryMemorySource(
-                tmp, source_kind="investigator-layer1", min_chars=5).iter_records())
+            records = list(DirectoryMemorySource(tmp, source_kind="investigator-layer1", min_chars=5).iter_records())
 
         self.assertEqual([os.path.basename(r.path) for r in records], ["long.md"])
 
@@ -260,14 +269,11 @@ class TestDirectorySource(unittest.TestCase):
             with open(os.path.join(tmp, "b.md"), "w", encoding="utf-8") as handle:
                 handle.write("## Notes\n\nWe decided to rotate the gateway token\n")
             db = os.path.join(tmp, "source.sqlite")
-            import_source(
-                DirectoryMemorySource(tmp, source_kind="investigator-layer3"),
-                db, prune_prefix=tmp)
+            import_source(DirectoryMemorySource(tmp, source_kind="investigator-layer3"), db, prune_prefix=tmp)
             graph = load_from_memory_db(db)
 
         scored = [
-            edge for edge in graph.edges
-            if edge.cooccurrence_count is not None or edge.semantic_score is not None
+            edge for edge in graph.edges if edge.cooccurrence_count is not None or edge.semantic_score is not None
         ]
         self.assertTrue(scored, "the directory source must feed the scored-edge path")
         sample = sample_scored_edges(graph, limit=5, seed=0)
@@ -281,19 +287,26 @@ class TestDirectorySource(unittest.TestCase):
             with open(os.path.join(tmp, "case.md"), "w", encoding="utf-8") as handle:
                 handle.write("# Case\n\nDecision: token rotation\n")
             db = os.path.join(tmp, "source.sqlite")
-            main([
-                "import-source", "--source", "directory",
-                "--source-kind", "investigator-layer3",
-                "--source-path", tmp, "--source-db", db,
-            ])
+            main(
+                [
+                    "import-source",
+                    "--source",
+                    "directory",
+                    "--source-kind",
+                    "investigator-layer3",
+                    "--source-path",
+                    tmp,
+                    "--source-db",
+                    db,
+                ]
+            )
             self.assertTrue(os.path.exists(db))
             conn = sqlite3.connect(db)
             try:
+                self.assertEqual(conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 1)
                 self.assertEqual(
-                    conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 1)
-                self.assertEqual(
-                    conn.execute("SELECT source_kind FROM source_meta").fetchone()[0],
-                    "investigator-layer3")
+                    conn.execute("SELECT source_kind FROM source_meta").fetchone()[0], "investigator-layer3"
+                )
             finally:
                 conn.close()
 
@@ -305,7 +318,8 @@ class TestChromaSource(unittest.TestCase):
         conn.execute(
             "CREATE TABLE embedding_metadata"
             " (id TEXT, key TEXT, string_value TEXT, int_value INTEGER,"
-            "  float_value REAL, bool_value INTEGER)")
+            "  float_value REAL, bool_value INTEGER)"
+        )
         rows = (
             ("e1", "1", _CONCEPTS.split("## Notes")[0]),
             ("e2", "1", "## Notes\n\nWe decided to rotate the gateway token\n"),
@@ -323,7 +337,8 @@ class TestChromaSource(unittest.TestCase):
             ):
                 conn.execute(
                     "INSERT INTO embedding_metadata VALUES (?,?,?,?,?,?)",
-                    (embedding_id, key, string_value, int_value, None, None))
+                    (embedding_id, key, string_value, int_value, None, None),
+                )
         conn.commit()
         conn.close()
         return db
@@ -348,12 +363,10 @@ class TestChromaSource(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             db = self._db(tmp)
-            records = list(ChromaMemorySource(
-                db, layer_values=("1", "2"), limit=1).iter_records())
+            records = list(ChromaMemorySource(db, layer_values=("1", "2"), limit=1).iter_records())
 
         self.assertEqual(len(records), 2)
-        self.assertEqual([record.source_kind for record in records],
-                         ["investigator-layer1", "investigator-layer2"])
+        self.assertEqual([record.source_kind for record in records], ["investigator-layer1", "investigator-layer2"])
 
     def test_store_feeds_scored_edges(self):
         from kgraph.calibrate import sample_scored_edges
@@ -367,8 +380,7 @@ class TestChromaSource(unittest.TestCase):
             graph = load_from_memory_db(out)
 
         scored = [
-            edge for edge in graph.edges
-            if edge.cooccurrence_count is not None or edge.semantic_score is not None
+            edge for edge in graph.edges if edge.cooccurrence_count is not None or edge.semantic_score is not None
         ]
         self.assertTrue(scored, "the chroma source must feed the scored-edge path")
         sample = sample_scored_edges(graph, limit=5, seed=0)
@@ -381,18 +393,25 @@ class TestChromaSource(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = self._db(tmp)
             out = os.path.join(tmp, "source.sqlite")
-            main([
-                "import-source", "--source", "chroma",
-                "--source-path", db, "--layer-values", "1",
-                "--source-db", out,
-            ])
+            main(
+                [
+                    "import-source",
+                    "--source",
+                    "chroma",
+                    "--source-path",
+                    db,
+                    "--layer-values",
+                    "1",
+                    "--source-db",
+                    out,
+                ]
+            )
             self.assertTrue(os.path.exists(out))
             conn = sqlite3.connect(out)
             try:
+                self.assertEqual(conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 2)
                 self.assertEqual(
-                    conn.execute("SELECT count(*) FROM chunks").fetchone()[0], 2)
-                self.assertEqual(
-                    conn.execute("SELECT source_kind FROM source_meta").fetchone()[0],
-                    "investigator-layer1")
+                    conn.execute("SELECT source_kind FROM source_meta").fetchone()[0], "investigator-layer1"
+                )
             finally:
                 conn.close()

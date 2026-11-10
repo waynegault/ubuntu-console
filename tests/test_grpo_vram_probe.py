@@ -163,18 +163,26 @@ def test_build_configs_matches_the_documented_4bit_and_lora_shape(
 ) -> None:
     seen_quant, seen_lora = _fake_quant_env(monkeypatch)
     quant, lora = probe.build_configs("Qwen/Qwen2.5-1.5B", 8)
-    assert seen_quant == [{
-        "load_in_4bit": True,
-        "bnb_4bit_quant_type": "nf4",
-        "bnb_4bit_use_double_quant": True,
-        "bnb_4bit_compute_dtype": _BF16_SENTINEL,
-    }]
+    assert seen_quant == [
+        {
+            "load_in_4bit": True,
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True,
+            "bnb_4bit_compute_dtype": _BF16_SENTINEL,
+        }
+    ]
     assert seen_lora[0]["r"] == 8
     # lora_alpha = 2 * r is the docstring's "r/alpha" convention.
     assert seen_lora[0]["lora_alpha"] == 16
     assert seen_lora[0]["task_type"] == "CAUSAL_LM"
     assert seen_lora[0]["target_modules"] == [
-        "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
     ]
     assert (quant.kw["bnb_4bit_quant_type"], lora.kw["r"]) == ("nf4", 8)
 
@@ -261,16 +269,19 @@ def _fake_measure_env(monkeypatch: pytest.MonkeyPatch) -> tuple[_Log, _Model]:
     setattr(torch, "randint", lambda *a, **k: "ids")
     setattr(torch, "ones_like", lambda x: "ones")
     setattr(torch, "optim", types.SimpleNamespace(AdamW=lambda ps, lr: _Optim(ps, log)))
-    setattr(torch, "cuda", types.SimpleNamespace(
-        reset_peak_memory_stats=lambda: log.events.append("reset_peak"),
-        synchronize=lambda: log.events.append("sync"),
-    ))
+    setattr(
+        torch,
+        "cuda",
+        types.SimpleNamespace(
+            reset_peak_memory_stats=lambda: log.events.append("reset_peak"),
+            synchronize=lambda: log.events.append("sync"),
+        ),
+    )
     setattr(torch, "no_grad", lambda: contextlib.nullcontext())
 
     peft = types.ModuleType("peft")
     setattr(peft, "get_peft_model", lambda m, lora: m)
-    setattr(peft, "prepare_model_for_kbit_training",
-            lambda m, use_gradient_checkpointing=True: m)
+    setattr(peft, "prepare_model_for_kbit_training", lambda m, use_gradient_checkpointing=True: m)
 
     class LoraConfig:
         def __init__(self, **kw: Any) -> None:
@@ -308,8 +319,11 @@ def _fake_measure_env(monkeypatch: pytest.MonkeyPatch) -> tuple[_Log, _Model]:
 
 def _args(**kw: Any) -> Any:
     return argparse.Namespace(
-        model="m", ctx=kw.get("ctx", 2048), lora_r=kw.get("lora_r", 16),
-        rollouts=kw.get("rollouts", 4), gen_tokens=kw.get("gen_tokens", 256),
+        model="m",
+        ctx=kw.get("ctx", 2048),
+        lora_r=kw.get("lora_r", 16),
+        rollouts=kw.get("rollouts", 4),
+        gen_tokens=kw.get("gen_tokens", 256),
     )
 
 
@@ -323,8 +337,7 @@ def test_measure_reports_each_component_as_a_phase_delta(
 
     budget = probe.measure("m", _args())
 
-    assert (budget.baseline_mb, budget.weights_mb, budget.hiprec_mb,
-            budget.adapters_mb) == (496, 554, 520, 34)
+    assert (budget.baseline_mb, budget.weights_mb, budget.hiprec_mb, budget.adapters_mb) == (496, 554, 520, 34)
     # Analytic optimizer: 2 fp32 moments per trainable parameter.
     assert budget.optimizer_mb == (2 * 4 * 8 * 1024 * 1024) // (1024 * 1024) == 64
     assert budget.activations_mb == 4400 - 1604 - 64
@@ -358,16 +371,25 @@ def test_render_names_every_component_and_the_verdict() -> None:
     # the verdict line must be present - a component silently dropped from render is a
     # budget nobody can audit.
     text = probe.render(_budget(baseline_mb=496))
-    for label in ("baseline", "weights (4-bit)", "high-precision", "adapters",
-                  "optimizer", "activations", "rollouts", "trainable", "reserve (20%)",
-                  "PEAK used", "headroom", "verdict"):
+    for label in (
+        "baseline",
+        "weights (4-bit)",
+        "high-precision",
+        "adapters",
+        "optimizer",
+        "activations",
+        "rollouts",
+        "trainable",
+        "reserve (20%)",
+        "PEAK used",
+        "headroom",
+        "verdict",
+    ):
         assert label in text, label
     assert "edge" in text
 
 
-def test_main_dry_run_returns_2_and_prints_the_config(
-    monkeypatch: pytest.MonkeyPatch, capsys: Any
-) -> None:
+def test_main_dry_run_returns_2_and_prints_the_config(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
     _fake_quant_env(monkeypatch)
     rc = probe.main(["Qwen/Qwen2.5-1.5B", "--dry-run", "--lora-r", "4"])
     out = capsys.readouterr().out
@@ -376,9 +398,7 @@ def test_main_dry_run_returns_2_and_prints_the_config(
     assert "rollouts   : 4 x 256 tokens" in out
 
 
-def test_main_returns_3_and_reports_a_failed_measurement(
-    monkeypatch: pytest.MonkeyPatch, caplog: Any
-) -> None:
+def test_main_returns_3_and_reports_a_failed_measurement(monkeypatch: pytest.MonkeyPatch, caplog: Any) -> None:
     _fake_quant_env(monkeypatch)
 
     def boom(model: str, args: Any) -> Any:
@@ -391,9 +411,7 @@ def test_main_returns_3_and_reports_a_failed_measurement(
     assert any("measurement failed for m" in r.getMessage() for r in caplog.records)
 
 
-def test_main_prints_render_by_default_and_json_on_request(
-    monkeypatch: pytest.MonkeyPatch, capsys: Any
-) -> None:
+def test_main_prints_render_by_default_and_json_on_request(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
     _fake_quant_env(monkeypatch)
     budget = _budget()
     monkeypatch.setattr(probe, "measure", lambda model, args: budget)

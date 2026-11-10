@@ -66,8 +66,11 @@ def _handler_class(store_path: str, graph_db_path: str | None = None):
         mock.patch.object(kgraph_server, "resolve_memory_db_path", return_value=None),
     ):
         kgraph_server.serve_file(
-            store_path, host="127.0.0.1", force_embed=True,
-            graph_db_path=graph_db_path, store_path=store_path,
+            store_path,
+            host="127.0.0.1",
+            force_embed=True,
+            graph_db_path=graph_db_path,
+            store_path=store_path,
         )
     # serve_file hands HTTPServer a partial(GraphRequestHandler, directory=...),
     # so unwrap to the class itself.

@@ -68,8 +68,7 @@ class TestPRDashboardGitData(unittest.TestCase):
         env = cls._git_env(td)
 
         def git(*args):
-            subprocess.run(["git", *args], cwd=td, env=env, check=True,
-                           capture_output=True, text=True)
+            subprocess.run(["git", *args], cwd=td, env=env, check=True, capture_output=True, text=True)
 
         git("init", "-q")
         with open(os.path.join(td, "a.txt"), "w", encoding="utf-8") as f:
@@ -78,7 +77,11 @@ class TestPRDashboardGitData(unittest.TestCase):
         git("commit", "-q", "-m", "initial commit")
         base = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=td, env=env, capture_output=True, text=True, check=True,
+            cwd=td,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
         git("checkout", "-q", "-b", "feature")
         with open(os.path.join(td, "b.txt"), "w", encoding="utf-8") as f:
@@ -182,12 +185,13 @@ class TestPRDashboardCorrelation(unittest.TestCase):
         from kgraph import pr_dashboard
 
         git_data = self._git_data(["scripts/kgraph/server.py"])
-        graph = {"nodes": [
-            {"id": "n1", "label": "server", "type": "file", "path": "server.py"},
-            {"id": "n2", "label": "pkg", "type": "file",
-             "path": "scripts/kgraph/server.py"},
-            {"id": "n3", "label": "no path", "type": "topic"},
-        ]}
+        graph = {
+            "nodes": [
+                {"id": "n1", "label": "server", "type": "file", "path": "server.py"},
+                {"id": "n2", "label": "pkg", "type": "file", "path": "scripts/kgraph/server.py"},
+                {"id": "n3", "label": "no path", "type": "topic"},
+            ]
+        }
         found = pr_dashboard._correlate_with_graph(git_data, graph)
         self.assertEqual({c["node_id"] for c in found}, {"n1", "n2"})
         self.assertEqual(found[0]["node_type"], "file")
@@ -196,22 +200,17 @@ class TestPRDashboardCorrelation(unittest.TestCase):
         from kgraph import pr_dashboard
 
         one = {"nodes": [{"id": "n1", "label": "N", "path": "f.py"}] * 3}
-        self.assertEqual(
-            len(pr_dashboard._correlate_with_graph(self._git_data(["f.py"]), one)), 1)
+        self.assertEqual(len(pr_dashboard._correlate_with_graph(self._git_data(["f.py"]), one)), 1)
 
-        many = {"nodes": [{"id": f"n{i}", "label": "N", "path": f"p{i}.py"}
-                          for i in range(60)]}
+        many = {"nodes": [{"id": f"n{i}", "label": "N", "path": f"p{i}.py"} for i in range(60)]}
         git_many = self._git_data([f"p{i}.py" for i in range(60)])
-        self.assertEqual(
-            len(pr_dashboard._correlate_with_graph(git_many, many)), 50)
+        self.assertEqual(len(pr_dashboard._correlate_with_graph(git_many, many)), 50)
 
     def test_empty_graph_yields_no_correlations(self):
         from kgraph import pr_dashboard
 
-        self.assertEqual(
-            pr_dashboard._correlate_with_graph(self._git_data(["f.py"]), {}), [])
-        self.assertEqual(
-            pr_dashboard._correlate_with_graph(self._git_data(["f.py"]), None), [])
+        self.assertEqual(pr_dashboard._correlate_with_graph(self._git_data(["f.py"]), {}), [])
+        self.assertEqual(pr_dashboard._correlate_with_graph(self._git_data(["f.py"]), None), [])
 
 
 class TestPRDashboardHtml(unittest.TestCase):
@@ -219,17 +218,20 @@ class TestPRDashboardHtml(unittest.TestCase):
     def _build(git_data, correlations=None):
         from kgraph import pr_dashboard
 
-        return pr_dashboard._build_dashboard_html(
-            git_data, correlations or [], "/tmp/repo", 30)
+        return pr_dashboard._build_dashboard_html(git_data, correlations or [], "/tmp/repo", 30)
 
     def test_status_badges_cover_every_branch(self):
-        html = self._build({"recent_files": [
-            {"status": "A", "path": "added.py"},
-            {"status": "D", "path": "deleted.py"},
-            {"status": "M", "path": "modified.py"},
-            {"status": "R100", "path": "renamed.py"},
-            {"status": "?", "path": "odd.py"},
-        ]})
+        html = self._build(
+            {
+                "recent_files": [
+                    {"status": "A", "path": "added.py"},
+                    {"status": "D", "path": "deleted.py"},
+                    {"status": "M", "path": "modified.py"},
+                    {"status": "R100", "path": "renamed.py"},
+                    {"status": "?", "path": "odd.py"},
+                ]
+            }
+        )
         self.assertIn('class="badge added"', html)
         self.assertIn('class="badge deleted"', html)
         self.assertIn('class="badge modified"', html)
@@ -237,30 +239,36 @@ class TestPRDashboardHtml(unittest.TestCase):
         self.assertIn('<span class="badge">?</span>', html)
 
     def test_marks_the_current_branch(self):
-        html = self._build({"branches": [{"name": "main", "current": True},
-                                         {"name": "old", "current": False}]})
+        html = self._build({"branches": [{"name": "main", "current": True}, {"name": "old", "current": False}]})
         self.assertIn("<strong>▶</strong> main", html)
         self.assertIn("<li>old</li>", html)
 
     def test_row_limits_are_applied(self):
-        html = self._build({
-            "merges": [{"hash": f"h{i}", "author_name": "A", "subject": "s",
-                        "date": "2026-01-01"} for i in range(25)],
-            "commits": [{"hash": f"c{i}", "author_name": "A", "subject": "s",
-                         "date": "2026-01-01"} for i in range(35)],
-            "recent_files": [{"status": "M", "path": f"f{i}.py"} for i in range(45)],
-            "branches": [{"name": f"b{i}", "current": False} for i in range(20)],
-        })
-        self.assertNotIn("h24", html)     # merges capped at 20
-        self.assertNotIn("c34", html)     # commits capped at 30
+        html = self._build(
+            {
+                "merges": [
+                    {"hash": f"h{i}", "author_name": "A", "subject": "s", "date": "2026-01-01"} for i in range(25)
+                ],
+                "commits": [
+                    {"hash": f"c{i}", "author_name": "A", "subject": "s", "date": "2026-01-01"} for i in range(35)
+                ],
+                "recent_files": [{"status": "M", "path": f"f{i}.py"} for i in range(45)],
+                "branches": [{"name": f"b{i}", "current": False} for i in range(20)],
+            }
+        )
+        self.assertNotIn("h24", html)  # merges capped at 20
+        self.assertNotIn("c34", html)  # commits capped at 30
         self.assertNotIn("f44.py", html)  # files capped at 40
-        self.assertNotIn("b19", html)     # branches capped at 15
+        self.assertNotIn("b19", html)  # branches capped at 15
 
     def test_correlation_count_renders(self):
-        html = self._build({"total_merges": 0, "total_commits": 0}, [
-            {"file": "a.py", "node_label": "A", "node_type": "file"},
-            {"file": "b.py", "node_label": "B", "node_type": "file"},
-        ])
+        html = self._build(
+            {"total_merges": 0, "total_commits": 0},
+            [
+                {"file": "a.py", "node_label": "A", "node_type": "file"},
+                {"file": "b.py", "node_label": "B", "node_type": "file"},
+            ],
+        )
         self.assertIn("Graph Correlations (2)", html)
         self.assertIn("a.py", html)
 
@@ -270,12 +278,14 @@ class TestPRDashboardEscaping(unittest.TestCase):
         from kgraph.pr_dashboard import _build_dashboard_html
 
         git_data = {
-            "merges": [{
-                "hash": "abc12345",
-                "author_name": "<script>alert(1)</script>",
-                "subject": "</td><script>alert(2)</script>",
-                "date": "2026-09-11",
-            }],
+            "merges": [
+                {
+                    "hash": "abc12345",
+                    "author_name": "<script>alert(1)</script>",
+                    "subject": "</td><script>alert(2)</script>",
+                    "date": "2026-09-11",
+                }
+            ],
             "commits": [],
             "recent_files": [{"status": "M", "path": "<img src=x onerror=alert(3)>"}],
             "branches": [{"name": "<script>alert(5)</script>", "current": True}],

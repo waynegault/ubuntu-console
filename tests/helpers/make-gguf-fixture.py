@@ -16,6 +16,7 @@ test time rather than committed.
 Usage: make-gguf-fixture.py <case> <out-path>
 Cases: both-keys | rope-only | general-ctx | plain-ctx | no-ctx | junk-name
 """
+
 import struct
 import sys
 
