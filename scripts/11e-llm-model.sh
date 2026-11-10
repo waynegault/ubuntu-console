@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 115
+#   v115 (2026-11-10): the @extractable note above model() said "~500 lines"; measured,
+#     the function is 242, so the note named a function twice its real size and made the
+#     split look far more urgent than it is. The number is now measured and dated.
 # Module Version: 114
 #   v114 (2026-11-10): `model autotune <row>` names a RETIRED row's reason before it runs it.
 #     bin/autotune-rows.sh has warned since v21 of that file, but this path calls
@@ -4976,9 +4980,10 @@ bench-compare|bench-latest|bench-history|delete|archive|download|register-traine
     return 0
 }
 
-# @extractable: model() is the largest function (~500 lines). When splitting
-# into modules, extract it into its own file (e.g. ~/.bashrc.d/11-llm-model.sh)
-# along with __renumber_registry, __quant_label, and __save_model_ctx.
+# @extractable: model() is the largest function (~240 lines, measured 2026-11-10).
+# When splitting into modules, extract it into its own file (e.g.
+# ~/.bashrc.d/11-llm-model.sh) along with __renumber_registry, __quant_label,
+# and __save_model_ctx.
 function model() {
     local action="${1:-}"
     (( $# > 0 )) && shift
