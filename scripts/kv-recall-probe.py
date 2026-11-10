@@ -184,10 +184,11 @@ def score_answer(answer: str, code: str) -> bool:
     return code.strip().lower() in tokens
 
 
-def ask_server(base_url: str, prompt: str, timeout: float) -> tuple[str, int | None]:
+def ask_server(base_url: str, model: str, prompt: str, timeout: float) -> tuple[str, int | None]:
     """One chat completion.  Returns (text, prompt_tokens) — the token count is the
     server's, and None when it did not report one."""
     payload = {
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.0,
         "max_tokens": 64,
@@ -199,6 +200,23 @@ def ask_server(base_url: str, prompt: str, timeout: float) -> tuple[str, int | N
     return text, (int(prompt_tokens) if isinstance(prompt_tokens, int) else None)
 
 
+def resolve_model(base_url: str, explicit: str, timeout: float) -> tuple[str, bool]:
+    """The model this run names, and whether the caller PINNED it.
+
+    The name is written into the baseline TSV as the row's identity, so a name the
+    server was never asked for files a measurement under a lane that does not
+    exist.  An explicit ``--model`` is therefore sent in the request as well as
+    recorded; without one the served list is the only honest source.
+    """
+    if explicit:
+        return explicit, True
+    entries = _llm.get_models(base_url.rstrip("/") + "/v1", timeout=timeout)
+    model = entries[0].get("id")
+    if not model:
+        raise _llm.LLMClientError(f"{base_url}/v1/models did not name an id; pass --model")
+    return str(model), False
+
+
 def run_plan(plan: ProbePlan, base_url: str, code: str, timeout: float) -> list[DepthResult]:
     """Query every depth in the plan, in order, against a server already running at
     ``plan.kv_type``."""
@@ -208,7 +226,7 @@ def run_plan(plan: ProbePlan, base_url: str, code: str, timeout: float) -> list[
         document, position = build_haystack(plan, depth, needle)
         prompt = f"{document}\n\n{QUESTION.format(tag='the A-17 bundle')}"
         logger.debug("depth %.2f -> needle at line %d of %d", depth, position, document.count("\n") + 1)
-        text, prompt_tokens = ask_server(base_url, prompt, timeout)
+        text, prompt_tokens = ask_server(base_url, plan.model, prompt, timeout)
         results.append(
             DepthResult(
                 depth=depth,
@@ -318,7 +336,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--base-url", default="http://127.0.0.1:18083", help="a llama.cpp server ALREADY running at --kv-type"
     )
-    parser.add_argument("--model", default="", help="label for the record (required to record)")
+    parser.add_argument(
+        "--model",
+        default="",
+        help="model to request and record; by default read from /v1/models and marked UNPINNED",
+    )
     parser.add_argument(
         "--kv-type", default="", help="the server's --cache-type-k/v, e.g. q8_0 or q4_0 (required to run)"
     )
@@ -370,8 +392,17 @@ def main(argv: list[str] | None = None) -> int:
         print("kv-recall-probe: --model is required to record or check a baseline", file=sys.stderr)
         return 2
 
+    if args.dry_run:
+        model, pinned = args.model or "unlabelled", bool(args.model)
+    else:
+        try:
+            model, pinned = resolve_model(args.base_url, args.model, args.timeout)
+        except (_llm.LLMClientError, TimeoutError, OSError) as exc:
+            print(f"kv-recall-probe: cannot name the model this run measures: {exc}", file=sys.stderr)
+            return 3
+
     plan = ProbePlan(
-        model=args.model or "unlabelled",
+        model=model,
         kv_type=args.kv_type or "unlabelled",
         ctx_tokens=args.ctx_tokens,
         depths=depths,
@@ -397,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
         "probe_version": PROBE_VERSION,
         "plan": {
             "model": plan.model,
+            "model_pinned": pinned,
             "kv_type": plan.kv_type,
             "ctx_tokens": plan.ctx_tokens,
             "depths": list(plan.depths),
@@ -419,7 +451,10 @@ def main(argv: list[str] | None = None) -> int:
         report["failures"] = failures
         print(json.dumps(report, indent=2))
     else:
-        print(f"KV recall — model={plan.model} kv_type={plan.kv_type} ctx~{plan.ctx_tokens}")
+        print(
+            f"KV recall — model={plan.model}{'' if pinned else ' (UNPINNED)'}"
+            f" kv_type={plan.kv_type} ctx~{plan.ctx_tokens}"
+        )
         for r in results:
             print(
                 f"  depth {r.depth:.2f}  {'HIT ' if r.hit else 'MISS'}"

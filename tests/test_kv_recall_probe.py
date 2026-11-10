@@ -47,16 +47,13 @@ def test_the_needle_template_is_the_documented_literal() -> None:
     it becomes. This literal is the criterion; when the probe's wording changes,
     this fails and the change must be made deliberately here too.
     """
-    assert probe.NEEDLE_TEMPLATE == (
-        "Note for the case file: the maintenance access code for {tag} is {code}."
-    )
+    assert probe.NEEDLE_TEMPLATE == ("Note for the case file: the maintenance access code for {tag} is {code}.")
     # ...and the rendered form `_needle` produces, so the .format() call is pinned too.
-    assert _needle("7394") == (
-        "Note for the case file: the maintenance access code for the A-17 bundle is 7394."
-    )
+    assert _needle("7394") == ("Note for the case file: the maintenance access code for the A-17 bundle is 7394.")
 
 
 # --- depth handling ---------------------------------------------------------
+
 
 def test_depths_are_positions_inside_the_context() -> None:
     assert probe.validate_depths((0.1, 0.9)) == (0.1, 0.9)
@@ -107,6 +104,7 @@ def test_the_same_plan_builds_the_same_haystack() -> None:
 
 # --- scoring ----------------------------------------------------------------
 
+
 def test_scoring_is_exact_and_reads_the_last_line() -> None:
     assert probe.score_answer("7394", "7394")
     assert probe.score_answer("The code is 7394.", "7394")
@@ -122,6 +120,7 @@ def test_scoring_is_exact_and_reads_the_last_line() -> None:
 
 
 # --- recording and checking -------------------------------------------------
+
 
 def _results(hits: list[bool]) -> list[Any]:
     return [
@@ -170,10 +169,76 @@ def test_the_aggregate_is_labelled_as_the_trap_it_is() -> None:
     assert "aggregate" in "".join(summary) and "cliff" in "".join(summary)
 
 
+# --- the model name is the baseline row's identity -------------------------
+
+
+def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, models: Any = None, post: Any = None) -> None:
+    """Replace the module-local client, so no test patches the shared module."""
+    import types
+
+    def _get_models(*_a: Any, **_k: Any) -> Any:
+        if isinstance(models, Exception):
+            raise models
+        return models
+
+    stub = types.SimpleNamespace(
+        LLMClientError=probe._llm.LLMClientError,
+        get_models=_get_models,
+        post_chat=post,
+        extract_text=lambda payload: payload["choices"][0]["message"]["content"],
+    )
+    monkeypatch.setattr(probe, "_llm", stub)
+
+
+def test_a_pinned_model_is_sent_to_the_server_not_only_recorded(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catches the label being decorative: a row filed under a name the server never saw."""
+    seen: list[dict[str, Any]] = []
+
+    def _post(_base: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        seen.append(payload)
+        return {"choices": [{"message": {"content": "7394"}}], "usage": {"prompt_tokens": 5}}
+
+    _stub_llm(monkeypatch, models=[{"id": "served-model"}], post=_post)
+    rc = probe.main(["--model", "llama32-3b", "--kv-type", "q8_0", "--ctx-tokens", "128", "--depths", "0.5"])
+    assert rc == 0
+    assert seen and all(payload["model"] == "llama32-3b" for payload in seen)
+    assert "(UNPINNED)" not in capsys.readouterr().out
+
+
+def test_without_a_model_the_served_list_names_the_row_and_it_is_marked_unpinned(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catches a discovered model being recorded as if the caller had pinned it."""
+
+    def _post(_base: str, _payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": "7394"}}], "usage": {"prompt_tokens": 5}}
+
+    _stub_llm(monkeypatch, models=[{"id": "served-model"}], post=_post)
+    rc = probe.main(["--kv-type", "q8_0", "--ctx-tokens", "128", "--depths", "0.5", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert '"model": "served-model"' in out
+    assert '"model_pinned": false' in out
+
+
+def test_an_unnameable_model_is_a_cannot_run_not_an_unlabelled_row(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catches the old default: a baseline row whose model is the string "unlabelled"."""
+    _stub_llm(monkeypatch, models=probe._llm.LLMClientError("no models"))
+    rc = probe.main(["--kv-type", "q8_0", "--ctx-tokens", "128", "--depths", "0.5"])
+    assert rc == 3
+    assert "cannot name the model" in capsys.readouterr().err
+
+
 # --- the command line -------------------------------------------------------
 
-def test_dry_run_builds_a_plan_and_contacts_nothing(monkeypatch: pytest.MonkeyPatch,
-                                                   capsys: pytest.CaptureFixture[str]) -> None:
+
+def test_dry_run_builds_a_plan_and_contacts_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     def _explode(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("--dry-run must not contact a server")
 
@@ -190,8 +255,9 @@ def test_measuring_without_a_kv_type_is_refused(capsys: pytest.CaptureFixture[st
     assert "--kv-type" in capsys.readouterr().err
 
 
-def test_a_server_that_does_not_answer_is_exit_3(monkeypatch: pytest.MonkeyPatch,
-                                                 capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_server_that_does_not_answer_is_exit_3(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     def _refuse(*_a: Any, **_k: Any) -> Any:
         raise urllib.error.URLError("connection refused")
 
@@ -201,8 +267,7 @@ def test_a_server_that_does_not_answer_is_exit_3(monkeypatch: pytest.MonkeyPatch
     assert "did not answer" in capsys.readouterr().err
 
 
-def test_a_check_that_regresses_is_exit_4(monkeypatch: pytest.MonkeyPatch,
-                                          tmp_path: Path) -> None:
+def test_a_check_that_regresses_is_exit_4(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     path = tmp_path / "baseline.tsv"
     plan = _plan()
     probe.record_baseline(path, plan, _results([True, True, True]))
@@ -211,8 +276,16 @@ def test_a_check_that_regresses_is_exit_4(monkeypatch: pytest.MonkeyPatch,
         return "no idea", 99
 
     monkeypatch.setattr(probe, "ask_server", _miss)
-    rc = probe.main([
-        "--model", plan.model, "--kv-type", plan.kv_type,
-        "--ctx-tokens", str(plan.ctx_tokens), "--check", str(path),
-    ])
+    rc = probe.main(
+        [
+            "--model",
+            plan.model,
+            "--kv-type",
+            plan.kv_type,
+            "--ctx-tokens",
+            str(plan.ctx_tokens),
+            "--check",
+            str(path),
+        ]
+    )
     assert rc == 4
