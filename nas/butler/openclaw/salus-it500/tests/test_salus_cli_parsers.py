@@ -2,7 +2,13 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-MODULE_PATH = Path("/home/wayne/.openclaw/skills/salus-it500/salus.py")
+# The file this repo ships, resolved from the test's own location.  It used to be
+# the absolute path of the INSTALLED skill (~/.openclaw/skills/salus-it500), which
+# is a different file: the suite then passed or failed on whatever the host happened
+# to have installed, and could not run at all on a machine without that skill.
+MODULE_PATH = Path(__file__).resolve().parent.parent / "salus.py"
+if not MODULE_PATH.is_file():
+    raise RuntimeError(f"mirrored salus.py missing from the repo: {MODULE_PATH}")
 
 
 def _load_module():
