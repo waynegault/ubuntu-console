@@ -169,7 +169,12 @@ stub_uname() {
     # Criterion: each box's lane table is its own.  The arm64 box serves two CUDA
     # lanes (Qwen3-Coder-30B chat + embeddinggemma embeddings); it must not claim this
     # box's five Xe/CUDA/CPU units, whose model files do not exist there.
-    run bash -c 'HOSTTYPE=aarch64; source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
+    # TAC_HOST_CPU_OVERRIDE pins the CPU identity: the arm64 profile declares one, and
+    # that key outranks the arch/CUDA/render facts, so without it this case passes only
+    # on a box whose CPU string matches the profile (measured 2026-11-11: the CI runner
+    # read a generic CPU and detection reported "no profile matches").
+    run env TAC_HOST_CPU_OVERRIDE="Cortex-X925" \
+        bash -c 'HOSTTYPE=aarch64; source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
         _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
     [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]

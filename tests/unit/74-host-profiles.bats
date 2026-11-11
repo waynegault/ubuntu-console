@@ -24,7 +24,12 @@ setup() {
 
 # selected_with FACTS — resolve a profile with the machine's facts stated.
 selected_with() {
+    # The CPU identity is pinned too.  The arm64 profile declares TAC_HOST_PROFILE_CPU,
+    # and that key outranks the arch/CUDA/render facts — so on a runner whose CPU string
+    # is not the box's (measured 2026-11-11: CI read a generic CPU and both arm64 cases
+    # reported "no profile matches"), the case tested the runner, not the rule.
     env TAC_HOST_FACTS_OVERRIDE="$1" TAC_HOST_PROFILE_FILE="$BATS_TEST_TMPDIR/no-override" \
+        TAC_HOST_CPU_OVERRIDE="Cortex-X925" \
         bash -c 'source "$1"; tac_host_profile_selected' _ "$LIB"
 }
 
@@ -41,7 +46,11 @@ selected_with() {
 @test "the shipped arm64 profile matches with or without a render node" {
     # Catches: requiring a render node on a box whose SoC may not expose one,
     # which would leave the ASUS box with no profile at all.
-    run env TAC_HOST_PROFILE_DIR="$PROFILE_DIR" bash -c '
+    # The profile declares a CPU identity, and that key outranks the arch/CUDA/render
+    # facts, so the CPU is pinned: otherwise this case passes only on a box whose CPU
+    # string contains the profile's pattern, and reports "no profile matches" elsewhere.
+    run env TAC_HOST_PROFILE_DIR="$PROFILE_DIR" TAC_HOST_CPU_OVERRIDE="Cortex-X925" \
+        bash -c '
         source "$1"
         tac_host_profile_match asus-n1n-rtx-spark aarch64 1 0 &&
         tac_host_profile_match asus-n1n-rtx-spark aarch64 1 1 &&

@@ -258,7 +258,13 @@ nfield() { sed -n "s/.*\"$2\":\([-0-9]*\).*/\1/p" <<<"$1"; }
     # newline, and all the tests above stayed green. Parse the document, do not pattern it.
     run env GPU_CONTEXT_PROBE="$STUB/ctx-shadow" GPU_LDCONFIG="$STUB/ldc-native" "$CHECK" --json
     [ "$status" -eq 1 ]
-    python3 - "$output" <<'PY'
+    # Resolve the interpreter rather than naming one: the CI runner has `python`
+    # but no bare `python3` (measured 2026-11-11, this case exited 127 there while
+    # it passed on the box), and a hardcoded .venv path does not exist in a runner
+    # checkout.
+    PY=$(command -v python3 || command -v python)
+    [ -n "$PY" ]
+    "$PY" - "$output" <<'PY'
 import json, sys
 obj = json.loads(sys.argv[1])
 for key in ("state", "diagnosis", "verdict", "order", "reason", "libcuda_first",
