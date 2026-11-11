@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 123
+# Module Version: 124
+#   v124 (2026-11-11): the v123 refusal's `case` gains its `*)` arm and its message is
+#     built in parts, so §18.3's 4.2.4 (case without a default) and 8.1.8 (a non-comment
+#     line over 120 columns) do not rise.  Behaviour is unchanged.
 #   v123 (2026-11-11): `model use` REFUSES a quantised V cache with flash attention off,
 #     before the card is taken.  Measured on this build (CUDA and CPU): llama.cpp exits at
 #     context creation with "quantized V cache requires flash_attn to be enabled" — it does
@@ -1954,15 +1957,17 @@ function __model_use_fit_preflight() {
     [[ -n "$_fa_setting" ]] || _fa_setting="true"
     case "${_fa_setting,,}" in
         false|0|no|off) _fa_off=1 ;;
+        *) ;;  # on/auto/anything else: flash attention is not explicitly off
     esac
     case "${_kv_v,,}" in
         f16|bf16|f32) ;;
         *)
             if (( _fa_off ))
             then
-                __tac_info "Error" \
-                    "[--cache-type-v ${_kv_v} cannot load with flash attention off: llama.cpp refuses a quantised V cache at context creation (measured 2026-11-11). Use f16 for V, or enable flash attention.]" \
-                    "$C_Error"
+                local _fa_msg="[--cache-type-v ${_kv_v} cannot load with flash attention off:"
+                _fa_msg+=" llama.cpp refuses a quantised V cache at context creation"
+                _fa_msg+=" (measured 2026-11-11). Use f16 for V, or enable flash attention.]"
+                __tac_info "Error" "$_fa_msg" "$C_Error"
                 return 1
             fi
             ;;
