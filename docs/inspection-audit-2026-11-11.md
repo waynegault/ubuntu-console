@@ -409,6 +409,81 @@ Same frozen export. Counts are over the shipped corpus (148 shell files) unless 
 in a second file → 1; (b) 13.4.3's duplicate detector on a fixture with two version lines → 2 (the check that
 found the real defect); (c) 13.5.5's marker check on a file without it → the MISSING branch fires.
 
+## §15 AI Agent Access, audited at `8343b7cc`
+
+Frozen at `8343b7cc` (`test(guard): pin one Module Version line per canonical module`) and exported with
+`git archive`; the worktree carried three unrelated in-flight shell edits, which the export excludes. The
+`~/.local/bin` and `~/.openclaw` readings are **live-box state**, not commit facts, and are marked as such.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 15.1 | HOLDS | `bash -c 'source env.sh && echo $__TAC_ENV_LOADED'` | Prints `1`, no stderr. |
+| 15.2 | HOLDS | the item's `type oc … __test_port` chain | Prints `OK` — all eight functions defined. |
+| 15.3 | HOLDS | `${__TAC_INITIALIZED:-unset}` | Prints `unset`; 13-init does not run in library mode. |
+| 15.4 | HOLDS | source twice | Prints `OK`; :36 returns early on the second source. |
+| 15.5 | HOLDS | `ls -la bin/tac-exec ~/.local/bin/tac-exec` | `-rwxr-xr-x` in-repo; `~/.local/bin/tac-exec` is a symlink to it (live). |
+| 15.6 | HOLDS | `bin/tac-exec oc \| head -3` | Prints the `oc — OpenClaw Command Reference` header. |
+| 15.7 | HOLDS | `bin/tac-exec model list \| head -2` | Prints the registry table header, multi-word args preserved. |
+| 15.8 | HOLDS | `bin/tac-exec` with no args | Prints `Usage: tac-exec <command> [args...]`; **rc=1**. |
+| 15.9 | FAILS | the item's six-wrapper loop (live) | `so`/`xo`/`serve` delegate OK, but `oc-backup`, `oc-model-list` and `oc-model-stop` **do not exist** in `~/.local/bin` — 3 of 6 absent. |
+| 15.10 | FAILS | the item's `≤6 lines` loop (live) | One WARN: `~/.local/bin/oc-model-status` has **7 lines**, over the threshold the item sets. |
+| 15.11 | HOLDS | `grep -c 'tac-exec' ~/.openclaw/workspace/TOOLS.md` | 5 (the item's floor is ≥5). Live. |
+| 15.12 | HOLDS | source env.sh then test `$PROMPT_COMMAND` | Empty → `OK`; no interactive side-effect leaks. |
+| 15.13 | HOLDS | `/usr/bin/time -f real=%e` around a source | **real=0.11 s**, well under the 1.0 s bound. |
+| 15.14 | HOLDS | `[[ -d mcp-tools ]]` | Absent → `OK: removed`. |
+| 15.15 | HOLDS | `env \| grep TAC_LIBRARY_MODE` | `TAC_LIBRARY_MODE=1`. |
+| 15.16 | HOLDS | `env -i … PATH=/usr/local/bin:/usr/bin:/bin … tac-exec oc` | Prints the `oc` help header with no `~/.local/bin` on PATH. |
+
+**Section controls — §15:** (a) 15.14's directory test on a fixture that *does* contain `mcp-tools/` → `FAIL:
+exists`; (b) 15.15's `env | grep` on a shell without the variable → 0 lines; (c) 15.10's line-count loop flags a
+7-line fixture, which is what makes its single WARN a measurement.
+
+## §16 Final Validation, audited at `8343b7cc`
+
+Same frozen export; 16.5 is live-box state.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 16.1 | HOLDS | `bash -n tactical-console.bashrc` + every `scripts/[0-9][0-9]-*.sh` and `bin/*.sh` | rc=0 across all of them. |
+| 16.2 | FAILS | `shellcheck -s bash -x --source-path=$PWD <loader + 16 modules>` | **38 findings** per-file, so "zero" is not met; the canonical module-graph pass (29 members) is clean, and §4.3.3 says a lone module's SC2034/SC2154 are its interface, not findings. |
+| 16.3 | HOLDS | `bash -ic 'source tactical-console.bashrc; exit'` | rc=0 (the `tcgetpgrp`/job-control lines are interactive noise, not errors). |
+| 16.4 | HOLDS | `model list`, `oc` from a library shell | `model list` prints the registry header (rc=0) and `oc` prints its reference. `m`/`h` are aliases (`04-aliases.sh:68,72`) but alias expansion is off in a non-interactive shell, so the item's own two alias examples cannot run there. |
+| 16.5 | HOLDS | `systemctl --user status llama-watchdog.timer` | `active (waiting)`, last trigger 35 s before the read. Live. |
+| 16.6 | HOLDS | `env -i HOME=$HOME bash --noprofile --norc -c 'source tactical-console.bashrc'` | rc=0, no stderr. |
+| 16.7 | NOT-RUN | `bats tests/tactical-console.bats` | `grep -c '^@test'` = **397**; the suite was started on this box and reached **8 cases with 0 failures** in ~15 minutes before it was stopped — the leading static-analysis cases each re-run shellcheck over the corpus and take minutes under current load. A full run would settle it. |
+| 16.8 | HOLDS | `ls scripts/[0-9][0-9]-*.sh \| wc -l` | **16** = 15 profile modules + `18-lint.sh`, with `_module-list.sh` naming 16 profile modules. |
+| 16.9 | HOLDS | this file | The audit log is this document: one row per item with disposition, command and measurement, plus the FAILS list the parent has been triaging. |
+
+**Section controls — §16:** (a) 16.1's `bash -n` on a broken fixture → rc=2; (b) 16.2's shellcheck on a fixture
+with an unquoted variable → 1 finding; (c) 16.8's glob on a fixture directory holding two numbered files → 2, so the
+count is derived rather than assumed.
+
+## §17 New Insights & Standards, audited at `8343b7cc`
+
+The items are dated field notes; each row measures whether the note still holds at this commit.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 17.1 | FAILS | the item's `grep -rnE '# *noqa\|# *type: *ignore\|shellcheck disable=SC'` | **23 `shellcheck disable=` lines** against the doc's 20 at 2026-10-25 (+3, unattributed: the 2026-10-25 list is not in the repo), and 3 real `type: ignore[...]`/`noqa:` directives in tests (down from 8) plus 2 prose mentions. Every code is in a documented class (SC2154 8, SC1090 8, SC2034 4, SC2329 3, SC2317 3, SC2016 2, SC2221 1, SC2086 1, SC1091 1). The doc's "7 E402 path bootstraps" description is stale — none of the 3 is E402. |
+| 17.2 | HOLDS | `grep -l '_module-list\.sh' env.sh tactical-console.bashrc` | 2 of 2; `tools/docs-sync-check.sh` derives the module count from the list (chunk 5, 16 OK). |
+| 17.3 | HOLDS | the item's two negations | No `_tac_expected_modules=(` array in the loader and no `[0-9][0-9]-*.sh` glob in env.sh. |
+| 17.4 | HOLDS | `grep -rnE '^[[:space:]]*exec [^0-9{]' scripts/*.sh tactical-console.bashrc` | 7 hits, **none in a function body**: 3 inside heredocs that generate pwsh shims (`14-wsl-extras.sh:52,62,76`) and 4 top-level in standalone entry points (`autotune-model.sh:416`, `retune-band-chunk.sh:64`, `run-autotune-batch.sh:99`, `spec-decode-bench.sh:57`). Matches the doc's 2026-10-25 reading. |
+| 17.5 | HOLDS | `grep -rn "grep -q 'ok'" scripts/ bin/` | 0. |
+| 17.6 | HOLDS | `health()` in `bin/llama-watchdog.sh` | `503) return 2` (:381), and 2 is treated as "not ready, don't touch" (:374, :714) — a loading lane is neither struck nor restarted. |
+| 17.7 | HOLDS | `grep -rn '=~ \^/' scripts/` | 0 unanchored-alternation regexes. |
+| 17.8 | HOLDS | `grep -rn 'grep -c .*\| echo' scripts/ bin/ tools/` | 0. |
+| 17.9 | HOLDS | registry header vs consumers | `LLM_REGISTRY_HEADER` (`01-constants.sh:396`) puts `mmap_mode` at column **15** and `tps` at **17**, exactly the numbers the item cites. |
+| 17.10 | HOLDS | `scripts/kgraph/server.py` | `validate_graph_payload` at :413 runs **before** `save_to_graph_db` at :416; `MAX_PAYLOAD_SIZE` imported :25; an explicit Origin allowlist (:43) rather than wildcard CORS. |
+| 17.11 | HOLDS | `grep -n 'escape' scripts/kgraph/{pr_dashboard,call_flow,html}.py` | `from html import escape` and every interpolated value wrapped (`pr_dashboard.py:266-269` …). |
+| 17.12 | HOLDS | `tests/conftest.py` | `_is_stale_lock` (:85) checks `os.kill(pid, 0)` **and** compares the process start time (:53, :105), so a recycled PID is not a live holder; the wait is bounded by the suite's own timeout (:36-38). |
+| 17.13 | HOLDS | `__cl_step` doc block, `08-maintenance.sh:2094-2099` | States it "reads yes_mode and bumps deep_count through the caller's dynamic scope" — exactly the note the item asks for. |
+| 17.14 | HOLDS | `ls scripts/_*.sh` | `_module-list.sh` and `_startup-env.sh`, both underscore-prefixed. |
+| 17.15 | HOLDS | `grep -n 'consecutive' scripts/autotune-model.sh` | :510 states the two-consecutive-failure rule and :708 names the consecutive-stall threshold; the counter resets on a healthy launch (:1954). |
+| 17.16 | FAILS | `kgraph update --repo .` then `kgraph wiring --repo .` | Update completes (6564 nodes, 15790 edges), but wiring reports **orphans 3, weak_wiring 3, unused_facades 1, cross_file_call_gaps 2510** where the item expects 0 of each (broken_imports is 0 ✓). Run against the live tree, which carried three unrelated shell edits. |
+
+**Section controls — §17:** (a) 17.4's probe on a fixture with `exec` inside a function → 1; (b) 17.5's on a
+fixture with `grep -q 'ok'` → 1; (c) 17.8's on a fixture with `grep -c x || echo 0` → 1.
+
 ## Summary
 
 | Section | Items | HOLDS | FAILS | NOT-RUN | PROCEDURE |
@@ -427,4 +502,19 @@ found the real defect); (c) 13.5.5's marker check on a file without it → the M
 | §11 Testing & CI | 14 | 11 | 3 | 0 | 0 |
 | §12 llama.cpp Integration | 23 | 20 | 3 | 0 | 0 |
 | §13 Cross-Script Consistency | 22 | 19 | 3 | 0 | 0 |
-| **Total** | **211** | **136** | **63** | **8** | **4** |
+| §15 AI Agent Access | 16 | 14 | 2 | 0 | 0 |
+| §16 Final Validation | 9 | 7 | 1 | 1 | 0 |
+| §17 New Insights & Standards | 16 | 14 | 2 | 0 | 0 |
+| **Total** | **252** | **171** | **68** | **9** | **4** |
+
+**Item coverage.** The document's §1–§17 as numbered total **252** items
+(13+14+15+14+24+14+12+7+15+15+9+14+23+22+16+9+16), and every one of them has a row above. Nothing in the numbered
+ranges is skipped. Three structural notes about the document itself: **§6 has no 6.6** (it runs 6.5 → 6.7), so §6 is
+12 items; **§13's subsections are out of order** (13.5 is written before 13.4) but complete at 22; **§14 does not
+exist** — the document jumps from §13 to §15; and **§18** is the document's own field notes, not a checklist, so it
+carries no items.
+
+**Closing note.** Audited commit `8343b7cc`; 252 items — 171 HOLDS, 68 FAILS, 9 NOT-RUN, 4 PROCEDURE. Three to fix
+first: **12.4.5** (a lane stop/switch errors in-flight turns instead of draining them, `llama-watchdog.sh:153`),
+**12.4.1** (no existence/readability check on the resolved GGUF before launch), **13.2.2** (exit code 2 means
+*usage* in most tools and *refused* in `bin/fleet-model.sh`). 16.7 is the one item still owed a full run.
