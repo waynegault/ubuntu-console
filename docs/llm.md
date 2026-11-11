@@ -109,7 +109,7 @@ measure, not a value to adopt.
 | Step | Lever | What it decides | In this repo |
 |---|---|---|---|
 | 1 | model, quant, ctx | whether it fits the GPU at the depth you serve | `model scan` + `config/quant-guide.conf` rate the quant; `check-ctx-profile.sh` compares the registry ctx (col 8) with the measured prompt profile (col 37) |
-| 2 | build, baseline depth | a rebuild can move speed as much as a flag | **not recorded** — see "Known gaps" below. The autotune certifies at a FILLED cache, so its number is taken at a realistic depth |
+| 2 | build, baseline depth | a rebuild can move speed as much as a flag | registry cols 46/47 (`llama_build`, `llama_build_prev`) record what the measuring binary reports, asked of the binary itself (`--version`) once per autotune run; an unreadable version leaves the column empty rather than guessed. The autotune certifies at a FILLED cache, so its number is taken at a realistic depth |
 | 3 | `-ngl` | whether the model runs on the GPU at all | registry ngl, `999` = full offload; the partial-offload ladder is deliberately skipped on shared-memory hosts (measured: it drove the guest into the OOM killer) |
 | 4 | `--n-cpu-moe` / `--cpu-moe` (MoE), `--n-cpu-ffn` / `--override-tensor` (dense) | keeps attention and KV on the GPU while weights spill | `--cpu-moe` is chosen automatically when a MoE's weights exceed the card (see "Placement, before the card is taken"); a per-layer `--n-cpu-moe N` and the dense `--n-cpu-ffn` lever are **not wired** — see "Known gaps" |
 | 5 | `-c` with `--fit` | the KV cache you actually allocate | `--fit on --fit-target` on serve; autotune certifies with `--fit off`; `/props` is read back and a mismatch is reported |
@@ -218,10 +218,6 @@ what changed that model's fate.
 
 ### Known gaps (recorded, not silently assumed)
 
-- **The certified TPS does not name the llama.cpp build it came from.** A rebuild can move
-  speed as much as a flag, so a number from before a rebuild is not comparable with one
-  after it. Fixing this means a registry/bench column for the build identity (and the
-  consumers that read the row), not a line in a log.
 - **MoE placement is one lever, not a search.** `--cpu-moe` (all experts to host RAM) is
   chosen automatically when a MoE's weights exceed the card; `--n-cpu-moe N` (keep only the
   first N layers' experts on the CPU, which the review recommends tuning downward until
