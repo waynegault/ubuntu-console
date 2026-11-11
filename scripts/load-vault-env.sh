@@ -3,7 +3,9 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-11-11): the SC2317 disable on the sourced/executed return now carries
+#       its rationale (inspection 1.12): one branch is unreachable per context by design.
 #   v9 (2026-10-11): the Windows env bridge is FORKED, so no shell blocks on
 #   pwsh.exe.  The shell pays the fork (~0.05-0.19 s) instead of the refresh
 #   (1.7-2.1 s idle; 3.5-9.8 s at load 22-25) and uses the bridge it already has.
@@ -199,6 +201,9 @@ then
     unset _lve_f _lve_candidate_files _lve_existing_files _lve_bridge_script _lve_bridge_file
     unset _lve_default_names _lve_names _lve_tmp_file
     unset _lve_bridge_ttl _lve_need_refresh _lve_age
+    # SC2317: this file is both sourced and executed.  `return` is the sourced path
+    # and `exit` the executed one, so one branch is unreachable in each context by
+    # design; shellcheck analyses a single context and flags the other.
     # shellcheck disable=SC2317
     return 0 2>/dev/null || exit 0
 fi

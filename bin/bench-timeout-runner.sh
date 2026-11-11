@@ -45,7 +45,9 @@
 # (lock file cleanup, model stop) from being bypassed.
 
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-11): the SC1090 disable on the run-time profile source now carries its
+#       rationale (inspection 1.12): the path is an argument, so shellcheck cannot follow it.
 #   v3 (2026-10-20): a missing <profile_path>/<command...> is a usage error (exit 2), and the
 #   profile is dropped with a plain `shift` — the old `shift 2` silently dropped the first
 #   command token whenever two or more args were given.
@@ -117,6 +119,8 @@ trap __btr_cleanup EXIT INT TERM
 # --- Source profile if provided -----------------------------------------------
 if [[ -n "$profile_path" && "$profile_path" != "none" && -f "$profile_path" ]]; then
     __btr_log "INFO" "sourcing profile: $profile_path"
+    # SC1090: the profile is a run-time argument, so shellcheck cannot follow it;
+    # the -f test above and the failure branch below are the guards.
     # shellcheck disable=SC1090
     if ! source "$profile_path" 2>/dev/null; then
         __btr_log "WARNING" "profile source failed: $profile_path (continuing without it)"
