@@ -317,6 +317,11 @@ setup() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
     grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    # Card 55a6fe89 defect 1: the stop is SIGKILL, so the unit lands `failed`; a stop we
+    # made must not leave it there.  Scoped to the stopped unit — the Xe lane was not
+    # stopped, so it must not be reset.
+    grep -q "reset-failed llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    ! grep -q "reset-failed llama-xe" "$SYSTEMCTL_MOCK_LOG"
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
@@ -446,6 +451,40 @@ setup() {
     grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
     grep -qv "stop llama-xe-minicpm5-1b-chat.service" "$SYSTEMCTL_MOCK_LOG"
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+}
+
+@test "integration: a deliberate suspend clears the failed latch it created" {
+    # Card 55a6fe89 defect 1.  KillSignal=SIGKILL means the stop completes as
+    # Result=signal and systemd keeps ActiveState=failed until something resets it.
+    # Measured 2026-11-04: after the 00:46:03Z suspend the lane sat failed and was the
+    # box's only failed unit, so a red failed-unit gate outlived the deliberate act.
+    touch "$WATCHDOG_MOCK_STATE/healthy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    grep -q "reset-failed llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ "$output" == *"cleared the failed latch on llama-cuda-llama32-3b-chat"* ]]
+    [[ "$output" == *"a deliberate stop is not a fault"* ]]
+}
+
+@test "integration: a suspended lane that was already down gets NO latch reset" {
+    # The control: the reset belongs to the ACT.  A tick that finds the lane already
+    # down performed no stop, so it set no latch — and a reset there would erase the
+    # evidence of a death that happened before the suspend.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"held by live pid"* ]]
+    ! grep -q "reset-failed" "$SYSTEMCTL_MOCK_LOG"
 }
 
 @test "integration: a suspend stop records how many in-flight turns it cuts" {

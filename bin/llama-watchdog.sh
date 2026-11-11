@@ -148,7 +148,13 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 31
+# Module Version: 32
+#   v32 (2026-11-11, card 55a6fe89 defect 1): a deliberate stop no longer leaves the unit
+#     latched `failed`.  KillSignal=SIGKILL + TimeoutStopSec=5 completes as Result=signal, and
+#     systemd keeps ActiveState=failed until something resets it — measured 2026-11-04, the
+#     lane sat failed from 00:46 as the box's only failed unit.  clear_stop_latch() runs ONLY
+#     after a stop this watchdog made (suspend, GPU-busy); an unexpected death keeps its
+#     failed state as evidence.
 #   v31 (2026-11-10, card 55a6fe89 LLAMA-SUSPEND-INFLIGHT-001): a deliberate stop SIGKILLs a
 #     server that cannot drain, so every turn queued on it dies mid-request — and nothing in
 #     the record said so. Measured 2026-11-04T00:46:03Z: one suspend, three live turns cut
@@ -435,6 +441,24 @@ stop_cost() {
     else
         log "stop cost: 0 in-flight requests on :${CUDA_PORT} — no live turn is cut by this stop"
     fi
+}
+
+# clear_stop_latch <unit> — a DELIBERATE stop is not a fault, so do not leave the unit
+# latched `failed` afterwards.  The lane's drop-in stops with KillSignal=SIGKILL and
+# TimeoutStopSec=5, so the stop completes as Result=signal / ExecMainStatus=9 and
+# systemd keeps ActiveState=failed until something resets it.  Measured 2026-11-04
+# 00:46:03Z (card 55a6fe89): the lane sat failed from 00:46 and was the box's only
+# failed unit, so a red failed-unit gate outlived the deliberate act that caused it.
+# The reset is issued only where WE stopped the lane, never on an unexpected death —
+# there the failed state is the evidence, and recover() clears it at restart time.
+clear_stop_latch() {
+    local unit="$1" _out
+    if ! _out=$(systemctl --user reset-failed "$unit.service" 2>&1); then
+        log "WARNING: could not clear the failed latch on $unit after a deliberate stop:" \
+            "${_out:-no output} — the next failed-unit check will report a stop we made"
+        return 0
+    fi
+    log "cleared the failed latch on $unit — a deliberate stop is not a fault"
 }
 
 # Window invariant (2026-09-14).  The window a request actually gets must equal
@@ -1036,6 +1060,8 @@ supervise_cuda_lane() {
             if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
             then
                 log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
+            else
+                clear_stop_latch "$CUDA_UNIT"
             fi
         else
             log "CUDA lane suspended — held by live pid $(_tac_suspend_pid "$CUDA_SUSPEND_FILE");" \
@@ -1110,6 +1136,8 @@ supervise_cuda_lane() {
                 if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
                 then
                     log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
+                else
+                    clear_stop_latch "$CUDA_UNIT"
                 fi
             fi
             # Mark the stop as OURS, renewed on every busy tick.  Without this the next
