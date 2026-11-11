@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
-#   v28 (2026-11-06): the nvidia-smi timeout wrappers are split (18.3 8.1.8).
+# Module Version: 30
+#   v30 (2026-11-11): wsl_gpu_health_suspect routes through _tac_dxg_health_check to detect
+#       critical kernel dxgkrnl failures (-12, -75, wait timeouts) without missing scripts.
+#   v29 (2026-11-06): the nvidia-smi timeout wrappers are split (18.3 8.1.8).
 #     Behaviour unchanged.
 #   v26 (2026-11-05): the no-argument default applies the two rules the wrapper and the
 #   resume loop already apply — "slow" is terminal, and the autotune TOMBSTONE retires a
@@ -263,24 +265,29 @@ drain_vram() {
 }
 
 #------------------------------------------------------------------------------
-# wsl_gpu_health_suspect — 0 when the dxgkrnl EOVERFLOW count is HIGH.
+# wsl_gpu_health_suspect — 0 when the dxgkrnl reports critical errors (-75, -12, or wait timeouts).
 #
-# A WARNING signal, not a verdict (was a hard gate until 2026-09-15).  The
-# investigator repo's check_wsl_gpu.py counts the dmesg reserve_gpu_va EOVERFLOW
-# signature, and its own module says to treat a high count as "suspect,
-# corroborate with tps" — while this batch used it as a hard halt.  The measured
-# data does not support a hard halt: the count tracks host state, not our own
-# activity (22 at 18 cycles one boot; 4 at 20 cycles the next).  The batch's
-# corroboration is the tps it already measures: a genuinely degraded adapter shows
-# up as rows that FAIL, which is what MAX_CONSECUTIVE_FAILURES halts on.
-# A real degradation is still fixed only by a WSL restart.
+# A WARNING signal, not a verdict.  Routes through _tac_dxg_health_check to read kernel
+# ring buffer for genuine driver/residency failure signatures.
 #------------------------------------------------------------------------------
 wsl_gpu_health_suspect() {
+    # swallow-ok: testing whether helper is declared in execution environment
+    if declare -f _tac_dxg_health_check >/dev/null 2>&1; then
+        # swallow-ok: health check returns 1 when suspect/errors found, matching function contract
+        ! _tac_dxg_health_check >/dev/null 2>&1
+        return $?
+    fi
     local script="$HOME/investigator/scripts/check_wsl_gpu.py" rc
-    [[ -f "$script" ]] || return 1
-    sh "$script" >/dev/null 2>&1
-    rc=$?
-    (( rc == 1 ))
+    if [[ -f "$script" ]]; then
+        # swallow-ok: external check script exit code is the condition
+        sh "$script" >/dev/null 2>&1
+        rc=$?
+        return $(( rc == 1 ? 0 : 1 ))
+    fi
+    local errs
+    # swallow-ok: dmesg read failure defaults to healthy; an unreadable log must not halt batch
+    errs=$(dmesg 2>/dev/null | grep -iE 'dxg.*(failed: -(12|75)|wait_for_completion.*timeout)' | tail -1)
+    [[ -n "$errs" ]]
 }
 
 # Initial drain — skipped when another agent owns the card: there is nothing of

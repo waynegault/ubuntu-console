@@ -16,7 +16,10 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-11-11): _tac_dxg_health_check — inspect dmesg ring buffer for critical WSL2
+#       dxgkrnl bridge errors (-12 ENOMEM, -75 EOVERFLOW, wait_for_completion timeouts)
+#       while ignoring harmless -22 EINVAL private query telemetry.
 #   v20 (2026-11-11): _tac_unsupervised_cuda_pids — the resident CUDA llama-servers that
 #       no systemd unit owns (a `model use` nohup launch, or a hand-started server).  The
 #       clean-room uses it to clear the card before autotune instead of refusing on them.
@@ -874,6 +877,25 @@ _tac_heavy_job_busy() {
     # swallow-ok: an unreadable status reads FREE; failing closed would strand a dead lane
     out="$("$hj" --status 2>/dev/null)" || out=""  # swallow-ok: same site, the reason above
     _tac_heavy_job_busy_from "$out"
+}
+
+# _tac_dxg_health_check — inspect dmesg for critical WSL2 dxgkrnl bridge failures.
+#
+# Flags critical errors (-12 ENOMEM, -75 EOVERFLOW, wait_for_completion timeouts).
+# Deliberately ignores -22 (EINVAL), which is common and benign telemetry queries rejected by WDDM.
+#
+# @returns 0 when healthy, 1 when critical kernel GPU errors are present (and prints reason on stdout).
+_tac_dxg_health_check() {
+    local dmesg_bin="${TAC_DMESG_BIN:-dmesg}"
+    command -v "$dmesg_bin" >/dev/null 2>&1 || return 0
+    local errs pat='dxg.*(failed: -(12|75)|wait_for_completion.*timeout)'
+    # swallow-ok: restricted dmesg read permissions read as clean rather than failing the check
+    errs=$("$dmesg_bin" 2>/dev/null | grep -iE "$pat" | tail -5) || errs=""
+    if [[ -n "$errs" ]]; then
+        printf '%s\n' "$errs"
+        return 1
+    fi
+    return 0
 }
 
 # end of file

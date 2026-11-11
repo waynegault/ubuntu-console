@@ -110,7 +110,10 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 27
+#   v27 (2026-11-11): render_shutdown_step polls for host vmmemWSL.exe termination so WDDM
+#       memory and GPU VA mappings unwind before reboot; resolve_writable_task_name falls
+#       back to user-scoped task name if default tac-wsl-restart is locked by Admin.
 #   v26 (2026-10-30): carried in by the merge with origin/main — the distro and the
 #   clone root become per-box seams (TAC_WSL_RESTART_DISTRO, then $WSL_DISTRO_NAME;
 #   TAC_WSL_RESTART_FOLDER, then $HOME).  The bare literals named this box's distro and a
@@ -694,6 +697,27 @@ render_quiesce_step() {
         ''
 }
 
+# The wrapper's SHUTDOWN step (2), printed by its own function so render_wrapper stays
+# under the §18.3 10.4 hundred-line bound.  Issues wsl.exe --shutdown and waits, bounded,
+# for host-side vmmemWSL.exe to terminate so WDDM residency and GPU VA mappings unwind cleanly.
+render_shutdown_step() {
+    printf '%s\r\n' \
+        'REM 2. Restart the distro. Must run here, never inside the distro.' \
+        'wsl.exe --shutdown >> "%LOG%" 2>&1' \
+        'REM Wait bounded for host-side vmmemWSL to exit so WDDM memory unwinds.' \
+        'set VM_TRIES=0' \
+        ':wait_vmmem_down' \
+        'tasklist /fi "IMAGENAME eq vmmemWSL.exe" 2>nul | findstr /i "vmmemWSL" >nul 2>&1' \
+        'if errorlevel 1 goto vmmem_down' \
+        'set /a VM_TRIES+=1' \
+        'if %VM_TRIES% GEQ 10 goto vmmem_down' \
+        'ping -n 2 127.0.0.1 >nul' \
+        'goto wait_vmmem_down' \
+        ':vmmem_down' \
+        'ping -n 6 127.0.0.1 >nul' \
+        ''
+}
+
 # STEP 3a — the gateway is STARTED again once the VM answers (v17).  Step 1b stops it before
 # the teardown, but stopping is only half the job: `enabled` is not `running`, so a gateway
 # that was ALREADY down before the restart (a failed start, an update window, a hand stop)
@@ -780,7 +804,7 @@ render_chunk_and_fleet_gates() {
             ':gate_clear' \
             'echo [%DATE% %TIME%] chunk gate clear - proceeding >> "%LOG%"')
     fi
-    printf '%s' "$_gate_block"
+    printf '%s\r\n' "$_gate_block"
     if [[ "$_force" != "1" ]]; then
         render_fleet_gate
     fi
@@ -834,11 +858,9 @@ render_wrapper() {
         ''
     # STEP 1b — the gateway is stopped and waited for BEFORE the VM goes down (v16).
     render_quiesce_step
+    # STEP 2 — restart distro and wait for host vmmemWSL.exe teardown (v27).
+    render_shutdown_step
     printf '%s\r\n' \
-        'REM 2. Restart the distro. Must run here, never inside the distro.' \
-        'wsl.exe --shutdown >> "%LOG%" 2>&1' \
-        'ping -n 11 127.0.0.1 >nul' \
-        '' \
         'REM 3. Wait, BOUNDED, for the distro to answer again. Exhaustion is' \
         'REM    logged and the relaunch is still attempted - the client boots the' \
         'REM    distro itself - but it is never a silent fall-through.' \
@@ -1035,6 +1057,25 @@ log_caller() {
     } >> "$ARM_LOG" || _say "WARN: could not write the arm log at $ARM_LOG"
 }
 
+# resolve_writable_task_name — test if default task name is locked by Admin, fallback if so.
+resolve_writable_task_name() {
+    [[ -n "${TAC_WSL_RESTART_TASK_NAME:-}" ]] && return 0
+    [[ "$TASK_NAME" == "tac-wsl-restart" ]] || return 0
+    # swallow-ok: query failure means no task exists, so default name remains writable
+    if task_state >/dev/null 2>&1; then
+        local _del_out
+        # swallow-ok: test delete detects whether DACL permits non-elevated user modification
+        if ! _del_out=$(_win 30 "$SCHTASKS_BIN" /delete /f /tn "$TASK_NAME" 2>&1); then
+            if [[ "$_del_out" =~ "Access is denied" ]]; then
+                _say "WARN: $TASK_NAME was created by Admin and cannot be cleared by user."
+                _say "      Switching to user-scoped task name 'tac-wsl-restart-user'..."
+                TASK_NAME="tac-wsl-restart-user"
+            fi
+        fi
+    fi
+    return 0
+}
+
 # Arm the next restart through the TRACKED tool, and read its registration back.
 arm_restart() {
     local _folder="$1" _delay="$2" _force="${3:-0}" _reason="${4:-}" _st _sd _create_out _arm_desc
@@ -1045,6 +1086,7 @@ arm_restart() {
         return 1
     fi
     warn_if_registered
+    resolve_writable_task_name
     # v15: CLEAR a leftover registration before creating.  At the 03:04 failure a spent one was
     # present; `/create /f` should overwrite it, but a second registration state that /f cannot
     # replace is exactly what an unexplained create failure looks like, and this costs ~1 s.
@@ -1074,6 +1116,10 @@ arm_restart() {
         else
             _say "  schtasks printed nothing: it either timed out at the bound or was refused"
         fi
+        if [[ "$_create_out" =~ "Access is denied" ]]; then
+            _say "  HINT: '$TASK_NAME' requires Admin elevation or unregistering from an admin prompt:"
+            _say "        powershell.exe -Command 'Unregister-ScheduledTask -TaskName \"$TASK_NAME\" -Confirm:\$false'"
+        fi
         return 1
     fi
     confirm_armed "$TASK_NAME fires at $_st on $_sd (Windows local time)" || return 1
@@ -1096,6 +1142,7 @@ schedule_restart() {
         return 1
     fi
     warn_if_registered
+    resolve_writable_task_name
     if [[ "$_recur" == "daily" ]]; then
         if ! write_wrapper "$_folder" scheduled; then
             return 1
@@ -1135,16 +1182,50 @@ schedule_restart() {
 # Remove the registration, and prove it by reading back - the /delete call itself
 # has been measured hanging after doing its work, so its status is not the verdict.
 unschedule() {
-    if ! task_state >/dev/null 2>&1; then
-        _say "nothing to remove: no $TASK_NAME registration"
-        return 0
-    fi
-    _win 90 "$SCHTASKS_BIN" /delete /f /tn "$TASK_NAME" >/dev/null 2>&1
+    local _removed=0 _had_err=0 _del_out
+    # swallow-ok: query failure means no default registration exists to remove
     if task_state >/dev/null 2>&1; then
-        _say "ERROR: the registration is still readable after /delete"
+        # swallow-ok: capture output to detect Admin DACL lock while verifying removal via read-back
+        _del_out=$(_win 90 "$SCHTASKS_BIN" /delete /f /tn "$TASK_NAME" 2>&1) || true
+        # swallow-ok: read-back verifies removal; failure means registration is gone
+        if task_state >/dev/null 2>&1; then
+            if [[ -z "${TAC_WSL_RESTART_TASK_NAME:-}" && \
+                  "$TASK_NAME" == "tac-wsl-restart" && \
+                  "$_del_out" =~ "Access is denied" ]]; then
+                _say "WARN: $TASK_NAME was created by Admin and cannot be cleared by user."
+            else
+                _say "ERROR: the registration is still readable after /delete"
+                _had_err=1
+            fi
+        else
+            _say "removed: no $TASK_NAME registration remains"
+            _removed=1
+        fi
+    fi
+    if [[ -z "${TAC_WSL_RESTART_TASK_NAME:-}" && "$TASK_NAME" == "tac-wsl-restart" ]]; then
+        local _orig_task="$TASK_NAME"
+        TASK_NAME="tac-wsl-restart-user"
+        # swallow-ok: check user-scoped fallback task if present
+        if task_state >/dev/null 2>&1; then
+            # swallow-ok: verify removal via read-back below rather than /delete exit status
+            _win 90 "$SCHTASKS_BIN" /delete /f /tn "$TASK_NAME" >/dev/null 2>&1 || true
+            # swallow-ok: read-back verifies removal of fallback registration
+            if task_state >/dev/null 2>&1; then
+                _say "ERROR: the $TASK_NAME registration is still readable after /delete"
+                _had_err=1
+            else
+                _say "removed: no $TASK_NAME registration remains"
+                _removed=1
+            fi
+        fi
+        TASK_NAME="$_orig_task"
+    fi
+    if (( _had_err )); then
         return 1
     fi
-    _say "removed: no $TASK_NAME registration remains"
+    if (( ! _removed )); then
+        _say "nothing to remove: no $TASK_NAME registration"
+    fi
     return 0
 }
 
@@ -1178,6 +1259,20 @@ show_status() {
             _verdict="$EXIT_STATUS_UNKNOWN"
             ;;
     esac
+    if [[ -z "${TAC_WSL_RESTART_TASK_NAME:-}" && \
+          "$TASK_NAME" == "tac-wsl-restart" && \
+          "$_verdict" -ne "$EXIT_STATUS_ARMED" ]]; then
+        local _orig_task="$TASK_NAME" _user_state _user_rc=0
+        TASK_NAME="tac-wsl-restart-user"
+        _user_state=$(task_state) || _user_rc=$?
+        TASK_NAME="$_orig_task"
+        if [[ "$_user_rc" -eq 0 ]] && \
+           ! printf '%s\n' "$_user_state" | grep -qiE '^Next Run Time:[[:space:]]*(N/A|<None>)?[[:space:]]*$'; then
+            _say "ARMED (tac-wsl-restart-user) - a restart is pending:"
+            _say "$_user_state"
+            _verdict="$EXIT_STATUS_ARMED"
+        fi
+    fi
     if [[ -f "$LOG_UNIX" ]]; then
         _say "--- last 15 lines of $LOG_WIN"
         tail -n 15 "$LOG_UNIX" >&2

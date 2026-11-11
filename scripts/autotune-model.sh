@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 129
+# Module Version: 130
+#   v130 (2026-11-11): _cuda_guard_or_exit checks _tac_dxg_health_check for critical dxgkrnl
+#     failures (-12 ENOMEM, -75 EOVERFLOW, wait timeouts) and enforces cumulative post-boot
+#     VRAM drift ceiling (LLM_AUTOTUNE_MAX_DRIFT_MIB) to prevent tuning on degraded adapter.
 #   v129 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v128 (2026-11-10): the start-ctx derivation is TWO-SIDED (card bf92711c, host half).  The
@@ -499,12 +502,15 @@ KV_QUANTS=${LLM_AUTOTUNE_KV_QUANTS:-"q8_0/q8_0 q4_0/q4_0"}
 _AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
 _CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
 _CUDA_STALL_FILE="${CUDA_STALL_FILE:-/dev/shm/autotune-degrade-stalls-${_AUTOTUNE_BOOT_ID:-unknown}}"
+_VRAM_BOOT_BASELINE_FILE="${TAC_VRAM_BASELINE_FILE:-/dev/shm/autotune-vram-baseline-${_AUTOTUNE_BOOT_ID:-unknown}}"
 export CUDA_CYCLE_FILE
 # Halting budget, same default and same counter file as run-autotune-batch.sh:
 # the batch runner derived 60 from the measured knee (~26 launch/kill cycles at
 # 109K ctx collapsed tps ~16 -> ~3.8, 2026-09-05); the probe is now capped near
 # 54K so each cycle leaks less, and 60 sits below the ~70-100 threshold there.
 CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"
+# Maximum allowed cumulative VRAM baseline drift (MiB) before halting due to VA fragmentation.
+LLM_AUTOTUNE_MAX_DRIFT_MIB="${LLM_AUTOTUNE_MAX_DRIFT_MIB:-1536}"
 # Consecutive launches that stall (health never ready, process still alive, no
 # architecture error) — the dxgkrnl degradation signature — before halting.
 # 0 disables. Two matches the standing bench rule: 2 consecutive failures and
@@ -710,6 +716,33 @@ _cuda_guard_or_exit() {
             _preflight_refuse unclassified 3
         fi
     fi
+    if declare -f _tac_dxg_health_check >/dev/null 2>&1; then
+        local _dxg_err
+        if ! _dxg_err=$(_tac_dxg_health_check); then
+            warn "ERROR: WSL2 dxgkrnl reported critical kernel GPU errors (-12/-75/wait timeout):"
+            while IFS= read -r _l; do warn "  $_l"; done <<< "$_dxg_err"
+            warn "       Restart WSL from Windows ('wsl --shutdown') to clear adapter state."
+            _preflight_refuse unclassified 3
+        fi
+    fi
+    if [[ -f "$_VRAM_BOOT_BASELINE_FILE" ]]; then
+        local _init_free _curr_free _vram_drift
+        # swallow-ok: baseline file read failure skips drift check
+        _init_free=$(cat "$_VRAM_BOOT_BASELINE_FILE" 2>/dev/null || echo "")
+        if [[ "$_init_free" =~ ^[0-9]+$ ]] && declare -f _tac_gpu_free_mib >/dev/null 2>&1; then
+            # swallow-ok: gpu read failure is handled downstream by preflight vram check
+            _curr_free=$(_tac_gpu_free_mib 2>/dev/null || echo "")
+            if [[ "$_curr_free" =~ ^[0-9]+$ ]] && (( _init_free > _curr_free )); then
+                _vram_drift=$(( _init_free - _curr_free ))
+                if (( _vram_drift >= LLM_AUTOTUNE_MAX_DRIFT_MIB )); then
+                    warn "ERROR: Cumulative post-boot VRAM drift (${_vram_drift} MiB" \
+                         ">= ${LLM_AUTOTUNE_MAX_DRIFT_MIB} MiB)."
+                    warn "       WSL2 dxgkrnl GPU VA fragmentation limit reached. Restart WSL ('wsl --shutdown')."
+                    _preflight_refuse unclassified 3
+                fi
+            fi
+        fi
+    fi
     return 0
 }
 
@@ -825,6 +858,10 @@ unset _vram_attempt
 # is not a number is a refusal, exactly as _tac_gpu_wait_used_below treats it.
 if ! [[ "$VRAM_TOTAL" =~ ^[0-9]+$ ]] || ! [[ "$FREE_VRAM" =~ ^[0-9]+$ ]]; then
     _fail "cannot read VRAM (total='${VRAM_TOTAL}' free='${FREE_VRAM}') - refusing to autotune."
+fi
+if [[ ! -f "$_VRAM_BOOT_BASELINE_FILE" && "$FREE_VRAM" =~ ^[0-9]+$ ]]; then
+    # swallow-ok: recording initial post-boot VRAM baseline is best-effort
+    printf '%s\n' "$FREE_VRAM" > "$_VRAM_BOOT_BASELINE_FILE" 2>/dev/null || true
 fi
 # Trust check: after clearing, free VRAM must sit ~at the card total.  A
 # large gap means a foreign process still holds the GPU — a certification
