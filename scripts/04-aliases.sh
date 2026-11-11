@@ -2,9 +2,10 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 38
+# Module Version: 39
+#   v39 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v38 (2026-11-10): removed deprecated fgrep/egrep aliases (use grep -F / grep -E).
-# Module Version: 37
 #   v37 (2026-11-05): a repo-relative GGUF path (`Q2_0/x.gguf`) is routed through
 #   llm-pull too.  `--local-dir` recreates the repo's directory, so the file landed
 #   nested and `model scan` could not see it — measured completing a 2-part set where

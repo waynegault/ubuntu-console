@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 52
+# Module Version: 53
+#   v53 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v52 (2026-11-10): exclude CPU heartbeat servers (build-cpu) from CUDA process discovery
 #     and reap, matching _tac_cuda_server_pids.
-# Module Version: 51
 #   v51 (2026-11-10): __calc_ctx_size respects shared-memory host context ceiling
 #     (LLAMA_MAX_CTX_SIZE / 262144 on unified-memory boxes) instead of hardcoding 65536.
-# Module Version: 50
 #   v50 (2026-11-10): on a SHARED-MEMORY host, __calc_gpu_layers judges a dense model against
 #     the GUEST (MemTotal minus LLAMA_FIT_KEEP_RESERVE_MB), not the card's carve.  The pool
 #     there is a reservation backed by the guest's RAM, so the carve is not the allocation
@@ -15,13 +15,11 @@
 #     re-marked it CPU-only and undid the launch.  MemTotal rather than MemAvailable, because
 #     a scan can run while the model is resident.  The launch-time preflight still guards the
 #     live allocation.
-# Module Version: 49
 #   v49 (2026-11-10): a registry row's draft model now RESOLVES against the store.  The row
 #     names its file relative to $LLAMA_MODEL_DIR, but this builder passed the column
 #     through verbatim, so the launch carried `--spec-draft-model mtp-....gguf` while the
 #     server's cwd is the repo — a draft that cannot be found.  Measured on row 4; the
 #     absolute path, or a relative one that is not in the store, is left untouched.
-# Module Version: 48
 #   v48 (2026-11-10): __llm_cuda_server_pids delegates its /proc walk to the shared
 #     _tac_cuda_server_pids; the lanes-stopped declaration moved above the function's
 #     doc block so §18.3 9.5's comment is directly above __llm_stand_down_cuda_lanes.
@@ -48,7 +46,6 @@
 #   carried it, so the tip could not be pushed.  The file already had the helper, with a
 #   comment saying it exists to keep new lines off that count; the flag stream on stdout
 #   is still the reason the note cannot be a normal tac_info line.
-# Module Version: 42
 #   v42 (2026-11-09): __spec_launch_flags NAMES a model-based draft type.  It emitted
 #   --spec-type only for `ngram`, so a registry row carrying spec_type=draft-dflash
 #   (or mtp/simple/eagle3/dspark) with a draft file launched that file with no type and
@@ -56,7 +53,6 @@
 #   adopted Qwen3.8-27B DFlash configuration ran with the type named, so the row must
 #   reproduce it; backend sampling ships with it and LLM_SPEC_DRAFT_BACKEND_SAMPLING=0
 #   turns that off.  An unrecognised type now says so on stderr instead of vanishing.
-# Module Version: 41
 #   v41 (2026-11-08): __llm_stand_down_cuda_lanes asks the SHARED collector which lanes
 #   hold CUDA memory, and refuses to run under AUTOTUNE_SELFTEST=1.  It keyed that
 #   decision on nvidia-smi's compute-apps list alone, which answers rc=0 with NO rows on
@@ -66,7 +62,6 @@
 #   says IS stood down for an autotune, while that list reported nothing at 32,331 MiB
 #   used.  __llm_cuda_server_pids (v37) is the attribution that works here; the selftest
 #   guard is required BECAUSE of it, or a canned run would stop the live lane.
-# Module Version: 40
 #   v40 (2026-11-06): __calc_gpu_layers' MoE branch no longer CLAIMS the experts are on
 #   the CPU.  `-ngl` moves whole layers, expert tensors included; they leave VRAM only
 #   with --cpu-moe.  The returned layer count is unchanged, and the launcher now decides
@@ -78,7 +73,6 @@
 #   pipeline ran inside the transient unit vexed-uphold-full.service.  __gpu_stale_context_verdict
 #   now refuses a process inside ANY named .service and one younger than
 #   LLM_GPU_STALE_MIN_AGE_S (600 s), so only an unowned leftover can be reaped.
-# Module Version: 38
 #   v38 (2026-11-06): wake reads persistence mode before it touches sudo.  It used to
 #   call `sudo -n nvidia-smi -pm 1` unconditionally, so `model bench` on a box without
 #   passwordless sudo printed "GPU Persistence [FAILED - passwordless sudo required for
@@ -88,7 +82,6 @@
 #   Same run: __llm_vram_holder_report printed an EMPTY "Held by:" block under a refusal
 #   whose census named its holder, because it read compute-apps — empty on this host.  Its
 #   holder list now comes from __llm_cuda_server_pids (compute-apps, else /proc/PID/exe).
-# Module Version: 37
 #   v37 (2026-11-05): __llm_cuda_server_pids gives the CUDA reap an attribution that
 #   works on WSL2.  nvidia-smi's compute-app list is EMPTY here even at 73 GiB used, so
 #   __llm_kill_cuda_llama_servers killed nothing and a non-systemd `model use` server
@@ -96,7 +89,6 @@
 #   collector asks nvidia-smi first and falls back to /proc/PID/exe (same build-opencl
 #   exclusion), and the reaper now REFUSES to run under AUTOTUNE_SELFTEST=1 — without
 #   that guard a selftest would reap the live lanes the fallback just made visible.
-# Module Version: 36
 #   v36 (2026-11-05): __llm_thread_cap takes the ceiling from the HOST PROFILE
 #   (LLAMA_THREAD_CAP), not a repo constant.  It returned 6 on every box, so a 20-core
 #   arm64 host launched every model — and measured all 30 autotune rows — at 6 threads

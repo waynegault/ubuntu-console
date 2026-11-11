@@ -121,7 +121,9 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 68
+# Module Version: 69
+#   v69 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v68 (2026-11-05): `__bridge_windows_api_keys --async` — the shell-start call site no longer
 #   waits for pwsh.exe. Measured the same evening: three attempts at `timeout 20` plus two 2 s
 #   sleeps is 64.2 s, and /dev/shm is tmpfs, so that cost lands on the FIRST shell after a boot
@@ -139,7 +141,6 @@
 #   apart (OC_PWSH_ATTEMPTS overrides) cost nothing when the first one answers, which is the
 #   normal case everywhere except the boot that prompted this. The give-up line now names the
 #   attempt count, so "no data" and "never asked" stay distinguishable in the error log.
-# Module Version: 66
 #   v66 (2026-11-01): the Windows bridge resolves pwsh.exe by its KNOWN LOCATION, and its fallback
 #   says WHY it fell back. Measured: `systemctl --user show-environment` at 14:30 printed PATH as the
 #   distro dirs only (/usr/local/sbin:...:/usr/local/games) — no ~/.local/bin — while pwsh.exe is the

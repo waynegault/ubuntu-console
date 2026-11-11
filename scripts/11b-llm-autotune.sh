@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 44
+# Module Version: 45
+#   v45 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v44 (2026-11-10): the SECOND budget (card bf92711c, host half).  __autotune_host_weight_bytes
 #     and __autotune_host_budget_verdict are pure functions: the part of a row's weights that
 #     lands in GUEST RAM rather than the GPU pool, and the verdict comparing that footprint
@@ -9,7 +11,6 @@
 #     it sized the probe from FREE_VRAM alone, which is how a 39.8 GB row plus an --flash-attn
 #     off retry drove the guest into the kernel OOM killer (7 gateway kills in 25 min) with
 #     every log line naming a pool that was not the binding one.
-# Module Version: 43
 #   v43 (2026-11-10): the state write uses a per-writer mktemp file, not the
 #     shared "${LLM_REGISTRY}.tmp" that 11a's other writers also used.
 #   v42 (2026-11-09): profile_save takes the GPU carve as its 33rd argument and records it in

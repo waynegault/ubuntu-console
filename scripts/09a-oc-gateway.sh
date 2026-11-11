@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 41
+# Module Version: 42
+#   v42 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v41 (2026-10-29): the rows that name the production lane take its unit name from
 #   the HOST PROFILE (TAC_HOST_PRIMARY_LANE) instead of hardcoding this box's Xe lane,
 #   so on a box with a different primary lane the message does not name a stranger.
@@ -12,51 +14,42 @@
 #   one of the two serving witnesses the classifier accepts ('ready'/'http server
 #   listening' is the other), and it prescribed `ps -eo pcpu`, a LIFETIME average that
 #   sorts the `ps` invocation itself to the top (measured here at 1300 %).
-# Module Version: 39
 #   v39 (2026-10-24): `__oc_wait_gateway_gone` replaces the single-sample read-back.  Live,
 #   `xo` read the unit as `activating` while its own stop sat queued behind an auto-restart,
 #   printed "the stop did not take" and exited 1, and the unit was `inactive` 30 s later.
 #   The bound is the unit's own TimeoutStopUSec + 30 s, the wait prints its state and the
 #   time left every OC_XO_PROGRESS_S seconds, and a caller with nothing to drain passes a
 #   short settle instead.
-# Module Version: 38
 #   v38 (2026-10-23): `so` prints one row per active fleet lane (`__llm_lane_rows`) instead
 #   of one hardcoded lane standing for "Local LLM"; `xo` names the lanes it deliberately
 #   leaves running.  Reporting only — no lane is stopped here.
-# Module Version: 37
 #   v37 (2026-10-23): the shutdown queues a non-blocking stop and then signals the WHOLE
 #   cgroup.  KillMode=mixed signals only the main process, so a `MainThread` child survived
 #   and the main's shutdown waited on it for ~5 minutes (then SIGKILL, then the state DB's
 #   offline-maintenance marker).  Wayne's 2026-09-27 `KillMode=process` request stays intact:
 #   this signals the group only on a deliberate stop, never on a crash.
-# Module Version: 36
 #   v36 (2026-10-23): the CLI-stop FALLBACK is skipped when a stop job is already queued
 #   or running — the unit reads `active` during a long drain, so the fallback fired and
 #   spent its whole 30 s budget for nothing (measured live).
-# Module Version: 35
 #   v35 (2026-10-23): the shutdown stops through SYSTEMD FIRST and only falls back to the
 #   CLI for a unit that still reads `active`.  Measured: CLI-first killed the process
 #   outside a stop job, so `Restart=always` started it again ("Stopped"/"Started" in the
 #   same second, then "Scheduled restart job"), undoing the purge's own stop.  A restart
 #   that still slips in is REPLACED with `--job-mode=replace` instead of waited behind.
-# Module Version: 34
 #   v34 (2026-10-23): `__oc_gateway_gone` reads ActiveState instead of `is-active`'s exit
 #   status (which is 3 while `deactivating`), and treats only a start/restart job as a
 #   return — a `stop` job is the stop we asked for.  Measured live: `oc purge` refused
 #   with Job=52372 'stop running' during a normal 330 s drain.
-# Module Version: 33
 #   v33 (2026-10-18): every `timeout … openclaw` call carries `-k 5` (or `-k 10/15` in
 #   09c).  Measured: `openclaw gateway stop` IGNORES SIGTERM, so `timeout 30` sent TERM,
 #   was ignored, and waited forever — the live purge hung inside it until I killed the
 #   child by hand.  The stop's budget is now also a seam (OC_GATEWAY_STOP_BUDGET_S) so
 #   the escalation is testable in seconds.  BATS: "a gateway stop that ignores TERM is
 #   KILLED, not waited out".
-# Module Version: 32
 #   v32 (2026-10-18): the start wait's five-secondly checks move into `__so_start_stall`.
 #   Adding the refusal watch pushed `__so_start_gateway` past the §18.3 10.4 bound (a
 #   function over 100 lines), so the block is extracted rather than the count
 #   re-baselined. Behaviour is identical — same rows, same order, same exit.
-# Module Version: 31
 #   v31 (2026-10-18): a start the state-DB guard REFUSES is reported at once, by name.
 #   Measured 2026-10-18 (20:52-22:13 BST): a WSL shutdown cut the gateway's drain, which
 #   left openclaw.sqlite sealed in "offline maintenance", and seven starts were refused
@@ -64,7 +57,6 @@
 #   place the reason is named — then spun its full 300 s budget and printed a bare FAILED.
 #   The CLI refusal is now read, the unit's refusal is watched in the journal from this
 #   attempt's own start, and the row names the guard instead of inviting a re-run.
-# Module Version: 30
 #   v30 (2026-10-14): `__so_health_gate` asserts that the MANAGED UNIT serves the port.
 #   A Gateway started as `openclaw gateway run` binds 18789 from a console while
 #   openclaw-gateway.service reads inactive, and every probe `so` ran still passed, so
@@ -72,14 +64,12 @@
 #   non-active unit now reports "[UP but NOT the managed service]" and returns 1; a
 #   stopped openclaw-gateway-guard.timer is REPORTED without changing the verdict,
 #   because a maintenance window stops that timer on purpose.
-# Module Version: 29
 #   v28 (2026-10-07): `__so_gateway_bound_age` no longer silences a failing journalctl —
 #   the `2>/dev/null` is REMOVED (and its `swallow-ok` marker with it) rather than kept.
 #   An unreadable journal has a defined outcome (no bind line, so no post-bind evidence,
 #   and the checker falls back to its elapsed bound), while a read that fails should say
 #   so on the caller's stderr — the silence the swallow gate exists to keep visible.  The
 #   pipeline's status is `cut`'s (0), so a failing read cannot abort a caller under `set -e`.
-# Module Version: 27
 #   v27 (2026-10-07): `__so_gateway_bound_age` — how many seconds ago the gateway's
 #   HTTP listener bound, read from the newest "[gateway] http server listening" line.
 #   09e forwards it to the enhanced checker as OC_HEALTH_GATEWAY_BOUND_AGE_S, because
@@ -88,7 +78,6 @@
 #   212 s, first /health 200 at 542 s — a 330 s post-bind dark interval, where an
 #   ordinary start serves as it binds).  The journal parsing stays in ONE module: the
 #   checker receives a number, never a second lifecycle classifier.
-# Module Version: 26
 #   v26 (2026-10-02): `so` also shows the daemon guard patch when it needs acting on
 #   (__oc_guard_patch_state --quiet-when-ok, from 09e). The patch silently reverts on
 #   every IDE-companion update and its cron self-heal can fail without reaching anyone

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 128
+# Module Version: 129
+#   v129 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v128 (2026-11-10): the start-ctx derivation is TWO-SIDED (card bf92711c, host half).  The
 #     probe's ctx still comes from the KV math against the GPU pool, but the run now also
 #     prices what it must hold in GUEST RAM — weights that `ngl` leaves un-offloaded plus the
@@ -11,7 +13,6 @@
 #     kernel OOM killer 7 times in 25 min, killing openclaw-gateway.service, while every log
 #     line named the card.  The host figure now comes from the same apply pass as the pool
 #     (host-profile v12), not from a separate read of /proc/meminfo.
-# Module Version: 127
 #   v127 (2026-11-10): the EXIT trap puts back the lanes this run stood down.  The watchdog
 #     cannot: its recover() DEFERS while a heavy job holds the box (LLAMA-LANE-CONTENTION-001)
 #     and `model autotune` IS that job, so on exit nothing restarted the lane until the next
@@ -19,7 +20,6 @@
 #     too.  Measured 09:16 today: the chat lane sat `failed`, /health dead, from 09:16:17
 #     until a hand start; the watchdog's 09:19 tick logged `suspend: NOT HELD` and finished
 #     without touching it.
-# Module Version: 126
 #   v126 (2026-11-09): the refusal names the term that refused.  v125's call site read the
 #     verdict through `$( )`, so __AUTOTUNE_VERDICT_REASON — script-scope state by design —
 #     never crossed the subshell and every refusal fell back to "load N on M cores", a
@@ -28,7 +28,6 @@
 #     The helper now also sets __AUTOTUNE_VERDICT, and the call site reads both globals in
 #     THIS shell with stdout discarded.  tests/unit/87 named the trap in a comment and then
 #     tested only the helper, which is why the call site kept it.
-# Module Version: 125
 #   v125 (2026-11-09): the winning save passes the boot's GPU carve (VRAM_TOTAL, MiB) to
 #     profile_save, so the row records the pool its tps was measured in (registry col 48,
 #     Wayne 2026-11-08 "a tps figure must name its GPU carve").  The figure is the one the run
@@ -48,7 +47,6 @@
 #     disagreement one level deeper, measured once the keys parsed — matched the
 #     launch_error arm and was MODEL-attributable, so two launches would have archived
 #     67 GiB of intact weights over a naming difference.  It now vetoes with the rest.
-# Module Version: 123
 #   v123 (2026-11-08): load<=cores is necessary, not sufficient.  Two runs certified at
 #     load under the core count while the box was not quiet (2026-11-07 22:14Z: 3.48 on 8
 #     cores beside two runner workers; 2026-11-08 12:52Z: 5.12 on 8 beside 2 CI workers and
@@ -93,10 +91,8 @@
 #   the offenders ("Outside the declared census <allowed tenant>:"), so a refusal caused by
 #   a foreign agent's llama-server read as if the embedding lane were at fault.  It now
 #   reads "Unlisted holders (declared tenants: …)".  No gate change.
-# Module Version: 111
 #   v111 (2026-11-05): the tolerance comment named a value the profile does not declare
 #   (5000); it declares 3500, and the kept lane is now declared to the census instead.
-# Module Version: 110
 #   v110 (2026-11-05): the VRAM baseline verdict moves to bin/_tac-bin-lib.sh (shared with
 #   both batch wrappers, which never load 11d), and its holder identity comes from
 #   /proc/PID/exe — nvidia-smi's compute-apps list is empty on this WSL2 box, so the first
@@ -105,7 +101,6 @@
 #   the variable (it was `"\$_VRAM_VERDICT"`, so it printed nothing), and the result file
 #   records baseline=/baseline_held_mib=/baseline_tenants= so a census row can never be
 #   read as clean-room.
-# Module Version: 109
 #   v109 (2026-11-04): the count-ratchet's four rises from this session cleared AT SOURCE, not by
 #   re-baselining — the window-expiry case gains its `*)` arm (4.2.4), the stop action moves out of
 #   _bench_spawn into a commented _bench_stop_unknown (10.4 and 9.5), leaving the function under the
@@ -147,7 +142,6 @@
 #   v92 (2026-11-02): one `warn` helper replaces four hand-written stderr writes, seven lines are
 #   wrapped, and the three failure-classification regexes are split with `+=` — values verified
 #   byte-identical to the previous blob. Clears the lane's 10.7, 8.1.8 and 9.7 rises.
-# Module Version: 91
 #   v91 (2026-11-02): the 800 MiB baseline tolerance is documented as the NO-LANE default it
 #   is.  Its justification cited a "~430 MiB memory-core-local-embedding-worker" that this
 #   box does not run (the lane is a CUDA llama-server at 4094 MiB) and that the pkill above

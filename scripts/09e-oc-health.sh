@@ -9,7 +9,9 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 36
+# Module Version: 37
+#   v37 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v36 (2026-11-01): `oc ms` (ocms) now LISTS the configured model providers and their
 #   endpoints, read from openclaw.json. It used to alias oc-sync-models, which ran
 #   `openclaw models scan --no-probe --yes | grep -v openrouter/` — an OpenRouter-FREE
@@ -56,7 +58,6 @@
 #   `oc doctor-local:` cases in tests/unit/33-daemon-guard-patch.bats drive the function
 #   with `oc-health` stubbed to print a stalled JSON and return 5 (and to return 0/1 for
 #   the other arms), asserting the json field, the human note and the exit code.
-# Module Version: 26
 #   v26 (2026-10-07): `oc-health` documents its EXIT CODE as a contract.  Wayne's
 #   decision that day: the checker gives `stalled` its own code (5) instead of 0, so the
 #   bound-but-dark state stops being invisible to a consumer that reads only the status,
@@ -71,7 +72,6 @@
 #   gateway_health also carries the checker's own word (`stalled`) through to the json/plain
 #   surfaces instead of flattening it.  (v26 left oc-doctor-local's EXIT contract and its
 #   behavioural coverage open; both land in v27.)
-# Module Version: 25
 #   v25 (2026-10-07): `oc health` also forwards `__so_gateway_bound_age` as
 #   OC_HEALTH_GATEWAY_BOUND_AGE_S, the checker's POST-BIND evidence.  Wayne's decision
 #   (2026-10-07): keep GATEWAY_COLD_START_BOUND_S = 420 and do not raise it; instead
@@ -81,7 +81,6 @@
 #   listener bound 212 s after unit start, first /health 200 at 542 s — a 330 s
 #   post-bind dark interval, where an ordinary start serves as it binds.  The number
 #   comes from 09a so the journal parsing stays in one module.
-# Module Version: 24
 #   v24 (2026-10-06): reflow the `plain)` case's enhanced-checker pipeline across a `\`
 #   continuation so the file carries no line over 120 characters (§18.3 8.1.8) —
 #   behaviour identical.  The marker moves because it IS the change-detection contract:

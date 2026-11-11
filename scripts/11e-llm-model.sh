@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 120
+# Module Version: 121
+#   v121 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v120 (2026-11-11): the keeper .pid reaper checks liveness AND the cmdline before
 #       signalling (inspection 2.6.3): a pid reused after the keeper exited is no longer
 #       TERMed.  A pid that fails either check is left to the cwd-scoped fallback.
@@ -12,7 +14,6 @@
 #     (`autotuned=yes`) and full-offloaded (`moe_offload_flag` empty), matching the certified
 #     `autotune-model.sh` argv and avoiding `llama_params_fit`'s double-load penalty (~121 s ->
 #     ~8 s on `#5 Qwen3.8-27B` + `draft-mtp`) and WDDM carve window shrinkage.
-# Module Version: 118
 #   v118 (2026-11-10): multi-file GGUF support across `model download`, `model delete`, and
 #     `model archive`.  (1) `__model_row_files` resolves all on-disk shards of a split row
 #     (`-00001-of-NNNNN.gguf` -> shards `1..N`), so `model delete` and `model archive` remove
@@ -21,7 +22,6 @@
 #     and globs while still rejecting `..` traversal, auto-expands a single shard spec
 #     (`-00001-of-NNNNN.gguf`) to its full `-*-of-NNNNN.gguf` set, and routes subfolder/shard
 #     downloads through `llm-pull` so they land flat in `$LLAMA_MODEL_DIR` before `__model_scan`.
-# Module Version: 117
 #   v117 (2026-11-10): (1) `llm-build` promotes compute 12.1 (Blackwell GB10 / RTX Spark N1X)
 #     to `121a-real` (or honors a matching `LLAMA_CUDA_ARCH` suffix) and reads
 #     `LLAMA_CUDA_FA_QUANTS` (set to `all` on `asus-n1n-rtx-spark`, the upstream replacement
@@ -29,25 +29,21 @@
 #     `mmap` enabled (`use_no_mmap=0`) under `auto` mode on shared-memory hosts with a native
 #     non-mount model store for single-file GPU-offloaded GGUFs, avoiding the double-read
 #     anonymous-RAM penalty of `--load-mode none` + `--fit on`.
-# Module Version: 116
 #   v116 (2026-11-10): `model scan` skips a multimodal projector.  The walk takes every
 #     *.gguf over the 300 MB floor, and a projector is one of those, so mmproj-BF16.gguf
 #     (931 MB, arch `clip`) registered as a SECOND row named "Qwen3.8-27B" beside the
 #     50.9 GiB model of the same name — a row that can never load, since llama.cpp is
 #     handed it as --mmproj, not as -m.  `__model_is_projector` matches the basename,
 #     case-insensitively, because the launcher's own candidate list is mmproj*.gguf.
-# Module Version: 115
 #   v115 (2026-11-10): the @extractable note above model() said "~500 lines"; measured,
 #     the function is 242, so the note named a function twice its real size and made the
 #     split look far more urgent than it is. The number is now measured and dated.
-# Module Version: 114
 #   v114 (2026-11-10): `model autotune <row>` names a RETIRED row's reason before it runs it.
 #     bin/autotune-rows.sh has warned since v21 of that file, but this path calls
 #     autotune-model.sh directly and so said nothing: measured 09:16 today, `model autotune 5`
 #     stopped the chat lane and staged Qwen3.8-Flash-Next-Coder-cut240 — retired as
 #     "qwen4exp.expert_count is an array, the loader reads u32 — re-convert" — without a word.
 #     The row is still honoured (the documented explicit override); it is just no longer silent.
-# Module Version: 113
 #   v113 (2026-11-10): `model default` reports FAILURE when the default-model write
 #     fails.  It printed [SET TO: …] unconditionally after an unchecked redirect, so
 #     a read-only or missing directory produced a success line for no write.
@@ -70,7 +66,6 @@
 #   tried the SAME taken name and refused (measured 2026-11-09: a compile killed at 15:09 stopped
 #   the rebuild until the name was cleared by hand).  The next free `-2`, `-3` suffix is used
 #   instead: nothing overwritten, nothing nested, nothing deleted.
-# Module Version: 108
 #   v108 (2026-11-09): `llm-build`'s fresh-tree rule dates the TREE, not only the pull.  v107 moved
 #   the tree when `HEAD..@{u}` reached LLAMA_BUILD_FRESH_AT - which answers "how far is the source
 #   from upstream", and reads 0 when the checkout has already advanced and only the build stood
@@ -79,7 +74,6 @@
 #   built from, so the tree is now dated directly: a lag of at least LLAMA_BUILD_FRESH_AT moves it,
 #   and a tree that cannot name its commit (no binary, or an unreadable banner) counts as stale.
 #   `--no-pull` no longer disables the rule - it only drops the pull's contribution.
-# Module Version: 107
 #   v107 (2026-11-09): `llm-build` refuses a symlinked build tree and starts a FRESH tree for a
 #   large jump.  Measured 2026-11-05: build-cuda/ was a symlink into the previous checkout, so
 #   `cmake -B` followed the link and reconciled a cache whose objects were 147 commits old - a
@@ -90,7 +84,6 @@
 #   `LLAMA_BUILD_FRESH_AT` (default 20) commits, or when `--fresh` asks for it.  The move is
 #   never a plain `mv` onto a name that exists: `mv` onto an existing DIRECTORY nests it and
 #   exits 0, so an existing `${build_dir}.prev-<commit>` is a refusal.
-# Module Version: 106
 #   v106 (2026-11-09): two opt-in lifecycle facts a lane could not state before.
 #     (a) IDLE RELEASE.  `model use N --idle-timeout S` starts bin/llm-idle-release.sh,
 #     which watches llama-server's own Prometheus counters and runs `tac-exec halt` when
@@ -107,7 +100,6 @@
 #     Also: TAC_CTX_SIZE and TAC_IDLE_TIMEOUT are consumed once.  Exported for a single
 #     `serve`/`model use`, they used to survive in the shell and silently apply to the
 #     NEXT launch in it.
-# Module Version: 105
 #   v105 (2026-11-09): `model use` HANDS the row's spec columns to the launch.  The
 #   registry has carried spec_type/spec_draft_model/spec_draft_n_max/spec_draft_ngl/
 #   spec_draft_device (columns 27-31) since SPEC-DEC-004, and __spec_launch_flags reads
@@ -116,7 +108,6 @@
 #   Measured: row 11 carries spec_type=ngram with spec_n_max=16 and its lane's argv has
 #   no spec flag.  Same failure shape as the flag builder's missing --spec-type: the
 #   value is read, then silently not used.
-# Module Version: 103
 #   v103 (2026-11-08): the sweep-ownership refusal dd714d23 added was 178 chars, so it is wrapped
 #     with a backslash-newline INSIDE the quoted string — bash removes it, so the emitted text is
 #     byte-identical and §18.3 8.1.8 (289 -> 288) is satisfied without changing the message.
@@ -175,14 +166,12 @@
 #   model registered, although the bytes were complete.  Measured on two GSQ-RCO sets; after
 #   the move, `model scan` read 14 models -> 15 with the paired sizes.  `mv -n`, and a
 #   destination that already exists wins, so a duplicate can never be overwritten.
-# Module Version: 94
 #   v94 (2026-11-05): the row's size is read with `stat -L`.  v93's walk follows a snapshot
 #   symlink, but `stat` does NOT follow by default, so a nested 2 GB model measured as its
 #   ~50-byte link and was then dropped by the 300 MB floor — the walk found it and silently
 #   discarded it, which is the exact failure this change-set exists to end.  Measured with a
 #   probe store: before, "No models found"; after, `qwen2.5-3b-instruct | deep/…/nested.gguf |
 #   2.0G | arch qwen2`.  Shard sizes use -L for the same reason.
-# Module Version: 93
 #   v93 (2026-11-05): the registry's file column is a path RELATIVE to the store, and the scan
 #   WALKS it instead of globbing the top level — Wayne: "i want to be able to use all llms in
 #   active or below. cant we point to the appropriate file nomatter where it is nested in
@@ -193,54 +182,44 @@
 #   the top level is skipped as the same model seen twice — so flatten-then-rescan is idempotent
 #   (measured: byte-identical registry).  v91/v92's nested-GGUF report is removed: recursion makes
 #   the omission it warned about impossible.
-# Module Version: 92
 #   v92 (2026-11-05): the nested-GGUF report counts only entries with NO flat counterpart.  Once
 #   an entry is flattened (hardlinked by name into the store root) its model scans, so reporting it
 #   again is a warning that can never clear.  Measured the same evening: after flattening all seven,
 #   a rescan still warned about them until this narrowed the count.
-# Module Version: 91
 #   v91 (2026-11-05): `model scan` NAMES the GGUFs it cannot see.  Its glob is deliberately flat,
 #   so a bare `hf download`'s nested `models--*/snapshots/**` entries were skipped in silence —
 #   measured 2026-11-05, seven such trees holding 210.8 GiB (two of them complete models) while
 #   the scan said "No models found".  The count and one example now print before the flat walk,
 #   with the remedy (`llm-pull`, or the `hf` wrapper, which lands files flat).
-# Module Version: 90
 #   v90 (2026-11-05): an INERT keep entry is named BEFORE anything is stopped.  Measured 17:20:
 #   a shell still exported the pre-rename embedding unit, the lane table had moved on, no keep
 #   entry matched, and `model use 1` stopped the lane — the operator only learned it after the
 #   load, from the confirmation line.  host-profile v11 clears the variable (the root cause);
 #   this makes a surviving disagreement (hand-set value, a profile mid-edit) loud and early.
-# Module Version: 89
 #   v89 (2026-11-05): `model use` now REPORTS the always-on lane's measured state after the new
 #   model is up — unit active, and llama-server's /health on its declared port — instead of leaving
 #   "unaffected" to inference (Wayne's requirement).  A lane that is stopped, or active but not
 #   answering, is named as such: then memory search is down and this model is not the cause.  Silent
 #   under __BENCH_MODE, whose output is parsed.
-# Module Version: 88
 #   v88 (2026-11-05): `model use` no longer displaces a lane named in LLAMA_LANE_KEEP_UNITS.  The
 #   claim stopped every `llama-cuda-*` unit in the profile's lane table, the always-on embedding
 #   lane included — measured on the arm64 box, `model use 1` stopped it and memory search stayed
 #   down for the life of the server, because the suspend marker keeps the watchdog from starting
 #   it again.  The kept lane is named in the output, and 12-gpu-exclusivity pins the behaviour
 #   against the pre-fix function.
-# Module Version: 87
 #   v87 (2026-11-05): the case in `__model_is_embedding` carries an explanatory comment, because
 #   §18.3 item 4.2.4 counts a `case` with neither a `*)` arm nor one (20 -> 21 when the case was
 #   added).  No `*)` arm belongs there: every other arch must fall through to the pooling read.
-# Module Version: 87
-# Module Version: 86
 #   v86 (2026-11-05): `model scan` no longer gives an embedding export a registry row.  Wayne's
 #   ruling, after the EmbeddingGemma row was removed by hand the same day: "we really shouldnt
 #   have any embedding models in this registry".  The test is the arch OR the GGUF's pooling
 #   metadata, because Qwen3-Embedding's arch is plain `qwen3` — the same string a chat model
 #   carries — so arch alone would let exactly the model that prompted the ruling back in.
-# Module Version: 85
 #   v85 (2026-11-05): the quiet gate sees CI.  `bin/heavy-job` cannot: the workflow calls bats
 #   directly, so a 77-file suite ran while the gate reported "free" and a rebuild was cleared
 #   into it.  `llm-build` now counts `Runner.Worker` processes and treats any as NOT quiet,
 #   naming the count and the override (`LLAMA_BUILD_ALLOW_CI=1`) rather than refusing silently
 #   - the requirement it implements is "quieted and stays quiet, or it does not build".
-# Module Version: 84
 #   v84 (2026-11-05): `llm-build` refuses to build into a BUSY box, and holds the box's own
 #   heavy-job lock while cmake runs, so nothing else starts behind it.  The quiet gate reads
 #   `bin/heavy-job --status`'s WORD - that command exits 0 whether the lock is free or BUSY,
@@ -248,7 +227,6 @@
 #   refusal leaves both the source and LLAMA_BUILD_VERSION where they were.  Both cmake steps
 #   run under `heavy-job --timeout ${LLAMA_BUILD_LOCK_WAIT_S:-0}`; losing the lock mid-flow
 #   (exit 3) is named as a refusal, not as a build failure.
-# Module Version: 83
 #   v83 (2026-11-05): `llm-build` builds the tree this box actually serves, and stops inventing a
 #   CUDA architecture.  It configured `$LLAMA_ROOT/build` unconditionally, so on the arm64 box -
 #   which serves build-cuda/ - a 40-60 minute rebuild landed in a tree no launcher reads, and the
@@ -257,9 +235,7 @@
 #   driver read and adds the profile's LLAMA_CUDA_ARCH as the fallback: the old `86` literal
 #   compiled Ampere kernels on a 12.1 card when nvidia-smi could not answer, and an unknown card
 #   now names the variable and stops instead of guessing.
-# Module Version: 82
 #   v82 (2026-11-04): `model use` displaces the CUDA lanes the PROFILE declares (the gated lane plus every llama-cuda-* row in LLAMA_LANE_SPECS) instead of the x86 box's two literals — on the arm64 box that stopped nothing and left the LIVE lane serving.
-# Module Version: 81
 #   v81 (2026-11-04): every bench TSV row carries BUILD IDENTITY in four appended columns —
 #   driver, CUDA, engine build (commit) and embedded arch.  A t/s figure without the binary
 #   that produced it cannot separate "this model is slower" from "this binary lost its arch
@@ -267,11 +243,9 @@
 #   on RTX Spark).  Appended, not inserted: every consumer reads $1-$4 by position
 #   (__model_bench_diff, __model_bench_latest, 11d's file resolver), so the existing five
 #   columns keep their places.  A field that cannot be read is "unknown", never empty.
-# Module Version: 80
 #   v80 (2026-11-02): seven over-long lines wrapped
 #   Formatting only: the read/printf argument lists were diffed token-for-token against the
 #   previous blob (48/20/23 tokens, identical).
-# Module Version: 79
 #   v79 (2026-11-02): the bench summary appends the autotuner's `detail=` when the result
 #   carries one (bounded to 160 chars), so the measured case reads "refused BEFORE any
 #   launch: resource exhaustion (...) — VRAM baseline not cleared — 27626 MiB still held".

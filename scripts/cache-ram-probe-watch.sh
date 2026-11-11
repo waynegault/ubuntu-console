@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v7 (2026-11-11): the cycle-ledger sum reads the files with awk directly instead of
 #       `cat … | awk` (inspection 6.2).  Same value: a missing glob still prints 0.
 #   v6 (2026-11-04): the CUDA-in-use ceiling is the profile's LLAMA_GPU_FREE_THRESHOLD_MIB, not a fixed 800 MiB (3500 on the arm64 box).
-# Module Version: 5
 #   v5 (2026-10-12): gate 4's VRAM READING comes from the shared `_tac_gpu_used_mib`
 #   (bin/_tac-bin-lib.sh) instead of an inline nvidia-smi pipeline.  The v4 multi-GPU
 #   property (most-used card; empty when nothing is readable) is preserved byte for

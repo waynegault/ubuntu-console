@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 43
+# Module Version: 44
+#   v44 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v43 (2026-11-01): the dispatcher's help lines for `ms` and `sync-models` describe what
 #   those commands now do — `oc ms` lists provider endpoints (no OpenRouter scan), and
 #   `oc sync-models` refreshes the hosted model catalog.
@@ -13,17 +15,14 @@
 #   string: since 2026-11-01 12:12 the value is a SecretRef ({source:"store", id:
 #   OPENCLAW_GATEWAY_TOKEN}), so the old `node -e require(...).gateway.auth.token`
 #   one-liner would print an object.  Handles a plaintext string and env/store refs.
-# Module Version: 40
 #   v40 (2026-11-01): the no-arg `oc` reference now names `export-keys-nas`
 #   (the case statement already routed it — the printed reference never did).
-# Module Version: 39
 #   v39 (2026-10-30): three §18.3 counters rose with v37/v38 and nothing re-baselined them,
 #   so the pre-push ratchet refused every push from this checkout — a gate doing its job on a
 #   style debt, not on the fix. Fixed the three rather than re-baselining: two __tac_info calls
 #   wrapped under 120 columns, a comment directly above `xo` (the definition had a blank line,
 #   which the counter reads as unattributed), and `return 4` in the tombstone path named, since
 #   a code other than 0/1 with no comment on the line is unreadable to the next editor.
-# Module Version: 38
 #   v38 (2026-10-29): corrects v37's third point, which claimed a tombstoned main simply
 #   cannot be reset.  Measured on a live gateway the same day: `sessions.reset` IS allowed
 #   when `allowRestartTombstoneReplacement === true && !entry.providerReview`
@@ -35,7 +34,6 @@
 #   ordering __oc_purge_reset_main already performs, now pinned by a test.  `sessions.recover`
 #   remains the fallback when reset is still refused; it starts a successor and leaves the
 #   tombstone set (rc 4, reported as such, never as a repair).
-# Module Version: 37
 #   v37 (2026-10-29): `oc purge` names three things it used to get wrong.  (1) The dry run
 #   read ${OC_PURGE_RESET_MAIN-hal} while the real run read ${OC_PURGE_RESET_MAIN-all}, so
 #   with the variable UNSET the preview named one main and the run reset all fourteen; both
@@ -46,23 +44,19 @@
 #   deleting, because a key list built on an unreadable store understates the blast radius.
 #   (3) A main left TOMBSTONED by a restart had no route out of purge.  The refusal it hits
 #   is narrower than first recorded — v38 below supersedes this paragraph.
-# Module Version: 36
 #   v36 (2026-10-24): `xo` WAITS for the stop instead of sampling it once — measured live,
 #   it read the unit as `activating` while its own stop sat queued behind an auto-restart,
 #   printed "the stop did not take" and exited 1, and the unit was `inactive` 30 s later.
 #   `__oc_wait_gateway_gone` (09a) is bounded by the unit's own TimeoutStopUSec and prints
 #   its progress; the [NOT RUNNING] row is now a read-back too, not an echo of the pre-stop
 #   probe (a start job can land between the two).
-# Module Version: 35
 #   v35 (2026-10-24): the purge resets EVERY agent's main, not only the configured one
 #   (owner's call: "both"), and it narrates its three slow phases — enumeration+delete,
 #   reset, prune — because ~2-3 minutes of silence read as a freeze.  `OC_PURGE_RESET_MAIN`
 #   still narrows the reset to one agent when set; unset/`all` means every main.
-# Module Version: 34
 #   v34 (2026-10-23): `xo` names the fleet lanes still running after it stops the owned LLM.
 #   `model stop` protects lanes by design, so "[STOPPED]" was true of one server and read as
 #   the whole box; the lanes are now reported, never stopped here.
-# Module Version: 33
 #   v33 (2026-10-23): `oc purge` NEVER stops or restarts the gateway.  Its sessions/ holds
 #   only the archives `sessions delete` wrote, each named by an `archive_name` row, so the
 #   blanket clear ORPHANED those rows — measured: hal/finn/juno each held one file matching
@@ -70,14 +64,12 @@
 #   and the reset run over RPC), a SERVING gateway is required before anything is deleted
 #   and started only when it does not answer, and the clear is an ORPHAN-ONLY prune that
 #   keeps cold/ and keeps any file whose store cannot be read.
-# Module Version: 32
 #   v32 (2026-10-23): the purge WAITS for the restarted gateway to answer RPC instead of
 #   sampling it once.  Measured live: a restart took 38.1 s to log `http server listening`,
 #   but step 4b probed once with the CLI's 10 s default and refused a gateway that was
 #   still starting ("gateway timeout after 10000ms") — after the session dirs had already
 #   been cleared.  The wait is bounded (OC_PURGE_HEALTH_S, default 300 s, polled every
 #   OC_PURGE_HEALTH_STEP_S) and prints progress; its refusal names the partial state.
-# Module Version: 31
 #   v32 (2026-10-23): the purge REFUSES before it stops a gateway whose own last shutdown
 #   did not complete.  Read from the journal: every one of today's four stops settled its
 #   work drain in <=20 s and then sat in `shutdown.gateway-close` past TimeoutStopUSec with
@@ -86,44 +78,35 @@
 #   with the session dirs already cleared (step 2 runs before the start).  The self-kill
 #   bound is also derived from the unit's TimeoutStopUSec (+10 s), not a flat 120 s, which
 #   fired 210 s INSIDE the budget the unit was given for a drain doing real work.
-# Module Version: 30
 #   v30 (2026-10-23): a shutdown that overruns is KILLED and held down instead of being
 #   fought poll-by-poll: live, the drain hung ~5 min, systemd SIGKILLed it, Restart=always
 #   brought it back, and the loop spent the rest of the bound replacing starts.  The
 #   replacement line is also throttled — unthrottled it printed every second and buried the
 #   progress rows.
-# Module Version: 29
 #   v29 (2026-10-23): the reset/patch params use `key`, not `sessionKey`.  Measured live:
 #   sessions.reset rejected {"sessionKey":...} with "must have required property 'key'".
 #   The witness asserts the param NAME, because a mock that accepts any shape proves nothing.
-# Module Version: 28
 #   v28 (2026-10-23): the restart replacement uses `systemctl stop --no-block`, not
 #   `--job-mode=replace`.  Measured: the latter blocked 30 s (rc=124) behind the pending
 #   auto-restart and changed nothing, so every poll stalled and the purge looked frozen.
-# Module Version: 27
 #   v27 (2026-10-23): the replacement prints systemctl's OWN refusal.  Live, the loop
 #   printed only "refused" every poll, which is undiagnosable; a discarded diagnostic
 #   stream is the defect, so the helper captures it and the caller no longer prints a
 #   second generic line.
-# Module Version: 26
 #   v26 (2026-10-23): the gone-wait prints its state and time left every 15 s.  A live run
 #   sat silent for minutes and read as "frozen"; silence is not progress.  The interval is
 #   a seam (OC_PURGE_PROGRESS_S) so the witness does not sleep.
-# Module Version: 25
 #   v25 (2026-10-23): the purge's wait now REPLACES a queued restart while it waits.  The
 #   loop used to only observe, so a `Restart=always` start (queued when systemd SIGKILLs a
 #   unit that overran TimeoutStopUSec) always won and the purge always refused.  The
 #   refusal message also names the real bound (it still said 120 after the bound became 360).
-# Module Version: 24
 #   v24 (2026-10-23): purge proves the gateway ANSWERS RPC before touching the store.
 #   Measured live: __so_start_gateway printed ONLINE (port 18789) and every openclaw call
 #   then timed out at 30 s, so `sessions delete` could not land and the purge reported a
 #   FAILED store with the rows still there.  A port is not a server.
-# Module Version: 23
 #   v23 (2026-10-23): the purge's gone-wait bound is 360 s, not 120 — the unit's own
 #   TimeoutStopUSec is 5min 30s, and a normal drain (queueSize=6, agentRuns=3) was
 #   refused at 120 s.  `__oc_gateway_gone` no longer reads our own stop job as a return.
-# Module Version: 22
 #   v22 (2026-10-23): `oc purge` now names the three things it used to overstate.  CRON
 #   sessions are KEPT (Wayne, 2026-10-23) and counted, so the roster read-back ignores them
 #   or every purge would fail over rows it deliberately kept.  Each agent's MAIN is kept, and
@@ -134,30 +117,24 @@
 #   that successor class, so without this it would manufacture the tombstone it leaves behind.
 #   Read-backs are from the store (archivedAt and mainRestartRecovery gone), never the RPC's
 #   own ok.  Bounded CLI calls carry `-k` because the CLI ignores SIGTERM.
-# Module Version: 21
 #   v21 (2026-10-18): the purge's `timeout … openclaw` calls carry `-k` (10 s for a read,
 #   15 s for the delete).  The CLI ignores SIGTERM — measured on `gateway stop` — so a
 #   plain timeout could wait forever on a hung CLI.
-# Module Version: 20
 #   v20 (2026-10-18): a purge with any failed step exits NON-ZERO.  The live run printed
 #   "2 FAILED" and returned 0, so the caller could not tell that it had failed.
-# Module Version: 19
 #   v19 (2026-10-18): a sessions dir with NO cold/ is still removed whole.  The cold/
 #   guard must not leave an empty sessions/ behind, which would make the directory purge
 #   a no-op on every agent that has no cold archive.
-# Module Version: 18
 #   v18 (2026-10-18): the session-dir purge KEEPS `cold/`, because the store holds a row
 #   per cold archive.  Measured: 110 rows pointed at files already removed by earlier
 #   purges, and the usage-cost refresh failed on every one.  Rows are deleted through
 #   the CLI; the files they name must outlive the pass that clears the directories.
-# Module Version: 17
 #   v17 (2026-10-18): `oc purge` never sends a MAIN session to `sessions delete`.
 #   Measured live: the CLI refuses it ("Cannot delete the main session"), and one
 #   refused key fails the whole batch — so the first live purge deleted the non-main
 #   sessions but reported the store delete as FAILED.  Mains are now counted and
 #   reported as KEPT ("use /reset in that chat"), the batch carries only non-main keys,
 #   and the roster read-back counts non-main rows so a correct purge is not a failure.
-# Module Version: 16
 #   v16 (2026-10-18): `oc purge` resets the session STORES, not just the directories.
 #   Measured: 47 sessions across 14 agents lived in agent/openclaw-agent.sqlite while the
 #   deleted dirs held two archives; a tombstoned WhatsApp session ('failed', absent from
@@ -165,7 +142,6 @@
 #   refresh on every pass.  It now deletes every stored session (main included) through
 #   `sessions delete`, restarts the gateway, and reads the roster back; --dry-run no
 #   longer stops the gateway.
-# Module Version: 15
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091  # the module loop sources _module-list.sh entries by name
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-11-11): one canonical version line; the historical entries below are
+#     changelog only, so a reader sums this file once (inspection 13.4.3).
 #   v21 (2026-11-10): LLM_SPEC_DRAFT_NGL defaults to empty (not 0) so per-row spec_draft_ngl
 #   in models.conf is respected by __spec_launch_flags instead of being overridden to CPU.
-# Module Version: 20
 #   v20 (2026-11-06): LLM_AUTOTUNE_KV_QUANTS gains f16/f16 as a candidate.  The sweep previously
 #   offered only quantised pairs, so the cache type could never be measured against the
 #   unquantised baseline — while f16 is the fastest cache wherever the window still fits.

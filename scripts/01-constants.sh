@@ -2,12 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 58
+# Module Version: 59
+#   v59 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v58 (2026-11-10): TACTICAL_REPO_ROOT verifies that the directory exists before keeping
 #     an inherited environment variable; falls back to resolving relative to BASH_SOURCE.
-# Module Version: 57
 #   v57 (2026-11-10): TAC_PYTHON resolves .venv/bin/python3 first before .venv/bin/python.
-# Module Version: 56
 #   v56 (2026-11-10): LLM_MODELSHELL_PID_DIR — one declaration for the directory the
 #     `model use` wrapper writes its PID file into.  11e (writer) and 11d (stale-lock
 #     reaper) each carried the `/tmp/llm-modelshell…` literal, so a test could not

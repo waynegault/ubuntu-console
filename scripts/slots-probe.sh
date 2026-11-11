@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v8 (2026-11-09): the cold-card refusal reads as one sentence.  v7 wrapped the gate's reason in
 #       brackets of its own, so the live message nested them — "the card is cold (SM clock 650 MHz
 #       of 3003 (below 60% ...))", which is what the 17:58 run actually printed.  The reason is now
 #       spliced after a dash.  No behaviour changes: the same terms, the same refusals.
-# Module Version: 7
 #   v7 (2026-11-09): the clock term gets a WARM-UP, because on its own it deadlocks.  Measured
 #       17:31: the card sat at 650 of 3,003 MHz with nothing using it, so the gate refused every
 #       attempt and the sweep could never run on the quiet box it requires.  _warm_clock now sends
@@ -13,14 +14,12 @@
 #       it) and polls the clock to the floor, bounded at 90 s; the gate then judges a warm card.
 #       Best-effort by design: a lane that is down, or a card that stays cold, still reaches the
 #       gate, which refuses with its own reason rather than measuring a cold card.
-# Module Version: 6
 #   v6 (2026-11-09): the quiet gate gains a CLOCK term.  The 15:14 run was clean on every other
 #       term — load 1.90, no CI worker, not a byte of foreign CPU pressure — and still measured
 #       28.44 tok/s at four slots where the same arm read 119.12 on a warm card: the SM clock was
 #       at 656 of 3,003 MHz and the card drew 1.7 W.  A load average cannot see that, so the gate
 #       now refuses below LLM_SLOTS_PROBE_CLOCK_MIN_PCT (default 60%) of this boot's max and
 #       quotes both readings; an UNREADABLE clock stays no-evidence, like the PSI term.
-# Module Version: 5
 #   v5 (2026-11-09): the probe refuses to measure a box that is not quiet, and voids an arm
 #       whose numbers cannot be true.  Measured on the second real run (load 6.80 at start):
 #       arm 4 reported aggregate 2.43 against per-stream 4.72 — impossible — because its
@@ -29,7 +28,6 @@
 #       (the same /proc/pressure/cpu reading autotune-model.sh uses) and an active CI runner
 #       worker, naming the term that refused; _summarise prints VOID instead of a rate when
 #       aggregate < per-stream or the group spread exceeds 50 %, and the JSON carries suspect=.
-# Module Version: 4
 #   v4 (2026-11-09): the summary stopped printing a figure that was wrong twice.  `ctx / slots /
 #       1024` was labelled "MiB" — it is K TOKENS — and every arm passes --kv-unified, so the
 #       window is SHARED and a per-slot division describes a configuration this lane never runs.
@@ -37,7 +35,6 @@
 #       kv_mib_per_slot.  Found by reading the first real run's own output, not by a test: the
 #       case that existed asserted the wrong label, which is why the new assertion checks that
 #       "MiB" is absent.
-# Module Version: 3
 #   v3 (2026-11-09): the restore waits for the PORT, not just for the process.  Measured on the
 #       first real run: the last arm's server was killed, the trap started the lane while 18087
 #       was still bound, llama-server died with "couldn't bind HTTP server socket" six times and
@@ -45,7 +42,6 @@
 #       DOWN and needed reset-failed by hand.  _wait_listen_free (ss, not a connect probe) now
 #       gates both the per-arm teardown and the restore, and the restore clears a rate limit
 #       before starting.
-# Module Version: 2
 #   v2 (2026-11-09): §18.3 debt the first cut carried — eight bare `exit 2` sites became one
 #       `die_usage` helper holding the status (9.7 79 -> 79, and no line pushed past 120
 #       chars doing it, 8.1.8), and the signal trap names its code.  No behaviour change:

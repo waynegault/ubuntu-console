@@ -1,14 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-11-11): one canonical version line; the historical entries below
+#     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v20 (2026-11-10): __llm_health_timeout scales for a VERY large checkpoint.  Every model of
 #     3 GB or more was given the same 180 s, which is a 3B-model figure: measured on this box,
 #     a 50.9 GiB BF16 checkpoint became healthy in 171 s warm and was still loading after 7
 #     minutes alongside a CI suite, and the wait then killed the lane mid-load and reported
 #     "FAILED OR TIMEOUT".  15 GB+ now gets 12 s per GiB (300 s floor, LLM_HEALTH_TIMEOUT_MAX
 #     cap, default 900), so the budget follows the load instead of the tier below it.
-# Module Version: 19
 #   v19 (2026-11-07): __llm_wait_for_health takes the launched server's pid and returns 2
 #   when it dies while waiting.  Measured the same day: a cudaMalloc failure killed the
 #   server 25 s in, and the loop polled for the full window — four minutes of dots — before
