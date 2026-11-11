@@ -790,8 +790,14 @@ def _default_llm_service_port() -> int:
             from tools.box import get_hardware_profile
 
             return get_hardware_profile(active_id).serving.primary_port
-        except Exception:
-            pass
+        except (ImportError, KeyError, ValueError) as exc:
+            # The fallback is a real answer, but a silent one hid WHY the profile was
+            # unusable (inspection 11.12).  Narrow on purpose: an unexpected error is a
+            # bug in this probe, not a reason to report the default port.
+            print(
+                f"oc-health-check: no profile port for {active_id!r} ({exc}); using 18081",
+                file=sys.stderr,
+            )
     return 18081
 
 

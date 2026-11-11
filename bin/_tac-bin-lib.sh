@@ -16,7 +16,10 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-11-11): the second SC2034 disable (REQSTOP_TS) carries its own rationale
+#       line, so the shellcheck directive is documented where the scanner reads it
+#       (inspection 11.5).
 #   v18 (2026-11-10): _tac_cuda_server_pids excludes CPU heartbeat servers (build-cpu),
 #     preventing llama-cpu-heartbeat from being flagged as an unlisted CUDA holder.
 # Module Version: 17
@@ -291,6 +294,7 @@ requested_stop_active() {
     # library reads them, which is why SC2034 has to be silenced rather than obeyed.
     # shellcheck disable=SC2034
     REQSTOP_PID="$_pid"
+    # SC2034 for the same reason as the pid above: the consumer is the caller.
     # shellcheck disable=SC2034
     REQSTOP_TS="$_ts"
     return 0
