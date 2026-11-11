@@ -40,33 +40,33 @@ from typing import Any, Literal, Self
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt, ValidationError, model_validator
 
-from tests._bats_suites import (
+from _bats_suites import (
     BatsSuite,
     load_suites,
     resolve_bats,
     suite_files,
 )
-from tests.e2e.helpers.assertions import (
+from .helpers.assertions import (
     assert_clean_shell_export,
     assert_no_resource_warnings,
     assert_referential_integrity,
     assert_valid_pydantic,
 )
-from tests.e2e.helpers.mock_hardware import (
+from .helpers.mock_hardware import (
     ASUS_SPARK_PROFILE,
     DELL_XPS_PROFILE,
 )
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
-from tests.e2e.helpers.mock_server import HermeticHTTPServer
-from tests.e2e.runner import build_pytest_args, main as runner_main, run_e2e_tests
+from .helpers.mock_procfs import VirtualProcfs
+from .helpers.mock_server import HermeticHTTPServer
+from .runner import build_pytest_args, main as runner_main, run_e2e_tests
 import tools.fsutil as fsutil
 import tools.llm_client as llm_client
 from _test_harness import load_script
-from scripts.kgraph.life_index import load_life_index
-from scripts.kgraph.mcp_server import build_mcp_handler
-from scripts.kgraph.models import GraphEdge, GraphNode
-from scripts.kgraph.projection import project_graph
-from scripts.kgraph.validate import MAX_PAYLOAD_SIZE, validate_graph_payload
+from kgraph.life_index import load_life_index
+from kgraph.mcp_server import build_mcp_handler
+from kgraph.models import GraphEdge, GraphNode
+from kgraph.projection import project_graph
+from kgraph.validate import MAX_PAYLOAD_SIZE, validate_graph_payload
 
 _oc_restart_check = load_script("scripts/oc-restart-check.py", "oc_restart_check_mod")
 _parent_is_systemd = _oc_restart_check._parent_is_systemd
@@ -185,7 +185,7 @@ class ChatCompletionRequest(BaseModel):
 
 def test_tier2_f1_01_empty_path_variable_bats_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifies bats resolution when PATH is empty string handles gracefully."""
-    import tests._bats_suites as bs
+    import _bats_suites as bs
 
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(bs, "_bats_checked", False)
@@ -204,7 +204,7 @@ def test_tier2_f1_01_empty_path_variable_bats_resolution(monkeypatch: pytest.Mon
 
 def test_tier2_f1_02_non_executable_bats_candidate_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifies that a candidate bats file lacking execute permission is skipped."""
-    import tests._bats_suites as bs
+    import _bats_suites as bs
 
     fake_bin = tmp_path / "bats"
     fake_bin.write_text("#!/bin/sh\necho bats\n", encoding="utf-8")
@@ -222,7 +222,7 @@ def test_tier2_f1_02_non_executable_bats_candidate_skipped(tmp_path: Path, monke
 
 def test_tier2_f1_03_load_suites_empty_tsv_raises_value_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifies that an empty suites TSV raises ValueError rather than returning empty list."""
-    import tests._bats_suites as bs
+    import _bats_suites as bs
 
     empty_tsv = tmp_path / "bats-suites.tsv"
     empty_tsv.write_text("", encoding="utf-8")
@@ -236,7 +236,7 @@ def test_tier2_f1_04_load_suites_non_integer_timeout_raises_value_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verifies that non-integer timeout strings raise ValueError citing line number."""
-    import tests._bats_suites as bs
+    import _bats_suites as bs
 
     bad_tsv = tmp_path / "bats-suites.tsv"
     bad_tsv.write_text("tests/*.bats\tfast\tnot_a_number\t60\n", encoding="utf-8")
@@ -1041,7 +1041,7 @@ def test_tier2_f14_05_windows_crlf_line_endings_rejected() -> None:
 
 def test_tier2_f15_01_isolated_sys_path_execution() -> None:
     """Verifies direct imports work cleanly without sys.path.insert(0, ...) hacks."""
-    import scripts.check_ci_status as ci_status
+    import check_ci_status as ci_status
 
     assert hasattr(ci_status, "main")
 
@@ -1454,7 +1454,7 @@ def test_tier2_f23_04_temperature_out_of_range() -> None:
 
 def test_tier2_f23_05_empty_model_data_list_handling() -> None:
     """Verifies handling of response payload containing empty model list."""
-    payload = {"data": []}
+    payload: dict[str, list[object]] = {"data": []}
     assert isinstance(payload.get("data"), list)
     assert len(payload["data"]) == 0
 

@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Any, Generator
 import pytest
 
-from tests.e2e.helpers.mock_hardware import (
+from .helpers.mock_hardware import (
     emulate_asus_spark,
     emulate_dell_xps,
 )
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
-from tests.e2e.helpers.mock_server import HermeticHTTPServer
+from .helpers.mock_procfs import VirtualProcfs
+from .helpers.mock_server import HermeticHTTPServer
 
 
 def pytest_configure(config: pytest.Config) -> None:

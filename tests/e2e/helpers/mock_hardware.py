@@ -13,7 +13,7 @@ import os
 import subprocess
 from contextlib import contextmanager
 from typing import Any, Generator
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
+from .mock_procfs import VirtualProcfs
 
 ASUS_SPARK_PROFILE: dict[str, Any] = {
     "profile_id": "asus-n1n-rtx-spark",

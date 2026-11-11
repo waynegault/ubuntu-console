@@ -38,23 +38,23 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt, 
 
 from _probe_paths import load_probe
 from _test_harness import load_script
-from scripts.kgraph.models import Graph, GraphEdge, GraphNode
-from scripts.kgraph.projection import project_graph
-from tests.e2e.helpers.assertions import (
+from kgraph.models import Graph, GraphEdge, GraphNode
+from kgraph.projection import project_graph
+from .helpers.assertions import (
     assert_clean_shell_export,
     assert_no_resource_warnings,
     assert_referential_integrity,
     assert_valid_pydantic,
     assert_validation_error,
 )
-from tests.e2e.helpers.mock_hardware import (
+from .helpers.mock_hardware import (
     ASUS_SPARK_PROFILE,
     DELL_XPS_PROFILE,
     emulate_asus_spark,
     emulate_dell_xps,
 )
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
-from tests.e2e.helpers.mock_server import HermeticHTTPServer
+from .helpers.mock_procfs import VirtualProcfs
+from .helpers.mock_server import HermeticHTTPServer
 from tools.fsutil import atomic_write_text
 from tools.llm_client import LLMClientError, extract_text, extract_usage, get_models, post_chat
 
@@ -260,7 +260,7 @@ def test_tier3_f21_f22_graph_projection_mcp_server_dispatch() -> None:
 
     Verifies that projected graphs integrate seamlessly with MCP query functions.
     """
-    from scripts.kgraph.mcp_server import find_path_result, query_nodes
+    from kgraph.mcp_server import find_path_result, query_nodes
 
     g = Graph(
         nodes=[
@@ -451,7 +451,7 @@ def test_tier3_f1_f4_resilient_bats_collection_pytest_config() -> None:
     Verifies that tests._bats_suites parses test suites correctly and handles
     missing bats binaries without crashing collection.
     """
-    from tests._bats_suites import load_suites, resolve_bats
+    from _bats_suites import load_suites, resolve_bats
 
     suites = load_suites()
     assert len(suites) > 0

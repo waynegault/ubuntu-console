@@ -48,7 +48,11 @@
 # and the run fails if any counter disagrees.
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-11-11): the exec puts REPO_ROOT on PYTHONPATH.  ratchet_check.py has one
+#       import path (`from tools.fsutil import ...`) instead of a script-mode fallback
+#       to a second module name; this wrapper is what makes that path resolve when the
+#       module is executed as a file, including the BATS sandbox copy.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -81,7 +85,11 @@ fi
 # The counters are a real module now (tools/ratchet_check.py) so ruff, mypy and
 # pyright see them; this wrapper only selects the interpreter and forwards the
 # same argv — `python3 -` and `python3 <file>` both expose the arguments at
-# sys.argv[1:].
-exec "$_python" "$REPO_ROOT/tools/ratchet_check.py" "$REPO_ROOT" "$BASELINE" "$mode"
+# sys.argv[1:].  REPO_ROOT goes on PYTHONPATH so the module's one import path
+# (`from tools.fsutil import ...`) resolves in script mode too; the BATS fixture
+# copies this wrapper beside the module, so its own REPO_ROOT is the sandbox and
+# `tools` there is a namespace package.
+exec env PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    "$_python" "$REPO_ROOT/tools/ratchet_check.py" "$REPO_ROOT" "$BASELINE" "$mode"
 
 # end of file

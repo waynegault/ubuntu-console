@@ -31,20 +31,20 @@ from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt
 
 from _probe_paths import load_probe
 from _test_harness import load_script
-from scripts.kgraph.models import Graph, GraphEdge, GraphNode
-from scripts.kgraph.projection import project_graph
-from tests.e2e.helpers.assertions import (
+from kgraph.models import Graph, GraphEdge, GraphNode
+from kgraph.projection import project_graph
+from .helpers.assertions import (
     assert_clean_shell_export,
     assert_no_resource_warnings,
     assert_referential_integrity,
     assert_valid_pydantic,
 )
-from tests.e2e.helpers.mock_hardware import (
+from .helpers.mock_hardware import (
     emulate_asus_spark,
     emulate_dell_xps,
 )
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
-from tests.e2e.helpers.mock_server import HermeticHTTPServer
+from .helpers.mock_procfs import VirtualProcfs
+from .helpers.mock_server import HermeticHTTPServer
 from tools.fsutil import atomic_write_text
 from tools.llm_client import LLMClientError, extract_text, extract_usage, get_models, post_chat
 
@@ -240,7 +240,7 @@ def test_tier4_w03_f16_f19_f20_f21_f22_kgraph_ingestion_to_mcp_query(tmp_path: P
     4. Atomically saved via tools.fsutil.atomic_write_text.
     5. Queried via MCP server methods (query_nodes, find_path_result).
     """
-    from scripts.kgraph.mcp_server import find_path_result, query_nodes
+    from kgraph.mcp_server import find_path_result, query_nodes
 
     # 1. Ingest concepts and build graph
     nodes = [
@@ -550,7 +550,7 @@ def test_tier4_w10_f20_f21_f22_mcp_server_end_to_end_dispatch() -> None:
     2. Validates kgraph_stats, kgraph_query, kgraph_path execution.
     3. Validates error codes: -32600 (invalid envelope), -32601 (unknown method), -32602 (bad params).
     """
-    from scripts.kgraph.mcp_server import build_mcp_handler
+    from kgraph.mcp_server import build_mcp_handler
 
     graph_payload = {
         "nodes": [
@@ -662,7 +662,7 @@ def test_tier4_w13_f1_f25_end_to_end_verification_gate() -> None:
     2. Certifies Tier 3 cross-feature test suite runs with 100% pass rate.
     3. Confirms zero resource warnings or socket leaks.
     """
-    from tests.e2e.runner import build_pytest_args, run_e2e_tests
+    from .runner import build_pytest_args, run_e2e_tests
 
     # Verify runner arguments
     args = build_pytest_args(tier="3", verbose=True)

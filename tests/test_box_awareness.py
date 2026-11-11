@@ -43,14 +43,17 @@ def test_hardware_profiles_registry_contains_target_boxes() -> None:
 
 def test_hardware_profile_is_frozen_and_validates_strictly() -> None:
     with pytest.raises(ValidationError):
+        # The ignore below is the point of this case: the assignment is illegal at
+        # run time (frozen model), and it must be attempted to prove that it is.
         ASUS_RTX_SPARK_PROFILE.id = "mutated"  # type: ignore[misc]
 
     with pytest.raises(ValidationError):
         PortAllocation(
+            primary_port=18087,
             lanes=[
                 LaneSpec(unit_name="a.service", port=18087, is_primary=True),
                 LaneSpec(unit_name="b.service", port=18087),
-            ]
+            ],
         )
 
     with pytest.raises(ValidationError):

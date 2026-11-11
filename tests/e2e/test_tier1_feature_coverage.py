@@ -31,19 +31,19 @@ from pydantic import (
 )
 import pytest
 
-from tests.e2e.helpers.assertions import (
+from .helpers.assertions import (
     assert_clean_shell_export,
     assert_no_resource_warnings,
     assert_referential_integrity,
     assert_valid_pydantic,
 )
-from tests.e2e.helpers.mock_hardware import (
+from .helpers.mock_hardware import (
     ASUS_SPARK_PROFILE,
     DELL_XPS_PROFILE,
     MockHardwareEmulator,
 )
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
-from tests.e2e.helpers.mock_server import HermeticHTTPServer
+from .helpers.mock_procfs import VirtualProcfs
+from .helpers.mock_server import HermeticHTTPServer
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -221,7 +221,7 @@ class ChatCompletionResponse(BaseModel):
 @pytest.mark.tier1
 def test_tier1_f1_01_bats_suite_table_loading() -> None:
     """F1: _bats_suites.load_suites loads tests/bats-suites.tsv with valid fields."""
-    from tests._bats_suites import BatsSuite, load_suites
+    from _bats_suites import BatsSuite, load_suites
 
     suites = load_suites()
     assert len(suites) > 0
@@ -236,7 +236,7 @@ def test_tier1_f1_01_bats_suite_table_loading() -> None:
 @pytest.mark.tier1
 def test_tier1_f1_02_bats_suite_files_mapping_no_duplicates() -> None:
     """F1: _bats_suites.suite_files provides distinct .bats file mappings without duplicates."""
-    from tests._bats_suites import suite_files
+    from _bats_suites import suite_files
 
     files = suite_files()
     assert len(files) > 0
@@ -251,7 +251,7 @@ def test_tier1_f1_02_bats_suite_files_mapping_no_duplicates() -> None:
 @pytest.mark.tier1
 def test_tier1_f1_03_resolve_bats_graceful_none_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """F1: resolve_bats(required=False) returns None or path without raising FileNotFoundError."""
-    import tests._bats_suites as bs
+    import _bats_suites as bs
 
     monkeypatch.setattr(bs, "_bats_checked", False)
     monkeypatch.setattr(bs.shutil, "which", lambda _cmd: None)
@@ -266,7 +266,7 @@ def test_tier1_f1_03_resolve_bats_graceful_none_when_absent(monkeypatch: pytest.
 @pytest.mark.tier1
 def test_tier1_f1_04_resolve_bats_required_raises_on_absence(monkeypatch: pytest.MonkeyPatch) -> None:
     """F1: resolve_bats(required=True) raises FileNotFoundError when bats is completely absent."""
-    import tests._bats_suites as bs
+    import _bats_suites as bs
 
     monkeypatch.setattr(bs, "_bats_checked", False)
     monkeypatch.setattr(bs.shutil, "which", lambda _cmd: None)
@@ -281,7 +281,7 @@ def test_tier1_f1_04_resolve_bats_required_raises_on_absence(monkeypatch: pytest
 @pytest.mark.tier1
 def test_tier1_f1_05_resolve_bats_finds_candidate_in_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """F1: resolve_bats resolves candidate path when shutil.which returns a valid executable."""
-    import tests._bats_suites as bs
+    import _bats_suites as bs
 
     fake_bats = tmp_path / "fake-bats"
     fake_bats.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -1209,7 +1209,7 @@ def test_tier1_f14_05_python_wrapper_execution_permissions() -> None:
 @pytest.mark.tier1
 def test_tier1_f15_01_check_ci_status_direct_import() -> None:
     """F15: scripts.check_ci_status imports cleanly without sys.path hacks."""
-    from scripts.check_ci_status import _normalize_summary
+    from check_ci_status import _normalize_summary
 
     assert callable(_normalize_summary)
 
@@ -1434,7 +1434,7 @@ def test_tier1_f18_02_nas_cpap_unified_dead_stub_quarantine() -> None:
 @pytest.mark.tier1
 def test_tier1_f18_03_graphedge_source_target_endpoints() -> None:
     """F18: GraphEdge requires explicit source and target endpoints."""
-    from scripts.kgraph.models import GraphEdge
+    from kgraph.models import GraphEdge
 
     edge = GraphEdge(source="n1", target="n2", label="connects")
     assert edge.source == "n1"
@@ -1445,7 +1445,7 @@ def test_tier1_f18_03_graphedge_source_target_endpoints() -> None:
 @pytest.mark.tier1
 def test_tier1_f18_04_graphedge_rejects_missing_endpoints() -> None:
     """F18: GraphEdge validation rejects data missing source or target."""
-    from scripts.kgraph.models import GraphEdge
+    from kgraph.models import GraphEdge
 
     with pytest.raises(ValidationError):
         GraphEdge.model_validate({"source": "n1", "label": "rel"})
@@ -1455,7 +1455,7 @@ def test_tier1_f18_04_graphedge_rejects_missing_endpoints() -> None:
 @pytest.mark.tier1
 def test_tier1_f18_05_graphedge_origin_clean_attribute() -> None:
     """F18: GraphEdge preserves origin field cleanly without overloaded source hacks."""
-    from scripts.kgraph.models import GraphEdge
+    from kgraph.models import GraphEdge
 
     edge = GraphEdge(source="n1", target="n2", origin="ast_parser")
     assert edge.origin == "ast_parser"
@@ -1572,7 +1572,7 @@ def test_tier1_f20_03_graph_edge_empty_target_rejected() -> None:
 @pytest.mark.tier1
 def test_tier1_f20_04_single_character_identifiers_accepted() -> None:
     """F20: Single character identifiers are valid."""
-    from scripts.kgraph.models import GraphEdge, GraphNode
+    from kgraph.models import GraphEdge, GraphNode
 
     node = GraphNode(id="a", label="A")
     edge = GraphEdge(source="a", target="b", label="link")
@@ -1585,7 +1585,7 @@ def test_tier1_f20_04_single_character_identifiers_accepted() -> None:
 @pytest.mark.tier1
 def test_tier1_f20_05_multichar_identifiers_accepted() -> None:
     """F20: Standard multi-character and namespaced identifiers validate cleanly."""
-    from scripts.kgraph.models import GraphEdge, GraphNode
+    from kgraph.models import GraphEdge, GraphNode
 
     node = GraphNode(id="service:auth:jwt_validator", label="JWT Validator")
     edge = GraphEdge(source="service:auth:jwt_validator", target="db:tokens", label="queries")
@@ -1804,7 +1804,7 @@ def test_tier1_f23_05_chat_completion_response_schema() -> None:
 @pytest.mark.tier1
 def test_tier1_f24_01_runner_tier_selection_args() -> None:
     """F24: runner.build_pytest_args selects Tier 1 test file."""
-    from tests.e2e.runner import build_pytest_args
+    from .runner import build_pytest_args
 
     args = build_pytest_args(tier="1")
     assert any("test_tier1_feature_coverage.py" in a for a in args)
@@ -1814,7 +1814,7 @@ def test_tier1_f24_01_runner_tier_selection_args() -> None:
 @pytest.mark.tier1
 def test_tier1_f24_02_runner_feature_filter_args() -> None:
     """F24: runner.build_pytest_args builds -k expression for feature identifier."""
-    from tests.e2e.runner import build_pytest_args
+    from .runner import build_pytest_args
 
     args = build_pytest_args(feature="F7")
     assert "-k" in args
@@ -1826,7 +1826,7 @@ def test_tier1_f24_02_runner_feature_filter_args() -> None:
 @pytest.mark.tier1
 def test_tier1_f24_03_runner_keyword_and_feature_combined() -> None:
     """F24: runner.build_pytest_args combines keyword and feature filter with and."""
-    from tests.e2e.runner import build_pytest_args
+    from .runner import build_pytest_args
 
     args = build_pytest_args(keyword="spark", feature="F8")
     assert "-k" in args
@@ -1838,7 +1838,7 @@ def test_tier1_f24_03_runner_keyword_and_feature_combined() -> None:
 @pytest.mark.tier1
 def test_tier1_f24_04_runner_dry_run_execution() -> None:
     """F24: runner.main with --dry-run prints command and exits with 0."""
-    from tests.e2e.runner import main
+    from .runner import main
 
     ret = main(["--tier", "1", "--dry-run"])
     assert ret == 0
@@ -1848,7 +1848,7 @@ def test_tier1_f24_04_runner_dry_run_execution() -> None:
 @pytest.mark.tier1
 def test_tier1_f24_05_runner_durations_and_failfast_flags() -> None:
     """F24: runner.build_pytest_args includes --durations and -x."""
-    from tests.e2e.runner import build_pytest_args
+    from .runner import build_pytest_args
 
     args = build_pytest_args(durations=10, failfast=True)
     assert "--durations=10" in args

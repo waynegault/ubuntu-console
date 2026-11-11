@@ -13,15 +13,15 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from tests.e2e.helpers.assertions import (
+from .helpers.assertions import (
     assert_clean_shell_export,
     assert_no_resource_warnings,
     assert_referential_integrity,
     assert_valid_pydantic,
     assert_validation_error,
 )
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
-from tests.e2e.runner import build_pytest_args
+from .helpers.mock_procfs import VirtualProcfs
+from .runner import build_pytest_args
 
 
 # --- Hermetic Sandbox Tests ---

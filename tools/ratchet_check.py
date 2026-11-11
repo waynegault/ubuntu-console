@@ -9,16 +9,20 @@ import re
 import subprocess
 import sys
 
+# One import path, not two.  The wrapper (tools/count-ratchet.sh) puts REPO on
+# PYTHONPATH, so `tools.fsutil` resolves both when this module is imported as
+# `tools.ratchet_check` and when it is executed as a script — including the BATS
+# fixture that copies the wrapper, this file and fsutil.py into a sandbox, where
+# `tools` is a namespace package.  The old `except ModuleNotFoundError: from fsutil`
+# fallback was a second module identity that mypy could not resolve.
+from tools.fsutil import atomic_write_text
+
 # The invocation values.  The wrapper ALWAYS passes them and main() reads them
 # from there; these module-level values are the import-safe defaults for a caller
 # that imports the counters (a test) — this module's own repo, its baseline and the
 # check mode.  They are not a fallback for a caller that forgot an argument:
 # running the program with too few arguments still raises.
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-try:
-    from tools.fsutil import atomic_write_text
-except ModuleNotFoundError:
-    from fsutil import atomic_write_text  # type: ignore[no-redef]
 BASELINE = os.path.join(REPO, "tools", "ratchet-baseline.tsv")
 MODE = "check"
 

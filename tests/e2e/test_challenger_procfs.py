@@ -13,8 +13,8 @@ import threading
 import time
 import pytest
 
-from tests.e2e.helpers.mock_hardware import emulate_asus_spark, emulate_dell_xps
-from tests.e2e.helpers.mock_procfs import VirtualProcfs
+from .helpers.mock_hardware import emulate_asus_spark, emulate_dell_xps
+from .helpers.mock_procfs import VirtualProcfs
 
 
 # Every adversarial case below proves a BYPASS by reading /proc/1/comm outside the virtual

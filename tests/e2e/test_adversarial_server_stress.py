@@ -29,8 +29,8 @@ from typing import Generator
 
 import pytest
 
-from tests.e2e.helpers.assertions import assert_no_resource_warnings
-from tests.e2e.helpers.mock_server import HermeticHTTPServer
+from .helpers.assertions import assert_no_resource_warnings
+from .helpers.mock_server import HermeticHTTPServer
 
 pytestmark = pytest.mark.e2e
 

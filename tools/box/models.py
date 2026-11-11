@@ -1,8 +1,13 @@
 """Pydantic v2 domain models for box profiles and hardware awareness.
 
-Module Version: 1 (2026-11-10)
+Module Version: 2 (2026-11-11)
 Provides typed, validated, and immutable schemas for hardware architectures,
 memory models, serving parameters, quantization policies, and lane port allocations.
+
+v2 (2026-11-11): PortAllocation rejects two lanes on one TCP port.  The check was
+    asserted by tests/test_box_awareness.py but never implemented — the case passed
+    only because the constructor was missing its required primary_port, so it raised
+    for the wrong reason and the duplicate-port invariant was untested.
 """
 
 from __future__ import annotations
@@ -189,6 +194,20 @@ class PortAllocation(BaseModel):
     def format_lane_specs(self) -> str:
         """Format as newline-delimited unit_name|port strings for bash export."""
         return "\n".join(f"{lane.unit_name}|{lane.port}" for lane in self.lanes)
+
+    @model_validator(mode="after")
+    def validate_unique_lane_ports(self) -> PortAllocation:
+        """Reject two lanes on one TCP port: the second bind cannot succeed.
+
+        The profile is the source of truth every lane and watchdog reads, so a
+        duplicate here would be discovered as one lane silently failing to start
+        rather than as a configuration error.
+        """
+        ports = [lane.port for lane in self.lanes]
+        duplicates = sorted({port for port in ports if ports.count(port) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate lane port(s): {', '.join(map(str, duplicates))}")
+        return self
 
 
 class HardwareProfile(BaseModel):

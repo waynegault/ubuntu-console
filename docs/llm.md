@@ -1200,10 +1200,10 @@ are tool choice, second-step routing, and argument construction.
 
 ```bash
 # score responses recorded earlier (no server, no GPU)
-python3 tools/llm_outcome_cases.py --responses responses.jsonl --json
+python3 -m tools.llm_outcome_cases --responses responses.jsonl --json
 
 # ask a loopback llama-server (a remote URL is refused — case prompts stay local)
-python3 tools/llm_outcome_cases.py --run --write "$HOME/.llm/outcomes/$(hostname).json"
+python3 -m tools.llm_outcome_cases --run --write "$HOME/.llm/outcomes/$(hostname).json"
 ```
 
 **Scope.** Thirteen cases is a smoke-sized correctness signal, not a benchmark: enough to catch a

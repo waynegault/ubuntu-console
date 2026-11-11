@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+from email.message import Message
 from unittest import mock
 
 import pytest
@@ -107,10 +108,15 @@ def test_an_http_error_carries_its_status():
 
 def test_http_error_closes_response_resource():
     """Catches an HTTPError socket or temporary file leak when status is non-2xx."""
-    mock_err = urllib.error.HTTPError("http://127.0.0.1:1/v1/models", 500, "Internal Server Error", {}, io.BytesIO(b""))
-    mock_err.close = mock.MagicMock(wraps=mock_err.close)
+    mock_err = urllib.error.HTTPError(
+        "http://127.0.0.1:1/v1/models", 500, "Internal Server Error", Message(), io.BytesIO(b"")
+    )
 
-    with mock.patch("urllib.request.urlopen", side_effect=mock_err):
-        with pytest.raises(llm_client.LLMClientError):
-            llm_client.get_url("http://127.0.0.1:1/v1/models", timeout=1)
-    mock_err.close.assert_called_once()
+    # patch.object replaces the bound method on THIS instance only.  Assigning
+    # `mock_err.close = MagicMock(...)` also worked at run time, but it is not a
+    # legal assignment to a method and mypy refuses it.
+    with mock.patch.object(mock_err, "close", wraps=mock_err.close) as close_spy:
+        with mock.patch("urllib.request.urlopen", side_effect=mock_err):
+            with pytest.raises(llm_client.LLMClientError):
+                llm_client.get_url("http://127.0.0.1:1/v1/models", timeout=1)
+    close_spy.assert_called_once()
