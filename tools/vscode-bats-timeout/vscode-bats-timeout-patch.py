@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Stop the VS Code BATS test-runner killing every suite at ten seconds, and make its
-``--filter`` a shell-safe argument.
+"""Stop the VS Code BATS test-runner killing every suite at ten seconds, make its
+``--filter`` a shell-safe argument, and stop it mutating ``process.env.PATH``.
 
 WHY A PATCH AT ALL.  `kherring.bats-test-runner` spawns one `bats` per suite file with
 
@@ -35,12 +35,27 @@ of the name as a FILE (`ERROR: Test file ".../lane" does not exist`), while an e
 silently MANGLES the filter instead, so it matches nothing.  The fix escapes the apostrophe
 as `'\''`, the one form a single-quoted string cannot express.
 
-THE PATCHES are two literal replacements, applied independently:
+THE THIRD DEFECT (2026-11-11 15:04 UTC) is live `process.env.PATH` mutation in `executeTest`:
+
+    const envs = process.env;
+    ...
+    envs[k] = envs[k] + separator + batsPath;
+
+In Node.js, `process.env` is NOT a plain value copy — `envs` aliases the Extension Host's
+process-wide environment.  Every single test run appends `:.../bats/bin` (~79 bytes) to
+`process.env.PATH` in memory.  After ~1,650 runs (2,896 observed in one session), `PATH`
+exceeds Linux's `MAX_ARG_STRLEN` (128 KiB / 32 pages), and every subsequent `spawn()` in
+the Extension Host — Git, Qwen companion, Mypy LSP server, and tests — fails with
+`Error: spawn E2BIG`.  The fix clones `process.env` (`{ ...process.env }`) and appends
+`batsPath` only if absent.
+
+THE PATCHES are three literal replacements, applied independently:
 
 * `timeout: 1e4` -> `timeout: 36e5` (one hour).  36e5 is chosen against
   `tests/bats-suites.tsv`, whose largest whole-file budget is 2700 s; this suite asserts
   the value stays above it.
 * the `--filter` quoting above, which must keep the label byte-identical through bash.
+* cloning `process.env` and deduplicating `batsPath` in `PATH`.
 
 An extension update replaces `dist/extension.js` and silently reverts both, so:
 
@@ -120,7 +135,42 @@ FILTER_PATCH = Patch(
     ),
 )
 
-PATCHES = (TIMEOUT_PATCH, FILTER_PATCH)
+ENV_PATCH = Patch(
+    name="env path isolation",
+    unpatched=(
+        "  const envs = process.env;\n"
+        '  let separator = ":";\n'
+        '  if (process.platform === "win32") {\n'
+        '    separator = ";";\n'
+        "  }\n"
+        "  for (const k in envs) {\n"
+        '    if (k.toLowerCase() === "path") {\n'
+        "      envs[k] = envs[k] + separator + batsPath;\n"
+        "    }\n"
+        "  }\n"
+    ),
+    patched=(
+        f"  // {MARK}: `process.env` is a live process-wide object, NOT a copy.  Mutating\n"
+        "  // envs[k] in-place appends batsPath on every test run until PATH exceeds Linux's\n"
+        "  // 128 KiB MAX_ARG_STRLEN, causing every spawn() in the Extension Host (Mypy, Git,\n"
+        "  // Qwen, tests) to fail with E2BIG.\n"
+        "  const envs = { ...process.env };\n"
+        '  let separator = ":";\n'
+        '  if (process.platform === "win32") {\n'
+        '    separator = ";";\n'
+        "  }\n"
+        "  for (const k in envs) {\n"
+        '    if (k.toLowerCase() === "path") {\n'
+        '      const currentPath = envs[k] || "";\n'
+        "      if (!currentPath.split(separator).includes(batsPath)) {\n"
+        "        envs[k] = currentPath ? currentPath + separator + batsPath : batsPath;\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+    ),
+)
+
+PATCHES = (TIMEOUT_PATCH, FILTER_PATCH, ENV_PATCH)
 
 
 def targets() -> list[Path]:

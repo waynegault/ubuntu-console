@@ -65,6 +65,20 @@ JS
     args.push("--filter", "'" + item.label + "'");
 JS
         done
+        for ((i = 0; i < copies; i++)); do
+            cat <<'JS'
+  const envs = process.env;
+  let separator = ":";
+  if (process.platform === "win32") {
+    separator = ";";
+  }
+  for (const k in envs) {
+    if (k.toLowerCase() === "path") {
+      envs[k] = envs[k] + separator + batsPath;
+    }
+  }
+JS
+        done
         printf '%s\n' '  const spawnOptions = {'
         printf '%s\n' '    cwd: workspaceFolder,'
         for ((i = 0; i < copies; i++)); do
@@ -179,7 +193,7 @@ sha_of() { sha256sum "$1" | cut -d' ' -f1; }
     [ "$status" -eq 0 ]
     [[ "$output" == *"already patched"* ]]
     [ "$(sha_of "$EXP")" = "$after_first" ]
-    [ "$(grep -c 'LOCALLY PATCHED' "$EXP")" -eq 2 ]
+    [ "$(grep -c 'LOCALLY PATCHED' "$EXP")" -eq 3 ]
 }
 
 @test "bats-timeout patch: a bundle with two spawn timeouts is REFUSED (rc 3) and untouched" {
@@ -321,10 +335,52 @@ sha_of() { sha256sum "$1" | cut -d' ' -f1; }
     [[ "$output" != *"spawn timeout"* ]]
     run "$PY" "$PATCHER" --apply
     [ "$status" -eq 0 ]
-    [ "$(grep -c 'LOCALLY PATCHED' "$EXP")" -eq 2 ]
+    [ "$(grep -c 'LOCALLY PATCHED' "$EXP")" -eq 3 ]
     grep -q 'timeout: 36e5,' "$EXP"
     grep -q 'item.label.replace' "$EXP"
+    grep -q 'const envs = { ...process.env };' "$EXP"
     run "$PY" "$PATCHER" --check
+    [ "$status" -eq 0 ]
+}
+
+@test "bats-timeout patch: process.env is cloned so repeated runs do not bloat PATH (E2BIG)" {
+    # Catches the third defect measured 2026-11-11 15:04 UTC: `const envs = process.env`
+    # mutated the Extension Host's live environment, appending batsPath on every test run
+    # until PATH exceeded Linux's 128 KiB MAX_ARG_STRLEN and broke all spawn() calls
+    # (Mypy, Git, Qwen, tests) with `Error: spawn E2BIG`.
+    write_ext
+    run "$PY" "$PATCHER" --apply
+    [ "$status" -eq 0 ]
+    command -v node >/dev/null 2>&1 || skip "node is not on PATH"
+    grep -q 'const envs = { ...process.env };' "$EXP"
+    # Extract the patched env block from the bundle and run it multiple times in node.
+    local prog
+    prog="$(python3 -c '
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+start = text.index("const envs = { ...process.env };")
+end = text.index("const spawnOptions = {", start)
+block = text[start:end]
+js = f"""
+const fakeProcess = {{ env: {{ PATH: "/usr/bin" }}, platform: "linux" }};
+const batsPath = "/ext/bats/bin";
+function runOnce() {{
+  const process = fakeProcess;
+{block}
+  return envs;
+}}
+const e1 = runOnce();
+const e2 = runOnce();
+if (fakeProcess.env.PATH !== "/usr/bin") {{
+  throw new Error("live process.env mutated: " + fakeProcess.env.PATH);
+}}
+if (e1.PATH !== "/usr/bin:/ext/bats/bin" || e2.PATH !== "/usr/bin:/ext/bats/bin") {{
+  throw new Error("expected deduplicated PATH, got: " + e1.PATH + " / " + e2.PATH);
+}}
+"""
+print(js)
+' "$EXP")"
+    run node -e "$prog"
     [ "$status" -eq 0 ]
 }
 
