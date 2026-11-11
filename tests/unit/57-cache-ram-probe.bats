@@ -340,11 +340,12 @@ gate_stubs() {
 # so no env var can redirect it and the script is NOT edited.  Instead the
 # UNMODIFIED shipped text runs from a scratch repo layout (<scratch>/scripts/…)
 # whose <scratch>/bin/heavy-job is a recording stub, and the four gate inputs are
-# controlled on PATH: gate 4 via an nvidia-smi stub whose output the case picks,
-# gate 1 via a cut stub (this box is BUSY — real /proc/loadavg would close gate 1
-# and the open-gate control would pass only on a quiet box), gate 3 via a cat stub
-# (/dev/shm ledger files exist here and are host state).  No GPU, no lock, no
-# /dev/shm, and the stub never execs its argv, so the real probe cannot run.
+# controlled: gate 4 via an nvidia-smi stub whose output the case picks, gate 1 via
+# a cut stub on PATH (this box is BUSY — real /proc/loadavg would close gate 1 and
+# the open-gate control would pass only on a quiet box), gate 3 via CUDA_CYCLE_GLOB
+# pointed at a path that matches nothing (a cat stub cannot do it: /dev/shm ledger
+# files exist on a live box and the glob expands before cat).  No GPU, no lock, no
+# /dev/shm, and the heavy-job stub never execs its argv, so the real probe cannot run.
 
 # watch_layout — build the scratch repo layout and the controlling stubs.
 # Sets W_SCRIPT (the copy to run), W_OUT, W_STUBBIN, W_LAUNCHES.
@@ -376,8 +377,7 @@ watch_layout() {
     chmod +x "$W_ROOT/bin/heavy-job"
     printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "${W_VRAM_OUT:-}"' > "$W_STUBBIN/nvidia-smi"
     printf '%s\n' '#!/usr/bin/env bash' 'printf "0.10\n"' > "$W_STUBBIN/cut"
-    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$W_STUBBIN/cat"
-    chmod +x "$W_STUBBIN/nvidia-smi" "$W_STUBBIN/cut" "$W_STUBBIN/cat"
+    chmod +x "$W_STUBBIN/nvidia-smi" "$W_STUBBIN/cut"
 }
 
 # watch_run <nvidia-smi-output-MiB> — run the copy with a 1s poll and a 0s budget.
@@ -389,6 +389,7 @@ watch_run() {
     # probe launched.  Both sides now name the same number on either box.
     run env PATH="$W_STUBBIN:$PATH" W_VRAM_OUT="$1" W_LAUNCHES="$W_LAUNCHES" \
         LLAMA_GPU_FREE_THRESHOLD_MIB="$VRAM_MAX" \
+        CUDA_CYCLE_GLOB="$W_ROOT/no-ledger-this-boot-*" \
         bash "$W_SCRIPT" --poll 1 --max-wait 0 --out "$W_OUT"
 }
 
