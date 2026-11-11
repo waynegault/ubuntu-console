@@ -267,8 +267,8 @@ nfield() { sed -n "s/.*\"$2\":\([-0-9]*\).*/\1/p" <<<"$1"; }
         _path=$(command -v "$_cand" 2>/dev/null) || continue
         if "$_path" -c 'pass' >/dev/null 2>&1; then PY="$_path"; break; fi
     done
-    [ -n "$PY" ]
-    "$PY" - "$output" <<'PY'
+    if [ -n "$PY" ]; then
+        "$PY" - "$output" <<'PY'
 import json, sys
 obj = json.loads(sys.argv[1])
 for key in ("state", "diagnosis", "verdict", "order", "reason", "libcuda_first",
@@ -282,6 +282,23 @@ assert obj["arm_wsl"] == "ok"
 assert "\n" not in obj["reason"], "reason carries an embedded newline"
 print("parsed")
 PY
+    else
+        # No usable python on this runner (measured 2026-11-11: its tool python3 cannot
+        # load libpython3.14.so).  jq parses the same document and checks the same keys,
+        # so the contract is still tested rather than skipped.
+        command -v jq >/dev/null 2>&1 || { echo "no python or jq to parse the document"; false; }
+        printf '%s' "$output" | jq -e '
+            (type == "object")
+            and (has("state") and has("diagnosis") and has("verdict") and has("order")
+                 and has("reason") and has("libcuda_first") and has("probe")
+                 and has("arm_default") and has("arm_wsl") and has("probe_rc")
+                 and has("arm_default_rc") and has("arm_wsl_rc") and has("smi_rc")
+                 and has("devices") and has("window_min") and has("dxg_failures")
+                 and has("wsl_crashes"))
+            and (.diagnosis == "libshadow") and (.verdict == "library-shadowed")
+            and (.arm_wsl == "ok") and (.reason | contains("\n") | not)
+        ' >/dev/null
+    fi
 }
 
 @test "contract: prose joins keep their separators (a reflow must not run words together)" {
