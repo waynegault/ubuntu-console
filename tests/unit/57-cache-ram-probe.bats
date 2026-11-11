@@ -235,9 +235,9 @@ smi_stub_fail() {
     export TAC_SMI_BIN="$SMI_STUB"
 }
 
-# gate_stubs — isolate gate_ok's remaining inputs.  The cut and cat stubs
-# intercept ONLY the /proc/loadavg read and the cycle-ledger glob, and delegate
-# everything else to the real command, so no other case in this file is affected.
+# gate_stubs — isolate gate_ok's remaining inputs.  The cut stub intercepts ONLY the
+# /proc/loadavg read and the cycle-glob seam points at an empty ledger, so no other
+# case in this file is affected.
 gate_stubs() {
     cut() {
         # The read is `cut -d' ' -f1 /proc/loadavg`: match on the FILE, not on a
@@ -251,14 +251,12 @@ gate_stubs() {
         done
         command cut "$@"
     }
-    cat() {
-        case "${1:-}" in
-            /dev/shm/autotune-cuda-cycles-*)
-                return 0 ;;                 # gate 3: no ledger content this boot
-            *)
-                command cat "$@" ;;
-        esac
-    }
+    # Gate 3 reads the ledger by glob, so the seam is the GLOB, not `cat`: a `cat`
+    # stub could not intercept it once the box had real ledger files (the glob
+    # expanded before cat ran), and the watcher no longer pipes through cat at all
+    # (inspection 6.2).  An unmatched path makes the gate read 0, which is the
+    # "no ledger content this boot" this file means to test.
+    export CUDA_CYCLE_GLOB="$SANDBOX/no-ledger-this-boot-*"
 }
 
 @test "vram gate: a card that cannot be read FAILS CLOSED" {

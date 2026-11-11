@@ -258,11 +258,15 @@ nfield() { sed -n "s/.*\"$2\":\([-0-9]*\).*/\1/p" <<<"$1"; }
     # newline, and all the tests above stayed green. Parse the document, do not pattern it.
     run env GPU_CONTEXT_PROBE="$STUB/ctx-shadow" GPU_LDCONFIG="$STUB/ldc-native" "$CHECK" --json
     [ "$status" -eq 1 ]
-    # Resolve the interpreter rather than naming one: the CI runner has `python`
-    # but no bare `python3` (measured 2026-11-11, this case exited 127 there while
-    # it passed on the box), and a hardcoded .venv path does not exist in a runner
-    # checkout.
-    PY=$(command -v python3 || command -v python)
+    # Resolve a WORKING interpreter rather than naming one.  The CI runner's bare
+    # `python3` exists but cannot load libpython3.14.so (exit 127), and a hardcoded
+    # .venv path does not exist in a runner checkout — so each candidate is asked to
+    # run before it is trusted (measured 2026-11-11, this case red both ways).
+    PY=""
+    for _cand in python3 python; do
+        _path=$(command -v "$_cand" 2>/dev/null) || continue
+        if "$_path" -c 'pass' >/dev/null 2>&1; then PY="$_path"; break; fi
+    done
     [ -n "$PY" ]
     "$PY" - "$output" <<'PY'
 import json, sys

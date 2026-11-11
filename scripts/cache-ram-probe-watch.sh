@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-11): the ledger files are expanded into an array and awk runs only when
+#     the first exists; no ledger prints 0.  v7's bare glob made awk fail before END and
+#     print NOTHING, which the vram gate read as can't-tell (measured: 57-cache-ram-probe
+#     cases 780-783 went red).  CUDA_CYCLE_GLOB is the seam those cases point at an
+#     empty ledger with, so they no longer read whatever this boot holds.
 #   v8 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v7 (2026-11-11): the cycle-ledger sum reads the files with awk directly instead of
@@ -126,10 +131,19 @@ gate_ok() {
     # swallow-ok: the exit status is captured on the same line (hj_rc) and checked below.
     hj="$("$HEAVY" --status 2>/dev/null)"; hj_rc=$?
     # The ledger is boot-scoped and absent before the first autotune of a boot.
-    # swallow-ok: an absent file and a zero sum are the same state, which the awk prints.
-    # awk reads the ledger files itself: `cat … | awk` was a useless use of cat.
-    # swallow-ok: a glob that matches nothing makes awk print 0, which is the intended sum
-    cycles="$(awk '{s+=$1} END{print s+0}' /dev/shm/autotune-cuda-cycles-* 2>/dev/null)"
+    # awk reads the files itself: `cat … | awk` was a useless use of cat (inspection 6.2).
+    # The files are expanded ONCE into an array and awk runs only when the first one
+    # exists: given an unmatched glob, awk fails before END and prints NOTHING, which
+    # this gate would read as can't-tell (measured 2026-11-11: cyc_ok=0).
+    # CUDA_CYCLE_GLOB is the test seam, so a case can point at an empty ledger instead
+    # of whatever this boot happens to hold.
+    # SC2206: the word splitting IS the glob expansion; quoting would pass a literal path.
+    # shellcheck disable=SC2206
+    local _cycle_files=( ${CUDA_CYCLE_GLOB:-/dev/shm/autotune-cuda-cycles-*} )
+    cycles=0
+    if [[ -e "${_cycle_files[0]}" ]]; then
+        cycles="$(awk '{s+=$1} END{print s+0}' "${_cycle_files[@]}")"
+    fi
     # Gate 4 (v3, hardened v4; the READING is shared since v5).  Deliberately NOT
     # silenced: if nvidia-smi cannot be read the reading stays empty, the numeric test
     # below fails, and the box is treated as BUSY — the gate fails closed, the correct
