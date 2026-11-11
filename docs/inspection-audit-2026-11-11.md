@@ -339,6 +339,76 @@ re-run with shebangs excluded it still reports exactly 1 of 24 undocumented, and
 returns. (c) the CI census was cross-checked against `nightly.yml` — the 7 CI-unlisted suites are all found there,
 so the "named literally" filter is not silently dropping them.
 
+## §12 llama.cpp Integration, audited at `612a47ec`
+
+Frozen at `612a47ec` (`fix(health): name the profile fallback and document the second SC2034`) and exported
+with `git archive`. HEAD equalled this commit and the worktree was clean. 23 items; the profile/lane facts come
+from `tools/box/profiles.py`, the launcher `scripts/11e-llm-model.sh` and the units under `systemd/`.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 12.1.1 | HOLDS | `grep -n 'LLAMA_BUILD_VERSION' scripts/01-constants.sh` | :329 export, :331 `git rev-parse --short HEAD` with an `unknown` fallback, :333 the branch that uses it. Rendered by `model status` (`"build"` / `build=`). |
+| 12.1.2 | FAILS | `grep -rn 'avx512\|avx2\|AVX' scripts/ bin/ tools/ config/` | **0 occurrences** anywhere. The CUDA half holds (`-DGGML_CUDA=ON` at `11e:5750`), but "AVX2/AVX512 detected and used" is absent — and on this aarch64 box neither ISA exists. |
+| 12.1.3 | HOLDS | `grep -n 'function llm-build' scripts/11e-llm-model.sh` | `function llm-build()` at :5437, with v107–v117 changelog entries describing its rules. |
+| 12.2.1 | HOLDS | `grep -rn -- '--jinja' scripts/ bin/ systemd/` | `cmd+=("--jinja")` at `11e:2208`, and every chat unit passes it (the Xe unit carries the 2026-09-18 why-comment). |
+| 12.2.2 | HOLDS | `grep -rn -- '--flash-attn'` | Passed from the row/bench arguments (`autotune-model.sh:1732`, `spec_dec_crossover.sh:136`, `cache-ram-probe.sh:473`). |
+| 12.2.3 | HOLDS | the item's three greps | Exactly **2** lines in `11e-llm-model.sh` (:2017 the `moe_offload_flag` assignment, :2019 the placement message); **0** in `systemd/`; **0** `override-tensor`/`--n-cpu-ffn`/`-ot`. The doc's figures reproduce exactly. |
+| 12.2.4 | HOLDS | `tools/box/profiles.py`; `11e:2173` | **Re-checked, not quoted.** The shared-memory profile sets `gpu_layers=999` (:41) and `ngl_strategy="full_only"` (:52); the discrete profile sets `"ladder"` (:180). `11e:1846` records the old premise as wrong, and the launcher appends `--n-gpu-layers "$gpu_layers"` (:2173). The inversion is implemented. |
+| 12.2.5 | HOLDS | `grep -rn 'load-mode'` | No `--load-mode mlock` anywhere, so the trade-off question is moot; the variant in use is `--load-mode none` (`autotune-model.sh:1723`), and the removed `--no-mmap` spelling appears 0 times. |
+| 12.2.6 | HOLDS | `grep -rn -- '--no-context-shift'` | 0 occurrences, so the "if present, document why" condition does not fire. |
+| 12.2.7 | HOLDS | `grep -rln -- '--reasoning' systemd/*.service` | **5 units** pin `--reasoning off` (minicpm5, xe-llama32, cuda-qwen35-pipeline, cuda-llama32, cpu-qwen25), matching the doc's five. No `--reasoning-budget` exists. |
+| 12.2.8 | HOLDS | `grep -n -- '--batch-size\|--ubatch-size' scripts/11e-llm-model.sh` | :2171 passes both from the profile: 2048/512 on the shared-memory box, 512/256 on the discrete one (`profiles.py`). |
+| 12.2.9 | HOLDS | `tests/unit/13-gguf-ctx-bounds.bats` | The suite pins GGUF-metadata parsing of the model's own context key (`general.context_length`, `<arch>.context_length`) against the rope-scaling original — the window is bounded by the model, not guessed. |
+| 12.2.10 | HOLDS | `grep -rn 'cont-batching' scripts/ bin/ tools/ .github/` | 0 occurrences. `--parallel` is pinned to 1 with a warning (`kv_unified` off), as the doc records. |
+| 12.3.1 | HOLDS | `grep -rn '/health'` vs `/v1/models` | 52 `/health` references, 4 `/v1/models`. The watchdog probes `/health` first (200 → ok, 503 → loading) and falls back to `/v1/models` only for an unrecognised code (`llama-watchdog.sh:377-383`); the 200+JSON pair is enforced at `11e:1804`. |
+| 12.3.2 | HOLDS | `grep '/health' … \| grep -c connect-timeout` | 13 health curls carry `--max-time`; **0** carry `--connect-timeout` — exactly the doc's claim, and correct for loopback. |
+| 12.3.3 | HOLDS | `grep -rn 'slots_idle\|slots_processing'` | 0 occurrences; the item is withdrawn and the tree matches the withdrawal. |
+| 12.3.4 | HOLDS | `scripts/07-telemetry.sh` | TPS comes from the server's `/metrics` counters (`llamacpp:tokens_predicted*`) through awk arithmetic, so it is numeric by construction. |
+| 12.3.5 | HOLDS | `grep -nE 'systemctl.*(stop\|restart)' bin/llama-watchdog.sh` | The watchdog delegates to `systemctl --user stop/restart` (:925, :1036, :1110), so systemd's SIGTERM → `TimeoutStopSec` → SIGKILL sequence applies; the unit file carries no override. |
+| 12.4.1 | FAILS | `grep -rnE '\[\[ -(f\|r\|s) "\$…model…' scripts/11e-llm-model.sh` | No existence/readability or size check on the resolved GGUF before the command is built. The only guard is registry membership ("Model #N not found", :3170/:4581); the `-f` tests near the launcher are for the mmproj and the binary. Recorded as measured — not fixed. |
+| 12.4.2 | HOLDS | `docs/llm.md:32` | The registry format is documented (`~/.llm/models.conf`, 48 columns) and parsed by `11a-llm-registry.sh`. |
+| 12.4.3 | HOLDS | `ls config/quant-guide.conf config/hosts.d/*quant*` | Both guides exist and each profile names its own via `guide_rel_path` (`profiles.py`). |
+| 12.4.4 | HOLDS | `grep -n 'load-mode' docs/llm.md` | `--load-mode none` is documented as the load-failed fallback at :95, :1443-1444 and :1617, with the `--no-mmap` removal noted. |
+| 12.4.5 | FAILS | `bin/llama-watchdog.sh:153` | The watchdog records that it **cannot** drain: "every turn queued on it dies mid-request". A stop/switch errors in-flight turns rather than draining them — the item's expected behaviour, documented as absent. |
+
+**Section controls — §12:** (a) 12.2.3's "expect ZERO" branch returns 2 in `scripts/` and 0 in `systemd/`, so the
+filter both finds and clears; (b) 12.2.10's grep on a fixture containing `--cont-batching` → 1; (c) 12.3.2's
+`connect-timeout` check on a fixture with a `/health` curl that carries it → 1; (d) 12.1.2's AVX grep on a fixture
+containing `AVX2` → 1, which is what makes its zero a measurement rather than a blind pattern.
+
+## §13 Cross-Script Consistency, audited at `612a47ec`
+
+Same frozen export. Counts are over the shipped corpus (148 shell files) unless a row narrows it.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 13.1.1 | HOLDS | `grep -rn 'LLM_PORT\|8081' scripts/ bin/ tactical-console.bashrc` | 4 code sites, all agreeing on 8081: the definition (`01-constants.sh:625`), two `${LLM_PORT:-8081}` fallbacks (`spec-decode-bench.sh:102,106`) and an `ss` grep (`run-autotune-batch.sh:257`). `oc-health-check.py` carries 18081, not 8081, as the doc corrects. |
+| 13.1.2 | HOLDS | `grep -rn '/dev/shm/active_llm' \| grep -v 01-constants` | **0** outside `01-constants.sh`. |
+| 13.1.3 | HOLDS | `grep -n 'LLAMA_.*SERVER_BIN='` | One source (`01-constants.sh:316,326,327`); the launchers repeat the default deliberately and `tests/unit/12-gpu-exclusivity.bats` asserts the two agree. |
+| 13.1.4 | HOLDS | health-URL census | One form, `http://127.0.0.1:<port>/health`, with the port variable spelled `$LLM_PORT` / `$LLM_SERVICE_PORT` / `$_port` per lane — the intended two-port design. |
+| 13.1.5 | HOLDS | `/dev/shm/` path census | Named files only (`llama-watchdog-cuda.suspend` 17 refs, `llm-idle-release.pid` 6, `autotune-cuda-cycles-` 10, …); no writer/reader disagreement. |
+| 13.2.1 | FAILS | `grep -rhoE '"(ERROR\|Error\|error)[: ]'` | Three prefixes: `ERROR:` ×39, `Error:` ×12, `ERROR` (no colon) ×4. The dominant form is `ERROR:`, but 16 sites differ. |
+| 13.2.2 | FAILS | `grep -rhoE 'exit [0-9]+' bin/*` | 0/1/2 dominate (68/61/35) but 2 is not one thing: `bin/fleet-model.sh` uses 2 for *refused* and 64 for usage, while others use 2 for usage; 3 (×12) and 4 (×7) have no shared table. |
+| 13.2.3 | HOLDS | local `log`/`warn` helpers vs `_tac-bin-lib.sh` | 17 tools define their own helper and 10 `bin/` scripts source the shared lib — consistent with §18.3 10.7 (one stderr helper per tool), not drift. |
+| 13.3.1 | HOLDS | `head -2 scripts/<module>.sh` | 16/16 carry `# shellcheck shell=bash`; no new file-level disables (24 disable sites repo-wide at this commit). |
+| 13.3.2 | HOLDS | command-position unquoted-var probe | 2 hits, both `mkdir -p $VAR` inside a printed message string; 0 unquoted path arguments. |
+| 13.3.3 | HOLDS | function-name prefix census | `__internal`/`_internal`/public split is uniform (`__autotune` 10, `_bench` 8, public `warn`/`usage`/`parse`). |
+| 13.3.4 | HOLDS | `install.sh:275-282` | Every `bin/` file is linked into `~/.local/bin`, with a named `launcher` list for the ones that need an exec shim. |
+| 13.4.1 | HOLDS | `for f in scripts/[0-9][0-9]-*.sh; do grep -q '^# Module Version:'` | 0 missing. |
+| 13.4.2 | HOLDS | the item's AI-instruction loop | 0 missing. |
+| 13.4.3 | FAILS | `grep -h '^# Module Version:' scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh \| wc -l` | **20 lines, not one per module**: `01-constants.sh` has 3 (:5, :8, :10) and `04-aliases.sh` 2 (:5, :7). The loader sums every match, so the canonical sum **461** became **611** — `TACTICAL_PROFILE_VERSION` read 13.611 instead of 13.461. The defect the item records as fixed on 2026-10-25 had returned. **Fixed after this audit in `02d2b7db`**: 13 scripts (plus `env.sh`) carried their history as extra `# Module Version:` lines; they now hold one canonical line each and the loader reports 13.463. |
+| 13.4.4 | HOLDS | `tactical-console.bashrc:221,255,267` | The composition is `<loader>.<sum>` and the sum is computed from every match — mechanism correct, value inflated at this commit by 13.4.3. |
+| 13.4.5 | HOLDS | header-format check over the 16 modules | 16/16 carry the `# ─── Module:` divider, the AI block and the version line. |
+| 13.5.1 | HOLDS | `grep -c 'continue' env.sh` | 2 (the `13-init.sh` skip and the PID-validation continue), and env.sh loads the 16 canonical modules from `_module-list.sh`. |
+| 13.5.2 | HOLDS | `grep -n '__TAC_ENV_LOADED' env.sh` | :36 returns early when set, :37 sets it. |
+| 13.5.3 | HOLDS | `grep -n '"\$@"' bin/tac-exec` | :112 `"$@" 2>&1` — arguments passed through unmodified. |
+| 13.5.4 | HOLDS | `test -x bin/tac-exec` | OK. |
+| 13.5.5 | HOLDS | the item's marker loop | Both `env.sh` and `bin/tac-exec` end with `# end of file`. |
+
+**Section controls — §13:** (a) 13.1.2's "zero outside 01-constants" probe on a fixture that repeats the literal
+in a second file → 1; (b) 13.4.3's duplicate detector on a fixture with two version lines → 2 (the check that
+found the real defect); (c) 13.5.5's marker check on a file without it → the MISSING branch fires.
+
 ## Summary
 
 | Section | Items | HOLDS | FAILS | NOT-RUN | PROCEDURE |
@@ -355,4 +425,6 @@ so the "named literally" filter is not silently dropping them.
 | §9 Documentation & Future-Proofing | 15 | 9 | 4 | 2 | 0 |
 | §10 Refactor & Maintainability | 9 | 2 | 6 | 1 | 0 |
 | §11 Testing & CI | 14 | 11 | 3 | 0 | 0 |
-| **Total** | **166** | **97** | **57** | **8** | **4** |
+| §12 llama.cpp Integration | 23 | 20 | 3 | 0 | 0 |
+| §13 Cross-Script Consistency | 22 | 19 | 3 | 0 | 0 |
+| **Total** | **211** | **136** | **63** | **8** | **4** |
