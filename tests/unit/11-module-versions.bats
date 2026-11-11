@@ -98,4 +98,24 @@ teardown() {
     [[ "$output" == "check-module-versions 1" ]]
 }
 
+@test "module-versions: every canonical module carries exactly ONE version line" {
+    # Catches the 2026-10-25 defect recurring (measured again 2026-11-11, inspection
+    # 13.4.3): a module that keeps its history as additional `# Module Version: N`
+    # lines.  The loader greps EVERY match and sums them, so the profile version was
+    # 13.553 against a canonical 13.463 with nothing else wrong.  The canonical set is
+    # _module-list.sh, not a glob: 18-lint.sh is a utility, not a module.
+    run bash -c 'source "$1"; __tac_module_list' _ "$REPO_ROOT/scripts/_module-list.sh"
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+    local module count
+    while IFS= read -r module; do
+        [[ -n "$module" ]] || continue
+        count=$(grep -c '^# Module Version:' "$REPO_ROOT/scripts/$module.sh")
+        [ "$count" -eq 1 ] || {
+            echo "$module.sh carries $count '# Module Version:' lines, expected 1"
+            return 1
+        }
+    done <<< "$output"
+}
+
 # end of file
