@@ -185,6 +185,78 @@ Same frozen export as §4. No live-box reading is used in this section.
 fire); (b) 5.4 on a synthetic `echo "ERROR: x"` → 1; (c) 5.7 on a synthetic `x=$(< /nonexistent)` with no guard →
 UNGUARDED; (d) 5.9's module check was run against a copy of a module with `set -o pipefail` added, and found it.
 
+## §6 Efficiency & Native Bash, audited at `ba8708c9`
+
+Frozen at `ba8708c9` (`test(hermetic): pin the CPU identity and resolve the interpreter`) and exported with
+`git archive`. HEAD was `9a6216c4` when this chunk started — one commit past the target, this audit's own §4/§5
+commit — so every measurement below describes `ba8708c9`. **§6 has no 6.6** (the document runs 6.5 → 6.7), hence
+12 items. Counts are over the 146 shipped shell files unless a row says otherwise; the doc's dated figures
+(2026-09-18, `f7403d24`) are compared against today's tree, which has grown.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 6.1 | FAILS | `grep -nE '\b(sed\|awk\|grep)\b' \| grep -v comment` | 529 shipped sites (1832 with tests) against the doc's 228 at `f7403d24`. The doc calls this a migration backlog, not a defect — recorded as backlog. |
+| 6.2 | FAILS | `grep -nE '\bcat [^\|]*\|[[:space:]]*[a-z]'` | 4 hits: 2 false positives (`journalctl --output=cat`, a usage comment), 1 nas message, and the genuine UUOC the doc names — still present, now at `cache-ram-probe-watch.sh:127` (doc says :118). |
+| 6.3 | FAILS | `grep -nE '^[[:space:]]*\([^(]'` | 77 hits, but the sample is embedded jq/SQL (`.agentId // …`, `(name,)`), not subshells — a jq line matches too (control). Census, not a check. |
+| 6.4 | HOLDS | the item's anchored `while … read` probe | 173 shipped sites: 63 whole-line, 60 field-splitting. The item was closed by reading the sizes (1–45 lines); nothing large was found then, and none appears now. |
+| 6.5 | HOLDS | `grep -nE '\bpython3?\b\|\bperl\b\|\bnode\b'` | 151 mentions; 16 `python3` at command position (JSON templating). Core logic stays native. |
+| 6.7 | FAILS | `tools/count-ratchet.sh --list` §18.3 6.7 | 106 `[ … ]` tests; baseline 106, so the ratchet is AT its baseline. This is the doc's threshold, not a new defect. |
+| 6.8 | FAILS | `grep -nE '\[\[.*[[:space:]]-(gt\|lt\|ge\|le\|eq\|ne)[[:space:]].*\]\]'` | 305 sites against the doc's 232. The doc itself concludes the swap saves nothing (both are builtins, behaviour identical) — threshold, not defect. |
+| 6.9 | FAILS | item's `grep -nE 'echo.*\|'` vs the doc's awk probe | 188 vs 84 (91 with tests). The item's own command is a census — the doc says so, and the two figures agree with its finding; 84 real `echo … \| cmd` sites remain. |
+| 6.10 | HOLDS | `grep -n 'echo -e'` | 0 sites. |
+| 6.11 | HOLDS | `grep -nE '\bmktemp\b' \| grep -v comment` | 40 sites (49 raw). The item's precondition ("consumed once") was read; 39 are `-d`, atomic-replace or multi-write, as the doc records. |
+| 6.12 | HOLDS | `grep -n '\bdu\b'` | 4 sites, none on a `/mnt/*` drvfs path (`/var/cache/apt`, model dir, store, a log string). |
+| 6.13 | FAILS | the item's per-file lookup loop | 36 (file, lookup) pairs repeat (153 call sites) against the doc's 23/100. The doc's own read found the premise fails for `command -v` (a builtin, 20 of 23) — threshold, not defect. |
+
+**Section controls — §6:** (a) 6.2 on a synthetic `cat f | grep x` → 1; (b) 6.10 on `echo -e "x"` → 1; (c) 6.3 on
+a synthetic `( cd /tmp; ls )` → 1 *and* on a jq line → 1, which is the finding: the probe cannot tell them apart;
+(d) the §18.3 counters' 10 controls pass (`--selftest`).
+
+## §7 Portability, audited at `ba8708c9`
+
+Same frozen export as §6. No live-box reading is used in this section.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 7.1 | HOLDS | `head -1 <file>` ×260 | 0 absolute-interpreter shebangs (`#!/home/…`, `#!/usr/local/…`), and no file lacks both a shebang and `# shellcheck shell=bash`. |
+| 7.2 | FAILS | `grep -nE 'stat -c\|find.*-printf\|date \+%s%N\|readarray\|mapfile'` | 89 sites; 0 carry a GNU/Linux-only note within 3 lines. The item asks each be justified and documented. |
+| 7.3 | FAILS | grep file headers for a bash minimum | 0 files state a minimum bash version, so nothing pins the 5.x features the repo uses (`${var@Q}`, `mapfile -d`). |
+| 7.4 | FAILS | `grep -rnE '/mnt/[c-z]\|wslpath\|wsl\.exe\|clip\.exe\|pwsh\.exe'` | 129 sites, 116 with no `WSL_DISTRO_NAME` guard or `command -v …exe` probe within 5 lines. The sampled ones fail predictably (`timeout`, `2>/dev/null`, glob no-match); the item's stated two forms are what is missing. |
+| 7.5 | HOLDS | `grep -nE '\.exe\b'` then read the calls | 33 real `.exe` invocations, 28 documented within 3 lines. The item's raw probe also matches `python-*.exe` globs — a census. |
+| 7.6 | FAILS | `grep -n '/dev/shm'` | 61 uses; 3 carry a mount/WSL note within 3 lines. |
+| 7.7 | FAILS | inspect `/mnt/` usage | 30 `/mnt/[c-z]` sites, 0 with a drvfs performance note within 3 lines. |
+
+**Section controls — §7:** (a) 7.1 on a synthetic `#!/home/linuxbrew/.linuxbrew/bin/bash` → 1; (b) 7.2 on a
+synthetic `stat -c %s f` with no comment → counted undocumented; (c) 7.5's probe on `python-*.exe` matches (the
+census finding); (d) 7.6's note check on a `/dev/shm` line with no neighbouring comment → undocumented.
+
+## §8 Style & Formatting, audited at `ba8708c9`
+
+Same frozen export. Ratchet rows cite `tools/count-ratchet.sh --list`; the baseline equals the count for every
+counter (the ratchet PASSES), so a FAILS here is the document's threshold, labelled as such.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 8.1.1 | NOT-RUN | inspect visually | Blank-line placement is a visual judgement with no probe; a per-file sample read would settle it, and nothing in this pass did. |
+| 8.1.2 | HOLDS | `grep -n '\[\[\$'` | 0 sites: no `[[$a==$b]]` compression. (A broader probe matches regex literals like `[[:space:]]` — a census.) |
+| 8.1.3 | HOLDS | `grep -rlP '\t'` | 1 file: `tests/unit/24-contracts-guards.bats`, whose 4 tabs are literal tab characters inside expected-output strings, not indentation. 0 tab-indented lines. |
+| 8.1.4 | HOLDS | `grep -Pn ' +$'` | 0 lines with trailing whitespace across 260 files. |
+| 8.1.5 | FAILS | `grep -nE ';.*fi$'` | 119 lines against the doc's 48. Threshold, not a new defect. |
+| 8.1.6 | FAILS | `tools/count-ratchet.sh --list` §18.3 4.2.6 | 9 one-line `for … do … done` loops, baseline 9 (at baseline). The item's own `;.*done$` returns 26 — a looser shape. Threshold. |
+| 8.1.7 | FAILS | the item's `&&` / `\|\|` grep (same pattern as 4.2.1) | 1716 matches: a plain `a && b` matches, so the command is a census, not a test for `cmd && ok \|\| fail`. Threshold. |
+| 8.1.8 | FAILS | `tools/count-ratchet.sh --list` §18.3 8.1.8 | 287 non-comment lines over 120 chars, baseline 287 (at baseline). Threshold. |
+| 8.1.9 | HOLDS | `grep -n '<<-'` | 0 occurrences; heredoc bodies are space-indented with the delimiter at column 0. |
+| 8.2.1 | FAILS | `grep -cE '^function '` and `grep -cE '^[a-z_][A-Za-z0-9_]*\(\)'` | 450 `function` and 941 bare `name()` — and **6 files mix both** (`01-constants.sh` 3/1, `11b-llm-autotune.sh` 23/1, `11d-llm-gpu.sh` 29/1, three tests). The doc claims no file mixes the two. |
+| 8.2.2 | HOLDS | `grep -rhoE '(readonly\|export) [a-z][A-Za-z0-9_]*='` | 0 non-UPPER constant declarations. |
+| 8.2.3 | FAILS | `tools/count-ratchet.sh --list` §18.3 4.3.6 | 31 mixedCase `local`/`declare` names, baseline 31 (at baseline). Threshold. |
+| 8.2.4 | HOLDS | `grep -hoE '^# (=+\|═+\|─+)'` | One dominant divider form (192 `# ===…` rules); the lengths vary with the title, not the format. |
+| 8.2.5 | HOLDS | `grep -nE '^\{'` | 28 `^{` lines, 0 of them following a function signature — they are block groupings (`{ … }` redirects). No Allman-brace function. |
+| 8.2.6 | HOLDS | command-position probe over `rm`/`cp`/`mv`/`cd`/`mkdir` | 2 hits, both `mkdir -p $VAR` inside a printed message string, not an executed command; 0 unquoted path arguments. |
+
+**Section controls — §8:** (a) 8.1.4 on a fixture ending in spaces → 1; (b) 8.1.9 on `cat <<-EOF` → 1; (c) 8.1.3
+on a tab-indented fixture → 1; (d) 8.2.1 on a fixture with one `function` and one bare `name()` → both counters
+read 1, so a mixed file is detectable.
+
 ## Summary
 
 | Section | Items | HOLDS | FAILS | NOT-RUN | PROCEDURE |
@@ -195,4 +267,7 @@ UNGUARDED; (d) 5.9's module check was run against a copy of a module with `set -
 | §3 Safety | 14 | 13 | 1 | 0 | 0 |
 | §4 Correctness & Clean Code | 24 | 12 | 9 | 3 | 0 |
 | §5 Robustness | 14 | 11 | 3 | 0 | 0 |
-| **Total** | **94** | **60** | **26** | **4** | **4** |
+| §6 Efficiency & Native Bash | 12 | 5 | 7 | 0 | 0 |
+| §7 Portability | 7 | 2 | 5 | 0 | 0 |
+| §8 Style & Formatting | 15 | 8 | 6 | 1 | 0 |
+| **Total** | **128** | **75** | **44** | **5** | **4** |
