@@ -63,10 +63,67 @@ key → "leaks found: 2", exit 7 (AWS's published example key did *not* fire —
 had to use a non-example key); (d) 2.3.4's synthetic `> /tmp/x` → 1; (e) `ls /dev/shm/*.suspend` → "No such file or
 directory", proving the 2.3.7 glob reports absence.
 
+## §2 Security — Critical (2.4–2.6), audited at `30fe9812`
+
+Frozen at `30fe9812` (`fix(ci): one import identity per module, and the typed-test errors mypy found`) and
+exported with `git archive`. HEAD was `08b8b1cc` when this chunk started — one commit past the target, this
+audit's own §1/§2 commit — so every measurement below describes `30fe9812`, not HEAD. No live-box reading is
+used in this section.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 2.4.1 | HOLDS | `grep -n 'PATH=.*:\.:'` ×261 | 0 matches. |
+| 2.4.2 | HOLDS | `grep -n 'pkill -f' \| grep -v comment` | 0 code; 3 comments (`autotune-model.sh:787`, `interview-benchmark.sh:12`, `tests/tactical-console.bats:2383`). The doc's `:415` is stale. |
+| 2.4.3 | HOLDS | `grep -n 'kill \$('` ×261 | 0 matches. |
+| 2.4.4 | FAILS | `grep -n 'pkill' \| grep -v comment` | 14 mentions, 6 without `-u`; 1 real invocation: `tools/hooks/pre-push:115` (`pkill -TERM -P "$GATE_PID"`), scoped by parent pid, not `-u`. The doc's "every real invocation carries -u" is false. |
+| 2.4.5 | FAILS | inspect each pkill site | 6 real sites: 1 pgrep-verifies (`autotune-model.sh:791`), 3 sleep only, 2 neither (`09f-oc-misc.sh:577`, `pre-push:115`). |
+| 2.5.1 | HOLDS | `grep -nE '\$@\|\$\*' \| grep -v '"'` | 0 unquoted on non-comment lines. |
+| 2.5.2 | FAILS | `grep -nE '\[\[.*\$[a-zA-Z]'` | 4951 matches — every `[[ … $var … ]]`, quoted or not; a correctly-quoted `[[ -n "$x" ]]` matches (control). The rule is also wrong for `[[ ]]`: no word splitting, and patterns must stay unquoted. |
+| 2.5.3 | FAILS | `grep -n 'printf.*\$'` | 1949 matches (every `printf … "$var"`); 20 sites put a variable in the format string (colour tokens, e.g. `05-ui-engine.sh:283`). |
+| 2.5.4 | HOLDS | `grep -nE 'rm.*\$\|mv.*\$\|cp.*\$'` | 819 matches, quoted and unquoted alike; re-derived: 0 unquoted path variables. |
+| 2.5.5 | HOLDS | `grep -n '\bread\b' \| grep -v '\-r'` | 146 hits, all prose ("cannot read"); every real call is `read -r` (335) or `read -ra` (8). |
+| 2.5.6 | HOLDS | `grep -n 'IFS='` | 279 sites; 5 bare assignments, all `local IFS=` or a restore (`11e-llm-model.sh:4238`). |
+| 2.6.1 | FAILS | `grep -nE '> .*\$\|>> '` | 1904 matches — a census, not a check (an atomic `> "$f.tmp" && mv` matches too, control). Re-derived: 1 direct shared-state write, `09d-oc-agents.sh:2200`. |
+| 2.6.2 | FAILS | timer → unit → ExecStart, then `grep flock` | 12 timers; 7 of 9 in-repo targets have no flock/lockfile, including `autotune-resume.sh`, run by BOTH `autotune-resume.timer` (OnBootSec=2min) and `autotune-resume-keeper.timer` (every 15 min). |
+| 2.6.3 | FAILS | inspect `.pid` readers | `11d-llm-gpu.sh:199` checks `kill -0` before trusting; `11e-llm-model.sh:2915-2925` signals the recorded pid with no liveness check, so a reused pid would be TERMed. |
+| 2.6.4 | NOT-RUN | inspect `[[ -f ]]` then act | 383 check-then-act sites; the 8 credential/lock ones sampled are all `if [[ -f ]]; then …` with a window. A per-site review is what would settle it. |
+
+**Section controls — §2.4–2.6:** (a) 2.4.1 on a synthetic `PATH="$PATH:.:/bin"` → 1; (b) 2.4.3 on a synthetic
+`kill $(pgrep -f x)` → 1; (c) 2.5.1 on a synthetic unquoted `$@` → 1; (d) 2.5.2's control *is* the finding — a
+correctly-quoted `[[ -n "$x" ]]` matches the stated probe → 1; (e) 2.6.1's control — a synthetic atomic
+`> "$f.tmp" && mv` matches the stated probe → 1, proving it cannot tell atomic from direct.
+
+## §3 Safety — Critical, audited at `30fe9812`
+
+Same frozen export as §2.4–2.6. No live-box reading is used in this section.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 3.1 | HOLDS | `grep -n "case \$- in"` | 4 hits: 2 profile guards (`tactical-console.bashrc:57`, `14-wsl-extras.sh:168`), 1 echo (`12-dashboard-help.sh:576`), 1 test (`tests/tactical-console.bats:68`). The doc's 3 hits / 2 guards and its line numbers are stale; the substance holds. |
+| 3.2 | HOLDS | `grep -nE 'nohup\|&$\|disown'` | 11 nohup/disown sites, all inside functions (`07-telemetry.sh:81` in `__tac_track_bg_job`, `09f:128` in `oc-kgraph`, `11e:2507` in `__model_use_launch_server`) or standalone nas scripts. |
+| 3.3 | HOLDS | `head -10` per file class | Loader + 16 modules: no `set -euo`. `install.sh:62` yes. 8 `bin/*.sh` yes (MAY). `tools/lint.sh:86` has `-e`; `tools/run-tests.sh:28` is `set -uo` with the stated reason at :25-27. |
+| 3.4 | HOLDS | `grep -nE "trap .*[[:space:]]ERR"` | 1 ERR trap (`02-error-handling.sh:338`), and that file has `set -E`. |
+| 3.5 | FAILS | `grep -n 'trap'` | 32 files trap EXIT; 19 have no INT/TERM trap, so their cleanup does not run on SIGTERM/SIGINT — bash does not run the EXIT trap for an untrapped signal. |
+| 3.6 | HOLDS | `grep -n 'rm -rf.*\$'` | 29 shipped sites; 4 carry `:?`/`[[ -n ]]`; the rest are safe by construction (mktemp, literal globs, function-local state paths). The 3 riskiest inspected (`09f:521`, `pre-push:275`, `08-maintenance:158`) are guarded by `[[ -d ]]`, mktemp and `[[ -e ]]`. |
+| 3.7 | HOLDS | `grep -nE 'rm -rf\|rm -f'` | 197 shipped sites; same finding as 3.6 — no unvalidated target found in the sample. |
+| 3.8 | HOLDS | inspect `.bashrc` files | The loader has no `set -e` (3.3), and neither does `scripts/14-wsl-extras.sh`. |
+| 3.9 | HOLDS | inspect the ERR handler | `02-error-handling.sh:__tac_err_handler` returns early for `__tac_last_err <= 1` ("Skip logging for exit code 1"). |
+| 3.10 | HOLDS | `grep -n 'sudo'` | 39 non-`-n` sites, all `install.sh` (gated by `sudo -n true` at :645/:687) or `08-maintenance.sh`'s user-invoked `up`/loopback functions; every source-time-path sudo uses `-n`. |
+| 3.11 | HOLDS | `grep -nE '&$\|&)'` | 27 sites; 10 capture `$!`; the rest are `&&` line continuations the probe misreads, disowned daemons (`setsid … &`), or subshells with a file handshake (`pre-push:224`). |
+| 3.12 | HOLDS | inspect `while true` / `while :` | 17 sites; 14 bounded (counter, bound, `return`, `break`, `timeout`); 3 are daemons by design (`llm-idle-release.sh:191`, `standby-keeper.sh:35`, `mi-scale-autocollect.sh:72`). |
+| 3.13 | HOLDS | `grep -nE '^ {0,4}(curl\|wget\|nc) '` | 2 curl sites, both inside functions (`_bench_spawn`, `metrics_pair`); no source-time network call. |
+| 3.14 | HOLDS | inspect `pwsh.exe` / `typeperf.exe` | 3 pwsh invocations, all timeout-wrapped (`09d:738` and `:1116` `timeout 20`, `01-constants.sh:498` `timeout 2`). |
+
+**Section controls — §3:** (a) 3.1 on a synthetic `case $- in` → 1; (b) 3.4 on a synthetic `trap … ERR` with no
+`set -E` → 1 trap, 0 `set -E`; (c) 3.6 on a synthetic `rm -rf "$UNSET_VAR"` → 1; (d) 3.12 on a synthetic
+`while true; do :; done` → NO-BREAK; (e) 3.5 on a synthetic EXIT-only trap → "EXIT-only detected".
+
 ## Summary
 
 | Section | Items | HOLDS | FAILS | NOT-RUN | PROCEDURE |
 |---|---|---|---|---|---|
 | §1 Pre-Flight | 13 | 5 | 4 | 0 | 4 |
 | §2 Security (to 2.3.7) | 14 | 12 | 2 | 0 | 0 |
-| **Total** | **27** | **17** | **6** | **0** | **4** |
+| §2 Security (2.4–2.6) | 15 | 7 | 7 | 1 | 0 |
+| §3 Safety | 14 | 13 | 1 | 0 | 0 |
+| **Total** | **56** | **37** | **14** | **1** | **4** |
