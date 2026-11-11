@@ -16,7 +16,10 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-11-11): _tac_unsupervised_cuda_pids — the resident CUDA llama-servers that
+#       no systemd unit owns (a `model use` nohup launch, or a hand-started server).  The
+#       clean-room uses it to clear the card before autotune instead of refusing on them.
 #   v19 (2026-11-11): the second SC2034 disable (REQSTOP_TS) carries its own rationale
 #       line, so the shellcheck directive is documented where the scanner reads it
 #       (inspection 11.5).
@@ -673,6 +676,22 @@ _tac_vram_holder_identities() {
         _exe="${_exe% (deleted)}"
         printf '%s|%s|%s\n' "$_p" "$_unit" "${_exe##*/}"
     done < <(_tac_cuda_server_pids)
+}
+
+# _tac_unsupervised_cuda_pids — pids of resident CUDA servers that NO systemd unit owns.
+#
+# Built on _tac_vram_holder_identities, so the same injection seam drives it in tests
+# and the same identity rules apply (exe, never argv; Xe and CPU builds excluded).  A
+# unit-owned server is excluded: its unit is the thing to stop, and stopping it by pid
+# would let systemd restart it.  These are exactly the census's `no-unit` holders.
+_tac_unsupervised_cuda_pids() {
+    local _pid _unit _exe
+    while IFS='|' read -r _pid _unit _exe
+    do
+        [[ "${_pid:-}" =~ ^[0-9]+$ ]] || continue
+        [[ -z "$_unit" ]] || continue
+        printf '%s\n' "$_pid"
+    done < <(_tac_vram_holder_identities)
 }
 
 # _tac_vram_baseline_verdict <free_mib> <total_mib> — may a measurement start?

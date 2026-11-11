@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 121
+# Module Version: 122
+#   v122 (2026-11-11): `model autotune N` / `model autotune all` route through
+#     bin/autotune-rows.sh (__model_autotune_clean_room), so the clean room — lane,
+#     tenant, runner and unsupervised-server stop, then restore — runs first instead of
+#     the engine refusing a busy card.  --workload / --allow-contended travel as env.
 #   v121 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v120 (2026-11-11): the keeper .pid reaper checks liveness AND the cmdline before
@@ -3381,6 +3385,54 @@ function __autotune_script_path() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_autotune_clean_room — run `model autotune` through bin/autotune-rows.sh.
+#
+# `model autotune N` used to call autotune-model.sh directly: the inner engine, which
+# never stops a lane.  With the chat and embed lanes resident it could only refuse its
+# VRAM baseline (measured 2026-11-11 09:39: 2983 MiB free of 32768).  The wrapper owns
+# the clean room — heavy-job lock, watchdog hold, lane/tenant/runner stop, unsupervised
+# server reap, census — and restores everything on exit.  The engine's flags travel as
+# the environment the batch already honours: --workload -> LLM_AUTOTUNE_WORKLOAD,
+# --allow-contended -> TAC_CONTENDED=1.
+# @param $@ <row|file>... | --all-but-done, plus --workload X / --allow-contended
+# @returns the wrapper's exit code; 2 on a malformed flag.
+# ---------------------------------------------------------------------------
+function __model_autotune_clean_room() {
+    local _wl="${LLM_AUTOTUNE_WORKLOAD:-}" _cont="${TAC_CONTENDED:-0}"
+    local -a _rows=()
+    while (( $# > 0 ))
+    do
+        case "$1" in
+            --workload)
+                if [[ -z "${2:-}" ]]
+                then
+                    if declare -f __tac_info >/dev/null 2>&1
+                    then
+                        __tac_info "Error" "[--workload needs a value (chat|legal|agentic|mix)]" "${C_Error:-}"
+                    else
+                        printf 'Error: [--workload needs a value (chat|legal|agentic|mix)]\n'
+                    fi
+                    # Exit 2: invalid argument (missing workload parameter value)
+                    return 2
+                fi
+                _wl="$2"
+                shift 2
+                ;;
+            --allow-contended) _cont=1; shift ;;
+            *) _rows+=("$1"); shift ;;
+        esac
+    done
+    if (( ${#_rows[@]} == 0 ))
+    then
+        __model_autotune_help
+        # Exit 2: missing required row/file argument
+        return 2
+    fi
+    LLM_AUTOTUNE_WORKLOAD="${_wl:-chat}" TAC_CONTENDED="$_cont" \
+        bash "$(__autotune_script_path ../bin/autotune-rows.sh)" "${_rows[@]}" 2>&1
+}
+
+# ---------------------------------------------------------------------------
 # __bench_build_identity — the build a throughput number came from
 # @description Echo four TAB-separated fields: driver, cuda, build, arch.
 # @returns 0 always.  An unreadable field is echoed as "unknown", never as empty.
@@ -5290,7 +5342,7 @@ function model() {
                 # 1 = rows failed, 0 = clean (2026-09-15 — it used to return 0 even on
                 # a 2-of-2 failure, and this line then announced "[Complete]" over it).
                 _at_rc=0
-                bash "$(__autotune_script_path run-autotune-batch.sh)" 2>&1 || _at_rc=$?
+                __model_autotune_clean_room --all-but-done "$@" || _at_rc=$?
                 if (( _at_rc == 0 ))
                 then
                     __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
@@ -5331,7 +5383,7 @@ function model() {
                     __tac_info "Autotune" "[running it because you named it explicitly; a sweep skips it]" "$C_Warning"
                 fi
             fi
-            bash "$(__autotune_script_path)" "$@" 2>&1
+            __model_autotune_clean_room "$@"
             ;;
 
         bench-diff)

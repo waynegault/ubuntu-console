@@ -18,6 +18,9 @@
 #        tools/docs-sync-check.sh --fix    (rewrite the phrases it derives, then re-check)
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
+# Module Version: 11
+#   v11 (2026-11-11): resolve python via tools/python-runtime.sh so --fix uses the repo's
+#   .venv/bin/python3 instead of failing when TAC_PYTHON names a stale external path.
 # Module Version: 10
 #   v10 (2026-11-02): `--fix`. The gate already printed the exact expected literal for
 #   every drifting phrase, and the repair was being done by hand — three times on
@@ -56,6 +59,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 README="$REPO_ROOT/README.md"
 LOADER="$REPO_ROOT/tactical-console.bashrc"
 
+# Prefer the repo's venv python through the shared python-runtime resolver.
+# shellcheck source=tools/python-runtime.sh
+source "$REPO_ROOT/tools/python-runtime.sh"
+# swallow-ok: fallback to python3 if resolver fails
+_python="$(_tac_python_path "$REPO_ROOT" 2>/dev/null || command -v python3 || echo "python3")"
+
 drift=0
 FIX=0
 fixed_count=0
@@ -74,7 +83,7 @@ esac
 # failure mode this gate exists to catch.
 fix_phrase() {
     local file="$1" desc="$2" expected="$3" locator="${4:-}" n=""
-    n=$("${TAC_PYTHON:-python3}" - "$file" "$locator" "$expected" <<'PY'
+    n=$("$_python" - "$file" "$locator" "$expected" <<'PY'
 import re, sys
 path, locator, expected = sys.argv[1], sys.argv[2], sys.argv[3]
 src = open(path, encoding="utf-8").read()

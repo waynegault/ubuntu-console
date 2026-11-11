@@ -250,3 +250,43 @@ BINLIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
     run grep -c "on this box, 2026-08-28" "$REPO_ROOT/scripts/autotune-model.sh"
     [ "$output" -eq 0 ]
 }
+
+@test "clean-room: only no-unit CUDA holders are named for reaping" {
+    # Measured 2026-11-11 09:39: `model autotune 1` refused on pid 278370 (no unit, :8081)
+    # beside two unit-owned lanes.  A unit-owned server must never be reaped by pid —
+    # systemd would restart it — so only the empty-unit rows may come back.
+    local f="$BATS_TEST_TMPDIR/holders"
+    printf '%s\n' \
+        "2911479|llama-cuda-qwen3embedding-embed.service|llama-server" \
+        "278370||llama-server" \
+        "2911684|llama-cuda-qwen3coder-30b-chat.service|llama-server" > "$f"
+    run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$f" bash -c \
+        'source "$1"; _tac_unsupervised_cuda_pids' _ "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "278370" ]
+}
+
+@test "clean-room: model autotune routes through the wrapper with flags as env" {
+    # Catches: `model autotune N` calling the inner engine, which never stops a lane and so
+    # can only refuse a busy card.  The wrapper is stubbed; the call it receives is the test.
+    local stub="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$stub"
+    run env STUB_DIR="$stub" bash -c '
+        source "$1/scripts/11e-llm-model.sh" >/dev/null 2>&1
+        __autotune_script_path() { printf "%s/rows.sh\n" "$STUB_DIR"; }
+        printf "#!/usr/bin/env bash\nprintf \"wl=%%s cont=%%s args=%%s\\\\n\" \"\$LLM_AUTOTUNE_WORKLOAD\" \"\$TAC_CONTENDED\" \"\$*\"\n" \
+            > "$STUB_DIR/rows.sh"
+        __model_autotune_clean_room 3 --workload legal --allow-contended' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "wl=legal cont=1 args=3" ]
+}
+
+@test "clean-room: a bare --workload is refused, not forwarded" {
+    run bash -c '
+        source "$1/scripts/01-constants.sh" >/dev/null 2>&1 || true
+        source "$1/scripts/05-ui-engine.sh" >/dev/null 2>&1 || true
+        source "$1/scripts/11e-llm-model.sh" >/dev/null 2>&1
+        __model_autotune_clean_room 3 --workload' _ "$REPO_ROOT"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--workload needs a value"* ]]
+}

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
+#   v24 (2026-11-11): clean-room stops unsupervised CUDA llama-servers (no systemd unit) so
+#       the census no longer refuses on a `model use` or hand-started server; opt out with
+#       AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED=0.  `model autotune` now routes through here.
 #   v23 (2026-11-11): clean-room holds actions.runner.* services so CI jobs do not spawn mid-sweep and contend the box.
 # Module Version: 22
 #   v22 (2026-11-10): handle --help / -h cleanly with exit 0 before taking the heavy-job lock.
@@ -378,6 +381,9 @@ if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
     done
     _runner_units=""
     _r=""
+    _p=""
+    _cmd=""
+    _w8=0
     # CI runners contend the box if a push or cron triggers a job mid-sweep (Wayne, 2026-11-11).
     # Holding the runner services prevents Runner.Worker from spawning during the bench.
 # swallow-ok: systemctl error listing units is handled by empty output
@@ -393,6 +399,41 @@ if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
             echo "clean-room: could NOT hold runner $_r - CI may contend the sweep" | tee -a "$LOG"
         fi
     done
+    # UNSUPERVISED CUDA SERVERS (Wayne, 2026-11-11).  A `model use` nohup launch or a
+    # hand-started llama-server has no unit, so nothing above stops it and the census
+    # then refuses on it as an `unlisted-holder` (measured 09:39: pid 278370, :8081).
+    # This run holds the box-wide heavy-job lock, so no other autotune or bench owns
+    # such a server.  It is TERMed (KILL after a bounded wait) and its command line is
+    # logged, because there is no unit to restore it from.  Opt out with
+    # AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED=0 (the census then refuses as before).
+    if [[ "${AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED:-1}" == "1" ]]; then
+        while IFS= read -r _p; do
+            [[ -n "$_p" ]] || continue
+            # swallow-ok: a process that exited mid-scan has no cmdline; the empty string is logged
+            _cmd="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)"
+            echo "clean-room: stopping unsupervised CUDA server pid $_p: ${_cmd:-unknown}" | tee -a "$LOG"
+            # swallow-ok: a pid that already exited is the outcome wanted; the wait below verifies
+            kill -TERM "$_p" 2>/dev/null || true
+            _w8=0
+            # swallow-ok: probe loop checking whether the process exited under TERM
+            while kill -0 "$_p" 2>/dev/null && (( _w8 < 15 )); do
+                sleep 1
+                _w8=$(( _w8 + 1 ))
+            done
+            # swallow-ok: checking whether the process survived TERM to escalate to KILL
+            if kill -0 "$_p" 2>/dev/null; then
+                # swallow-ok: the read-back below reports a survivor, so a failed KILL is never hidden
+                kill -KILL "$_p" 2>/dev/null || true
+                sleep 1
+            fi
+            # swallow-ok: read-back check verifying whether the process is gone
+            if kill -0 "$_p" 2>/dev/null; then
+                echo "clean-room: could NOT stop pid $_p - the census will refuse" | tee -a "$LOG"
+            else
+                echo "clean-room: stopped pid $_p (no unit to restore it - relaunch by hand)" | tee -a "$LOG"
+            fi
+        done < <(_tac_unsupervised_cuda_pids)
+    fi
     # A stop is asynchronous: wait (bounded) for its memory to leave the card, so the
     # baseline below describes a clean card rather than a race with a dying process.
     # The bound is DERIVED, not declared: at a 24 GiB pool the WDDM driver alone
