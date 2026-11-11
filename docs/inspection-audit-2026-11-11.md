@@ -118,6 +118,73 @@ Same frozen export as §2.4–2.6. No live-box reading is used in this section.
 `set -E` → 1 trap, 0 `set -E`; (c) 3.6 on a synthetic `rm -rf "$UNSET_VAR"` → 1; (d) 3.12 on a synthetic
 `while true; do :; done` → NO-BREAK; (e) 3.5 on a synthetic EXIT-only trap → "EXIT-only detected".
 
+## §4 Correctness & Clean Code — High, audited at `bee06f14`
+
+Frozen at `bee06f14` (`docs(lint): give the three undocumented shellcheck disables a rationale`) and exported
+with `git archive`. HEAD was `3f174955` when this chunk started — one commit past the target, this audit's own
+§2.4–2.6/§3 commit — so every measurement below describes `bee06f14`. The §18.3 figures come from the repo's own
+counter (`tools/count-ratchet.sh --list`), whose 10 controls pass (10/10, `--selftest`). `tools/lint.sh` in the
+export passes every stage except two that need a git repository (count-ratchet and the CI gate), which is an
+export artefact, not a finding.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 4.1.1 | HOLDS | `bash -n <file>` ×147 | 0 failures. Control: `if then` → syntax error. |
+| 4.1.2 | FAILS | `shellcheck -s bash -x --source-path=$PWD <file>` ×147 | 157 findings across 47 files, none of them error-severity; "zero at all severity levels" is unachievable per-file, as the doc's own 4.3.3 says. The canonical gate (module graph, 29 members) PASSES. |
+| 4.1.3 | HOLDS | `shellcheck -S error` ×147 | 0 error-severity findings, so nothing is owed under "error = must fix"; 157 warning/info/style remain (4.1.2). |
+| 4.1.4 | NOT-RUN | inspect awk/sed snippets | No extractor for embedded programs; running each against a fixture (or `awk --lint`) would settle it. |
+| 4.1.5 | HOLDS | `grep -nE '\$\[\|\blet\b'` ×259 | 18 hits, all non-bash: JS `let` in heredocs (`qwen-memory-index-patch.sh`), a builtin-name case list (`05-ui-engine.sh:200`), a regex literal. 0 `$[` and 0 bash `let`. |
+| 4.2.1 | FAILS | the item's `grep -nE` over `&&`/`\|\|` ×259 | 1716 matches — a plain `a && b` matches (control), so it is a census; the 167 real `&& … \|\| …` sites are mostly the braced `X && { a \|\| b; }` form the ratchet calls house style. |
+| 4.2.2 | FAILS | inspect `;` chains | 3929 lines chain with `;`, 3213 of them the `; then`/`; do` idiom; no probe separates a two-command chain from that idiom. |
+| 4.2.3 | HOLDS | shellcheck fall-through (SC2221/SC2222) | 0 findings across 147 files. |
+| 4.2.4 | FAILS | `tools/count-ratchet.sh --list` §18.3 4.2.4 | 20 case blocks with neither a `*)` arm nor an explanatory comment. |
+| 4.2.5 | FAILS | `grep -nE 'if .*;.*then'` | 1649 matches — every `if …; then`, the house form the ratchet deliberately does not ratchet. The rule would flag the idiom itself. |
+| 4.2.6 | FAILS | `tools/count-ratchet.sh --list` §18.3 4.2.6 | 9 whole `for … do … done` loops on one line. |
+| 4.2.7 | HOLDS | `grep -nE '(^\|[;&\|{][[:space:]]*)exit'` in the 16 sourced modules | 0 hits in modules; the 31 in `scripts/` are standalone entry points, which 3.3 permits. |
+| 4.2.8 | HOLDS | nested `name() {` at indent | Nested helpers exist (`09d:563 _human`, `11e:3563 __bench_restore_traps`) and each carries a purpose comment; none captures an outer variable, so no dynamic-scoping note is owed. |
+| 4.3.1 | FAILS | `grep -nE 'local [a-z_]+=\$\('` | 96 sites (SC2155): assign and declare on separate lines. |
+| 4.3.2 | FAILS | `grep -nE 'for [a-z_]+ in \$[a-z_]'` | 14 unquoted-string iterations (e.g. `for p in $PATH` after `IFS=':'`), not arrays. |
+| 4.3.3 | HOLDS | `tools/lint.sh` (module graph, 29 members) | PASS — and the per-file alternative's 157 findings are the SC2034/SC2154 noise the item warns against. |
+| 4.3.4 | HOLDS | `grep '^function'` then count references | 0 functions in `scripts/*.sh` defined and never referenced. |
+| 4.3.5 | NOT-RUN | inspect functions | ~1,000 functions; a per-function check of every assignment is needed. What would settle it: a shellcheck rule or an AST pass over assignments inside function bodies. |
+| 4.3.6 | FAILS | `tools/count-ratchet.sh --list` §18.3 4.3.6 | 31 `local`/`declare` names in mixedCase. |
+| 4.3.7 | NOT-RUN | inspect top-level assignments | Needs per-variable usage analysis (which function reads each global); no probe exists. Would settle: an AST pass mapping reads to enclosing functions. |
+| 4.3.8 | HOLDS | `grep -n 'declare -i'` | 0 uses — the item is withdrawn and the repo matches the withdrawal. |
+| 4.3.9 | HOLDS | `grep -n '\breadonly\b'` | 46 readonly declarations present (e.g. `10-deployment.sh:41 _COMMIT_MAX_TOKENS`). |
+| 4.3.10 | HOLDS | `local NAME` also `^NAME=` in the same module | 0 shadowing pairs found across `scripts/*.sh`. |
+| 4.3.11 | HOLDS | `grep -n 'OPENCLAW_ROOT'` | 2 sites: the alias at `01-constants.sh:204` under a 3-line DEPRECATION comment (:201-203), and a display line marked deprecated (`09e:1090`). |
+
+**Section controls — §4:** (a) 4.1.1 on a synthetic `if then` → syntax error; (b) 4.2.1's control *is* its
+finding — a plain `a && b` matches the stated probe; (c) the §18.3 counters' own 10 controls all pass
+(`tools/count-ratchet.sh --selftest`: "10 counters, all controls pass"); (d) 4.3.4's reference check on a fixture
+defining an uncalled function reports refs=1; (e) 4.3.10's shadow check on a fixture with `X=1` plus `local X=2`
+reports the pair.
+
+## §5 Robustness — High, audited at `bee06f14`
+
+Same frozen export as §4. No live-box reading is used in this section.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 5.1 | HOLDS | `grep -n 'command -v'` ×259 | 227 guard sites. |
+| 5.2 | HOLDS | `grep -nE '\b(curl\|wget)\b '` then read the flags | 65 mentions; every real invocation carries `--max-time`/`--connect-timeout` (the one flagged line, `11e:5864`, has `--connect-timeout 10 --max-time 20` on its continuation). |
+| 5.3 | HOLDS | `grep -n '\${[A-Za-z_][A-Za-z0-9_]*:-'` | 1351 defaulted expansions. |
+| 5.4 | FAILS | `grep -nE '(echo\|printf)[^;]*(\[FAIL\]\|Error:\|ERROR:)' \| grep -v '>&2'` | 18 hits; the styled UI lines are the documented exemption, but standalone scripts emit diagnostics on stdout (`autotune-model.sh:533`, `run-autotune-batch.sh:109`, `bin/autotune-resume.sh` ×6). |
+| 5.5 | HOLDS | `grep -nE '\|\| (exit\|return)\|if ! '` | 744 checked-failure sites. |
+| 5.6 | FAILS | `grep -nE '\(\([^)]*/[[:space:]]*[a-z_]'` | 16 variable-divisor sites; 2 guard with a `> 0 ?` ternary (`11e:1079`, `11e:1144`), the rest assume non-zero (`11d:1592`, `11e:1878`, `11f:318/660`). |
+| 5.7 | HOLDS | `grep -n '\$(<'` then read the guard | 45 shipped reads, 40 behind `-f/-s/-r`; the 5 unguarded ones handle the failure explicitly (`\|\| return 0`, `\|\| var=""`) or read a proc file. My first pass counted 13 — it missed `-r` guards. |
+| 5.8 | HOLDS | `grep -nE '^[[:space:]]*cd ' \| grep -v '\|\|'` | 20 unguarded `cd`s; the shipped ones are in `set -euo` scripts (`check-repo-boundaries.sh:9`, `nas-iot-bootstrap.sh:51`), and `11e:2481` is the documented stdin-keeper case where exiting is worse. |
+| 5.9 | HOLDS | `grep -n 'pipefail'` | No sourced module SETS it; `04-aliases.sh` uses `${PIPESTATUS[0]}` at :153 and :238 (doc's :212 is stale). |
+| 5.10 | HOLDS | inspect the one curl call | `11e:5862-5866` checks the result (`\|\| result=""`) and parses the trailing `http_code`. |
+| 5.11 | FAILS | `grep -n '\bjq\b '` | 74 jq calls, 30 with the stated `2>/dev/null`; 44 rely on the caller's `\|\|`/empty check instead. |
+| 5.12 | HOLDS | `grep -nE 'pwsh\|typeperf'` | 3 same as 3.14: every invocation is `timeout`-wrapped (`09d:738`, `09d:1116`, `01-constants.sh:498`). |
+| 5.13 | HOLDS | `grep -nE '\[\[ -s \|stat -c%s\|wc -c'` | 20 size/validity checks on cache reads; `11e:5281` treats an unreadable lock as empty rather than trusting it. |
+| 5.14 | HOLDS | `grep -n 'mkdir -p'` | 473 sites; the writer creates its parent before writing in the sampled paths. |
+
+**Section controls — §5:** (a) 5.2 on a synthetic `curl http://x` with no timeout flag → 1 (the flag check can
+fire); (b) 5.4 on a synthetic `echo "ERROR: x"` → 1; (c) 5.7 on a synthetic `x=$(< /nonexistent)` with no guard →
+UNGUARDED; (d) 5.9's module check was run against a copy of a module with `set -o pipefail` added, and found it.
+
 ## Summary
 
 | Section | Items | HOLDS | FAILS | NOT-RUN | PROCEDURE |
@@ -126,4 +193,6 @@ Same frozen export as §2.4–2.6. No live-box reading is used in this section.
 | §2 Security (to 2.3.7) | 14 | 12 | 2 | 0 | 0 |
 | §2 Security (2.4–2.6) | 15 | 7 | 7 | 1 | 0 |
 | §3 Safety | 14 | 13 | 1 | 0 | 0 |
-| **Total** | **56** | **37** | **14** | **1** | **4** |
+| §4 Correctness & Clean Code | 24 | 12 | 9 | 3 | 0 |
+| §5 Robustness | 14 | 11 | 3 | 0 | 0 |
+| **Total** | **94** | **60** | **26** | **4** | **4** |
