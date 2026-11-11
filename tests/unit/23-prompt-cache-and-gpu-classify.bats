@@ -714,6 +714,74 @@ EOS
     [[ "$output" == "ok" ]]
 }
 
+# ── the KV/attention contradiction, refused before the card is taken ─────────
+# MEASURED 2026-11-11 on this build, CUDA and CPU: `-ctv q8_0 --flash-attn off`
+# exits at context creation with "quantized V cache requires flash_attn to be
+# enabled".  It does NOT fall back.  The refusal must therefore happen in the
+# pre-flight, before the resident lane is stopped — a warning in the builder
+# arrives too late.
+_preflight() {
+    {
+        awk '/^function __model_use_fit_verdict/,/^}/' "$LAUNCHER"
+        awk '/^function __model_use_fit_preflight/,/^}/' "$LAUNCHER"
+    } > "$SANDBOX/preflight.sh"
+    grep -q 'fit_preflight' "$SANDBOX/preflight.sh" \
+        || { echo "FAIL: pre-flight not extracted"; return 1; }
+    cat > "$SANDBOX/preflight-run.sh" <<'EOS'
+set -uo pipefail
+__llm_registry_field() {
+    case "${2:-}" in
+        quant_cache) printf '%s' "${STUB_QUANT_CACHE:-}" ;;
+        flash_attn) printf '%s' "${STUB_FLASH_ATTN:-}" ;;
+        *) printf '' ;;
+    esac
+}
+__tac_vram_total_bytes() { echo 25769803776; }
+__tac_info() { printf '%s\n' "$2"; }
+source "$1"
+file="stub.gguf"
+model_path="/stub/model.gguf"
+model_bytes=2000000000
+arch="qwen2"
+gpu_layers=99
+C_Error=""; C_Dim=""; C_Warning=""
+__model_use_fit_preflight
+EOS
+    bash "$SANDBOX/preflight-run.sh" "$SANDBOX/preflight.sh"
+}
+
+@test "kv/fa: a quantised V cache with flash attention off is REFUSED before the card is taken" {
+    # Fails if: the combination is only warned about (the lane then dies at load,
+    # after the resident model was stopped) or accepted.
+    LLAMA_CACHE_TYPE_V=q8_0 LLAMA_FLASH_ATTN=off run _preflight
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"cannot load with flash attention off"* ]]
+    [[ "$output" == *"Use f16 for V"* ]]
+}
+
+@test "kv/fa: the row's own quant_cache and flash_attn columns are what is judged" {
+    # The env is not the only source: a row carrying q8_0 V and flash_attn=off is
+    # the same dead launch, and must be refused without any env override.  The
+    # override is unset here because env beats the row by design (the launcher's
+    # own precedence), so leaving it set would test the env path again.
+    unset LLAMA_FLASH_ATTN LLAMA_CACHE_TYPE_V
+    STUB_QUANT_CACHE="Q4_K_M/q8_0/q8_0" STUB_FLASH_ATTN="off" run _preflight
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"cannot load with flash attention off"* ]]
+}
+
+@test "kv/fa: f16 V with flash attention off is allowed (control)" {
+    # The Xe lane's shape: FA off is legitimate, and the remedy for a quantised V
+    # is f16 — so this must not be refused, or the refusal would block the fix.
+    LLAMA_CACHE_TYPE_V=f16 LLAMA_FLASH_ATTN=off run _preflight
+    [[ "$status" -eq 0 ]]
+}
+
+@test "kv/fa: a quantised V cache with flash attention on is allowed (control)" {
+    LLAMA_CACHE_TYPE_V=q8_0 LLAMA_FLASH_ATTN=on run _preflight
+    [[ "$status" -eq 0 ]]
+}
+
 @test "placement: the builder emits --cpu-moe when the pre-flight set it" {
     run _build_argv "" "" 18083 "--cpu-moe"
     [[ "$output" == *"--cpu-moe"* ]]

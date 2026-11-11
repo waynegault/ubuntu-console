@@ -114,7 +114,7 @@ measure, not a value to adopt.
 | 4 | `--n-cpu-moe` / `--cpu-moe` (MoE), `--n-cpu-ffn` / `--override-tensor` (dense) | keeps attention and KV on the GPU while weights spill | `--cpu-moe` is chosen automatically when a MoE's weights exceed the card (see "Placement, before the card is taken"); a per-layer `--n-cpu-moe N` and the dense `--n-cpu-ffn` lever are **not wired** — see "Known gaps" |
 | 5 | `-c` with `--fit` | the KV cache you actually allocate | `--fit on --fit-target` on serve; autotune certifies with `--fit off`; `/props` is read back and a mismatch is reported |
 | 6 | `-ctk` / `-ctv` | cache bytes against decode speed | `q8_0/q8_0` default; `f16/f16` is a sweep candidate (the fastest type wherever the window fits); `q4_0/q4_0` is a candidate but is refused by the retrieval gate |
-| 7 | `--flash-attn` | the attention kernel | `on`; `auto` is llama.cpp's default, and a quantised V cache forces it on |
+| 7 | `--flash-attn` | the attention kernel | `on`; `auto` is llama.cpp's default, and a quantised V cache **requires** it. A quantised V with FA off is refused by the pre-flight, before the card is taken — measured 2026-11-11 (CUDA and CPU): llama.cpp exits at context creation with "quantized V cache requires flash_attn to be enabled", it does not fall back |
 | 8 | `--spec-type` | decode against prefill | ngram sweep wired (`ngram-mod`); `draft-mtp` / `draft-dflash` exist in the installed build but are not in the sweep |
 | 9 | `-sm` / `-ts` | multi-GPU split | both hosts here are single-GPU; not applicable |
 | 10 | re-run the same baseline | decode and prefill separately | both are recorded (`BEST_TPS`, `BEST_PREFILL`), and the prefill floor is optional and explicit |

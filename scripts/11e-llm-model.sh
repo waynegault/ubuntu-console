@@ -1,7 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 122
+# Module Version: 123
+#   v123 (2026-11-11): `model use` REFUSES a quantised V cache with flash attention off,
+#     before the card is taken.  Measured on this build (CUDA and CPU): llama.cpp exits at
+#     context creation with "quantized V cache requires flash_attn to be enabled" — it does
+#     not fall back.  The builder's warning arrived after __model_use_claim_cuda_card had
+#     stopped the resident lane, so a load that cannot succeed displaced a serving model
+#     first.  The check now lives in __model_use_fit_preflight and names the remedy (f16 for
+#     V, or enable flash attention); the q4_1/q5_0/q5_1 no-FA-kernel warning stays in the
+#     builder, where a warning is still the right shape.
 #   v122 (2026-11-11): `model autotune N` / `model autotune all` route through
 #     bin/autotune-rows.sh (__model_autotune_clean_room), so the clean room — lane,
 #     tenant, runner and unsupervised-server stop, then restore — runs first instead of
@@ -1926,6 +1934,40 @@ function __model_use_fit_verdict() {
 function __model_use_fit_preflight() {
     local _vram_mb _avail_mb _n_layers="" _verdict _model_mb
     moe_offload_flag=""
+
+    # A quantised V cache cannot be created with flash attention off.  MEASURED
+    # 2026-11-11 on this build, CUDA and CPU: the server exits at context creation
+    # with "llama_init_from_model: quantized V cache requires flash_attn to be
+    # enabled" — it does NOT fall back to an allocatable type.  Refuse HERE, before
+    # the card is taken, rather than warn in the builder after the resident lane has
+    # already been stopped for a load that cannot succeed.
+    local _kv_v _fa_setting _fa_off=0
+    _kv_v="${LLAMA_CACHE_TYPE_V:-}"
+    if [[ -z "$_kv_v" ]]
+    then
+        # quant_cache is QUANT/type-k/type-v; a legacy two-part row has no V and
+        # llama.cpp's f16 default applies.
+        _kv_v=$(__llm_registry_field "$file" quant_cache | cut -d/ -f3)
+    fi
+    [[ -n "$_kv_v" ]] || _kv_v="q8_0"
+    _fa_setting="${LLAMA_FLASH_ATTN:-$(__llm_registry_field "$file" flash_attn)}"
+    [[ -n "$_fa_setting" ]] || _fa_setting="true"
+    case "${_fa_setting,,}" in
+        false|0|no|off) _fa_off=1 ;;
+    esac
+    case "${_kv_v,,}" in
+        f16|bf16|f32) ;;
+        *)
+            if (( _fa_off ))
+            then
+                __tac_info "Error" \
+                    "[--cache-type-v ${_kv_v} cannot load with flash attention off: llama.cpp refuses a quantised V cache at context creation (measured 2026-11-11). Use f16 for V, or enable flash attention.]" \
+                    "$C_Error"
+                return 1
+            fi
+            ;;
+    esac
+
     _model_mb=$(( model_bytes / 1048576 ))
     _vram_mb=$(( $(__tac_vram_total_bytes) / 1048576 ))
     _avail_mb=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo)
@@ -2046,31 +2088,23 @@ function __model_use_build_command() {
         # disagree about what this lane is actually running.
         local kv_k="${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}"
         local kv_v="${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}"
-        # Two combinations a default CUDA build cannot serve as written. Both are
-        # SILENT rather than fatal at the flag level, so they are said out loud before
-        # the launch instead of surfacing as a slow lane or a dead one:
-        #  1. a quantised V cache cannot run with flash attention off — llama.cpp
-        #     refuses to create the context;
-        #  2. q4_1/q5_0/q5_1 have no flash-attention kernel in a default CUDA build and
-        #     attention falls back to the CPU unless the build compiles that pair
-        #     (GGML_CUDA_FA_QUANTS; llama.cpp #28455).
+        # One combination a default CUDA build cannot serve as written, and it is
+        # SILENT at the flag level, so it is said out loud before the launch instead
+        # of surfacing as a slow lane: q4_1/q5_0/q5_1 have no flash-attention kernel
+        # in a default CUDA build and attention falls back to the CPU unless the build
+        # compiles that pair (GGML_CUDA_FA_QUANTS; llama.cpp #28455).
         # The remedy names GGML_CUDA_FA_QUANTS, not the deprecated ALL_QUANTS toggle,
         # which warns on every configure (ggml/cmake/common.cmake:59).
+        #
+        # The OTHER combination — a quantised V cache with flash attention off — is
+        # not warned about here: it is a hard failure (measured 2026-11-11: the server
+        # exits at context creation), so __model_use_fit_preflight REFUSES it before
+        # the card is taken. A warning here would arrive after the resident lane had
+        # already been stopped for a load that cannot succeed.
         # REF: https://vramcalculator.com/llama-cpp-performance-flags/ steps 6-7.
         if [[ "$gpu_layers" != "0" ]]
         then
             local _kv_warn=""
-            case "$kv_v" in
-                f16|bf16|f32) ;;
-                *)
-                    if [[ "$flash_attn_mode" == "off" ]]
-                    then
-                        _kv_warn="--cache-type-v ${kv_v} cannot load with --flash-attn off:"
-                        _kv_warn+=" llama.cpp refuses a quantised V cache without flash"
-                        _kv_warn+=" attention; use f16 for V or leave flash attention on"
-                    fi
-                    ;;
-            esac
             case "$kv_v" in
                 q4_1|q5_0|q5_1)
                     if [[ "$flash_attn_mode" != "off" ]]
