@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 119
+# Module Version: 120
+#   v120 (2026-11-11): the keeper .pid reaper checks liveness AND the cmdline before
+#       signalling (inspection 2.6.3): a pid reused after the keeper exited is no longer
+#       TERMed.  A pid that fails either check is left to the cwd-scoped fallback.
 #   v119 (2026-11-10): (1) `model scan` skips speculative draft heads (`__model_is_draft_head`:
 #     `mtp-*.gguf` / `*dflash*.gguf`) just as v116 skips `mmproj*.gguf`, so auxiliary draft
 #     heads do not register as standalone chat rows.  (2) `__model_use_build_command` passes
@@ -2916,7 +2919,15 @@ function __model_stop() {
     do
         [[ -f "$_keeper_file" ]] || continue
         _keeper_pid=$(< "$_keeper_file")
-        if [[ "$_keeper_pid" =~ ^[0-9]+$ ]]
+        # A .pid file is a CLAIM, not a fact.  Two checks before signalling: the pid
+        # must be alive, and its cmdline must still be the keeper's (`sleep 3600`).
+        # Without the second, a pid reused by an unrelated process after the keeper
+        # exited would be TERMed — measured by inspection 2.6.3, which found 11d:199
+        # checking liveness and this path not.  A pid that fails either check is left
+        # alone and the fallback below (cwd-scoped, `sleep 3600` only) still reaps it.
+        if [[ "$_keeper_pid" =~ ^[0-9]+$ ]] \
+           && kill -0 "$_keeper_pid" 2>/dev/null \
+           && [[ "$(tr '\0' ' ' < "/proc/$_keeper_pid/cmdline" 2>/dev/null)" == *"sleep 3600"* ]]
         then
             # swallow-ok: best-effort kill of the keeper: a pid that already exited is the outcome sought
             kill -TERM "$_keeper_pid" 2>/dev/null || true
