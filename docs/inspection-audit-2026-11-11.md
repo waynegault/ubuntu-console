@@ -257,6 +257,88 @@ counter (the ratchet PASSES), so a FAILS here is the document's threshold, label
 on a tab-indented fixture → 1; (d) 8.2.1 on a fixture with one `function` and one bare `name()` → both counters
 read 1, so a mixed file is detectable.
 
+## §9 Documentation & Future-Proofing, audited at `8083d981`
+
+Frozen at `8083d981` (`fix(watch): read the cycle ledger with awk instead of cat | awk`) and exported with
+`git archive`; the worktree was clean and HEAD equals this commit, so the venv-dependent tools ran against the same
+tree. 148 shipped shell files, 20 docs, 112 BATS suites.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 9.1 | HOLDS | `head -20 <file>` ×148 | 147 of 148 carry a header block with purpose + `# Module Version:` and dated version entries. No `author:` field is used anywhere — the house convention, not a gap. |
+| 9.2 | HOLDS | comment-line vs code-line census | 22,732 comment lines against 34,176 code lines (40%), and the samples read in this audit explain *why*. |
+| 9.3 | NOT-RUN | inspect complex Bashisms | Requires reading each fd-manipulation/regex site; a per-site sample read would settle it and none was done. |
+| 9.4 | HOLDS | `ls scripts/[0-9][0-9]-*.sh \| grep -v 18-lint.sh`; `__tac_module_list` | 16 profile modules: 15 numbered + `09b-gog.sh`, exactly matching `_module-list.sh`'s 16. The doc's "the glob returns 17" is stale — it returns 16 (15 + `18-lint.sh`). `tools/*.sh` is 26, not the stated 21. |
+| 9.4.1 | HOLDS | `tools/check-contracts.sh modules` | OK — 27 load positions, 95 declared `@depends` edges, 15 `@uses`, **0 disagreements, 0 cycles**. |
+| 9.4.2 | HOLDS | `grep '^# Module Version:'` ×16 | 16/16 modules carry it, plus `@modular-section` and `@depends`; `tools/check-module-versions.sh --worktree` reports 0 unbumped modules. |
+| 9.4.3 | HOLDS | `grep -c '_module-list'` | 5 references in each loader; neither globs `scripts/`. |
+| 9.4.4 | FAILS | non-comment lines of `tactical-console.bashrc` | 113 lines. The item's enumeration omits the **10-line `mktemp` + `exec 8>&1 9>&2` output-hold block** and `HOMEBREW_NO_PATH_SHADOW_CHECK`, so "nothing else" is false. |
+| 9.5 | FAILS | `tools/count-ratchet.sh --list` §18.3 9.5 | 116 function definitions with no comment directly above; baseline 116 (at baseline). Threshold. |
+| 9.6 | FAILS | `grep -nE '\[\[.*=~'` | 476 sites; 132 have a comment within 2 lines. |
+| 9.7 | FAILS | `tools/count-ratchet.sh --list` §18.3 9.7 | 79 literal exit/return codes other than 0/1 with no comment; baseline 79 (at baseline). Threshold. |
+| 9.8 | NOT-RUN | inspect global writes in functions | Needs a per-function dataflow pass (which globals each function writes); none exists in the repo. |
+| 9.9 | HOLDS | `grep -nEi '\b(TODO\|FIXME\|HACK)\b'` | 5 hits, all inside the two hygiene tests that assert their absence (`tactical-console*.bats`); 0 in shipped code. |
+| 9.10 | HOLDS | `ls CHANGELOG*`; `git log` | No CHANGELOG exists, as the item requires; commit subjects carry the why. |
+| 9.11 | HOLDS | `ls docs/*.md .agents/decisions/*.md` | 20 documents, including 7 decision records under `.agents/decisions/`. |
+
+**Section controls — §9:** (a) 9.4's module count cross-checked against `_module-list.sh` (16 = 15 + 09b, and the
+glob is 16 — the two agree only because `18-lint.sh` is excluded); (b) 9.9's probe on a fixture containing a real
+`# TODO` line → 1, so the zero in shipped code can go red; (c) 9.6's comment window on a fixture with no comment → 0.
+
+## §10 Refactor & Maintainability, audited at `8083d981`
+
+Same frozen export. Ratchet rows cite `tools/count-ratchet.sh --list` (baseline equals count; the ratchet PASSES).
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 10.1 | FAILS | 5-line-block duplication scan over 148 files | 74 distinct normalised 5-line blocks occur 3+ times. |
+| 10.2 | FAILS | `grep -nE '[^0-9][0-9]{5,}[^0-9]'` | 121 literals outside an UPPER_CASE assignment (`/ 1000000` in a timing divide, `86400` in comparisons, `18789` port defaults). |
+| 10.3 | FAILS | `grep -c 'dry-run\|DRY_RUN'` | 11 files offer a dry mode; `install.sh` (0) and `tools/clean-orphans.sh` (0) — the two most destructive — do not. |
+| 10.4 | FAILS | `tools/count-ratchet.sh --list` §18.3 10.4 | 41 functions over 100 lines; baseline 41 (at baseline). Threshold. |
+| 10.5 | NOT-RUN | inspect nesting | The item needs an AST; an indentation proxy finds 750 lines at ≥20 spaces (worst `11e-llm-model.sh`, 196) but cannot tell nesting from heredoc content. |
+| 10.6 | FAILS | `grep -nE 'localhost:[0-9]+\|127\.0\.0\.1:[0-9]+\|https?://'` | 18 inline endpoints in functions (`api.ipify.org`, `cloud.r-project.org`, `huggingface.co`), not top-of-file constants. |
+| 10.7 | FAILS | `tools/count-ratchet.sh --list` §18.3 10.7 | 252 hand-written `>&2` sites instead of a helper; baseline 252 (at baseline). Threshold. |
+| 10.8 | HOLDS | `grep -nE '\bENABLE_[A-Z_]+\b'` | 0 feature-flag variables. |
+| 10.9 | HOLDS | `tools/check-contracts.sh modules` | 0 cycles, load order validated from `_module-list.sh`; the startup sequence is the documented list. |
+
+**Section controls — §10:** (a) 10.8's probe on a fixture with `ENABLE_FOO=1` → 1; (b) 10.3's probe on a fixture
+carrying `DRY_RUN` → 1; (c) the 5-line duplication scan against a fixture with one block repeated three times →
+that block reported.
+
+## §11 Testing & CI, audited at `8083d981`
+
+Same frozen export; the Python tools ran in the repo's venv, whose tree equals this commit.
+
+| Item | Disposition | Command (or citation) | Measured |
+|---|---|---|---|
+| 11.1 | HOLDS | `tools/lint.sh` usage header; `--staged` / `--files` arms | Three modes present (:468 `--staged`, the `--files` arm, and the whole-tree default); one place defines the shellcheck flags. |
+| 11.2 | HOLDS | `ls tests/*.bats tests/unit/*.bats tests/integration/*.bats` | 112 suites; `tests/bats-suites.tsv` drives both bridges (41 rows, root + unit + integration families). |
+| 11.3 | HOLDS | `tests/tactical-console-function-availability.bats` | Exists and runs — named in `nightly.yml:96`, not in ci.yml. |
+| 11.4 | HOLDS | lint.sh syntax loop | Covers `tactical-console.bashrc`, `env.sh`, `install.sh`, `scripts/*.sh`, `tools/*.sh`, `tools/hooks/*`, `tools/qwen-hooks/*.sh`, `bin/*` — `.bashrc` and `.sh` both. |
+| 11.5 | FAILS | `grep -c 'shellcheck disable'` + rationale check | 24 sites; 23 documented, 1 not (`bin/_tac-bin-lib.sh:294`, covered only by its sibling directive's block). The three the 2026-11-10 pass flagged are now fixed. |
+| 11.6 | HOLDS | `tools/hooks/pre-commit` | Calls `tools/lint.sh --staged` (:59) and `tools/check-module-versions.sh`, not inline copies. |
+| 11.7 | HOLDS | `grep -rn 'env -i' tests/*.bats` | `tactical-console-fast.bats:291-311`: `env -i` sourcing plus the `declare -F model` / `declare -F so` assertions — the half with teeth. |
+| 11.8 | HOLDS | `.venv/bin/python3 -m ruff check scripts/kgraph/ scripts/oc-health-check.py tests/` | All checks passed. |
+| 11.9 | HOLDS | the item's 16-file pytest command | 477 collected, **477 passed, 24 subtests passed** in 62 s. The doc's 463 is stale. |
+| 11.10 | HOLDS | `scripts/kgraph/models.py` | `GraphNode.id: str = Field(..., min_length=1)` (:218); GraphEdge aliases and GraphBuilder dedup exercised by the passing suite. |
+| 11.11 | HOLDS | `.github/workflows/ci.yml:420-470` | `python` job on `python-version: "3.14"`, running ruff, mypy, pyright and pytest. |
+| 11.12 | FAILS | `ruff check --select BLE001,S110,S112` | **2 violations** at `scripts/oc-health-check.py:793`: `except Exception: pass`. |
+| 11.13 | FAILS | `head -1 scripts/oc-health-check.py` | `#!/usr/bin/env python3`, not `.venv/bin/python`. |
+| 11.14 | HOLDS | `config/concept-aliases.json`; `scripts/kgraph/constants.py` | The JSON exists and `load_concept_config()` (:82) is the single loader (:118 caches it). |
+
+**CI suite census (the decisive evidence for 11.1–11.4):** 112 suites exist; **105 are named literally in
+`ci.yml`** (102 unit/integration + 2 root + the integration block) and **7 are named only in `nightly.yml`** —
+`05/06/07-spec-dec-*`, `08-autotune-workload`, `12-gpu-exclusivity`, `38-heavy-job`, and
+`tactical-console-function-availability` (nightly.yml:87-96). Every suite runs in CI; the TSV is the bridge's
+source of truth, not a runner list. No suite is orphaned.
+
+**Section controls — §11:** (a) 11.5's rationale check on a fixture whose directive sits under a shebang first
+returned **MISREAD** — `#!/usr/bin/env bash` was accepted as a comment — so the probe has a shebang blind spot;
+re-run with shebangs excluded it still reports exactly 1 of 24 undocumented, and the only line-2 directive
+(`env.sh:2`) carries inline prose. (b) 11.12's ruff selection is proven able to fail by the 2 real findings it
+returns. (c) the CI census was cross-checked against `nightly.yml` — the 7 CI-unlisted suites are all found there,
+so the "named literally" filter is not silently dropping them.
+
 ## Summary
 
 | Section | Items | HOLDS | FAILS | NOT-RUN | PROCEDURE |
@@ -270,4 +352,7 @@ read 1, so a mixed file is detectable.
 | §6 Efficiency & Native Bash | 12 | 5 | 7 | 0 | 0 |
 | §7 Portability | 7 | 2 | 5 | 0 | 0 |
 | §8 Style & Formatting | 15 | 8 | 6 | 1 | 0 |
-| **Total** | **128** | **75** | **44** | **5** | **4** |
+| §9 Documentation & Future-Proofing | 15 | 9 | 4 | 2 | 0 |
+| §10 Refactor & Maintainability | 9 | 2 | 6 | 1 | 0 |
+| §11 Testing & CI | 14 | 11 | 3 | 0 | 0 |
+| **Total** | **166** | **97** | **57** | **8** | **4** |
