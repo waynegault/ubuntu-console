@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 23
+#   v23 (2026-11-11): clean-room holds actions.runner.* services so CI jobs do not spawn mid-sweep and contend the box.
 # Module Version: 22
 #   v22 (2026-11-10): handle --help / -h cleanly with exit 0 before taking the heavy-job lock.
 # Module Version: 21
@@ -296,8 +298,10 @@ trap '_tac_suspend_release "$SUSPEND"' EXIT
 AUTOTUNE_CLEAN_ROOM="${AUTOTUNE_CLEAN_ROOM:-1}"
 _TENANTS_STOPPED=()
 _WATCHDOGS_STOPPED=()
+_RUNNERS_STOPPED=()
+# cleanroom_restore restores stopped watchdogs, tenants, runners and fleet model.
 cleanroom_restore() {
-    local _t _w
+    local _t _w _r
     # Timers back FIRST: a tenant restored while the watchdog is still held stays up, and
     # the watchdog's next tick then finds it healthy instead of restarting it.
     for _w in "${_WATCHDOGS_STOPPED[@]:-}"; do
@@ -320,6 +324,16 @@ cleanroom_restore() {
         fi
     done
     _TENANTS_STOPPED=()
+    for _r in "${_RUNNERS_STOPPED[@]:-}"; do
+        [[ -n "$_r" ]] || continue
+# swallow-ok: a failed release is reported by the else branch below, never hidden
+        if systemctl --user start "$_r" >/dev/null 2>&1; then
+            echo "clean-room: released runner $_r"
+        else
+            warn "clean-room: FAILED to release runner $_r - start it by hand"
+        fi
+    done
+    _RUNNERS_STOPPED=()
     # ...and the fleet goes back to the lane it was on, LAST: switching before the tenant
     # is serving would hand every agent a lane that cannot answer yet.
     if ! bash "$REPO/bin/fleet-model.sh" restore; then
@@ -360,6 +374,23 @@ if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
             else
                 echo "clean-room: could NOT stop $_t - the readings will be CONTENDED" | tee -a "$LOG"
             fi
+        fi
+    done
+    _runner_units=""
+    _r=""
+    # CI runners contend the box if a push or cron triggers a job mid-sweep (Wayne, 2026-11-11).
+    # Holding the runner services prevents Runner.Worker from spawning during the bench.
+# swallow-ok: systemctl error listing units is handled by empty output
+    _runner_units=$(systemctl --user list-unit-files 'actions.runner.*' --no-legend 2>/dev/null | awk '{print $1}')
+    for _r in $_runner_units; do
+        [[ -n "$_r" ]] || continue
+        systemctl --user is-active --quiet "$_r" || continue
+# swallow-ok: a failed hold is reported by the else branch below, never hidden
+        if systemctl --user stop "$_r" >/dev/null 2>&1; then
+            _RUNNERS_STOPPED+=("$_r")
+            echo "clean-room: held runner $_r (prevents CI contention during sweep)" | tee -a "$LOG"
+        else
+            echo "clean-room: could NOT hold runner $_r - CI may contend the sweep" | tee -a "$LOG"
         fi
     done
     # A stop is asynchronous: wait (bounded) for its memory to leave the card, so the

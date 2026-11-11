@@ -1,0 +1,16 @@
+{
+  "quality-gate": {
+    "PostToolUse": [
+      {
+        "matcher": "edit_file|write_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/agent-quality-gate.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
