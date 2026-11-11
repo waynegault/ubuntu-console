@@ -75,7 +75,19 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-11-11): clause (7) — the extractor must NOT write the MEMORY.md index line itself,
+#   and `index: core` is the only way to surface a note.  WHY: the CLI now BUILDS MEMORY.md from
+#   the notes (memoryCoreSplit at chunk-QAEZSJL6.js, `doc.core === true`), so a hand-written
+#   pointer is deleted by the next render — measured 2026-11-11, an extractor pass hand-added a
+#   352-char line, four store cases went red (90 != 89, 150-char cap, non-core-in-catalog), and
+#   the render then removed the line anyway: the work is thrown away either way.  The prompt
+#   still carries FOUR `Step 2 — add a pointer to ... MEMORY.md` instructions (three in
+#   buildManagedAutoMemoryPrompt/buildResidentAutoMemoryPrompt, one in buildTaskPrompt), and
+#   this rule element sits in the extraction prompt they are read from.  The gate catches the
+#   write at push time; a gate cannot stop it, so the instruction has to.  ACTIVATION: same as
+#   every version here — the prompt is loaded per daemon, so a --check reading `applied` is not
+#   evidence the extractor has read it.
 #   v5 (2026-10-24): the injected rule gains clause (5) — NEVER begin a wrapped line with an
 #   operator — after a memory note wrapped a formula so a continuation line began `+ 0 + …`,
 #   which markdown reads as a list marker (MD004 on prose).  Payload v3 -> v4, and a v3 copy is
@@ -119,7 +131,7 @@ EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
 # payload still contains reads every copy as "applied" and silently skips the upgrade —
 # measured 2026-11-09 landing clause (6), where the v4/v5 probe "NEVER begin a wrapped line"
 # is still inside v6, so all three copies reported ok and the new clause never arrived.
-RULE_NEWEST_CLAUSE="The file ENDS with"
+RULE_NEWEST_CLAUSE="NEVER adds a line to"
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -231,7 +243,10 @@ rule_text = (
 
     "EXACTLY ONE newline: no missing final newline (the linter reports MD047) and no blank "
 
-    "line after the last paragraph."
+    "line after the last paragraph. "
+    "(7) NEVER adds a line to MEMORY.md: that index is BUILT from these notes, so a pointer "
+    "you write is removed by the next render. To surface a note in the index, give the note "
+    "the frontmatter `index: core`; without it the note is stored but not listed."
 )
 rule_literal = '"' + rule_text + '"'
 
@@ -264,7 +279,24 @@ V1_RULE_TEXT = (
     "asterisks (*like this*), and a blank line before and after every list."
 )
 v1_literal = '"' + V1_RULE_TEXT + '"'
-SUPERSEDED = (v5_literal, v3_literal, v2_literal, v1_literal)
+# v6 (clause 6, the final newline) is now SUPERSEDED by v7: it is the payload the three live
+# copies carry, so without a v6 literal they would be refused rather than upgraded in place.
+V6_RULE_TEXT = (
+    "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
+    "lints every note it holds, so: (1) EMPHASIS uses underscores ONLY, _like this_. The "
+    "asterisk must NEVER delimit emphasis -- re-read every span you emit and convert "
+    "*like this* to _like this_. STRONG text keeps its asterisks (**bold**); never convert "
+    "those to underscores. (2) A blank line before and after every list and heading. (3) The "
+    "single H1 repeats the frontmatter name value. (4) Every code block is fenced with a "
+    "language tag, never indented. (5) NEVER begin a wrapped line with +, -, * or #, and never "
+    "begin one with a number followed by a full stop: markdown reads a line-initial marker as a "
+    "list or heading, so keep a formula or a code span on ONE line even when it is long. "
+    "(6) The file ENDS with "
+    "EXACTLY ONE newline: no missing final newline (the linter reports MD047) and no blank "
+    "line after the last paragraph."
+)
+v6_literal = '"' + V6_RULE_TEXT + '"'
+SUPERSEDED = (v6_literal, v5_literal, v3_literal, v2_literal, v1_literal)
 
 MIN_ANCHOR = '"Memory file format reference:",...MEMORY_FRONTMATTER_EXAMPLE]'
 SPACED_ANCHOR = '"Memory file format reference:",\n  ...MEMORY_FRONTMATTER_EXAMPLE\n]'
@@ -325,7 +357,7 @@ if src.index(marker) > src.index(MIN_ANCHOR if min_hits == 1 else SPACED_ANCHOR)
     raise SystemExit("refusing to patch: the rule landed after the format reference, not before it")
 
 p.write_text(src, encoding="utf-8")
-print("  upgraded extractor-style (superseded payload -> v6)" if upgraded else "  patched  extractor-style")
+print("  upgraded extractor-style (superseded payload -> v7)" if upgraded else "  patched  extractor-style")
 PY
     then
         echo "  MISMATCH $name — an anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
