@@ -321,7 +321,8 @@ jobs:
                tests/unit/88-slots-probe.bats \
                tests/unit/89-model-idle-release.bats \
                tests/unit/90-model-mmproj.bats \
-               tests/unit/91-health-timeout.bats
+               tests/unit/91-health-timeout.bats \
+               tests/unit/92-lane-arbiter.bats
 
       - name: Run integration tests
         run: |

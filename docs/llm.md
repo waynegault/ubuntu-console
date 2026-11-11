@@ -576,6 +576,48 @@ to the card. Stopping a lane invokes no reaper (the lane units carry no
 `ExecStop`), so a watchdog tick can free VRAM but cannot evict a foreign run.
 When the owner's run ends the lock is released and the lane returns by itself.
 
+### CUDA lane arbitration — one decision per start
+
+The CUDA chat lane has two controllers: the watchdog, and everything else that can issue
+`systemctl --user start`. On 2026-11-04 a bench held the VRAM drain marker with live pid
+3998; the watchdog refused to start `llama-cuda-qwen3coder-30b-chat` twice, and at 00:42:59
+the unit was started anyway by something systemd never named. At 00:46:03 the watchdog
+enforced the hold with SIGKILL, mid-prompt at 45,056 tokens, and four agent sessions lost
+the turn. The hold was right — the second controller was the defect, and it could not be
+named afterwards. Card GPU-LANE-ARBITRATION-001.
+
+The decision now lives on the unit, not in a caller:
+
+- `systemd/llama-cuda-lane-arbiter.conf` sets
+  `ExecCondition=%h/.local/bin/llama-lane-arbiter.sh check %n`, installed as
+  `10-lane-arbiter.conf` on every CUDA **chat** lane. Every start path — an agent's
+  `systemctl --user start`, a script, a timer, the guard, systemd's own `Restart=`, a
+  dependency job — passes through that one condition, so none of them can be the exception.
+- Exit 78 (`EX_CONFIG`) is read by systemd as *skipped*: `ActiveState=inactive`,
+  `Result=success`, `NRestarts=0` (measured on systemd 259). A refusal is not a fault, so
+  `Restart=always` does not storm and the lane never allocates VRAM or loads a model.
+  `ExecStartPre` would have marked the unit `failed` and retried it every `RestartSec`.
+- The refusal names the live holder pid and the requester. systemd records no caller, so
+  the arbiter resolves the requesting process from `/proc` — the process whose argv names
+  the unit with a start verb, with its cwd and ancestor chain — and prints `UNRESOLVED`
+  with the invocation id rather than guessing a name when nothing matches.
+- A **stale** marker is not a hold: the rule is the shared `_tac_suspend_held` (marker
+  exists, carries a numeric pid, and that pid is alive), so a holder killed with SIGKILL —
+  whose `EXIT` trap never runs — cannot wedge the lane down. The 2026-10-11 4h22m outage
+  was exactly that: a marker whose recorded owner was already dead.
+- The **embedding** lane is deliberately out of scope: `LLAMA_LANE_KEEP_UNITS` keeps it
+  resident through a VRAM drain, so refusing its restart while a bench holds the card
+  would take memory search down for the length of the bench — a different subsystem
+  broken to protect a measurement.
+- `LLAMA_LANE_ARBITER_SCOPE` (space-separated unit names) widens or narrows the scope on a
+  host that wants a different hold; unset, the scope is the host profile's
+  `LLAMA_CUDA_LANE_UNIT`.
+
+`bin/llama-lane-arbiter.sh start <unit> [reason]` is the sanctioned path for agents and
+scripts: it declares the requester before asking (verbatim `LLAMA_LANE_REQUESTER`, else the
+`/proc` scan), applies the same rule, and only then issues `systemctl --user start`. A start
+that bypasses it still meets the unit's `ExecCondition`; what it loses is its attribution.
+
 ### The two cards, and what runs on each
 
 Two independent GPUs.  Nothing on one card's path may stop, gate or clear the
