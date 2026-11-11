@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-11-11): the cycle-ledger sum reads the files with awk directly instead of
+#       `cat … | awk` (inspection 6.2).  Same value: a missing glob still prints 0.
 #   v6 (2026-11-04): the CUDA-in-use ceiling is the profile's LLAMA_GPU_FREE_THRESHOLD_MIB, not a fixed 800 MiB (3500 on the arm64 box).
 # Module Version: 5
 #   v5 (2026-10-12): gate 4's VRAM READING comes from the shared `_tac_gpu_used_mib`
@@ -124,7 +126,9 @@ gate_ok() {
     hj="$("$HEAVY" --status 2>/dev/null)"; hj_rc=$?
     # The ledger is boot-scoped and absent before the first autotune of a boot.
     # swallow-ok: an absent file and a zero sum are the same state, which the awk prints.
-    cycles="$(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null | awk '{s+=$1} END{print s+0}')"
+    # awk reads the ledger files itself: `cat … | awk` was a useless use of cat.
+    # swallow-ok: a glob that matches nothing makes awk print 0, which is the intended sum
+    cycles="$(awk '{s+=$1} END{print s+0}' /dev/shm/autotune-cuda-cycles-* 2>/dev/null)"
     # Gate 4 (v3, hardened v4; the READING is shared since v5).  Deliberately NOT
     # silenced: if nvidia-smi cannot be read the reading stays empty, the numeric test
     # below fails, and the box is treated as BUSY — the gate fails closed, the correct
