@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import json
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -359,9 +360,12 @@ def test_tier4_w05_f13_f14_f15_fail_closed_venv_execution_sweep(tmp_path: Path) 
     )
     assert p2.returncode == 127
 
-    # Primary repo executes tool cleanly with .venv
+    # A repo tool executes cleanly under an interpreter.  sys.executable is used
+    # rather than a hardcoded .venv/bin/python3: a CI runner has no repo venv
+    # (measured 2026-11-11: FileNotFoundError), and check_ci_status.py is stdlib-only,
+    # so the interpreter running this suite is the right one to prove that with.
     p3 = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "python3"), str(REPO_ROOT / "scripts" / "check_ci_status.py"), "--help"],
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_ci_status.py"), "--help"],
         capture_output=True,
         text=True,
         check=False,

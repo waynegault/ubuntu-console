@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import shutil
+import subprocess
 import sys
 import threading
 from collections.abc import Generator
@@ -12,6 +14,35 @@ from pathlib import Path
 from typing import Any
 
 from _paths import REPO_ROOT
+
+
+# ── Interpreter selection ────────────────────────────────────────────────────
+
+
+def pytest_interpreter() -> str:
+    """An interpreter that can import pytest AND its dependencies.
+
+    Candidates are ASKED, not assumed: sys.executable first (the suite's own), then
+    the PATH names.  A setup-python job can leave `sys.executable` pointing at an
+    installation whose pytest is missing pluggy, while the job's own `python` — the
+    one that runs this suite — has it (measured 2026-11-11: ModuleNotFoundError:
+    pluggy from sys.executable, green from `python`).
+    """
+    candidates: list[str] = [sys.executable]
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found and found not in candidates:
+            candidates.append(found)
+    for candidate in candidates:
+        probe = subprocess.run(
+            [candidate, "-c", "import pytest, pluggy"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return candidate
+    raise RuntimeError("no interpreter can import pytest and pluggy")
 
 
 # ── Dynamic Script Loader ─────────────────────────────────────────────────────

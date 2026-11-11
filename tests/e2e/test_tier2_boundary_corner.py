@@ -61,7 +61,7 @@ from .helpers.mock_server import HermeticHTTPServer
 from .runner import build_pytest_args, main as runner_main, run_e2e_tests
 import tools.fsutil as fsutil
 import tools.llm_client as llm_client
-from _test_harness import load_script
+from _test_harness import load_script, pytest_interpreter
 from kgraph.life_index import load_life_index
 from kgraph.mcp_server import build_mcp_handler
 from kgraph.models import GraphEdge, GraphNode
@@ -408,15 +408,12 @@ def test_tier2_f4_04_strict_markers_rejects_unregistered_marker() -> None:
 def test_tier2_f4_05_strict_config_validation() -> None:
     """Verifies repo pytest configuration passes --strict-config validation cleanly.
 
-    The interpreter is the one that can RUN pytest, not `sys.executable`: in CI
-    `sys.executable` is the runner's tool python, where pytest's own dependencies are
-    not installed (it failed with `ModuleNotFoundError: pluggy`), while the job's
-    `python`/venv is the interpreter that runs this suite.
+    The interpreter is the one that can import pytest and pluggy, not `sys.executable`
+    unconditionally: a CI runner's tool python carries a pytest install missing pluggy
+    (measured 2026-11-11), while the job's own `python` has both.
     """
-    venv_python = REPO_ROOT / ".venv" / "bin" / "python3"
-    interpreter = str(venv_python) if venv_python.is_file() else (shutil.which("python") or sys.executable)
     cmd = [
-        interpreter,
+        pytest_interpreter(),
         "-m",
         "pytest",
         "--strict-config",

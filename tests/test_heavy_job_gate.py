@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 
 import conftest
+from _test_harness import pytest_interpreter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HEAVY_JOB = REPO_ROOT / "bin" / "heavy-job"
@@ -250,10 +251,13 @@ def test_a_dash_k_python_selection_does_not_queue_behind_a_held_lock(tmp_path: P
     env = _heavy_env(lock_path)
     env["TAC_HEAVY_JOB_WAIT_S"] = "2"
     env.pop("TEST_RUN_PIPE", None)
+    # The interpreter that RUNS this suite, not a hardcoded .venv: a CI runner has no
+    # repo venv, and its tool python carries a pytest install missing pluggy (measured
+    # 2026-11-11: FileNotFoundError here, ModuleNotFoundError in the sibling case).
     with _held_by_heavy_job(lock_path):
         proc = subprocess.run(
             [
-                str(REPO_ROOT / ".venv" / "bin" / "python"),
+                pytest_interpreter(),
                 "-m",
                 "pytest",
                 "tests",
