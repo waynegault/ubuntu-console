@@ -406,9 +406,17 @@ def test_tier2_f4_04_strict_markers_rejects_unregistered_marker() -> None:
 
 
 def test_tier2_f4_05_strict_config_validation() -> None:
-    """Verifies repo pytest configuration passes --strict-config validation cleanly."""
+    """Verifies repo pytest configuration passes --strict-config validation cleanly.
+
+    The interpreter is the one that can RUN pytest, not `sys.executable`: in CI
+    `sys.executable` is the runner's tool python, where pytest's own dependencies are
+    not installed (it failed with `ModuleNotFoundError: pluggy`), while the job's
+    `python`/venv is the interpreter that runs this suite.
+    """
+    venv_python = REPO_ROOT / ".venv" / "bin" / "python3"
+    interpreter = str(venv_python) if venv_python.is_file() else (shutil.which("python") or sys.executable)
     cmd = [
-        sys.executable,
+        interpreter,
         "-m",
         "pytest",
         "--strict-config",
@@ -416,7 +424,7 @@ def test_tier2_f4_05_strict_config_validation() -> None:
         "tests/e2e/test_harness_sanity.py",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT))
-    assert res.returncode == 0
+    assert res.returncode == 0, res.stderr
 
 
 # ==============================================================================
@@ -943,14 +951,21 @@ def test_tier2_f13_04_clean_environment_no_path(tmp_path: Path) -> None:
     assert bash, "bash is required for this case"
 
     # (a) A checkout WITH a venv: PATH is irrelevant, the absolute venv path answers.
+    # Built here, not taken from this checkout: a CI runner has no repo venv, so asking
+    # REPO_ROOT made this branch assert the runner's layout (measured 2026-11-11).
+    with_venv = tmp_path / "with-venv"
+    (with_venv / ".venv" / "bin").mkdir(parents=True)
+    fake_python = with_venv / ".venv" / "bin" / "python3"
+    fake_python.write_text('#!/bin/sh\nexec /bin/sh "$@"\n', encoding="utf-8")
+    fake_python.chmod(0o755)
     res = subprocess.run(
-        [bash, "-c", 'source "$1" && _tac_python_path "$2"', "_", str(helper), str(REPO_ROOT)],
+        [bash, "-c", 'source "$1" && _tac_python_path "$2"', "_", str(helper), str(with_venv)],
         capture_output=True,
         text=True,
         env={"PATH": ""},
     )
     assert res.returncode == 0, res.stderr
-    assert res.stdout.strip().startswith(str(REPO_ROOT / ".venv")), res.stdout
+    assert res.stdout.strip() == str(fake_python), res.stdout
 
     # (b) No venv, no TAC_PYTHON, no PATH: fail closed rather than inventing an interpreter.
     res = subprocess.run(

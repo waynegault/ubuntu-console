@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
@@ -294,16 +295,22 @@ def test_tier3_f13_f14_fail_closed_venv_resolver_tool_execution(tmp_path: Path) 
     runtime_sh = REPO_ROOT / "tools" / "python-runtime.sh"
     assert runtime_sh.exists()
 
-    # 1. Successful resolution against real REPO_ROOT
+    # 1. Successful resolution against a checkout that HAS a venv.  The tree is built
+    # here: a CI runner has no repo venv, so resolving REPO_ROOT failed there
+    # (measured 2026-11-11).
+    with_venv = tmp_path / "with-venv"
+    (with_venv / ".venv" / "bin").mkdir(parents=True)
+    (with_venv / ".venv" / "bin" / "python3").write_text('#!/bin/sh\nexec /bin/sh "$@"\n', encoding="utf-8")
+    (with_venv / ".venv" / "bin" / "python3").chmod(0o755)
     proc = subprocess.run(
-        ["bash", "-c", f'source "{runtime_sh}" && _tac_python_path "{REPO_ROOT}"'],
+        ["bash", "-c", f'source "{runtime_sh}" && _tac_python_path "{with_venv}"'],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 0, proc.stderr
     resolved = proc.stdout.strip()
-    assert resolved.endswith(".venv/bin/python3") or resolved.endswith(".venv/bin/python")
+    assert resolved == str(with_venv / ".venv" / "bin" / "python3")
 
     # 2. Fail-closed behavior on tree without .venv when TAC_PYTHON is invalid
     proc_fail = subprocess.run(
@@ -628,17 +635,25 @@ def test_tier3_f2_f12_systemd_mock_restart_safety_supervisor_evaluation(virtual_
     assert probe._parent_is_systemd(999999) is False
 
 
-def test_tier3_f10_f13_export_env_execution_via_python_runtime() -> None:
+def test_tier3_f10_f13_export_env_execution_via_python_runtime(tmp_path: Path) -> None:
     """Pair 22 (F10 x F13): Shell CLI Bridge x Strict .venv Python Runtime.
 
-    Verifies that running python tools via python-runtime.sh uses the repo .venv.
+    Verifies that running python tools via python-runtime.sh uses the checkout's .venv.
+    The venv is created here: a CI runner installs pytest outside a repo venv, so
+    resolving THIS checkout failed there (measured 2026-11-11).
     """
     runtime_sh = REPO_ROOT / "tools" / "python-runtime.sh"
-    cmd = f'source "{runtime_sh}" && "$(_tac_python_path "{REPO_ROOT}")" -c "import sys; print(sys.prefix)"'
+    venv_dir = tmp_path / ".venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],
+        check=True,
+        capture_output=True,
+    )
+    cmd = f'source "{runtime_sh}" && "$(_tac_python_path "{tmp_path}")" -c "import sys; print(sys.prefix)"'
 
     proc = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False)
-    assert proc.returncode == 0
-    assert proc.stdout.strip().endswith(".venv")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(venv_dir)
 
 
 def test_tier3_f16_f21_atomic_write_projected_graph_snapshot(tmp_path: Path) -> None:

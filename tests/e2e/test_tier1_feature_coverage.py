@@ -253,7 +253,12 @@ def test_tier1_f1_03_resolve_bats_graceful_none_when_absent(monkeypatch: pytest.
     """F1: resolve_bats(required=False) returns None or path without raising FileNotFoundError."""
     import _bats_suites as bs
 
+    # BOTH globals: `_bats_checked` forces the probe to run, and `_cached_bats` holds
+    # an earlier case's answer.  Resetting only the flag let a previous resolution leak
+    # through (measured 2026-11-11: CI had cached the runner's bats and this case
+    # returned it instead of None).
     monkeypatch.setattr(bs, "_bats_checked", False)
+    monkeypatch.setattr(bs, "_cached_bats", None)
     monkeypatch.setattr(bs.shutil, "which", lambda _cmd: None)
 
     orig_is_file = Path.is_file
@@ -269,6 +274,7 @@ def test_tier1_f1_04_resolve_bats_required_raises_on_absence(monkeypatch: pytest
     import _bats_suites as bs
 
     monkeypatch.setattr(bs, "_bats_checked", False)
+    monkeypatch.setattr(bs, "_cached_bats", None)
     monkeypatch.setattr(bs.shutil, "which", lambda _cmd: None)
 
     orig_is_file = Path.is_file
@@ -1081,14 +1087,22 @@ def test_tier1_f12_05_11d_gpu_context_ceiling_shared_memory() -> None:
 
 @pytest.mark.e2e
 @pytest.mark.tier1
-def test_tier1_f13_01_python_runtime_sh_resolves_repo_venv() -> None:
-    """F13: tools/python-runtime.sh resolves repo root .venv/bin/python3."""
+def test_tier1_f13_01_python_runtime_sh_resolves_repo_venv(tmp_path: Path) -> None:
+    """F13: tools/python-runtime.sh resolves a checkout's .venv/bin/python3.
+
+    The tree is built here rather than using the checkout's own .venv: a CI runner
+    installs pytest outside a repo venv, so asking THIS checkout made the case assert
+    the runner's layout (measured 2026-11-11: it resolved a bare `python3` there).
+    """
     repo_root = Path(__file__).resolve().parent.parent.parent
-    cmd = f'source "{repo_root}/tools/python-runtime.sh" && _tac_python_path "{repo_root}"'
+    fake_venv = tmp_path / ".venv" / "bin"
+    fake_venv.mkdir(parents=True)
+    (fake_venv / "python3").write_text('#!/bin/sh\nexec /bin/sh "$@"\n', encoding="utf-8")
+    (fake_venv / "python3").chmod(0o755)
+    cmd = f'source "{repo_root}/tools/python-runtime.sh" && _tac_python_path "{tmp_path}"'
     res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
-    assert res.returncode == 0
-    resolved = res.stdout.strip()
-    assert resolved in (str(repo_root / ".venv/bin/python3"), str(repo_root / ".venv/bin/python"))
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == str(fake_venv / "python3")
 
 
 @pytest.mark.e2e
