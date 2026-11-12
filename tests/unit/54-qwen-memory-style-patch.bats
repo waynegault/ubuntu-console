@@ -33,6 +33,11 @@ setup() {
     mkdir -p "$CHUNKS"
     cp "$FIXTURE" "$CHUNKS/"
     TARGET="$CHUNKS/qwen-memory-extractor-style-chunk.js"
+    # The CURRENT payload's clause and version, read out of the patcher itself (see the note at
+    # NEWEST_CLAUSE below).  Derived here rather than at file level because BATS evaluates
+    # file-level lines before setup() has set PATCHER.
+    NEWEST_CLAUSE="$(sed -n 's/^RULE_NEWEST_CLAUSE="\(.*\)"$/\1/p' "$PATCHER")"
+    NEWEST_VERSION="$(sed -n 's/.*superseded payload -> \(v[0-9][0-9]*\)).*/\1/p' "$PATCHER" | head -n 1)"
     # node is the patcher's OWN dependency (it runs `node --check` after every edit); make the
     # suite full-strength on a runner whose PATH does not carry it.
     if ! command -v node >/dev/null 2>&1 && [[ -d /home/linuxbrew/.linuxbrew/bin ]]; then
@@ -46,9 +51,23 @@ setup() {
 V3_CLAUSE="The asterisk must NEVER delimit emphasis"
 # The v2 payload's opening, absent from v3, so "0 occurrences" is the upgrade's proof.
 V2_OPENING="Match the store's Markdown style: emphasis with underscores"
-# The v4 clause — the phrase that distinguishes the CURRENT payload from every earlier one.
-# The v6 clause — the phrase that distinguishes the CURRENT payload from every earlier one.
-NEWEST_CLAUSE="The file ENDS with"
+# The clause distinguishing the CURRENT payload.  DERIVED from the patcher inside setup(), not
+# restated: a literal here is a second copy of the version, and it drifted the moment clause (7)
+# landed — measured 2026-11-11, the patcher emitted "-> v7" while this file still pinned v6, so
+# a behaviour-correct script failed on the label.  RULE_NEWEST_CLAUSE is the patcher's own
+# answer to "which payload is current", which is exactly what this suite needs to assert.
+# (It is assigned in setup() because BATS evaluates file-level lines before PATCHER exists.)
+
+@test "style patch: the derived version and clause are read, not empty" {
+    # The control for the two derivations above.  Both are scraped out of the patcher, so if
+    # either pattern stops matching (a reformatted assignment, a changed message) the suite
+    # would go on asserting against an empty string and pass for the wrong reason.
+    [[ -n "$NEWEST_CLAUSE" ]]
+    [[ "$NEWEST_VERSION" =~ ^v[0-9]+$ ]]
+    # ...and the clause really is the CURRENT payload's: the patcher must not already carry it
+    # in a superseded literal, or "one occurrence after an upgrade" would prove nothing.
+    [ "$(grep -cF "$NEWEST_CLAUSE" "$FIXTURE")" -eq 0 ]
+}
 
 @test "style patch: a chunk carrying the superseded payload reads NEEDS, not applied" {
     run env QWEN_STYLE_PATCH_CHUNK_DIRS="$CHUNKS" bash "$PATCHER" --check
@@ -56,10 +75,10 @@ NEWEST_CLAUSE="The file ENDS with"
     [[ "$output" == *"superseded"* ]]
 }
 
-@test "style patch: applying UPGRADES the payload in place — v6 present once, v2 gone, and it still parses" {
+@test "style patch: applying UPGRADES the payload in place — current clause once, v2 gone, still parses" {
     run env QWEN_STYLE_PATCH_CHUNK_DIRS="$CHUNKS" bash "$PATCHER"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"upgraded extractor-style (superseded payload -> v6)"* ]]
+    [[ "$output" == *"upgraded extractor-style (superseded payload -> $NEWEST_VERSION)"* ]]
     [[ "$output" == *"syntax verified"* ]]
 
     # The upgrade's whole point: one style element, and it is the CURRENT one.
