@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 132
+# Module Version: 133
+#   v133 (2026-11-12): prompt for clean wsl-restart.sh restart on adapter degradation in interactive terminal.
 #   v132 (2026-11-12): __model_bench runs _tac_adapter_health_check as upfront first check,
 #     and halts benchmark queue immediately (break) on autotune rc=3 adapter degradation.
 #   v131 (2026-11-12): suppress pre-banner suspend acquire and clean-room stdout chatter
@@ -3724,7 +3725,22 @@ function __model_bench() {
         if ! _bench_adapter_err=$(_tac_adapter_health_check)
         then
             __tac_info "Error" "[WSL2 GPU adapter degraded: ${_bench_adapter_err}]" "$C_Error"
-            __tac_info "Tip" "Restart WSL from Windows ('wsl --shutdown') to clear adapter state" "$C_Dim"
+            local _wsl_restart=""
+            _wsl_restart="${TAC_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/bin/wsl-restart.sh"
+            if [[ -x "$_wsl_restart" && -t 0 ]]
+            then
+                local _ans=""
+                read -r -p "Do you want to restart WSL now? [y/N]: " _ans
+                if [[ "$_ans" =~ ^[Yy] ]]
+                then
+                    __tac_info "Restart" "Arming clean WSL restart via wsl-restart.sh..." "$C_Highlight"
+                    bash "$_wsl_restart" --restart --force \
+                        --reason "adapter degraded / CUDA cycle budget reached"
+                    return 1
+                fi
+            fi
+            __tac_info "Tip" \
+                "Run 'bin/wsl-restart.sh --restart' or Windows 'wsl --shutdown' to clear adapter state" "$C_Dim"
             return 1
         fi
     fi
@@ -4154,8 +4170,21 @@ function __model_bench() {
                     if (( _autotune_rc == 3 ))
                     then
                         __tac_info "Bench" \
-                            "[Halting bench queue: adapter degraded / budget exhausted. Restart WSL ('wsl --shutdown')]" \
+                            "[Halting bench queue: adapter degraded / budget exhausted]" \
                             "$C_Error"
+                        local _wsl_restart=""
+                        _wsl_restart="${TAC_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/bin/wsl-restart.sh"
+                        if [[ -x "$_wsl_restart" && -t 0 ]]
+                        then
+                            local _ans=""
+                            read -r -p "Do you want to restart WSL now? [y/N]: " _ans
+                            if [[ "$_ans" =~ ^[Yy] ]]
+                            then
+                                __tac_info "Restart" "Arming clean WSL restart via wsl-restart.sh..." "$C_Highlight"
+                                bash "$_wsl_restart" --restart --force \
+                                    --reason "adapter degraded / CUDA cycle budget reached"
+                            fi
+                        fi
                         break
                     fi
                     sleep 2
