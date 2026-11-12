@@ -303,7 +303,7 @@ def _release_heavy_job_session() -> None:
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
-    """Gate a BATS-carrying SELECTION behind the box's heavy-job lock.
+    """Gate a BATS-carrying SELECTION behind the box's heavy-job lock, and prune stale ids.
 
     Deliberately NOT pytest_collection_modifyitems: that hook sees every item the
     session COLLECTED, before -k/--deselect remove any, and importing
@@ -312,8 +312,81 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     and queued for the heavy-job lock anyway — measured 2026-11-04, a one-test Python run
     waiting behind a full tools/run-tests.sh.  ``session.items`` here is the selection
     after deselection, which is what the gate's "no BATS item, no queue" rule means.
+
+    That same post-deselection view is why the PRUNE below cannot use it: a ``-k`` run
+    must not drop every id it did not select.  The fence it needs comes from the
+    collect-only pass that runs straight before every real collection — see
+    ``_prune_vanished_nodeids``.
     """
+    _prune_vanished_nodeids(session)
     ensure_heavy_job_session(session.config, session.items, collect_only=_is_vscode_discovery())
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Record the UNFILTERED collected node set, for the stale-id prune.
+
+    ``tryfirst`` so it sees every item before pytest's own ``-k``/``-m`` deselection
+    (which is a later ``modifyitems`` impl).  Measured 2026-11-11: on a
+    ``-k 54_qwen_memory_style_patch`` run this hook sees **2000** items while
+    ``session.items`` in ``pytest_collection_finish`` holds **6** — so this is the only
+    unfiltered view there is, and there is no separate collect-only pass to borrow one
+    from.  ``session.config.cache`` may be absent (``-p no:cacheprovider``), which is why
+    the recorder touches nothing but the attribute.  Nothing is mutated here.
+
+    ``_tac_whole_tree`` records whether the ANSWER covers the whole tree: a run that
+    named a FILE (``pytest tests/test_bats_bridge.py``) collects only that file, so
+    "absent from this collection" says nothing about ids from anywhere else — measured
+    2026-11-11, an early version of this prune dropped 939 nodeids on such a run.  The
+    test is NOT "no args": ``pytest.ini`` sets ``testpaths``, so even a bare run carries
+    ``args=['tests', 'nas/butler/openclaw/salus-it500/tests']`` (measured), which is why
+    the coverage is asked as "are the collector dirs exactly those".
+    """
+    config._tac_collected = {item.nodeid for item in items}  # type: ignore[attr-defined]
+    dirs = getattr(session, "_initialpaths", ())
+    testpaths = tuple(str(config.inipath.parent / path) for path in config.getini("testpaths"))
+    config._tac_whole_tree = bool(dirs) and {str(d) for d in dirs} == set(testpaths)  # type: ignore[attr-defined]
+
+
+def _prune_vanished_nodeids(session: pytest.Session) -> None:
+    """Drop ``lastfailed``/``nodeids`` entries for tests that no longer collect.
+
+    pytest only removes a lastfailed id when THAT id passes; a renamed or deleted test
+    keeps its entry forever.  Measured 2026-11-11 on this repo: eight such ids sat in
+    ``lastfailed``, including the one a BATS case rename retired minutes earlier.  They
+    are what the VS Code Testing panel reads, so the cost is a stale red cross, and
+    ``--lf``/``--failed-first`` replay ids that cannot be found.
+
+    A rename is not a test that failed, so "it does not collect" is sufficient, and it
+    needs no full run (unlike the duration prune) because the answer is the collection
+    itself — recorded unfiltered by ``pytest_collection_modifyitems`` above.  Two fences
+    stop it over-reaching: it prunes only when the run covered the WHOLE rootdir (a file
+    argument collects just that file), and never on an empty collection (a pattern that
+    matched nothing, a collection error).
+    """
+    if not hasattr(session.config, "cache"):
+        # -p no:cacheprovider (or --co on a bare config): there is no file to prune.
+        return
+    if not getattr(session.config, "_tac_whole_tree", False):
+        return
+    cache = session.config.cache
+    collected = getattr(session.config, "_tac_collected", None)
+    if not collected:
+        # Nothing to subtract from (a plugin-supplied collection, a collection error, a
+        # selection pattern matching nothing).  Pruning on an empty set would delete the cache.
+        return
+    for key in ("cache/lastfailed", "cache/nodeids"):
+        saved = cache.get(key, {})
+        vanished = sorted(set(saved) - collected)
+        if not vanished:
+            continue
+        if isinstance(saved, dict):
+            for nodeid in vanished:
+                del saved[nodeid]
+        else:
+            saved = [nodeid for nodeid in saved if nodeid in collected]
+        cache.set(key, saved)
+        print(f"\033[2mtac-cache: pruned {len(vanished)} vanished id(s) from {key}\033[0m")
 
 
 @pytest.fixture(autouse=True)
