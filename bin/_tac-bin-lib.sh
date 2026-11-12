@@ -16,7 +16,11 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 23
+#   v23 (2026-11-12): the suspend journal collapses newlines out of argv and bounds the
+#     recorded command. An argv element can contain a newline (a shell -c script does), so
+#     one acquire became several physical lines and the log stopped being one record per
+#     line — which is exactly the property a reader needs to pair acquire against release.
 #   v22 (2026-11-12): _tac_suspend_held answers LIVENESS from /proc/<pid>/stat, not
 #     from kill -0.  EPERM: a LIVE pid owned by another user returns rc=1, and the
 #     reader printed "owner pid is dead" about a running holder.  ZOMBIE: an exited
@@ -410,8 +414,14 @@ _tac_suspend_journal() {
     local _ev="$1" _f="$2" _log _cmd
     _log="${TAC_SUSPEND_JOURNAL:-/home/wayne/logs/llama-suspend-holds.log}"
     # swallow-ok: an unreadable cmdline yields empty, which the line records as unknown
-    _cmd=$(tr '\0' ' ' < "/proc/$$/cmdline" 2>/dev/null)   # swallow-ok: an unreadable cmdline is recorded as unknown; the audit line must not fail the hold
+    # Collapse NUL AND newline: an argv element can contain a newline (a shell -c script
+    # does), and one event then becomes several physical lines, so the log stops being
+    # one-record-per-line and a reader cannot pair acquire against release. Measured
+    # 2026-11-12: a bench acquire whose -c script was multi-line wrote the whole script
+    # into the journal as raw lines.
+    _cmd=$(tr '\0\n' '  ' < "/proc/$$/cmdline" 2>/dev/null)   # swallow-ok: an unreadable cmdline is recorded as unknown; the audit line must not fail the hold
     # swallow-ok: journalling is best-effort by definition; the caller's rc is the result
+    _cmd="${_cmd:0:200}"   # a full -c script is not an audit line; the head identifies the caller
     printf '%s %s pid=%s ppid=%s marker=%s cmd=%s\n' \
         "$(date -u +%FT%TZ)" "$_ev" "$$" "$PPID" "$_f" "${_cmd:-unknown}" \
         >> "$_log" 2>/dev/null   # swallow-ok: journalling is best-effort by definition; the caller's rc is the result

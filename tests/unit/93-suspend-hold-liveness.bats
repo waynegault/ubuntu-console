@@ -171,3 +171,29 @@ PY
     [ "$status" -eq 0 ]                   # the hold succeeded; only the audit line failed
     [ -f "$MARK" ]
 }
+
+@test "journal: a MULTI-LINE argv stays ONE record, so acquire can be paired with release" {
+    # An argv element can contain a newline (a shell -c script does). Without collapsing
+    # them, one acquire becomes several physical lines and the log stops being one record
+    # per line -- which is the property a reader needs to pair acquire against release.
+    # Measured 2026-11-12: pre-fix, one acquire whose -c script spanned 3 lines wrote 5
+    # physical lines, 1 timestamped and 4 continuations.
+    export TAC_SUSPEND_JOURNAL="$BATS_TEST_TMPDIR/nl.log"
+    run bash -c "source '$LIB' 2>/dev/null; _tac_suspend_acquire '$MARK'" \
+        -c "script line A
+script line B
+script line C"
+    local total ts
+    total=$(wc -l < "$TAC_SUSPEND_JOURNAL")
+    ts=$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' "$TAC_SUSPEND_JOURNAL")
+    [ "$total" -eq "$ts" ]          # no continuation lines: every line is a record
+}
+
+@test "journal: the recorded command is BOUNDED, so one record cannot flood the log" {
+    export TAC_SUSPEND_JOURNAL="$BATS_TEST_TMPDIR/bound.log"
+    run bash -c "source '$LIB' 2>/dev/null; _tac_suspend_acquire '$MARK'" \
+        -c "$(printf 'x%.0s' $(seq 1 900))"
+    run grep -o 'cmd=.*' "$TAC_SUSPEND_JOURNAL"
+    [ "$status" -eq 0 ]
+    [ "${#output}" -le 210 ]
+}
