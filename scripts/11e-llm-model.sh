@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 131
+# Module Version: 132
+#   v132 (2026-11-12): __model_bench runs _tac_adapter_health_check as upfront first check,
+#     and halts benchmark queue immediately (break) on autotune rc=3 adapter degradation.
 #   v131 (2026-11-12): suppress pre-banner suspend acquire and clean-room stdout chatter
 #     so the MODEL BENCHMARK box is the clean first output; bound Models selector row.
 #   v130 (2026-11-12): suppress misleading "CUDA keeping <unit>" notice during __BENCH_MODE=1
@@ -3715,6 +3717,18 @@ function __model_bench() {
         return 1
     fi
 
+    # Upfront first check: refuse immediately if WSL2 GPU adapter is degraded or cycle budget exhausted.
+    local _bench_adapter_err=""
+    if declare -f _tac_adapter_health_check &>/dev/null
+    then
+        if ! _bench_adapter_err=$(_tac_adapter_health_check)
+        then
+            __tac_info "Error" "[WSL2 GPU adapter degraded: ${_bench_adapter_err}]" "$C_Error"
+            __tac_info "Tip" "Restart WSL from Windows ('wsl --shutdown') to clear adapter state" "$C_Dim"
+            return 1
+        fi
+    fi
+
     # ---------------------------------------------------------------------------
     # Singleton guard: PID file + flock with stale-process detection.
     # Prevents duplicate bench runs and cleans up after killed processes.
@@ -4137,6 +4151,13 @@ function __model_bench() {
                     # swallow-ok: a stop before the next measurement; a model already stopped is the state sought
                     __model_stop 2>/dev/null || true
                     __gpu_clear_stale_processes
+                    if (( _autotune_rc == 3 ))
+                    then
+                        __tac_info "Bench" \
+                            "[Halting bench queue: adapter degraded / budget exhausted. Restart WSL ('wsl --shutdown')]" \
+                            "$C_Error"
+                        break
+                    fi
                     sleep 2
                     continue
                 fi

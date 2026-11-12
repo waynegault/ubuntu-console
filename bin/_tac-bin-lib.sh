@@ -16,7 +16,9 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-11-12): _tac_adapter_health_check / _tac_cuda_cycle_check / _tac_cuda_stall_check —
+#     first-check guards for WSL2 GPU adapter degradation and CUDA cycle budget exhaustion.
 #   v25 (2026-11-12): _tac_cleanroom_enter accepts optional quiet flag/mode; _tac_cleanroom_msg
 #     honours _TAC_CLEANROOM_QUIET=1 so pre-banner clean-room chatter can be suppressed.
 #   v24 (2026-11-12): _tac_cleanroom_enter / _tac_cleanroom_restore — shared clean-room
@@ -976,6 +978,65 @@ _tac_dxg_health_check() {
     errs=$("$dmesg_bin" 2>/dev/null | grep -iE "$pat" | tail -5) || errs=""
     if [[ -n "$errs" ]]; then
         printf '%s\n' "$errs"
+        return 1
+    fi
+    return 0
+}
+
+# _tac_cuda_cycle_check [budget] — check if the WSL2 CUDA context cycle budget is exhausted.
+# @returns 0 when within budget, 1 when budget is spent (and prints reason on stdout).
+_tac_cuda_cycle_check() {
+    local _boot_id _cycle_file _cycles=0 _budget="${1:-${CUDA_CYCLE_BUDGET:-60}}"
+    # swallow-ok: unreadable boot_id falls back to unknown
+    _boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
+    _cycle_file="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_boot_id:-unknown}}"
+    if [[ -f "$_cycle_file" ]]; then
+        # swallow-ok: unreadable cycle file falls back to 0
+        _cycles=$(cat "$_cycle_file" 2>/dev/null || echo 0)
+    fi
+    [[ "$_cycles" =~ ^[0-9]+$ ]] || _cycles=0
+    [[ "$_budget" =~ ^[0-9]+$ ]] || _budget=60
+    if (( _cycles >= _budget )); then
+        printf 'CUDA context-cycle budget reached (%d >= %d) — restart WSL\n' "$_cycles" "$_budget"
+        return 1
+    fi
+    return 0
+}
+
+# _tac_cuda_stall_check [stall_cap] — check if consecutive autotune stalls reached ceiling.
+# @returns 0 when healthy, 1 when stalls reached ceiling (and prints reason on stdout).
+_tac_cuda_stall_check() {
+    local _boot_id _stall_file _stalls=0 _cap="${1:-${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}}"
+    # swallow-ok: unreadable boot_id falls back to unknown
+    _boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
+    _stall_file="${CUDA_STALL_FILE:-/dev/shm/autotune-degrade-stalls-${_boot_id:-unknown}}"
+    if [[ -f "$_stall_file" ]]; then
+        # swallow-ok: unreadable stall file falls back to 0
+        _stalls=$(cat "$_stall_file" 2>/dev/null || echo 0)
+    fi
+    [[ "$_stalls" =~ ^[0-9]+$ ]] || _stalls=0
+    [[ "$_cap" =~ ^[0-9]+$ ]] || _cap=2
+    if (( _cap > 0 && _stalls >= _cap )); then
+        printf '%d consecutive launches stalled (dxgkrnl degradation) — restart WSL\n' "$_stalls"
+        return 1
+    fi
+    return 0
+}
+
+# _tac_adapter_health_check — unified pre-check for WSL2 GPU adapter health & cycle budget.
+# @returns 0 when healthy, 1 when adapter is degraded or budget exhausted (reason on stdout).
+_tac_adapter_health_check() {
+    local _msg=""
+    if ! _msg=$(_tac_cuda_cycle_check); then
+        printf '%s\n' "$_msg"
+        return 1
+    fi
+    if ! _msg=$(_tac_cuda_stall_check); then
+        printf '%s\n' "$_msg"
+        return 1
+    fi
+    if ! _msg=$(_tac_dxg_health_check); then
+        printf 'critical dxgkrnl GPU errors in dmesg (-12/-75/wait timeout) — restart WSL\n'
         return 1
     fi
     return 0

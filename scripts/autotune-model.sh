@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 137
+# Module Version: 138
+#   v138 (2026-11-12): fix multi-part format in adapter_degraded failure label to emit one line.
 #   v137 (2026-11-12): classify non-generative / decision models as unsupported_arch and abort
 #     preflight immediately; carry window_timeout class on readiness expiry; assign typed
 #     adapter_degraded classification to preflight GPU guards instead of unclassified.
@@ -179,7 +180,7 @@ ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not 
 (unexplained — stopped without a descent, so nothing was measured)" ;;
         window_timeout)     printf "the readiness window expired with no error signature \
 (a slow load or a degraded adapter, NOT an OOM)" ;;
-        adapter_degraded)   printf '%s\n' "WSL2 GPU adapter degraded (CUDA cycle budget, " \
+        adapter_degraded)   printf '%s%s\n' "WSL2 GPU adapter degraded (CUDA cycle budget, " \
             "stalls, or kernel dxgkrnl errors; restart WSL)" ;;
         missing_dependency) printf "missing required autotune components or shell functions" ;;
         certified)          printf 'certified' ;;
