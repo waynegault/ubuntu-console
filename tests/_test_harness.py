@@ -20,13 +20,22 @@ from _paths import REPO_ROOT
 
 
 def pytest_interpreter() -> str:
-    """An interpreter that can import pytest AND its dependencies.
+    """An interpreter that can actually RUN pytest, verified by running it.
 
-    Candidates are ASKED, not assumed: sys.executable first (the suite's own), then
-    the PATH names.  A setup-python job can leave `sys.executable` pointing at an
-    installation whose pytest is missing pluggy, while the job's own `python` — the
-    one that runs this suite — has it (measured 2026-11-11: ModuleNotFoundError:
-    pluggy from sys.executable, green from `python`).
+    Candidates are ASKED, not assumed: ``sys.executable`` first (the suite's own), then
+    the PATH names.  The question is ``python -m pytest --version`` — the capability
+    itself — rather than an import list that has to be kept in step with pytest's
+    dependencies.  (pluggy IS a hard pytest dependency — ``_pytest/main.py`` imports it —
+    so the two probes agree when pluggy is missing; asking for ``-m pytest`` simply
+    stops the list from becoming wrong in a different way later.)
+
+    ``sys.executable`` is the interpreter already running this suite, so it is returned
+    when every probe fails: a CHILD may inherit a masked environment this process does
+    not have, and refusing to name the interpreter we are executing under is never the
+    more honest answer.  Measured 2026-11-12, nightly run 43148425686: the import probe
+    raised ``RuntimeError: no interpreter can import pytest and pluggy`` in a job whose
+    ``python -m pytest`` had just run 1272 tests, failing one case for a reason that
+    described the probe and not the tree.
     """
     candidates: list[str] = [sys.executable]
     for name in ("python3", "python"):
@@ -35,14 +44,14 @@ def pytest_interpreter() -> str:
             candidates.append(found)
     for candidate in candidates:
         probe = subprocess.run(
-            [candidate, "-c", "import pytest, pluggy"],
+            [candidate, "-m", "pytest", "--version"],
             capture_output=True,
             timeout=30,
             check=False,
         )
         if probe.returncode == 0:
             return candidate
-    raise RuntimeError("no interpreter can import pytest and pluggy")
+    return sys.executable
 
 
 # ── Dynamic Script Loader ─────────────────────────────────────────────────────
