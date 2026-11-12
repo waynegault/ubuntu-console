@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 138
+# Module Version: 139
+#   v139 (2026-11-12): scale AT_WINDOW_S for large multi-shard models (>40 GiB) when not
+#     explicitly set; emit window_timeout instead of load_fail on readiness expiry so descent
+#     reports "readiness timeout" rather than "unsupported model".
 #   v138 (2026-11-12): fix multi-part format in adapter_degraded failure label to emit one line.
 #   v137 (2026-11-12): classify non-generative / decision models as unsupported_arch and abort
 #     preflight immediately; carry window_timeout class on readiness expiry; assign typed
@@ -144,6 +147,7 @@ LLM_AUTOTUNE_MAX_DRIFT_MIB="${LLM_AUTOTUNE_MAX_DRIFT_MIB:-1536}"
 CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
 
 # _fail — the one refusal path for a pre-measurement check.  It routes through the repo's
+_AT_WINDOW_USER_SET="${AT_WINDOW_S:-}"
 AT_WINDOW_S="${AT_WINDOW_S:-300}"
 
 # _fail — refuse before any launch: print the reason, then exit 1 with the class recorded.
@@ -501,6 +505,13 @@ else
 fi
 [[ "$MODEL_BYTES" =~ ^[0-9]+$ ]] || MODEL_BYTES=0
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
+
+# Scale readiness window for large multi-shard models (>40 GiB) when AT_WINDOW_S wasn't pinned.
+if [[ -z "${_AT_WINDOW_USER_SET:-}" ]] && (( MODEL_MB >= 40960 )); then
+    _scaled_window=$(( 300 + ((MODEL_MB - 40960) / 1024) * 8 ))
+    (( _scaled_window > 900 )) && _scaled_window=900
+    (( _scaled_window > AT_WINDOW_S )) && AT_WINDOW_S="$_scaled_window"
+fi
 
 # Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
 if [[ $MODEL_MB -lt 1000 ]]; then
@@ -1155,7 +1166,7 @@ _bench_spawn() {
         fi
         _bench_stop "$_BENCH_PID"
         _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" "$_sft"
-        echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"; return 1
+        echo "0|0|$_sft" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="$_sft"; return 1
     fi
 
     # _bench_preflight_ready — verify slot serves /v1/chat/completions before benchmarking.
@@ -1689,6 +1700,7 @@ _last_fail_label() {
     local _t="${1:-$(last_fail_type)}"
     case "$_t" in
         load_fail)            printf '%s\n' "unsupported model" ;;
+        window_timeout)       printf '%s\n' "readiness timeout" ;;
         loader_crash_unknown) printf '%s\n' "unclassified crash" ;;
         *)                    printf '%s\n' "OOM" ;;
     esac
@@ -1793,11 +1805,11 @@ for combo in "${COMBOS[@]}"; do
         tps=$(bench_ctx "$c" "$b" "$u" 1) || {
             _lft=$(last_fail_type)
             fail_label=$(_last_fail_label "$_lft")
-            # STOP, do not halve, on a hard load failure or an unclassified crash:
+            # STOP, do not halve, on a hard load failure, timeout, or unclassified crash:
             if [[ "$_lft" == "load_fail" ]]; then
                 break
             fi
-            if [[ "$_lft" == "loader_crash_unknown" ]]; then
+            if [[ "$_lft" == "loader_crash_unknown" || "$_lft" == "window_timeout" ]]; then
                 echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label} (stopping descent)"
                 _ALL_LOAD_FAIL=false
                 _ABORT_COMBO_WALK=1
@@ -1926,7 +1938,7 @@ probe_no_mmap() {
                 if [[ "$_lft" == "load_fail" ]]; then
                     break
                 fi
-                if [[ "$_lft" == "loader_crash_unknown" ]]; then
+                if [[ "$_lft" == "loader_crash_unknown" || "$_lft" == "window_timeout" ]]; then
                     echo "  ctx $(fmt "$c") - ${fail_label} (stopping descent)"
                     _ALL_LOAD_FAIL=false
                     _abort_no_mmap=1
