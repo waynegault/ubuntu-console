@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 136
+# Module Version: 137
+#   v137 (2026-11-12): classify non-generative / decision models as unsupported_arch and abort
+#     preflight immediately; carry window_timeout class on readiness expiry; assign typed
+#     adapter_degraded classification to preflight GPU guards instead of unclassified.
 #   v136 (2026-11-12): clarify autotune progress lines (human-friendly layer offload
 #     and KV cache eligibility notices).
 #   v135 (2026-11-12): consolidate and shorten verbose header and inline comments.
@@ -160,7 +163,7 @@ _fail() {
 __autotune_failure_label() {
     case "${1:-}" in
         resource_exhausted) printf 'resource exhaustion (OOM / failed allocation)' ;;
-        unsupported_arch)   printf 'unsupported architecture / no matching backend' ;;
+        unsupported_arch)   printf 'unsupported architecture / non-generative model' ;;
         launch_error)       printf "launch or flag error, or a model the server could not load \
 (the server rejected its invocation)" ;;
         loader_vintage)     printf "the FILE and the LOADER disagree about a required GGUF key \
@@ -176,6 +179,9 @@ ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not 
 (unexplained — stopped without a descent, so nothing was measured)" ;;
         window_timeout)     printf "the readiness window expired with no error signature \
 (a slow load or a degraded adapter, NOT an OOM)" ;;
+        adapter_degraded)   printf '%s\n' "WSL2 GPU adapter degraded (CUDA cycle budget, " \
+            "stalls, or kernel dxgkrnl errors; restart WSL)" ;;
+        missing_dependency) printf "missing required autotune components or shell functions" ;;
         certified)          printf 'certified' ;;
         *)                  printf 'unclassified (the launch output matched no known signature)' ;;
     esac
@@ -294,7 +300,7 @@ _cuda_guard_or_exit() {
         echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
         echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
         # DEF-024: a refused pre-flight is not a failed configuration list.  The class is
-        _preflight_refuse unclassified 3 \
+        _preflight_refuse adapter_degraded 3 \
             "CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}); restart WSL"
     fi
     if (( CUDA_DEGRADE_CONSECUTIVE_STALLS > 0 )); then
@@ -302,7 +308,7 @@ _cuda_guard_or_exit() {
         if (( s >= CUDA_DEGRADE_CONSECUTIVE_STALLS )); then
             echo "ERROR: ${s} consecutive launches stalled (health never ready while the process stayed alive) — the dxgkrnl degradation signature, at ${c}/${CUDA_CYCLE_BUDGET} cycles." >&2
             echo "       Restart WSL from Windows ('wsl --shutdown'); nothing was certified this run." >&2
-            _preflight_refuse unclassified 3 \
+            _preflight_refuse adapter_degraded 3 \
                 "${s} consecutive launches stalled (dxgkrnl degradation); restart WSL"
         fi
     fi
@@ -312,7 +318,7 @@ _cuda_guard_or_exit() {
             warn "ERROR: WSL2 dxgkrnl reported critical kernel GPU errors (-12/-75/wait timeout):"
             while IFS= read -r _l; do warn "  $_l"; done <<< "$_dxg_err"
             warn "       Restart WSL from Windows ('wsl --shutdown') to clear adapter state."
-            _preflight_refuse unclassified 3 \
+            _preflight_refuse adapter_degraded 3 \
                 "WSL2 dxgkrnl kernel GPU errors in dmesg (-12/-75/wait timeout); restart WSL"
         fi
     fi
@@ -329,7 +335,7 @@ _cuda_guard_or_exit() {
                     warn "ERROR: Cumulative post-boot VRAM drift (${_vram_drift} MiB" \
                          ">= ${LLM_AUTOTUNE_MAX_DRIFT_MIB} MiB)."
                     warn "       WSL2 dxgkrnl GPU VA fragmentation limit reached. Restart WSL ('wsl --shutdown')."
-                    _preflight_refuse unclassified 3 \
+                    _preflight_refuse adapter_degraded 3 \
                         "cumulative post-boot VRAM drift ${_vram_drift} MiB >= ${LLM_AUTOTUNE_MAX_DRIFT_MIB} MiB; restart WSL"
                 fi
             fi
@@ -622,7 +628,7 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 # Probe bounds — floor AND ceiling — come from __autotune_ctx_bounds in
 if ! declare -f __autotune_ctx_bounds &>/dev/null || ! declare -f __autotune_descent_candidates &>/dev/null; then
     echo "ERROR: __autotune_ctx_bounds / __autotune_descent_candidates are not loaded (scripts/11b-llm-autotune.sh missing?) — refusing to autotune without tested ctx bounds." >&2
-    _preflight_refuse unclassified 1
+    _preflight_refuse missing_dependency 1
 fi
 read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
     "$START_CTX" "${_native_ctx:-}" "${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}" "$MIN_CTX")
@@ -938,7 +944,8 @@ __autotune_classify_failure() {
     _re_unsupported+='are) not supported|is not supported by this|not supported by this (build|backend)|no (matching|'
     _re_unsupported+='suitable|supported) backend|failed to find (a |the )?(matching |suitable )?backend|'
     _re_unsupported+='requires ctx_other to be set|support for .* was not (built|compiled)|'
-    _re_unsupported+='model architecture .* (not supported|unknown)'
+    _re_unsupported+='model architecture .* (not supported|unknown)|'
+    _re_unsupported+='without text generation|decision model|classifier model|use /v1/systemone'
     # A model the server could NOT LOAD was a shape this classifier was blind to.  _startup_fail_type
     local _re_vintage='key not found in model:|has wrong type .* but expected type|'
     _re_vintage+='error loading model hyperparameters|gguf version .* (not supported|unsupported)|'
@@ -1146,34 +1153,63 @@ _bench_spawn() {
             _cuda_stall_reset
         fi
         _bench_stop "$_BENCH_PID"
-        _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
+        _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" "$_sft"
         echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"; return 1
     fi
 
-    # Pre-flight: confirm model slot is actually ready to serve.
-    local pf_ok=0 pf_w=0
-    while [[ $pf_w -lt 60 ]]; do
-        if curl -sS --max-time 5 "$health_url/v1/chat/completions" \
-            -H "Content-Type: application/json" \
-            -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
-            2>/dev/null | "$TAC_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
-            pf_ok=1; break
-        fi
-        kill -0 "$_BENCH_PID" 2>/dev/null || {
-            local _sft; _sft=$(_startup_fail_type)
-            # _sft is derived HERE from the log, so it is always set (no -u risk) and it is
-            _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" \
-                "$(_bench_class_from_startup "$_sft")"
-            echo "0|0|$_sft" > "/tmp/at-metrics-$$"
-            _BENCH_FAIL_TYPE="$_sft"
-            return 1
-        }
-        sleep 1; pf_w=$((pf_w + 1))
-    done
-    if [[ $pf_ok -ne 1 ]]; then
+    # _bench_preflight_ready — verify slot serves /v1/chat/completions before benchmarking.
+    _bench_preflight_ready() {
+        local _pf_w=0
+        while [[ $_pf_w -lt 60 ]]; do
+            local _pf_resp=""
+            # swallow-ok: probe failures are expected until the slot is ready; non-zero curl is handled below
+            _pf_resp=$(curl -sS --max-time 5 "$health_url/v1/chat/completions" \
+                -H "Content-Type: application/json" \
+                -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
+                2>/dev/null) || _pf_resp=""
+            local _py_tok="import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))"
+            if printf '%s' "$_pf_resp" | "$TAC_PYTHON" -c "$_py_tok" 2>/dev/null | grep -q '[1-9]'; then
+                return 0
+            fi
+            # Check if the server explicitly rejected the endpoint as non-generative / unsupported
+            local _has_decision_err=0
+            if grep -qiE 'without text generation|decision model|use /v1/systemone' <<< "$_pf_resp"; then
+                _has_decision_err=1
+            elif [[ -r "$_BENCH_LOG" ]] \
+                && grep -qiE 'without text generation|decision model|use /v1/systemone' "$_BENCH_LOG"; then
+                _has_decision_err=1
+            fi
+            if (( _has_decision_err == 1 )); then
+                # Server rejected chat completions: non-generative/decision model cannot serve text
+                return 1
+            fi
+            kill -0 "$_BENCH_PID" 2>/dev/null || {
+                local _sft; _sft=$(_startup_fail_type)
+                # _sft is derived HERE from the log, so it is always set (no -u risk) and it is
+                _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" \
+                    "$(_bench_class_from_startup "$_sft")"
+                echo "0|0|$_sft" > "/tmp/at-metrics-$$"
+                _BENCH_FAIL_TYPE="$_sft"
+                return 1
+            }
+            sleep 1; _pf_w=$((_pf_w + 1))
+        done
+        return 1
+    }
+
+    local _pf_rc=0
+    _bench_preflight_ready || _pf_rc=$?
+    if (( _pf_rc != 0 )); then
         _bench_stop "$_BENCH_PID"
-        _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
-        echo "0|0|oom" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="oom"; return 1
+        local _pf_fail_cls
+        _pf_fail_cls=$(__autotune_classify_failure "$_BENCH_LOG")
+        [[ "$_pf_fail_cls" == "unclassified" ]] && _pf_fail_cls="resource_exhausted"
+        _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" "$_pf_fail_cls"
+        if [[ "$_pf_fail_cls" == "unsupported_arch" || "$_pf_fail_cls" == "launch_error" ]]; then
+            echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"; return 1
+        else
+            echo "0|0|oom" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="oom"; return 1
+        fi
     fi
 
     # GPU warmup: wake clocks from power-save (P5/P8 → P0).

@@ -133,3 +133,4 @@ config/kv-recall-baseline.tsv
 # Run output.  logs/ is ignored above; this rule names the reason for the tree.
 logs/
 
+bin/qwen-memory-style-patch.sh.backup

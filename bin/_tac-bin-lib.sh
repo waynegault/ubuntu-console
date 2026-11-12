@@ -16,7 +16,9 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-11-12): _tac_cleanroom_enter accepts optional quiet flag/mode; _tac_cleanroom_msg
+#     honours _TAC_CLEANROOM_QUIET=1 so pre-banner clean-room chatter can be suppressed.
 #   v24 (2026-11-12): _tac_cleanroom_enter / _tac_cleanroom_restore — shared clean-room
 #     isolation (fleet-model sweep, watchdog hold, census tenant stop, CI runner hold,
 #     unsupervised CUDA server reap, lane stop, card drain) for autotune-rows.sh,
@@ -987,10 +989,13 @@ _TAC_CLEANROOM_FLEET_SWITCHED=0
 _TAC_CLEANROOM_ENTERED=0
 _TAC_CLEANROOM_REPO=""
 _TAC_CLEANROOM_LOG=""
+_TAC_CLEANROOM_QUIET=0
 
 # _tac_cleanroom_msg <message> — emit a clean-room status line and append to log if set.
 _tac_cleanroom_msg() {
-    printf '%s\n' "$*"
+    if [[ "${_TAC_CLEANROOM_QUIET:-0}" != "1" ]]; then
+        printf '%s\n' "$*"
+    fi
     if [[ -n "${_TAC_CLEANROOM_LOG:-}" ]]; then
         printf '%s\n' "$*" >> "$_TAC_CLEANROOM_LOG"
     fi
@@ -1067,7 +1072,7 @@ _tac_cleanroom_drain_card() {
     fi
 }
 
-# _tac_cleanroom_enter [repo_root] [lane_unit] [log_file] — isolate GPU and CPU for
+# _tac_cleanroom_enter [repo_root] [lane_unit] [log_file] [quiet] — isolate GPU and CPU for
 # clean-room measurement.  Switches fleet model off the primary lane, holds watchdogs,
 # stops declared census tenants, holds actions.runner.* CI services, reaps unsupervised
 # CUDA servers, stops the primary lane, and waits for VRAM to drain.
@@ -1077,6 +1082,13 @@ _tac_cleanroom_enter() {
     _TAC_CLEANROOM_REPO="${1:-${REPO:-$_default_repo}}"
     local _lane="${2:-${LLAMA_CUDA_LANE_UNIT:-}}"
     _TAC_CLEANROOM_LOG="${3:-}"
+    local _quiet="${4:-}"
+    if [[ "$_quiet" == "--quiet" || "$_quiet" == "quiet" ]] \
+        || [[ "$_quiet" == "1" || "${TAC_CLEANROOM_QUIET:-0}" == "1" ]]; then
+        _TAC_CLEANROOM_QUIET=1
+    else
+        _TAC_CLEANROOM_QUIET=0
+    fi
     _TAC_CLEANROOM_WATCHDOGS_STOPPED=()
     _TAC_CLEANROOM_TENANTS_STOPPED=()
     _TAC_CLEANROOM_RUNNERS_STOPPED=()
@@ -1167,7 +1179,7 @@ _tac_cleanroom_restore() {
         [[ -n "$_w" ]] || continue
         # swallow-ok: a failed release is reported by the else branch below, never hidden
         if systemctl --user start "$_w" >/dev/null 2>&1; then
-            echo "clean-room: released watchdog $_w"
+            _tac_cleanroom_msg "clean-room: released watchdog $_w"
         else
             _tac_cleanroom_warn "clean-room: FAILED to release $_w - start it by hand"
         fi
@@ -1177,7 +1189,7 @@ _tac_cleanroom_restore() {
         [[ -n "$_t" ]] || continue
         # swallow-ok: a failed restore is reported by the else branch below, never hidden
         if systemctl --user start "$_t" >/dev/null 2>&1; then
-            echo "clean-room: restored tenant $_t"
+            _tac_cleanroom_msg "clean-room: restored tenant $_t"
         else
             _tac_cleanroom_warn "clean-room: FAILED to restore $_t - start it by hand"
         fi
@@ -1187,7 +1199,7 @@ _tac_cleanroom_restore() {
         [[ -n "$_r" ]] || continue
         # swallow-ok: a failed release is reported by the else branch below, never hidden
         if systemctl --user start "$_r" >/dev/null 2>&1; then
-            echo "clean-room: released runner $_r"
+            _tac_cleanroom_msg "clean-room: released runner $_r"
         else
             _tac_cleanroom_warn "clean-room: FAILED to release $_r - start it by hand"
         fi

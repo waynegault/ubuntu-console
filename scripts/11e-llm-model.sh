@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 130
+# Module Version: 131
+#   v131 (2026-11-12): suppress pre-banner suspend acquire and clean-room stdout chatter
+#     so the MODEL BENCHMARK box is the clean first output; bound Models selector row.
 #   v130 (2026-11-12): suppress misleading "CUDA keeping <unit>" notice during __BENCH_MODE=1
 #     when declared tenants are already stopped by clean-room.
 #   v129 (2026-11-12): __model_bench emits clean-room/suspend setup logs before opening
@@ -3873,11 +3875,14 @@ function __model_bench() {
     # child subshells do not stamp short-lived PIDs that read as dead between models.
     if declare -f _tac_suspend_acquire &>/dev/null
     then
-        if _tac_suspend_acquire "$_bench_cuda_suspend"
+        local _bench_acquire_out=""
+        # swallow-ok: acquire stdout is debug log; if refused, refusal reason is retrieved via _tac_suspend_pid below
+        if _bench_acquire_out=$(_tac_suspend_acquire "$_bench_cuda_suspend" 2>&1)
         then
             _bench_acquired_suspend=1
+        # swallow-ok: ancestor check output is debug info; exit code is the verdict
         elif declare -f _tac_suspend_owner_is_ancestor &>/dev/null \
-             && _tac_suspend_owner_is_ancestor "$_bench_cuda_suspend"
+             && _tac_suspend_owner_is_ancestor "$_bench_cuda_suspend" >/dev/null 2>&1
         then
             _bench_acquired_suspend=0
         else
@@ -3902,7 +3907,7 @@ function __model_bench() {
     # stopped before any autotune or benchmark probe runs.
     if (( _bench_acquired_suspend == 1 )) && declare -f _tac_cleanroom_enter &>/dev/null
     then
-        _tac_cleanroom_enter "${TAC_ROOT:-}" "${LLAMA_CUDA_LANE_UNIT:-}"
+        _tac_cleanroom_enter "${TAC_ROOT:-}" "${LLAMA_CUDA_LANE_UNIT:-}" "" --quiet
         _bench_cleanroom_entered=1
     fi
 
@@ -4028,7 +4033,12 @@ function __model_bench() {
     fi
     if (( ${#bench_selectors[@]} > 0 ))
     then
-        __tac_info "Models" "${#b_num[@]} selected (${bench_selectors[*]})" "$C_Text"
+        local _sel_str="${bench_selectors[*]}"
+        if (( ${#_sel_str} > 28 ))
+        then
+            _sel_str="${_sel_str:0:25}..."
+        fi
+        __tac_info "Models" "${#b_num[@]} selected (${_sel_str})" "$C_Text"
     else
         __tac_info "Models" "${#b_num[@]} queued" "$C_Text"
     fi
