@@ -314,9 +314,8 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     after deselection, which is what the gate's "no BATS item, no queue" rule means.
 
     That same post-deselection view is why the PRUNE below cannot use it: a ``-k`` run
-    must not drop every id it did not select.  The fence it needs comes from the
-    collect-only pass that runs straight before every real collection — see
-    ``_prune_vanished_nodeids``.
+    must not drop every id it did not select.  The fence it needs is recorded, unfiltered,
+    by ``pytest_collection_modifyitems`` above — see ``_prune_vanished_nodeids``.
     """
     _prune_vanished_nodeids(session)
     ensure_heavy_job_session(session.config, session.items, collect_only=_is_vscode_discovery())
