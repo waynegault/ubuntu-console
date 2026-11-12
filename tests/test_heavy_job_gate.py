@@ -278,3 +278,72 @@ def test_a_dash_k_python_selection_does_not_queue_behind_a_held_lock(tmp_path: P
     combined = proc.stdout + proc.stderr
     assert proc.returncode == 0, f"the selection queued or failed (rc={proc.returncode}):\n{combined}"
     assert "1 passed" in combined, combined
+
+
+class _FakeCache:
+    """A pytest cache with the two keys the prune touches, in memory."""
+
+    def __init__(self, lastfailed: dict[str, bool], nodeids: list[str]) -> None:
+        self._data: dict[str, Any] = {"cache/lastfailed": lastfailed, "cache/nodeids": nodeids}
+        self.written: list[str] = []
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._data.get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        self._data[key] = value
+        self.written.append(key)
+
+
+class _FakeLF:
+    """pytest's LFPlugin, whose in-memory dict is what its sessionfinish flushes."""
+
+    def __init__(self, lastfailed: dict[str, bool]) -> None:
+        self.lastfailed = lastfailed
+
+
+class _FakeSession:
+    def __init__(self, cache: _FakeCache, lastfailed: dict[str, bool], collected: set[str] | None, whole: bool) -> None:
+        pluginmanager = SimpleNamespace(getplugin=lambda name: _FakeLF(lastfailed) if name == "lfplugin" else None)
+        self.config = SimpleNamespace(
+            cache=cache,
+            pluginmanager=pluginmanager,
+            _tac_collected=collected,
+            _tac_whole_tree=whole,
+        )
+
+
+def test_vanished_nodeids_are_pruned_and_live_ones_are_kept() -> None:
+    """Catches: a rename leaving its old id in lastfailed, which the panel reads as a cross.
+
+    Measured 2026-11-11: a BATS case rename left its retired node id behind and the VS Code
+    Testing panel reported it as a red cross forever, because pytest only clears a
+    lastfailed entry when THAT id passes.
+    """
+    live = "tests/x.py::test_live"
+    gone = "tests/x.py::test_renamed_away"
+    cache = _FakeCache({live: True, gone: True}, [live, gone, "tests/y.py::test_other"])
+    session = _FakeSession(cache, {live: True, gone: True}, {live}, whole=True)
+
+    conftest._prune_vanished_nodeids(session)  # type: ignore[arg-type]
+
+    # The plugin's dict is what its own sessionfinish writes back — a prune that only
+    # touched cache.set would be undone a moment later (measured).
+    assert session.config.pluginmanager.getplugin("lfplugin").lastfailed == {live: True}
+    assert cache.get("cache/nodeids") == [live]
+
+
+def test_the_prune_writes_nothing_for_a_narrowed_or_empty_collection() -> None:
+    """Catches: a file-scoped or failed collection wiping the cache on ids it never looked at.
+
+    A run naming one FILE collects only that file, so "absent" says nothing about the rest —
+    an early version dropped 939 nodeids on such a run.  An empty collection is the same
+    hazard with no floor at all.
+    """
+    stale = {"tests/x.py::test_gone": True}
+    for whole, collected in ((False, {"tests/x.py::test_live"}), (True, None), (True, set())):
+        cache = _FakeCache(dict(stale), ["tests/x.py::test_gone"])
+        session = _FakeSession(cache, dict(stale), collected, whole=whole)
+        conftest._prune_vanished_nodeids(session)  # type: ignore[arg-type]
+        assert cache.written == [], f"pruned on whole_tree={whole} collected={collected!r}"
+        assert cache.get("cache/lastfailed") == stale

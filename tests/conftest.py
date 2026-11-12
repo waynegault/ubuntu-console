@@ -343,9 +343,13 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     the coverage is asked as "are the collector dirs exactly those".
     """
     config._tac_collected = {item.nodeid for item in items}  # type: ignore[attr-defined]
+    inipath = config.inipath
     dirs = getattr(session, "_initialpaths", ())
-    testpaths = tuple(str(config.inipath.parent / path) for path in config.getini("testpaths"))
-    config._tac_whole_tree = bool(dirs) and {str(d) for d in dirs} == set(testpaths)  # type: ignore[attr-defined]
+    if inipath is None:
+        config._tac_whole_tree = False  # type: ignore[attr-defined]
+        return
+    testpaths = {str(inipath.parent / path) for path in config.getini("testpaths")}
+    config._tac_whole_tree = bool(dirs) and {str(d) for d in dirs} == testpaths  # type: ignore[attr-defined]
 
 
 def _prune_vanished_nodeids(session: pytest.Session) -> None:
@@ -375,8 +379,16 @@ def _prune_vanished_nodeids(session: pytest.Session) -> None:
         # Nothing to subtract from (a plugin-supplied collection, a collection error, a
         # selection pattern matching nothing).  Pruning on an empty set would delete the cache.
         return
-    for key in ("cache/lastfailed", "cache/nodeids"):
-        saved = cache.get(key, {})
+    # cache/lastfailed is OWNED by pytest's LFPlugin, which loads it in __init__ and
+    # writes that in-memory copy back at sessionfinish — so writing the cache here is
+    # undone a moment later (measured 2026-11-11: the prune reported 8 ids, the file kept
+    # all 8).  Mutate the plugin's dict, and its own flush persists the prune.
+    lf_plugin = session.config.pluginmanager.getplugin("lfplugin")
+    lastfailed: dict[str, bool] | None = getattr(lf_plugin, "lastfailed", None)
+    for key, saved in (
+        ("cache/lastfailed", lastfailed if lastfailed is not None else cache.get("cache/lastfailed", {})),
+        ("cache/nodeids", cache.get("cache/nodeids", {})),
+    ):
         vanished = sorted(set(saved) - collected)
         if not vanished:
             continue
