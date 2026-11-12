@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 128
+# Module Version: 129
+#   v129 (2026-11-12): __model_bench emits clean-room/suspend setup logs before opening
+#     the MODEL BENCHMARK summary box and adds Clean-Room + Models rows inside the box.
 #   v128 (2026-11-12): __model_bench enters shared clean-room (_tac_cleanroom_enter /
 #     _tac_cleanroom_restore) when it owns the card (_bench_acquired_suspend=1) so
 #     declared tenants, watchdogs, CI runners, unsupervised CUDA servers, and the
@@ -3849,7 +3851,6 @@ function __model_bench() {
     trap '__bench_signal_rc=130; __bench_cleanup; return 130' INT
     trap '__bench_signal_rc=143; __bench_cleanup; return 143' TERM
 
-    __tac_header "MODEL BENCHMARK" "open"
     local bench_run_id
     bench_run_id=$(date +%Y%m%d_%H%M%S)
     local bench_log_dir="${TAC_CACHE_DIR:-/dev/shm}/llm-bench-logs/${bench_run_id}"
@@ -3861,7 +3862,6 @@ function __model_bench() {
     then
         _bench_watchdog_was_active=1
         systemctl --user stop "$bench_watchdog_timer" 2>/dev/null
-        __tac_info "Watchdog" "Suspended for bench (will restore)" "$C_Dim"
     fi
 
     # Hold the CUDA suspend marker under this parent bench PID for the whole sweep so
@@ -3888,7 +3888,6 @@ function __model_bench() {
                 __tac_info "Watchdog" "Restored" "$C_Dim"
             fi
             __bench_cleanup
-            __tac_footer
             return 1
         fi
     fi
@@ -4009,15 +4008,29 @@ function __model_bench() {
         return 1
     fi
 
+    __tac_header "MODEL BENCHMARK" "open"
+    if (( _bench_watchdog_was_active )) || (( ${#_TAC_CLEANROOM_WATCHDOGS_STOPPED[@]} > 0 ))
+    then
+        __tac_info "Watchdog" "Suspended for bench (will restore)" "$C_Dim"
+    fi
+    if (( _bench_cleanroom_entered == 1 ))
+    then
+        local _cr_summary="Isolated"
+        _cr_summary+=" (${#_TAC_CLEANROOM_TENANTS_STOPPED[@]} tenant,"
+        _cr_summary+=" ${#_TAC_CLEANROOM_RUNNERS_STOPPED[@]} runner,"
+        _cr_summary+=" ${#_TAC_CLEANROOM_WATCHDOGS_STOPPED[@]} watchdog held)"
+        __tac_info "Clean-Room" "$_cr_summary" "$C_Success"
+    fi
+    if (( ${#bench_selectors[@]} > 0 ))
+    then
+        __tac_info "Models" "${#b_num[@]} selected (${bench_selectors[*]})" "$C_Text"
+    else
+        __tac_info "Models" "${#b_num[@]} queued" "$C_Text"
+    fi
     # swallow-ok: a wake signal to a helper that may already have exited
     wake 2>/dev/null || true
     __llm_bench_perf_prep
-    if (( ${#bench_selectors[@]} > 0 ))
-    then
-        printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} selected models (${bench_selectors[*]})...${C_Reset}"
-    else
-        printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} models...${C_Reset}"
-    fi
+    printf '\n'
 
     local __BENCH_MODE=1
     local i
