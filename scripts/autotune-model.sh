@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 130
+# Module Version: 131
+#   v131 (2026-11-12): honor loader_crash_unknown in probe loops instead of descending
+#     or mislabeling it as OOM; centralize failure-token labeling in _last_fail_label.
 #   v130 (2026-11-11): _cuda_guard_or_exit checks _tac_dxg_health_check for critical dxgkrnl
 #     failures (-12 ENOMEM, -75 EOVERFLOW, wait timeouts) and enforces cumulative post-boot
 #     VRAM drift ceiling (LLM_AUTOTUNE_MAX_DRIFT_MIB) to prevent tuning on degraded adapter.
@@ -2619,6 +2621,16 @@ last_fail_type() {
     cut -d'|' -f3 "/tmp/at-metrics-$$" 2>/dev/null | head -1
 }
 
+# _last_fail_label [fail_type] — map a bench_ctx failure token to its display label.
+_last_fail_label() {
+    local _t="${1:-$(last_fail_type)}"
+    case "$_t" in
+        load_fail)            printf '%s\n' "unsupported model" ;;
+        loader_crash_unknown) printf '%s\n' "unclassified crash" ;;
+        *)                    printf '%s\n' "OOM" ;;
+    esac
+}
+
 # --- KV-quant certification gate (KVCACHE-CONSOLE-PROMPT-CACHE-001) ---
 # REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
 #      (Ibrahim, TDS, 2026-09-16) — https://towardsdatascience.com/the-kv-cache-tax-why-inference-servers-run-out-of-memory-before-compute/
@@ -2736,8 +2748,7 @@ probe_upward() {
     fi
 
     _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
-        _fail_label="OOM"
-        [[ $(last_fail_type) == "load_fail" ]] && _fail_label="unsupported model"
+        _fail_label=$(_last_fail_label)
         echo "    ctx $(fmt "$_pc") - ${_fail_label}"
         return 1
     }
@@ -2750,8 +2761,7 @@ probe_upward() {
         [[ $_pc -eq $_lo ]] && break
         _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
             _hi=$_pc
-            _fail_label="OOM"
-            [[ $(last_fail_type) == "load_fail" ]] && _fail_label="unsupported model"
+            _fail_label=$(_last_fail_label)
             echo "    ctx $(fmt "$_pc") - ${_fail_label}: binary probe"
             break
         }
@@ -2762,8 +2772,7 @@ probe_upward() {
         _mid=$(( ( _lo + _hi ) / 2 / 512 * 512 ))
         [[ $_mid -eq $_lo ]] && return 0
         _tps=$(bench_ctx "$_mid" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
-            _fail_label="OOM"
-            [[ $(last_fail_type) == "load_fail" ]] && _fail_label="unsupported model"
+            _fail_label=$(_last_fail_label)
             echo "    ctx $(fmt "$_mid") - ${_fail_label}"
             return 0
         }
@@ -2786,31 +2795,32 @@ for combo in "${COMBOS[@]}"; do
             echo "  ctx $(fmt "$BEST_CTX") - ${tps} tps"
             ANY_OK=true; record_best "$BEST_CTX" "$tps" "$b" "$u"
         else
-            fail_label="OOM"
-            [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+            fail_label=$(_last_fail_label)
             echo "  ctx $(fmt "$BEST_CTX") - ${fail_label} with batch $(fmt "$b")/$(fmt "$u")"
         fi
         continue
     fi
-    test_num=0; c=$c0; found=false; _ALL_LOAD_FAIL=true
+    test_num=0; c=$c0; found=false; _ALL_LOAD_FAIL=true; _ABORT_COMBO_WALK=0
     while [[ $c -ge $MIN_CTX ]]; do
         test_num=$((test_num + 1))
         tps=$(bench_ctx "$c" "$b" "$u" 1) || {
-            fail_label="OOM"
-            # STOP, do not halve, on a hard load failure: shrinking ctx cannot make
-            # an unloadable GGUF load, so every further step is another llama-server
-            # spawn and another CUDA cycle (2026-10-14 — code-100k-Q8_0 walked
-            # 40,960 -> 2,560 on "failed to load model" and, with the fallback below,
-            # exhausted the boot's 60-cycle ledger).  The FA-off retry inside
-            # _bench_spawn is the one legitimate retry a load failure gets; leaving
-            # _ALL_LOAD_FAIL true makes the row report un-runnable and skip the combos.
-            if [[ $(last_fail_type) == "load_fail" ]]; then
-                fail_label="unsupported model"
+            _lft=$(last_fail_type)
+            fail_label=$(_last_fail_label "$_lft")
+            # STOP, do not halve, on a hard load failure or an unclassified crash:
+            # shrinking ctx cannot fix an unloadable GGUF, and descending on an
+            # unwitnessed crash contradicts _bench_stop_unknown ("no descent").
+            if [[ "$_lft" == "load_fail" ]]; then
+                break
+            fi
+            if [[ "$_lft" == "loader_crash_unknown" ]]; then
+                echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label} (stopping descent)"
+                _ALL_LOAD_FAIL=false
+                _ABORT_COMBO_WALK=1
                 break
             fi
             echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label}: dropping to $(fmt $((c/2)))"
             _ALL_LOAD_FAIL=false
-            c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
+            _next_c=$((c/2)); [[ $_next_c -lt $MIN_CTX ]] && break; c=$_next_c; continue
         }
         echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps"
         found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
@@ -2840,8 +2850,7 @@ for combo in "${COMBOS[@]}"; do
             # classification in the binary probe.
             if [[ $rc -ne 0 ]] || [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" || "$tps" == "0,00" ]]; then
                 hi=$c
-                fail_label="OOM"
-                [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+                fail_label=$(_last_fail_label)
                 if [[ -n "$tps" && "$tps" == "0" ]]; then
                     echo "  Test $test_num: ctx $(fmt "$c") - 0 tps (${fail_label}): binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
                 else
@@ -2878,8 +2887,7 @@ for combo in "${COMBOS[@]}"; do
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
             if [[ $rc -ne 0 ]]; then
                 hi=$c
-                fail_label="OOM"
-                [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+                fail_label=$(_last_fail_label)
                 echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label}"
             else
                 lo=$c; record_best "$lo" "$tps" "$b" "$u"
@@ -2890,7 +2898,7 @@ for combo in "${COMBOS[@]}"; do
         break
     done
     if [[ $found == false ]]; then
-        fail_label="OOM"
+        fail_label=$(_last_fail_label)
         [[ $_ALL_LOAD_FAIL == true ]] && fail_label="unsupported model"
         # No attempt at all is NOT a model verdict.  _ALL_LOAD_FAIL is initialised
         # true and cleared by a non-load failure, so a loop that never ran leaves it
@@ -2909,6 +2917,10 @@ for combo in "${COMBOS[@]}"; do
             echo "  (model cannot be loaded — skipping remaining combos)"
             break
         fi
+        if [[ "${_ABORT_COMBO_WALK:-0}" == "1" ]]; then
+            echo "  (unclassified crash on default load — skipping remaining combos)"
+            break
+        fi
     fi
 done
 
@@ -2921,11 +2933,33 @@ done
 # pass that re-runs the probe with mmap off and shares the same globals.  `b`/`u`
 # stay global exactly as before, so the move is behaviour-preserving (a later
 # step can unify this with probe_upward, whose loop it duplicates).
+# _probe_no_mmap_climb <start_ctx> <batch> <ubatch> — step up ctx in --load-mode none until OOM or MAX_CTX.
+_probe_no_mmap_climb() {
+    local _lo="$1" _b="$2" _u="$3" _c _tps _rc _fl
+    _c=$((_lo * 3 / 2)); [[ $_c -gt $MAX_CTX ]] && _c=$MAX_CTX
+    while true; do
+        [[ $_c -eq $_lo ]] && break
+        bench_ctx "$_c" "$_b" "$_u" 1 "off" > /tmp/at-tps-$$; _rc=$?
+        # swallow-ok: missing metrics temp file reads empty, which triggers the failure branch below
+        _tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
+        if [[ $_rc -ne 0 ]]; then
+            _fl=$(_last_fail_label)
+            echo "  ctx $(fmt "$_c") - ${_fl}"
+            break
+        fi
+        _lo=$_c; record_best "$_lo" "$_tps" "$_b" "$_u"
+        echo "  ctx $(fmt "$_c") - ${_tps} tps - climbing to $(fmt $((_c*3/2)))"
+        _c=$((_c * 3 / 2)); [[ $_c -gt $MAX_CTX ]] && _c=$MAX_CTX
+    done
+}
+
+# probe_no_mmap — retry the probe with --load-mode none after default (mmap) loads fail.
 probe_no_mmap() {
     echo ""
     echo "  default (mmap) load failed at all ctx — retrying with --load-mode none"
     echo ""
     _ALL_LOAD_FAIL=true
+    local _abort_no_mmap=0
     for combo in "${COMBOS[@]}"; do
         IFS=':' read -r b u <<< "$combo"
         echo "  batch $(fmt "$b")/$(fmt "$u")  (--load-mode none)"
@@ -2934,41 +2968,37 @@ probe_no_mmap() {
         c=$START_CTX; found=false
         while [[ $c -ge $MIN_CTX ]]; do
             tps=$(bench_ctx "$c" "$b" "$u" 1 "off") || {
-                fail_label="OOM"
+                local _lft _next_c
+                _lft=$(last_fail_type)
+                fail_label=$(_last_fail_label "$_lft")
                 # Same stop-on-load-fail rule as the mmap walk: an unloadable GGUF
                 # does not become loadable with --load-mode none.
-                if [[ $(last_fail_type) == "load_fail" ]]; then
-                    fail_label="unsupported model"
+                if [[ "$_lft" == "load_fail" ]]; then
+                    break
+                fi
+                if [[ "$_lft" == "loader_crash_unknown" ]]; then
+                    echo "  ctx $(fmt "$c") - ${fail_label} (stopping descent)"
+                    _ALL_LOAD_FAIL=false
+                    _abort_no_mmap=1
                     break
                 fi
                 echo "  ctx $(fmt "$c") - ${fail_label}: dropping to $(fmt $((c/2)))"
                 _ALL_LOAD_FAIL=false
-                c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
+                _next_c=$((c/2)); [[ $_next_c -lt $MIN_CTX ]] && break; c=$_next_c; continue
             }
             echo "  ctx $(fmt "$c") - ${tps} tps"
             found=true; ANY_OK=true; _ALL_LOAD_FAIL=false; MMAP_FALLBACK_USED=1
             record_best "$c" "$tps" "$b" "$u"
-            # Phase 2: step up, stop at first OOM (fallback path — keep it simple)
-            lo=$c; c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
-            while true; do
-                [[ $c -eq $lo ]] && break
-                bench_ctx "$c" "$b" "$u" 1 "off" > /tmp/at-tps-$$; rc=$?
-                tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
-                if [[ $rc -ne 0 ]]; then
-                    fail_label="OOM"
-                    [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
-                    echo "  ctx $(fmt "$c") - ${fail_label}"
-                    break
-                fi
-                lo=$c; record_best "$lo" "$tps" "$b" "$u"
-                echo "  ctx $(fmt "$c") - ${tps} tps - climbing to $(fmt $((c*3/2)))"
-                c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
-            done
+            _probe_no_mmap_climb "$c" "$b" "$u"
             break
         done
         # Likewise early-abort remaining combos in the fallback path
         if [[ $_ALL_LOAD_FAIL == true ]]; then
             echo "  (model cannot be loaded even with --load-mode none — aborting)"
+            break
+        fi
+        if (( _abort_no_mmap == 1 )); then
+            echo "  (unclassified crash with --load-mode none — aborting)"
             break
         fi
     done
@@ -3039,8 +3069,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
             COMBO_TPS[$key]="$tps"
             record_best "$BEST_CTX" "$tps" "$_b2" "$_u2"
         else
-            fail_label="OOM"
-            [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+            fail_label=$(_last_fail_label)
             echo "  combo $_b2/$_u2 - ${fail_label}"
         fi
     }
@@ -3329,8 +3358,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fi
     else
         _FAST_REJECT=0
-        fail_label="OOM"
-        [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+        fail_label=$(_last_fail_label)
         echo "  ctx $(fmt "$_dc") - filled ${fail_label} (capacity ctx failed the filled load — descending once)"
         # The capacity ctx failed the FILLED load (memory pressure at fill) — fall back to a
         # quick descent for a working filled ctx.  Same candidate list, so it also cannot step

@@ -45,10 +45,12 @@ extract_fns() {
 
 setup() {
     HARNESS="$BATS_TEST_TMPDIR/fns.sh"
-    extract_fns "_bench_log_tail __autotune_classify_failure _bench_class_from_startup _bench_record_failure _autotune_failure_report __autotune_failure_label" > "$HARNESS"
+    extract_fns "_bench_log_tail __autotune_classify_failure _bench_class_from_startup _bench_record_failure _autotune_failure_report __autotune_failure_label last_fail_type _last_fail_label _probe_no_mmap_climb probe_no_mmap" > "$HARNESS"
     # A harness that failed to extract would make every arm below vacuous.
     grep -q '^_bench_record_failure() {' "$HARNESS"
     grep -q '^_bench_class_from_startup() {' "$HARNESS"
+    grep -q '^_last_fail_label() {' "$HARNESS"
+    grep -q '^probe_no_mmap() {' "$HARNESS"
     LOG="$BATS_TEST_TMPDIR/server.log"
     : > "$LOG"
 }
@@ -279,4 +281,57 @@ report_with() {
     run classify_with ""
     [ "$status" -eq 0 ]
     [ "$output" = "resource_exhausted" ]
+}
+
+@test "_last_fail_label maps loader_crash_unknown without collapsing it into OOM" {
+    run bash -c '
+        source "$1" || exit 90
+        printf "0|0|load_fail\n" > "/tmp/at-metrics-$$"
+        echo "load_fail=$(_last_fail_label)"
+        printf "0|0|loader_crash_unknown\n" > "/tmp/at-metrics-$$"
+        echo "crash=$(_last_fail_label)"
+        printf "0|0|oom\n" > "/tmp/at-metrics-$$"
+        echo "oom=$(_last_fail_label)"
+        rm -f "/tmp/at-metrics-$$"
+    ' _ "$HARNESS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"load_fail=unsupported model"* ]]
+    [[ "$output" == *"crash=unclassified crash"* ]]
+    [[ "$output" == *"oom=OOM"* ]]
+}
+
+@test "probe_no_mmap stops immediately on loader_crash_unknown without descending or labeling OOM" {
+    local calls_file="$BATS_TEST_TMPDIR/bench_calls"
+    run bash -c '
+        source "$1" || exit 90
+        COMBOS=("1024:256" "512:128")
+        START_CTX=8192
+        MIN_CTX=4096
+        MAX_CTX=32768
+        ANY_OK=false
+        MMAP_FALLBACK_USED=0
+        CALLS_FILE="$2"
+        fmt() { printf "%s" "$1"; }
+        record_best() { :; }
+        bench_ctx() {
+            printf "%s\n" "$1:$2:$3" >> "$CALLS_FILE"
+            printf "0|0|loader_crash_unknown\n" > "/tmp/at-metrics-$$"
+            return 1
+        }
+        probe_no_mmap
+        rm -f "/tmp/at-metrics-$$"
+    ' _ "$HARNESS" "$calls_file"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unclassified crash (stopping descent)"* ]]
+    [[ "$output" != *"dropping to"* ]]
+    [[ "$output" != *"OOM"* ]]
+    [ "$(wc -l < "$calls_file")" -eq 1 ]
+}
+
+@test "main combo walk handles loader_crash_unknown without descending to half ctx" {
+    run awk '/^    test_num=0; c=\$c0;/,/^done$/' "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'if [[ "$_lft" == "loader_crash_unknown" ]]; then'* ]]
+    [[ "$output" == *'_ABORT_COMBO_WALK=1'* ]]
 }

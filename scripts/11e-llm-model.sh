@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 124
+# Module Version: 125
+#   v125 (2026-11-12): (1) __model_bench acquires /dev/shm/llama-watchdog-cuda.suspend
+#     under its live PID (unless an ancestor such as bin/bench-rows.sh already holds it)
+#     and releases it before restoring the prior model; __model_use_claim_cuda_card honors
+#     that ancestor hold under __BENCH_MODE=1 instead of refusing or stamping dead child
+#     subshell PIDs; (2) __model_bench derives bench_model_timeout from __llm_health_timeout
+#     plus __llm_burn_request_timeout when LLM_BENCH_MODEL_TIMEOUT is unset; (3) suppress
+#     interactive job-start [1] pid noise in __bench_run_with_timeout while keeping stderr.
 #   v124 (2026-11-11): the v123 refusal's `case` gains its `*)` arm and its message is
 #     built in parts, so §18.3's 4.2.4 (case without a default) and 8.1.8 (a non-comment
 #     line over 120 columns) do not rise.  Behaviour is unchanged.
@@ -1653,16 +1660,26 @@ function __model_use_claim_cuda_card() {
     #     and the operator gets a name and a pid instead of a silently broken sweep.  A
     #     DEAD owner reads as NOT HELD (_tac_suspend_held checks the pid), so a killed
     #     holder can never wedge `model use`.
+    local _ancestor_suspend_held=0
     if declare -f _tac_suspend_held &>/dev/null && _tac_suspend_held "$_cuda_suspend"
     then
-        local _holder
-        # _tac_suspend_pid only prints the stamped pid; a read failure means the marker is
-        # already gone, which still triggers this refusal — the safe direction.
-        # swallow-ok: the pid is decorative in the message; the HELD verdict above is the decision
-        _holder=$(_tac_suspend_pid "$_cuda_suspend" 2>/dev/null)
-        __tac_info "Error" "[CUDA card is held by a live sweep/bench (owner pid ${_holder:-unknown}) — \
+        # Under __BENCH_MODE=1, an ancestor hold belongs to our own bench/sweep wrapper
+        # (__model_bench or bin/bench-rows.sh) keeping the card down for the whole run.
+        if [[ -n "${__BENCH_MODE:-}" ]] \
+           && declare -f _tac_suspend_owner_is_ancestor &>/dev/null \
+           && _tac_suspend_owner_is_ancestor "$_cuda_suspend"
+        then
+            _ancestor_suspend_held=1
+        else
+            local _holder
+            # _tac_suspend_pid only prints the stamped pid; a read failure means the marker is
+            # already gone, which still triggers this refusal — the safe direction.
+            # swallow-ok: the pid is decorative in the message; the HELD verdict above is the decision
+            _holder=$(_tac_suspend_pid "$_cuda_suspend" 2>/dev/null)
+            __tac_info "Error" "[CUDA card is held by a live sweep/bench (owner pid ${_holder:-unknown}) — \
 not stopping a lane an autotune or bench run owns; stop that run first, or wait for it to finish]" "$C_Error"
-        return 1
+            return 1
+        fi
     fi
 
     # 2. Displace our own CUDA service lanes.  Never the Xe ones.
@@ -1740,7 +1757,8 @@ not stopping a lane an autotune or bench run owns; stop that run first, or wait 
     #    OWNER-STAMPED (v62): the marker carries THIS shell's pid, so a holder that
     #    is killed without running its trap no longer wedges the lane — the readers
     #    see a dead owner and treat the mark as not held.
-    if ! _tac_suspend_acquire "$_cuda_suspend" \
+    if (( _ancestor_suspend_held == 0 )) \
+       && ! _tac_suspend_acquire "$_cuda_suspend" \
        && [[ "$(_tac_suspend_pid "$_cuda_suspend")" != "$$" ]]
     then
         __tac_info "Warning" "[could not mark the CUDA card as taken ($_cuda_suspend)]" "$C_Warning"
@@ -3296,6 +3314,8 @@ function __bench_run_with_timeout() {
 
     local _bench_runner_script="${TACTICAL_REPO_ROOT:-}/bin/bench-timeout-runner.sh"
 
+    local _bwt_err_fd=""
+    exec {_bwt_err_fd}>&2
     if (( _is_shell_func == 1 ))
     then
         local _bench_profile_path="${TACTICAL_PROFILE_PATH:-}"
@@ -3309,18 +3329,25 @@ function __bench_run_with_timeout() {
         declare -fx "$1" 2>/dev/null || true
         (( _monitor_was_on == 1 )) && set +m
         if command -v setsid >/dev/null 2>&1; then
-            setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$1\" \"\$2\" \"\${@:3}\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
+            { setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$1\" \"\$2\" \"\${@:3}\"" _ \
+                # swallow-ok: suppress interactive bash job-start noise ([1] pid) while keeping child stderr
+                "$_bench_runner_script" "$_bench_profile_path" "$@" 2>&"${_bwt_err_fd}" & } 2>/dev/null
         else
-            bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$1\" \"\$2\" \"\${@:3}\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
+            { bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$1\" \"\$2\" \"\${@:3}\"" _ \
+                # swallow-ok: suppress interactive bash job-start noise ([1] pid) while keeping child stderr
+                "$_bench_runner_script" "$_bench_profile_path" "$@" 2>&"${_bwt_err_fd}" & } 2>/dev/null
         fi
     elif command -v setsid >/dev/null 2>&1; then
         (( _monitor_was_on == 1 )) && set +m
-        setsid "$@" &
+        # swallow-ok: suppress interactive bash job-start noise ([1] pid) while keeping child stderr on _bwt_err_fd
+        { setsid "$@" 2>&"${_bwt_err_fd}" & } 2>/dev/null
     else
         (( _monitor_was_on == 1 )) && set +m
-        "$@" &
+        # swallow-ok: suppress interactive bash job-start noise ([1] pid) while keeping child stderr on _bwt_err_fd
+        { "$@" 2>&"${_bwt_err_fd}" & } 2>/dev/null
     fi
     local cmd_pid=$!
+    exec {_bwt_err_fd}>&-
     # swallow-ok: job-control bookkeeping for a process that is already running
     disown "$cmd_pid" 2>/dev/null || true
     __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
@@ -3625,6 +3652,8 @@ function __model_bench() {
     # are always cleaned unless the process receives SIGKILL.
     # ---------------------------------------------------------------------------
     local bench_cleanup_spawned_pids=()
+    local _bench_cuda_suspend="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
+    local _bench_acquired_suspend=0
     local __bench_signal_rc=0
     local __bench_cleaned=0
     local __bench_prev_int_trap=""
@@ -3679,6 +3708,18 @@ function __model_bench() {
             # swallow-ok: a stop performed as part of cleanup must not fail the cleanup
             __model_stop >/dev/null 2>&1 || true
         fi
+        # Release the CUDA suspend hold only when this bench run acquired it.
+        if (( _bench_acquired_suspend == 1 ))
+        then
+            if declare -f _tac_suspend_release &>/dev/null
+            then
+                # swallow-ok: cleanup release of our own hold; an already-removed marker is harmless
+                _tac_suspend_release "$_bench_cuda_suspend" >/dev/null 2>&1 || true
+            else
+                rm -f "$_bench_cuda_suspend"
+            fi
+            _bench_acquired_suspend=0
+        fi
         # Remove guard files (unconditionally — these are /tmp files, safe to rm)
         rm -f "$bench_pid_file"
         if [[ -n "$bench_lock_fd" ]]
@@ -3711,6 +3752,35 @@ function __model_bench() {
         __tac_info "Watchdog" "Suspended for bench (will restore)" "$C_Dim"
     fi
 
+    # Hold the CUDA suspend marker under this parent bench PID for the whole sweep so
+    # child subshells do not stamp short-lived PIDs that read as dead between models.
+    if declare -f _tac_suspend_acquire &>/dev/null
+    then
+        if _tac_suspend_acquire "$_bench_cuda_suspend"
+        then
+            _bench_acquired_suspend=1
+        elif declare -f _tac_suspend_owner_is_ancestor &>/dev/null \
+             && _tac_suspend_owner_is_ancestor "$_bench_cuda_suspend"
+        then
+            _bench_acquired_suspend=0
+        else
+            local _bench_holder=""
+            # swallow-ok: pid display only; the live hold refusal below does not depend on it
+            _bench_holder=$(_tac_suspend_pid "$_bench_cuda_suspend" 2>/dev/null)
+            __tac_info "Error" \
+                "[CUDA card is held by a live sweep/bench (owner pid ${_bench_holder:-unknown})]" "$C_Error"
+            if (( _bench_watchdog_was_active ))
+            then
+                # swallow-ok: best-effort watchdog restore on refusal; timer absence is non-fatal
+                systemctl --user start "$bench_watchdog_timer" 2>/dev/null
+                __tac_info "Watchdog" "Restored" "$C_Dim"
+            fi
+            __bench_cleanup
+            __tac_footer
+            return 1
+        fi
+    fi
+
     # Capture the model to restore afterwards as its FILE name (the stable identity): a
     # bench is exactly the window in which a rescan is plausible, and "restore whatever
     # sits at row 26 now" is how the wrong model gets started afterwards.
@@ -3724,7 +3794,7 @@ function __model_bench() {
         __tac_info "Bench" "[Ignoring LLM_BENCH_AUTOTUNE_ENGINE=${LLM_BENCH_AUTOTUNE_ENGINE}; single autotuner mode uses shell]" "$C_Dim"
     fi
 
-    local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=() b_notes=()
+    local -a b_num=() b_name=() b_file=() b_size=() b_arch=() b_gpu=() b_tps=() b_notes=()
 
     # NOTE: the __bench_* helpers below are deliberately global.  Bash has no
     # function-local functions, so defining them here registers them for the
@@ -3791,6 +3861,7 @@ function __model_bench() {
         b_name+=("$name")
         b_file+=("$file")
         b_size+=("$size")
+        b_arch+=("${_arch:-}")
         b_gpu+=("${gpu_layers:-0}")
     done < "$LLM_REGISTRY"
 
@@ -3941,7 +4012,21 @@ function __model_bench() {
 
         rm -f "$LLM_TPS_CACHE" "$LLM_WINDOW_MISMATCH_CACHE"
         # Timeout guard: force-bound full model run (__model_use + burn).
-        local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-600}"
+        # Derive from health + burn timeouts when LLM_BENCH_MODEL_TIMEOUT is unset
+        # so large checkpoints (e.g. 70G+ --cpu-moe) are not killed mid-load/burn.
+        local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-}"
+        if [[ -z "$bench_model_timeout" ]]
+        then
+            local _bm_health_t _bm_burn_t=600
+            _bm_health_t=$(__llm_health_timeout "${b_size[$i]}" "${b_gpu[$i]}" "${b_name[$i]}")
+            if declare -F __llm_burn_request_timeout >/dev/null 2>&1
+            then
+                _bm_burn_t=$(__llm_burn_request_timeout \
+                    "${b_size[$i]}" "${b_gpu[$i]}" "${b_arch[$i]:-}" 1)
+            fi
+            bench_model_timeout=$(( _bm_health_t + _bm_burn_t ))
+            (( bench_model_timeout < 600 )) && bench_model_timeout=600
+        fi
         local bench_model_rc=0
         # Use || to capture non-zero exit codes safely under set -e.
         __bench_run_with_timeout "$bench_model_timeout" __bench_run_single_model "${b_file[$i]}" || bench_model_rc=$?
@@ -4045,6 +4130,19 @@ function __model_bench() {
                       rm -rf "$_old_dir" 2>/dev/null || true
                   done
         fi
+    fi
+
+    # Release our bench suspend hold before restoring the prior model (now outside __BENCH_MODE).
+    if (( _bench_acquired_suspend == 1 ))
+    then
+        if declare -f _tac_suspend_release &>/dev/null
+        then
+            # swallow-ok: normal-exit release before restoring prior model; absence is harmless
+            _tac_suspend_release "$_bench_cuda_suspend" >/dev/null 2>&1 || true
+        else
+            rm -f "$_bench_cuda_suspend"
+        fi
+        _bench_acquired_suspend=0
     fi
 
     if [[ -n "$_bench_prev_file" ]]

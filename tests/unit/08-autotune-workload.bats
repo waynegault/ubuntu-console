@@ -620,7 +620,8 @@ _selftest_run() {
     # ...the ONE legitimate load-failure retry (FA off) is still attempted...
     [[ "$src" == *'_launch_server || true'* ]]
     # ...and the ctx walk consults the classification before halving.
-    [[ "$src" == *'if [[ $(last_fail_type) == "load_fail" ]]; then'* ]]
+    [[ "$src" == *'_lft=$(last_fail_type)'* ]]
+    [[ "$src" == *'if [[ "$_lft" == "load_fail" ]]; then'* ]]
 }
 
 # ── WSL2 dxgkrnl leak ledger (2026-09-14) ────────────────────────────────────
