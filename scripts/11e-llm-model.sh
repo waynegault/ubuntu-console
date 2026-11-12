@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 133
+# Module Version: 134
+#   v134 (2026-11-12): pass --now to wsl-restart.sh so confirmation dialogue appears immediately;
+#     auto-trigger restart mid-bench on rc=3 without interactive prompt.
 #   v133 (2026-11-12): prompt for clean wsl-restart.sh restart on adapter degradation in interactive terminal.
 #   v132 (2026-11-12): __model_bench runs _tac_adapter_health_check as upfront first check,
 #     and halts benchmark queue immediately (break) on autotune rc=3 adapter degradation.
@@ -3733,14 +3735,14 @@ function __model_bench() {
                 read -r -p "Do you want to restart WSL now? [y/N]: " _ans
                 if [[ "$_ans" =~ ^[Yy] ]]
                 then
-                    __tac_info "Restart" "Arming clean WSL restart via wsl-restart.sh..." "$C_Highlight"
-                    bash "$_wsl_restart" --restart --force \
+                    __tac_info "Restart" "Arming immediate WSL restart via wsl-restart.sh..." "$C_Highlight"
+                    bash "$_wsl_restart" --restart --now --force \
                         --reason "adapter degraded / CUDA cycle budget reached"
                     return 1
                 fi
             fi
             __tac_info "Tip" \
-                "Run 'bin/wsl-restart.sh --restart' or Windows 'wsl --shutdown' to clear adapter state" "$C_Dim"
+                "Run 'bin/wsl-restart.sh --restart --now' or Windows 'wsl --shutdown' to clear adapter state" "$C_Dim"
             return 1
         fi
     fi
@@ -4174,16 +4176,11 @@ function __model_bench() {
                             "$C_Error"
                         local _wsl_restart=""
                         _wsl_restart="${TAC_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/bin/wsl-restart.sh"
-                        if [[ -x "$_wsl_restart" && -t 0 ]]
+                        if [[ -x "$_wsl_restart" ]]
                         then
-                            local _ans=""
-                            read -r -p "Do you want to restart WSL now? [y/N]: " _ans
-                            if [[ "$_ans" =~ ^[Yy] ]]
-                            then
-                                __tac_info "Restart" "Arming clean WSL restart via wsl-restart.sh..." "$C_Highlight"
-                                bash "$_wsl_restart" --restart --force \
-                                    --reason "adapter degraded / CUDA cycle budget reached"
-                            fi
+                            __tac_info "Restart" "Triggering immediate WSL restart via wsl-restart.sh..." "$C_Highlight"
+                            bash "$_wsl_restart" --restart --now --force \
+                                --reason "adapter degraded / dxgkrnl error mid-bench"
                         fi
                         break
                     fi

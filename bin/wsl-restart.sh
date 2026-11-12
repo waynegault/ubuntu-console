@@ -76,7 +76,7 @@
 # separate unit because its arming is an owner decision, not a side effect here.
 #
 # USAGE
-#   wsl-restart.sh --restart [--folder PATH] [--delay MINUTES]   one-shot restart in N min
+#   wsl-restart.sh --restart [--now] [--folder PATH] [--delay N] one-shot restart (with --now: fire immediately)
 #   wsl-restart.sh --restart --force --reason TEXT [--delay N]    recovery restart: bypass the
 #                                                                chunk and fleet gates (logged)
 #   wsl-restart.sh --schedule HH:MM                              one-shot restart at HH:MM
@@ -110,7 +110,9 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
+#   v28 (2026-11-12): add --now flag to --restart to immediately trigger schtasks /run
+#       after arming so the Windows confirmation dialogue appears without delay.
 #   v27 (2026-11-11): render_shutdown_step polls for host vmmemWSL.exe termination so WDDM
 #       memory and GPU VA mappings unwind before reboot; resolve_writable_task_name falls
 #       back to user-scoped task name if default tac-wsl-restart is locked by Admin.
@@ -1078,8 +1080,10 @@ resolve_writable_task_name() {
 
 # Arm the next restart through the TRACKED tool, and read its registration back.
 arm_restart() {
-    local _folder="$1" _delay="$2" _force="${3:-0}" _reason="${4:-}" _st _sd _create_out _arm_desc
+    local _folder="$1" _delay="$2" _force="${3:-0}" _reason="${4:-}" _now="${5:-0}"
+    local _st _sd _create_out _arm_desc
     _arm_desc="restart --delay $_delay"
+    [[ "$_now" == "1" ]] && _arm_desc+=" --now"
     [[ "$_force" == "1" ]] && _arm_desc+=" --force --reason ${_reason}"
     log_caller "$_arm_desc"
     if ! check_preconditions; then
@@ -1123,6 +1127,14 @@ arm_restart() {
         return 1
     fi
     confirm_armed "$TASK_NAME fires at $_st on $_sd (Windows local time)" || return 1
+    if [[ "$_now" == "1" ]]; then
+        # swallow-ok: immediate run is best-effort; the fallback scheduled trigger remains armed
+        if _win 30 "$SCHTASKS_BIN" /run /tn "$TASK_NAME" >/dev/null 2>&1; then
+            _say "triggered immediately: $TASK_NAME is running now (confirmation dialog will appear shortly)"
+        else
+            _say "WARN: schtasks /run failed; $TASK_NAME will still fire at $_st"
+        fi
+    fi
     _say "the wrapper logs to $LOG_WIN; this session ends with the client."
     return 0
 }
@@ -1302,11 +1314,12 @@ validate_seams() {
 # Argument parsing only; --restart is never reached by accident.
 main() {
     local _mode="" _folder="$FOLDER_DEFAULT" _delay="$DELAY_MINUTES_DEFAULT" _time="" _want=""
-    local _recur="once" _force="0" _reason=""
+    local _recur="once" _force="0" _reason="" _now="0"
     validate_seams || return $?
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --restart)    _mode="restart" ;;
+            --now)        _now="1" ;;
             --force)      _force="1" ;;
             --reason)     _reason="${2:?--reason needs text}"; shift ;;
             --status)     _mode="status" ;;
@@ -1344,6 +1357,10 @@ main() {
         fi
         _reason=$(sanitize_reason "$_reason")
     fi
+    if [[ "$_now" == "1" && "$_mode" != "restart" ]]; then
+        _say "ERROR: --now applies to --restart only"
+        return "$EXIT_USAGE"
+    fi
     case "$_mode" in
         restart)
             # A zero-minute delay computes a trigger that has already passed, and
@@ -1351,7 +1368,7 @@ main() {
             # and let the failure be the loud kind rather than a surprise.
             [[ "$_delay" =~ ^[0-9]+$ && "$_delay" -ge 1 ]] ||
                 { _say "ERROR: --delay must be a whole number of minutes, at least 1"; return "$EXIT_USAGE"; }
-            arm_restart "$_folder" "$_delay" "$_force" "$_reason"
+            arm_restart "$_folder" "$_delay" "$_force" "$_reason" "$_now"
             ;;
         schedule)   schedule_restart "$_folder" "$_time" "$_recur" ;;
         unschedule) unschedule ;;
