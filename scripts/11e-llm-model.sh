@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 125
+# Module Version: 126
+#   v126 (2026-11-12): __model_mmproj_compatible verifies GGUF projection_dim and
+#     general.basename/name before attaching a sibling mmproj*.gguf in a shared
+#     flat store (such as ~/models/active), preventing mismatched projectors from
+#     breaking non-matching models during `model use` and `model bench` restore.
 #   v125 (2026-11-12): (1) __model_bench acquires /dev/shm/llama-watchdog-cuda.suspend
 #     under its live PID (unless an ancestor such as bin/bench-rows.sh already holds it)
 #     and releases it before restoring the prior model; __model_use_claim_cuda_card honors
@@ -2075,6 +2079,94 @@ function __model_use_fit_preflight() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_mmproj_compatible
+# @description Verify a sibling mmproj*.gguf matches the target model GGUF
+#   by projection_dim vs embedding_length and general.basename/name when both
+#   files are real GGUFs (0-byte stubs in unit tests pass through).
+# @returns 0 if compatible or non-GGUF stub, 1 if mismatched.
+# ---------------------------------------------------------------------------
+function __model_mmproj_compatible() {
+    local _m_path="$1" _p_path="$2"
+    [[ -s "$_m_path" && -s "$_p_path" ]] || return 0
+    local _py="${python_bin:-${TAC_PYTHON:-}}"
+    if [[ -z "$_py" ]] && declare -f _tac_python_path >/dev/null 2>&1
+    then
+        _py=$(_tac_python_path "${TACTICAL_REPO_ROOT:-.}")
+    fi
+    [[ -n "$_py" && -x "$_py" ]] || return 0
+    # swallow-ok: non-zero means GGUF metadata proved a mismatch; unreadable/parse errors return 0 below
+    "$_py" - "$_m_path" "$_p_path" 2>/dev/null <<'PY'
+import struct, sys
+
+def read_kv(path):
+    with open(path, "rb") as f:
+        data = f.read(65536)
+    if len(data) < 24 or data[:4] != b"GGUF":
+        return None
+    _, _, nkv = struct.unpack_from("<IQQ", data, 4)
+    off = 24
+    out = {}
+    def rstr(o):
+        if o + 8 > len(data): raise EOFError
+        l, = struct.unpack_from("<Q", data, o); o += 8
+        if o + l > len(data): raise EOFError
+        return data[o:o + l].decode("utf-8", "replace"), o + l
+    def skip(o, vt):
+        if vt in (0, 1, 7): return o + 1
+        if vt in (2, 3): return o + 2
+        if vt in (4, 5, 6): return o + 4
+        if vt in (10, 11, 12): return o + 8
+        if vt == 8:
+            if o + 8 > len(data): raise EOFError
+            l, = struct.unpack_from("<Q", data, o)
+            return o + 8 + l
+        if vt == 9:
+            if o + 12 > len(data): raise EOFError
+            et, al = struct.unpack_from("<IQ", data, o); o += 12
+            sz = {0:1, 1:1, 7:1, 2:2, 3:2, 4:4, 5:4, 6:4, 10:8, 11:8, 12:8}.get(et)
+            if sz is not None: return o + sz * al
+            for _ in range(al): o = skip(o, et)
+            return o
+        raise EOFError
+    for _ in range(min(nkv, 500)):
+        try:
+            k, off = rstr(off)
+            if off + 4 > len(data): break
+            vt, = struct.unpack_from("<I", data, off); off += 4
+            if vt == 8: v, off = rstr(off)
+            elif vt in (4, 5):
+                if off + 4 > len(data): break
+                v, = struct.unpack_from("<I", data, off); off += 4
+            elif vt in (10, 11):
+                if off + 8 > len(data): break
+                v, = struct.unpack_from("<Q", data, off); off += 8
+            else:
+                off = skip(off, vt); continue
+            out[k] = v
+        except EOFError:
+            break
+    return out
+
+m_kv = read_kv(sys.argv[1])
+p_kv = read_kv(sys.argv[2])
+if m_kv is None or p_kv is None:
+    sys.exit(0)
+p_dim = p_kv.get("clip.vision.projection_dim")
+m_arch = m_kv.get("general.architecture", "")
+m_emb = m_kv.get(f"{m_arch}.embedding_length")
+if m_emb is None:
+    m_emb = next((v for k, v in m_kv.items() if k.endswith(".embedding_length")), None)
+if isinstance(p_dim, int) and isinstance(m_emb, int) and p_dim != m_emb:
+    sys.exit(1)
+p_base = (p_kv.get("general.basename") or p_kv.get("general.name") or "").lower().strip()
+m_base = (m_kv.get("general.basename") or m_kv.get("general.name") or "").lower().strip()
+if p_base and m_base and p_base != m_base and not m_base.startswith(p_base) and not p_base.startswith(m_base):
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+# ---------------------------------------------------------------------------
 # __model_use_build_command
 # @description Build the server command array and configure mmap behavior.
 # @uses llm_backend, model_path, ctx, batch_size, ubatch_size, threads,
@@ -2159,7 +2251,10 @@ function __model_use_build_command() {
                 for _cand in "$_mmdir"/mmproj-F16.gguf "$_mmdir"/mmproj-BF16.gguf \
                     "$_mmdir"/mmproj*.gguf
                 do
-                    if [[ -f "$_cand" ]]
+                    if [[ -f "$_cand" ]] && {
+                        ! declare -F __model_mmproj_compatible >/dev/null 2>&1 \
+                        || __model_mmproj_compatible "$model_path" "$_cand"
+                    }
                     then
                         _mmproj="$_cand"
                         break

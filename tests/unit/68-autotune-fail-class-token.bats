@@ -335,3 +335,10 @@ report_with() {
     [[ "$output" == *'if [[ "$_lft" == "loader_crash_unknown" ]]; then'* ]]
     [[ "$output" == *'_ABORT_COMBO_WALK=1'* ]]
 }
+
+@test "_launch_or_record_failure hands off live AT_WINDOW_S timeout instead of stopping as loader_crash_unknown" {
+    run awk '/_launch_or_record_failure\(\)/,/^    if \[\[ \$hw -ge "\$AT_WINDOW_S" \]\]/' "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'hw >= AT_WINDOW_S'* ]]
+    [[ "$output" == *'kill -0 "${_BENCH_PID:-}"'* ]]
+}

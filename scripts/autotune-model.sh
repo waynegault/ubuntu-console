@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 131
+# Module Version: 132
+#   v132 (2026-11-12): do not let loader_crash_unknown intercept AT_WINDOW_S expiry when
+#     _BENCH_PID is still alive loading; hand off to the hw >= AT_WINDOW_S window_timeout
+#     and _cuda_stall_bump path instead of misreporting a live timeout as a crash.
 #   v131 (2026-11-12): honor loader_crash_unknown in probe loops instead of descending
 #     or mislabeling it as OOM; centralize failure-token labeling in _last_fail_label.
 #   v130 (2026-11-11): _cuda_guard_or_exit checks _tac_dxg_health_check for critical dxgkrnl
@@ -1849,6 +1852,9 @@ _bench_spawn() {
     # counter measures this helper and not the tail of its parent.  Nested: it reads the caller's locals.
     _launch_or_record_failure() {
     _launch_server || {
+        # Hand live AT_WINDOW_S expiry to the window_timeout path below, not loader_crash_unknown.
+        (( hw >= AT_WINDOW_S )) && kill -0 "${_BENCH_PID:-}" 2>/dev/null \
+            && ! _startup_load_fail quiet && return 0
         # The REASON must be READ, never assumed: labelling every launch failure
         # "flash-attn" is how an unloadable GGUF read as an FA fault for hours
         # (2026-10-14 — code-100k-Q8_0 logged load_model "failed to load model" at

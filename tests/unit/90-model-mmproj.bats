@@ -53,8 +53,10 @@ teardown() {
 _build() {
     local _dir="$1" _arch="$2" _bench="${3:-}" _mmproj="${4:-}" \
           _model_name="${5:-model.gguf}"
-    awk '/^function __model_use_build_command\(\)/,/^}/' "$LAUNCHER" \
+    awk '/^function __model_mmproj_compatible\(\)/,/^}/' "$LAUNCHER" \
         > "$SANDBOX/builder.sh"
+    awk '/^function __model_use_build_command\(\)/,/^}/' "$LAUNCHER" \
+        >> "$SANDBOX/builder.sh"
     grep -q -- '--mmproj' "$SANDBOX/builder.sh" \
         || { echo "FAIL: builder not extracted"; return 1; }
 
@@ -177,6 +179,54 @@ _has_flag_value() {
         || { echo "a bench argv gained --mmproj; the certified argv moved"; return 1; }
     [[ "$output" != *"reads as a vision model"* ]] \
         || { echo "bench mode warned about a projector it deliberately omits"; return 1; }
+}
+
+@test "mmproj: shared directory skips mismatched GGUF projector and keeps matching GGUF projector" {
+    mkdir -p "$SANDBOX/shared"
+    "$REPO_ROOT/.venv/bin/python3" - "$SANDBOX/shared" <<'PY'
+import struct, sys
+from pathlib import Path
+
+def write_gguf(path, kvs):
+    buf = bytearray()
+    buf += b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs))
+    def pstr(s):
+        b = s.encode("utf-8")
+        return struct.pack("<Q", len(b)) + b
+    for k, vt, v in kvs:
+        buf += pstr(k) + struct.pack("<I", vt)
+        if vt == 8:
+            buf += pstr(v)
+        elif vt == 4:
+            buf += struct.pack("<I", v)
+    Path(path).write_bytes(bytes(buf))
+
+d = Path(sys.argv[1])
+write_gguf(d / "mmproj-BF16.gguf", [
+    ("general.architecture", 8, "clip"),
+    ("general.basename", 8, "Qwen3.8-27B"),
+    ("clip.vision.projection_dim", 4, 5120),
+])
+write_gguf(d / "Bolt-74B.gguf", [
+    ("general.architecture", 8, "nemotron_h_moe"),
+    ("general.name", 8, "NVIDIA-Nemotron-3.5-Bolt-74B-A9B"),
+    ("nemotron_h_moe.embedding_length", 4, 4096),
+])
+write_gguf(d / "Qwen3.8-27B-Q4_K_M.gguf", [
+    ("general.architecture", 8, "qwen35"),
+    ("general.basename", 8, "Qwen3.8-27B"),
+    ("qwen35.embedding_length", 4, 5120),
+])
+PY
+    run _build shared nemotron_h_moe "" "" "Bolt-74B.gguf"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"--mmproj"* ]] \
+        || { echo "mismatched projector was attached to Bolt-74B; argv:"; printf '%s\n' "$output"; return 1; }
+
+    run _build shared qwen35 "" "" "Qwen3.8-27B-Q4_K_M.gguf"
+    [[ "$status" -eq 0 ]]
+    _has_flag_value "$output" "--mmproj" "$SANDBOX/shared/mmproj-BF16.gguf" \
+        || { echo "matching projector was not attached to Qwen3.8-27B; argv:"; printf '%s\n' "$output"; return 1; }
 }
 
 # end of file

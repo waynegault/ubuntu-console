@@ -26,9 +26,10 @@ files = [
     "tests",
     "nas",
 ]
-# nas collectors import the shared lib as `lib.butler_common` (card 974f99ff); the
-# scripts dir is on sys.path at run time, so mirror that for the type checkers.
-mypy_path = ["stubs", "nas/butler/scripts"]
+# nas collectors import the shared lib as `lib.butler_common` (card 974f99ff); tests and
+# tools import `kgraph` from `scripts/kgraph` via pytest's pythonpath, so mirror both
+# on mypy_path for standalone and IDE mypy runs.
+mypy_path = ["scripts", "stubs", "nas/butler/scripts"]
 warn_unused_configs = true
 show_error_codes = true
 # Check the bodies of functions that carry no annotations.  Left off by default,
