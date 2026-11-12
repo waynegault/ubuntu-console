@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 133
+# Module Version: 134
+#   v134 (2026-11-12): _cuda_guard_or_exit passes explicit detail strings to
+#     _preflight_refuse so callers like `model bench` report the exact adapter/dxgkrnl
+#     refusal reason instead of bare `unclassified`.
 #   v133 (2026-11-12): default ALLOW_CONTENDED=${TAC_CONTENDED:-1} so contended runs
 #     persist their best configuration stamped meas_state=indicative (retuning advised
 #     on a quiet box) instead of discarding the run; add --refuse-contended to opt out.
@@ -715,14 +718,16 @@ _cuda_guard_or_exit() {
         # DEF-024: a refused pre-flight is not a failed configuration list.  The class is
         # left unclassified on purpose: the adapter state is the cause, and calling it
         # "resource exhaustion" would send the operator to free VRAM instead of restarting WSL.
-        _preflight_refuse unclassified 3
+        _preflight_refuse unclassified 3 \
+            "CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}); restart WSL"
     fi
     if (( CUDA_DEGRADE_CONSECUTIVE_STALLS > 0 )); then
         s=$(_cuda_stalls)
         if (( s >= CUDA_DEGRADE_CONSECUTIVE_STALLS )); then
             echo "ERROR: ${s} consecutive launches stalled (health never ready while the process stayed alive) — the dxgkrnl degradation signature, at ${c}/${CUDA_CYCLE_BUDGET} cycles." >&2
             echo "       Restart WSL from Windows ('wsl --shutdown'); nothing was certified this run." >&2
-            _preflight_refuse unclassified 3
+            _preflight_refuse unclassified 3 \
+                "${s} consecutive launches stalled (dxgkrnl degradation); restart WSL"
         fi
     fi
     if declare -f _tac_dxg_health_check >/dev/null 2>&1; then
@@ -731,7 +736,8 @@ _cuda_guard_or_exit() {
             warn "ERROR: WSL2 dxgkrnl reported critical kernel GPU errors (-12/-75/wait timeout):"
             while IFS= read -r _l; do warn "  $_l"; done <<< "$_dxg_err"
             warn "       Restart WSL from Windows ('wsl --shutdown') to clear adapter state."
-            _preflight_refuse unclassified 3
+            _preflight_refuse unclassified 3 \
+                "WSL2 dxgkrnl kernel GPU errors in dmesg (-12/-75/wait timeout); restart WSL"
         fi
     fi
     if [[ -f "$_VRAM_BOOT_BASELINE_FILE" ]]; then
@@ -747,7 +753,8 @@ _cuda_guard_or_exit() {
                     warn "ERROR: Cumulative post-boot VRAM drift (${_vram_drift} MiB" \
                          ">= ${LLM_AUTOTUNE_MAX_DRIFT_MIB} MiB)."
                     warn "       WSL2 dxgkrnl GPU VA fragmentation limit reached. Restart WSL ('wsl --shutdown')."
-                    _preflight_refuse unclassified 3
+                    _preflight_refuse unclassified 3 \
+                        "cumulative post-boot VRAM drift ${_vram_drift} MiB >= ${LLM_AUTOTUNE_MAX_DRIFT_MIB} MiB; restart WSL"
                 fi
             fi
         fi
