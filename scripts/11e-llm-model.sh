@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 129
+# Module Version: 130
+#   v130 (2026-11-12): suppress misleading "CUDA keeping <unit>" notice during __BENCH_MODE=1
+#     when declared tenants are already stopped by clean-room.
 #   v129 (2026-11-12): __model_bench emits clean-room/suspend setup logs before opening
 #     the MODEL BENCHMARK summary box and adds Clean-Room + Models rows inside the box.
 #   v128 (2026-11-12): __model_bench enters shared clean-room (_tac_cleanroom_enter /
@@ -1753,7 +1755,10 @@ not stopping a lane an autotune or bench run owns; stop that run first, or wait 
         done
         if [[ -n "$_kept" ]]
         then
-            __tac_info "CUDA" "keeping $_unit (always-on; it backs memory search)" "$C_Dim"
+            if [[ -z "${__BENCH_MODE:-}" ]]
+            then
+                __tac_info "CUDA" "keeping $_unit (always-on; it backs memory search)" "$C_Dim"
+            fi
             continue
         fi
         # swallow-ok: the probe's failure IS the answer: a unit that is not active has nothing to stop

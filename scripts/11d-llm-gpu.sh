@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 54
+# Module Version: 55
+#   v55 (2026-11-12): use intuitive "GPU Buffer" terminology in place of "GPU Carve" / "GPU VRAM".
 #   v54 (2026-11-12): wake() reports unified-memory Model Memory budget (MemTotal -
 #     LLAMA_FIT_KEEP_RESERVE_MB) alongside GPU Carve (NVML) when
 #     TAC_HOST_PROFILE_SHARED_MEMORY=1 so `model bench` shows the true model pool.
@@ -1058,7 +1059,7 @@ function wake() {
             _mem_total_mb=$(awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null) || _mem_total_mb=0
             # swallow-ok: unreadable /proc/meminfo falls back to 0 and skips unified budget line
             _mem_avail_mb=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null) || _mem_avail_mb=0
-            __tac_info "GPU Carve" "${g_used} MiB / ${g_total} MiB (NVML)" "$C_Text"
+            __tac_info "GPU Buffer" "${g_used} MiB / ${g_total} MiB" "$C_Text"
             if (( _mem_total_mb > _reserve_mb ))
             then
                 local _budget_mb=$(( _mem_total_mb - _reserve_mb ))
@@ -1070,7 +1071,7 @@ function wake() {
                     "${_avail_gib} GiB free / ${_budget_gib} GiB budget (${_budget_mb} MiB)" "$C_Text"
             fi
         else
-            __tac_info "GPU VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
+            __tac_info "GPU Buffer" "${g_used} MiB / ${g_total} MiB" "$C_Text"
         fi
         __tac_info "Temp" "${g_temp}${DEGREE}C" "$C_Text"
     fi

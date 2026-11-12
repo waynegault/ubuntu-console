@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 135
+# Module Version: 136
+#   v136 (2026-11-12): clarify autotune progress lines (human-friendly layer offload
+#     and KV cache eligibility notices).
 #   v135 (2026-11-12): consolidate and shorten verbose header and inline comments.
 #   v134 (2026-11-12): _cuda_guard_or_exit passes explicit detail strings to _preflight_refuse.
 #   v133 (2026-11-12): default ALLOW_CONTENDED=${TAC_CONTENDED:-1}; --refuse-contended opts out.
@@ -2069,9 +2071,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
     # SHARED-MEMORY HOSTS GET NO LADDER (2026-11-03).  The ladder exists for a discrete
     if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
     then
-        echo "  n_gpu_layers ladder: SKIPPED — shared memory: a step DOWN moves weights out of"
-        echo "    the GPU pool and into host RAM instead of relieving pressure. Pool sizes are in"
-        echo "    the pools line above (read on this run); which of the two is larger is not assumed."
+        echo "  • Layer offload: Keeping full offload (unified memory detected)"
     elif [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
         for _frac in 3 1; do
             _ngl_cand=$(( _n_layers * _frac / 4 ))
@@ -2108,7 +2108,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
         [[ "$_kk" == "$WIN_KVK" && "$_kv" == "$WIN_KVV" ]] && continue
         _kv_status=$(kv_pair_status "$_kk" "$_kv")
         if [[ "$_kv_status" != "certified" ]]; then
-            echo "  cache k=$_kk v=$_kv: NOT TESTED — $_kv_status"
+            echo "  • KV Cache ($_kk/$_kv): Skipped (requires retrieval validation test)"
             continue
         fi
         KV_PAIRS+=("$_pair")
