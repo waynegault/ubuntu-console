@@ -16,7 +16,13 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-11-12): _tac_suspend_held answers LIVENESS from /proc/<pid>/stat, not
+#     from kill -0.  EPERM: a LIVE pid owned by another user returns rc=1, and the
+#     reader printed "owner pid is dead" about a running holder.  ZOMBIE: an exited
+#     but unreaped pid returns rc=0, so a SIGKILLed holder's marker read "HELD by
+#     live pid" forever and wedged the watchdog permanently.  Adds
+#     _tac_suspend_journal: acquire/release both logged, so the litter names its writer.
 #   v21 (2026-11-11): _tac_dxg_health_check — inspect dmesg ring buffer for critical WSL2
 #       dxgkrnl bridge errors (-12 ENOMEM, -75 EOVERFLOW, wait_for_completion timeouts)
 #       while ignoring harmless -22 EINVAL private query telemetry.
@@ -38,7 +44,15 @@
 #     the registry was renumbered ran `Qwen3.8-Flash-Next-Coder-cut240 …` — retired as
 #     "qwen4exp.expert_count is an array, the loader reads u32 — re-convert" — and the run's
 #     only word about it was silence.  The reason is what the operator's decision needs.
-# Module Version: 15
+#   v16 (2026-11-12): _tac_suspend_held answers LIVENESS from /proc/<pid>/stat, not from
+#     kill -0.  kill -0 is wrong in both directions for this question.  EPERM: a LIVE
+#     process owned by another user returns rc=1, and this reader reported "owner pid is
+#     dead" (measured: kill -0 1 -> rc=1 "Operation not permitted", pid 1 alive).  ZOMBIE:
+#     a process that has exited but not been reaped returns rc=0, so the marker of a
+#     SIGKILLed holder read "HELD by live pid" forever and wedged the watchdog with a
+#     marker that could never clear (measured by Hal 2026-11-12: state Z, kill -0 rc=0).
+#     /proc/<pid>/stat is world-readable and states the lifecycle directly; the zombie test
+#     must precede any kill -0 branch or it is unreachable.  Unclassifiable -> HELD.
 #   v15 (2026-11-08): _tac_heavy_job_busy_from / _tac_heavy_job_busy — is a heavy job holding
 #     the box?  LLAMA-LANE-CONTENTION-001 needs the watchdog to ask before it restarts a lane
 #     (measured 2026-11-04: two starts and two stops in six minutes under a live campaign, the
@@ -377,6 +391,33 @@ _tac_suspend_owner_is_ancestor() {
     return 1
 }
 
+# _tac_suspend_journal <acquire|release> <file> — WHO took or dropped the hold, and from
+# where.  Best-effort and never fatal: a hold must not fail because its audit line could
+# not be written.
+#
+# WHY (2026-11-12): the marker in /dev/shm has been found naming a dead pid five days
+# running (962592, 1064257, 1072977, 1830830, 1982230, 2004365) and NOTHING recorded who
+# wrote it.  `ps` shows no live acquirer, journalctl has no trace for those pids (a
+# short-lived process leaves no record, so "no journal entry" was never evidence), and a
+# 90s watch at 0.15s over a quiet window saw no change.  Two agents spent a day reasoning
+# about authorship from an artefact that carries no authorship.  This line makes the next
+# litter name its own writer.
+#
+# BOTH events are journalled, not just acquire: an acquire with no matching release is
+# ambiguous — it is either litter or a run that is still going — and that ambiguity is
+# exactly what made the last five days unreadable.
+_tac_suspend_journal() {
+    local _ev="$1" _f="$2" _log _cmd
+    _log="${TAC_SUSPEND_JOURNAL:-/home/wayne/logs/llama-suspend-holds.log}"
+    # swallow-ok: an unreadable cmdline yields empty, which the line records as unknown
+    _cmd=$(tr '\0' ' ' < "/proc/$$/cmdline" 2>/dev/null)   # swallow-ok: an unreadable cmdline is recorded as unknown; the audit line must not fail the hold
+    # swallow-ok: journalling is best-effort by definition; the caller's rc is the result
+    printf '%s %s pid=%s ppid=%s marker=%s cmd=%s\n' \
+        "$(date -u +%FT%TZ)" "$_ev" "$$" "$PPID" "$_f" "${_cmd:-unknown}" \
+        >> "$_log" 2>/dev/null   # swallow-ok: journalling is best-effort by definition; the caller's rc is the result
+    return 0
+}
+
 # _tac_suspend_held <file> — 0 = HELD, 1 = not held.  THE rule, for readers too.
 _tac_suspend_held() {
     local _f="$1" _pid
@@ -391,13 +432,37 @@ _tac_suspend_held() {
         log "suspend: NOT HELD — $_f carries no numeric owner pid (legacy, empty or mid-write marker)"
         return 1
     fi
-    if kill -0 "$_pid" 2>/dev/null   # swallow-ok: a failed kill -0 IS the "not alive" answer this predicate reports
+    # LIVENESS IS A /proc QUESTION, NOT A kill -0 QUESTION (2026-11-12).  kill -0 answers
+    # "could I signal it, and did the signal call succeed", which is neither liveness nor
+    # death in the two cases that actually wedge this lane:
+    #   * EPERM — a LIVE process owned by another user returns rc=1, so this predicate
+    #     reported "owner pid is dead" about a running holder.  Measured: kill -0 1 ->
+    #     rc=1 "Operation not permitted" with pid 1 alive.
+    #   * ZOMBIE — a process that has ALREADY EXITED but has not been reaped returns rc=0,
+    #     because the pid still exists to be signalled.  Its EXIT trap has run, or it was
+    #     SIGKILLed, so it cannot release its own hold: the marker never clears and the
+    #     watchdog stays down for good.  Measured (Hal, 2026-11-12): zombie state=Z,
+    #     kill -0 rc=0, and this reader printed "HELD by live pid" about a dead process.
+    # /proc/<pid>/stat is world-readable, so the permission question never arises, and its
+    # field 3 states the lifecycle directly.  The zombie check MUST precede any kill -0
+    # branch or it is unreachable — kill -0 succeeds on a zombie.
+    if [[ ! -e "/proc/$_pid" ]]
     then
-        log "suspend: HELD by live pid $_pid ($_f)"
-        return 0
+        log "suspend: NOT HELD — owner pid $_pid is gone ($_f); a killed holder cannot release its own hold"
+        return 1
     fi
-    log "suspend: NOT HELD — owner pid $_pid is dead ($_f); a killed holder cannot release its own hold"
-    return 1
+    local _state
+    # swallow-ok: an unreadable stat yields empty, which the test below treats as HELD
+    # (conservative: a holder we cannot classify is not evidence of a free lane).
+    _state=$(awk '{print $3}' "/proc/$_pid/stat" 2>/dev/null)   # swallow-ok: an unreadable stat yields empty, which the test below treats as HELD (conservative)
+    if [[ "$_state" == "Z" || "$_state" == "X" ]]
+    then
+        log "suspend: NOT HELD — owner pid $_pid has EXITED (state $_state, unreaped) ($_f);" \
+            "it cannot release its own hold"
+        return 1
+    fi
+    log "suspend: HELD by live pid $_pid (state ${_state:-unknown}) ($_f)"
+    return 0
 }
 
 # Acquire the hold: 0 = this run now owns it, 1 = a LIVE owner holds it, 2 = the
@@ -425,6 +490,7 @@ _tac_suspend_acquire() {
         rm -f "$_tmp" 2>/dev/null   # swallow-ok: best-effort drop of the temp; rc 2 reports the outcome
         return 2   # 2 = the rename could not be made; the caller refuses to start
     fi
+    _tac_suspend_journal acquire "$_f"
     return 0
 }
 
@@ -471,6 +537,7 @@ _tac_suspend_release() {
         fi
     fi
     rm -f "$_f" 2>/dev/null   # swallow-ok: best-effort by definition; the return below is the result
+    _tac_suspend_journal release "$_f"
     return 0
 }
 
