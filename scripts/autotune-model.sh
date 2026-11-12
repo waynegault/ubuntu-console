@@ -1,348 +1,24 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 134
-#   v134 (2026-11-12): _cuda_guard_or_exit passes explicit detail strings to
-#     _preflight_refuse so callers like `model bench` report the exact adapter/dxgkrnl
-#     refusal reason instead of bare `unclassified`.
-#   v133 (2026-11-12): default ALLOW_CONTENDED=${TAC_CONTENDED:-1} so contended runs
-#     persist their best configuration stamped meas_state=indicative (retuning advised
-#     on a quiet box) instead of discarding the run; add --refuse-contended to opt out.
-#   v132 (2026-11-12): do not let loader_crash_unknown intercept AT_WINDOW_S expiry when
-#     _BENCH_PID is still alive loading; hand off to the hw >= AT_WINDOW_S window_timeout
-#     and _cuda_stall_bump path instead of misreporting a live timeout as a crash.
-#   v131 (2026-11-12): honor loader_crash_unknown in probe loops instead of descending
-#     or mislabeling it as OOM; centralize failure-token labeling in _last_fail_label.
-#   v130 (2026-11-11): _cuda_guard_or_exit checks _tac_dxg_health_check for critical dxgkrnl
-#     failures (-12 ENOMEM, -75 EOVERFLOW, wait timeouts) and enforces cumulative post-boot
-#     VRAM drift ceiling (LLM_AUTOTUNE_MAX_DRIFT_MIB) to prevent tuning on degraded adapter.
-#   v129 (2026-11-11): one canonical version line; the historical entries below
-#     are changelog only, so the loader sums this file once (inspection 13.4.3).
-#   v128 (2026-11-10): the start-ctx derivation is TWO-SIDED (card bf92711c, host half).  The
-#     probe's ctx still comes from the KV math against the GPU pool, but the run now also
-#     prices what it must hold in GUEST RAM — weights that `ngl` leaves un-offloaded plus the
-#     staging a split set needs — against MemAvailable, before any launch.  Over the stated
-#     bound it refuses with `insufficient_host_ram` and BOTH numbers; inside the bound but
-#     above the tight band it drops the probe to MIN_CTX and says which pool is binding.
-#     Measured 2026-11-03: a 39.8 GB row plus an --flash-attn off retry took the guest to the
-#     kernel OOM killer 7 times in 25 min, killing openclaw-gateway.service, while every log
-#     line named the card.  The host figure now comes from the same apply pass as the pool
-#     (host-profile v12), not from a separate read of /proc/meminfo.
-#   v127 (2026-11-10): the EXIT trap puts back the lanes this run stood down.  The watchdog
-#     cannot: its recover() DEFERS while a heavy job holds the box (LLAMA-LANE-CONTENTION-001)
-#     and `model autotune` IS that job, so on exit nothing restarted the lane until the next
-#     tick — up to five minutes — and a stop that escalated to SIGKILL left the unit `failed`
-#     too.  Measured 09:16 today: the chat lane sat `failed`, /health dead, from 09:16:17
-#     until a hand start; the watchdog's 09:19 tick logged `suspend: NOT HELD` and finished
-#     without touching it.
-#   v126 (2026-11-09): the refusal names the term that refused.  v125's call site read the
-#     verdict through `$( )`, so __AUTOTUNE_VERDICT_REASON — script-scope state by design —
-#     never crossed the subshell and every refusal fell back to "load N on M cores", a
-#     sentence its own reading contradicts (21:48 today: row 3 measured 70.53 tps, load 3.14
-#     on 20 cores, and the CI/pressure term that actually refused was printed as load).
-#     The helper now also sets __AUTOTUNE_VERDICT, and the call site reads both globals in
-#     THIS shell with stdout discarded.  tests/unit/87 named the trap in a comment and then
-#     tested only the helper, which is why the call site kept it.
-#   v125 (2026-11-09): the winning save passes the boot's GPU carve (VRAM_TOTAL, MiB) to
-#     profile_save, so the row records the pool its tps was measured in (registry col 48,
-#     Wayne 2026-11-08 "a tps figure must name its GPU carve").  The figure is the one the run
-#     already validated at its start — an unreadable card still refuses the run, so a row is
-#     never written with a guessed carve.
-#   v124 (2026-11-09): a `key not found in model:` failure no longer blames the BUILD.  The
-#     label said "rebuilding does not help, re-convert or obtain a matching GGUF", while
-#     bin/llm-archive-unusable.sh said "rebuild llama.cpp first" — the operator was told both
-#     things by one run.  Neither is knowable from the message: it means the LOADER asked for
-#     a key the FILE lacks, and either side can be the stale one.  Measured 2026-11-09,
-#     GLM-5.3-Flash-REAP50-IQ3_M.gguf was missing FOUR keys the installed build requires
-#     (attention.indexer.kpool plus hyper_connection.count/sinkhorn_iterations/epsilon, which
-#     the file carries under their old attention.hc.* names) after a rebuild failed to help
-#     on 2026-11-06 and again on 2026-11-08.  The label and the failure line now name the
-#     test that decides which side is stale, and no longer assert a cause.
-#     Same pass, same class: `check_tensor_dims: tensor 'X' not found` — the same
-#     disagreement one level deeper, measured once the keys parsed — matched the
-#     launch_error arm and was MODEL-attributable, so two launches would have archived
-#     67 GiB of intact weights over a naming difference.  It now vetoes with the rest.
-#   v123 (2026-11-08): load<=cores is necessary, not sufficient.  Two runs certified at
-#     load under the core count while the box was not quiet (2026-11-07 22:14Z: 3.48 on 8
-#     cores beside two runner workers; 2026-11-08 12:52Z: 5.12 on 8 beside 2 CI workers and
-#     a live vitest), because a run-queue average cannot see load carried by few saturated
-#     threads.  The verdict now also refuses on an active CI runner worker and on start-of-run
-#     CPU pressure above LLM_AUTOTUNE_PSI_MAX_PCT; both terms only ever make it stricter, and
-#     the pressure read is sampled BEFORE the server launches so the bench's own threads are
-#     not mistaken for foreign load.  The refusal message names the term that refused.
-#   v122 (2026-11-08): the two remaining memory-geometry reflexes are gone, not restated.
-#     The shared-memory ladder refusal and the "name both pools" comment both asserted
-#     "the GPU pool is the LARGE side, host RAM the small one (29.8 GiB)" as a property of
-#     the box.  This host has served GPU 81920/host 46.5 GiB, GPU 98304/host 30.5 GiB and
-#     GPU 24576/host 78.4 GiB under 78.4 GiB of RAM across three boots, so the relation is
-#     per-boot and load-relative.  The refusal stays keyed on the PROFILE's shared-memory
-#     fact (unchanged behaviour); the sizes now come only from the run's own pools line.
-#   v121 (2026-11-07): the run asks its own measuring binary for the build id once, and passes
-#     it to the profile save (card 8d144104) — the row records what measured it, not a
-#     hand-typed number.  Guarded on the helper, so a run without 11b loaded records no build
-#     instead of aborting.
-#   v120 (2026-11-07): the three descent ladders (card b7602d50) no longer read
-#     `for x in $(__autotune_descent_candidates ...)`.  The emitter prints one candidate per
-#     LINE, so the unquoted split worked only while every candidate was a bare number; each
-#     ladder is now `while IFS= read -r ...; done < <(...)`, and the ctx it is computed FROM
-#     is captured first, because the loop reassigns the variable the call takes as an
-#     argument.  Body, `break` and the assignments behave exactly as before.
-#   v119 (2026-11-07): the measurement-verdict call is split at an argument boundary so the
-#     line is under 120 characters (18.3 8.1.8).  Behaviour unchanged: the continuation is
-#     whitespace inside a command substitution.
-#   v117 (2026-11-06): _launch_server's failure handling is _launch_or_record_failure,
-#     called as "|| return 1" so every exit path lands where it did.  The 18.3 10.4 counter
-#     bounds a definition by the NEXT one, so the def nested here measured _startup_fail_type as
-#     106 lines (it is 9) by swallowing the tail of _bench_spawn.  The nvidia-smi timeout
-#     wrappers are split for 8.1.8, and the fa_required warning is shortened, not reworded.
-#   v116 (2026-11-06): the KV-quant gate admits the unquantised reference dtypes (f16/f32/bf16)
-#   without a retrieval probe, and f16/f16 joins the default candidate ladder.  The probe asks
-#   what QUANTISATION costs recall, so it cannot certify the baseline — while the cache type
-#   also moves SPEED, measurably more so with depth.  The sweep can now measure f16 where it
-#   fits rather than assuming q8_0.  _bench_spawn also passes its V cache type to
-#   __autotune_fa_retry, and a `fa_required` verdict stops the row instead of reloading with
-#   flash attention off, which llama.cpp refuses for a quantised V cache.
-#   v112 (2026-11-06): the unlisted-holder block heading named the CENSUS where it meant
-#   the offenders ("Outside the declared census <allowed tenant>:"), so a refusal caused by
-#   a foreign agent's llama-server read as if the embedding lane were at fault.  It now
-#   reads "Unlisted holders (declared tenants: …)".  No gate change.
-#   v111 (2026-11-05): the tolerance comment named a value the profile does not declare
-#   (5000); it declares 3500, and the kept lane is now declared to the census instead.
-#   v110 (2026-11-05): the VRAM baseline verdict moves to bin/_tac-bin-lib.sh (shared with
-#   both batch wrappers, which never load 11d), and its holder identity comes from
-#   /proc/PID/exe — nvidia-smi's compute-apps list is empty on this WSL2 box, so the first
-#   cut of the census had nothing to check.  The cgroup unit is the LEAF .service (the old
-#   `head -1` named user@1000.service).  The refusal's unlisted-holder list now expands
-#   the variable (it was `"\$_VRAM_VERDICT"`, so it printed nothing), and the result file
-#   records baseline=/baseline_held_mib=/baseline_tenants= so a census row can never be
-#   read as clean-room.
-#   v109 (2026-11-04): the count-ratchet's four rises from this session cleared AT SOURCE, not by
-#   re-baselining — the window-expiry case gains its `*)` arm (4.2.4), the stop action moves out of
-#   _bench_spawn into a commented _bench_stop_unknown (10.4 and 9.5), leaving the function under the
-#   100-line bound it had crossed.
-#   v108 (2026-11-04): _startup_fail_type calls __autotune_oom_evidence (11b v38) instead of a nested
-#   copy, so the witness is testable; with 11b absent the token falls to loader_crash_unknown rather
-#   than claiming an OOM.
-#   v107 (2026-11-04): OOM requires POSITIVE EVIDENCE.  _startup_fail_type's else arm used to print
-#   `oom` for "nothing matched", so a silent death was filed as a memory verdict and descended; the
-#   70B spent a day that way.  _oom_evidence now supplies the witness (the server's own allocation
-#   line, or a kernel OOM line naming THIS pid) and an unwitnessed death is loader_crash_unknown,
-#   which stops the row — no descent, no FA-off retry.  Carried through _bench_class_from_startup
-#   and named by __autotune_failure_label; the window-expiry arm keeps its window_timeout reading.
-#   v106 (2026-11-04): a split GGUF is refused before launch when its largest shard cannot be
-#   staged in host RAM (insufficient_host_staging), sized against MemAvailable with a 4 GiB
-#   margin (LLM_AUTOTUNE_STAGING_MARGIN_MB).  Single files are exempt — they are mmapped and
-#   the 120b certified with 16 GiB available — so the gate only fires where a shard stages.
-#   v105 (2026-11-04): MODEL_BYTES comes from __autotune_model_bytes (11b v35), so a split
-#   GGUF is sized on its whole shard set rather than on the one file the row names.  The
-#   single-file reading survives only as a stated fallback for a partial tree.
-#   v104 (2026-11-04): clear the two §18.3 rises the lane's own commits left behind, at source
-#   rather than by re-baselining — the launch_error label and the readiness-window message are
-#   wrapped (same output, no single line over 120 columns), and `_fail` gains the comment above
-#   it that item 9.5 asks for.
-#   v103 (2026-11-04): a SELFTEST run may not take the real watchdog hold.  The harness stubs
-#   nvidia-smi/pkill/pgrep/systemctl, but the hold is a FILE WRITE, so a selftest acquired
-#   /dev/shm/llama-watchdog-cuda.suspend, the watchdog honoured it, and the production CUDA lane
-#   was stood down to let a unit test assert a decision -- measured twice in four minutes while
-#   VS Code's pytest ran 08-autotune-workload.bats.  A stub cannot cover a path, so the selftest
-#   now redirects the hold unless the caller names one explicitly.
-#   v99 (2026-11-04): a DETECTED cause reaches the writer.  The row that OOM'd at ctx 8192
-#   was SIGKILLed, so the classifier was handed an empty log and recorded "unclassified"
-#   while /tmp/at-metrics-$$ already said oom - the detected-and-discarded reason.  Only
-#   oom is carried, and only into the hole the log cannot fill; load_fail is overloaded
-#   (the stall check reads != load_fail) so mapping it would manufacture an arch verdict.
-#   v94 (2026-11-03): a hold taken by an ANCESTOR (the batch runner) is reported as what it is -
-#   this row runs under the sweep own hold - instead of "held by another run ... the watchdog may
-#   restart the CUDA lane mid-run", which named our own parent as a foreign threat on every row.
-#   v92 (2026-11-02): one `warn` helper replaces four hand-written stderr writes, seven lines are
-#   wrapped, and the three failure-classification regexes are split with `+=` — values verified
-#   byte-identical to the previous blob. Clears the lane's 10.7, 8.1.8 and 9.7 rises.
-#   v91 (2026-11-02): the 800 MiB baseline tolerance is documented as the NO-LANE default it
-#   is.  Its justification cited a "~430 MiB memory-core-local-embedding-worker" that this
-#   box does not run (the lane is a CUDA llama-server at 4094 MiB) and that the pkill above
-#   already removes — so it sized nothing.  No behaviour change: the default stays 800.
-#   v90 (2026-11-02): a pre-flight refusal now carries a ONE-LINE detail into the result file
-#   ("VRAM baseline not cleared — 27626 MiB still held by another process"), so a caller's
-#   summary can state the fact the operator would otherwise have to scroll up for.  The
-#   message this script prints is unchanged; only the machine-readable record gains it.
-#   v89 (2026-11-02): DEF-024 — a run that certifies nothing now SAYS WHY, and never calls an
-#   environmental refusal "no working config".  Every failed launch kept its stderr in
-#   $_BENCH_LOG and then deleted it on unwind, so `model autotune N` ended in one bare
-#   "failed: unsupported model" whatever the launch had actually said.  Each attempt now
-#   records a bounded tail plus a classification read FROM THE LOG — unsupported_arch /
-#   resource_exhausted / launch_error / unclassified — and the final failure prints both,
-#   marks the registry row meas_state=unacceptable ONLY when the verdict is durable
-#   (unsupported_arch; a contended-card or dxgkrnl halt is not a property of the model and
-#   must not poison the plan), and writes a key=value result file when the caller asks for
-#   one (LLM_AUTOTUNE_RESULT_FILE).  Pre-flight refusals — the measured DEF-024 case was
-#   one: "VRAM baseline not cleared — 27626 MiB still held" — are recorded through the same
-#   channel with stage=preflight, so a caller can stop reporting "no working config" for a
-#   run that never launched a server.
-#   v88 (2026-11-02): the VRAM baseline gate can now be satisfied on a box whose declared
-#   CUDA lane holds the card.  __llm_kill_cuda_llama_servers SPARES every lane in
-#   LLAMA_LANE_SPECS by design (a managed unit must never be reaped by a sweep), so on this
-#   box — where the lane IS a CUDA lane — `model autotune N` could only ever refuse:
-#   measured 2026-11-02, "28099 MiB still held" with llama-cuda-qwen3coder-30b-chat.service
-#   serving :18087 at -ngl 99.  The run now stands its OWN declared lanes down first
-#   (bounded, attributed by CUDA compute app, foreign-owner lock honoured), and the refusal
-#   names the holder instead of only the byte count.
-#   v87 (2026-11-01): the LLAMA_CUDA_SERVER_BIN fallback was still build/bin, which does
-#   not exist on this box — an unset environment therefore pointed the run at nothing and
-#   the same defect reached bin/llama-cuda-server, 01-constants, the spec-dec crossover and
-#   cache-ram-probe.  All four now name build-cuda/, and 01-constants resolves whichever of
-#   the two trees actually holds llama-server.
-#   v86 (2026-11-01): the measured server binary is LLAMA_CUDA_SERVER_BIN (default build/bin)
-#   instead of LLAMA_SERVER_BIN — this box's CUDA build is build-cuda, not a unified build/bin.
-#   v85 (2026-10-20): TWO FAIL-OPEN GATES CLOSED.  (1) The VRAM baseline read defaulted to
-#   4096/3965 when nvidia-smi could not answer, so an unreadable card produced a 131 MiB
-#   "gap", passed the 800 MiB bound, and the run certified against a baseline the card never
-#   reported; both readings must now be numeric or the run exits 1.  (2) An unmeasurable
-#   second position only WARNED, so the row saved `certified` with no drift evidence; it now
-#   stamps `indicative`, the same rule as the collapse guard.
-#   v84 (2026-10-18): before the save, the row's observed input profile (col 37) is run
-#   through __autotune_window_policy and the verdict is printed AND recorded in ctx_policy
-#   (col 45).  This is the card's check/flag route: certification remains the HIGHEST ctx
-#   that holds LLM_MIN_TPS (v6 semantics, D1(a)/D2(b)); no score or saved ctx changes, and
-#   an empty profile prints profile-missing rather than passing silently (CTXBUDGET-003).
-#   v81 (2026-10-15): legal/agentic profiles run one deterministic task-contract probe at
-#   the final winner before persistence; malformed legal labels or agentic tool-call JSON
-#   refuse the save. Probe calls are separate from the throughput samples and use no judge.
-#   v80 (2026-10-14): a hard LOAD failure now STOPS the ctx walk instead of halving it.
-#   ctx cannot make an unloadable GGUF load, so every further step was a llama-server
-#   spawn and a CUDA cycle: code-100k-Q8_0 walked 40,960 -> 2,560 on "failed to load
-#   model", then the --load-mode none fallback repeated it, until the boot's 60-cycle
-#   ledger was exhausted (rows 2 and 3, 2026-10-14).  A load-fail-at-every-ctx now
-#   also skips that mmap fallback; OOM still halves, untouched.  The launch-failure
-#   retry no longer claims "flash-attn" for a failure that is not flash-attn-specific —
-#   it names the failure the server log actually shows (failure-message-is-not-the-
-#   cause).  The load-fail signature gains `requires ctx_other to be set`: a DRAFT/
-#   assistant arch served standalone hits it and it is a load failure, not memory
-#   (dflash2-qwen38-27b-Q8_0).
-#   v79 (2026-10-13): 1a — the POSITION term.  The winner is a median of 5 taken at ONE
-#   point in the run, so the write branch now measures the SAME config a SECOND time
-#   (after profile 2 and the spec sweep, so it is a genuinely later position) and records
-#   the drift in meas_drift_pct (col 43) using the probe's own (max-min)/max formula;
-#   above the probe's 25% DRIFT_WARN_PCT the row is stamped indicative, as contention is.
-#   v78 (2026-10-13): 3c — the certification REFUSES to write when the box is
-#   contended.  A tps measured on a contended box is indicative, not certified, so
-#   by default the run exits 1 WITHOUT writing the row; --allow-contended writes it
-#   stamped meas_state=indicative (the 2b columns carry that caveat).  An unreadable
-#   load is not proven quiet, so it refuses too (fail closed).  The verdict lives in
-#   __autotune_measurement_verdict; the load/cores read before the save is REUSED.
-#   ALSO IN v78: that read moved ABOVE the selftest branch.  2b had placed it inside
-#   the write branch, but the warning block below is reached on the selftest path too,
-#   where it was then unset under `set -u` and aborted the run (line 2589:
-#   _row_load: unbound variable) — the 08 suite's selftest/dxg cases failed.
-#   v77 (2026-10-12): 2b — the certification now STAMPS how its number was measured.
-#   The measurement-context read (load/cores) moved BEFORE the save so the load is read
-#   once and passed as meas_load, with meas_n=5 and meas_state=certified|indicative; the
-#   warning block below reuses the same read.  New registry columns 40-44.
-#   v76 (2026-10-12): a FAILED profile save is FATAL.  `__llm_autotune_profile_save`
-#   verifies its own registry write (11b v26) and returns 1 when the row does not hold
-#   the value it was asked for; the call site used to echo a warning and carry on, so the
-#   run still printed its "saved:" line from the unchanged row and read as success.
-#   v75 (2026-10-03): the dead `__llm_thread_cap` standalone fallback is deleted —
-#   `__llm_thread_cap has ONE definition in scripts/11d-llm-gpu.sh, which env.sh (sourced
-#   above, exit-1 on failure) loads.
-#   v74 (2026-10-02): the heavy-job lock is taken AFTER the command line is validated and
-#   the model resolved, not as the first thing after `set -uo pipefail`.  An invalid
-#   invocation (a typo, a row that does not exist, a missing file) is a refusal to start,
-#   so it must not queue behind a running heavy job: on a busy box it sat in
-#   `heavy-job: waiting for the heavy-job lock...` until the caller's own timeout (124),
-#   which is exactly what the fast-fail integration cases caught.
-#   v73 (2026-10-02): the profile modules are (re)loaded through the shared sub-module
-#   loader, which REPORTS a missing/failing module instead of discarding the error and the
-#   status (card f5bf87bc).
-#   v72 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
-#   the box at a time — see the serialisation prologue after the MODEL_PATH check.
-#   v71 (2026-09-29): _sampler_args takes the model path as an ARGUMENT (it read a
-#   caller-scope MODEL_PATH, so a direct call printed nothing and looked like dead
-#   wiring — three probes concluded wrongly); it refuses loudly with no argument.  The
-#   row now logs its sampler policy once before spawning, and the `saved:` line carries
-#   sampler=<rp>/<rln>, so a certified tps can be audited for its decode policy.
-#   v68 (2026-09-27): the q8_0 prompt range in v66/v67's comment corrected to the measured
-#   17,675..17,756 — read this time from the --record run's own captured output AND from
-#   config/kv-recall-baseline.tsv, which agree. The earlier 17,759 was the --check run's
-#   first line, taken from a truncated view. Comment only; no behaviour change.
-#   v67 (2026-09-27): the prompt range had been quoted as 17,682..17,770 for BOTH pairs;
-#   that is the q4_0 run's. v67 gave it per pair and named config/kv-recall-baseline.tsv
-#   the record of authority — but restated q8_0's maximum from the --check run. Comment
-#   only; no behaviour change.
-#   v66 (2026-09-27): the gate's comment carries the FULL-CONTEXT measurement (ctx 21504,
-#   ~17.7k-token prompts: q8_0 9/9, q4_0 9/9, 3376 vs 2788 MiB), superseding the ~3.7k
-#   first pass, and records how the precision is evidenced when the build logs no cache
-#   type. q4_0 stays refused: one model, one needle, one trial is not a certification.
-#   v65 (2026-09-27): KV_CERTIFIED_PAIRS' comment carries the FIRST MEASURED ROWS from
-#   the retrieval probe (q8_0 9/9, q4_0 9/9 depths at ~3.7k tokens; VRAM 2544 vs 2320 MiB
-#   confirms the runs differed) and says plainly why that is not yet a certification of
-#   q4_0. No behaviour change: q8_0/q8_0 remains the only certified pair.
-#   v64 (2026-09-27): KV_CERTIFIED_PAIRS' comment now names the retrieval probe that gate
-#   was waiting for (scripts/kv-recall-probe.py, card KVCACHE-QUANT-VALIDATE-001) and the
-#   three steps that certify a pair. No behaviour change: q8_0/q8_0 is still the only
-#   certified pair until a pair has rows in config/kv-recall-baseline.tsv.
-#===============================================================================
-# autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
+# Module Version: 135
+#   v135 (2026-11-12): consolidate and shorten verbose header and inline comments.
+#   v134 (2026-11-12): _cuda_guard_or_exit passes explicit detail strings to _preflight_refuse.
+#   v133 (2026-11-12): default ALLOW_CONTENDED=${TAC_CONTENDED:-1}; --refuse-contended opts out.
 #
-# Phase 1: step down from start until a ctx works.
-# Phase 2: step up 50% from working ctx until OOM, then binary probe
-#          between the last working ctx and OOM point.
-# Search : beam search over batch/ubatch at the winning ctx; in the "almost
-#          fits" band, sweep n_gpu_layers and KV-cache quantization (both can
-#          free VRAM for a higher ctx than the registry's 999-or-0 binary).
-# Phase 4: TPS floor recovery at a *filled* KV cache — the scoring bench
-#          pre-fills the context (LLM_AUTOTUNE_FILL_RATIO x ctx, capped) so
-#          the floor certifies sustained throughput at the ctx being recorded,
-#          not a burst on an empty cache. Prefill tok/s is captured from the
-#          server timings and persisted alongside decode.
-# Profiles: profile 1 = max ctx sustaining the floor (existing registry
-#          columns); profile 2 = max decode TPS config for interactive flows
-#          (registry fields 22-26). Winner recorded even when below floor
-#          (best-effort honest capability).
-# Score  : highest ctx that meets the TPS floor (best-effort max TPS otherwise).
-#
-# Sources tactical-console functions for VRAM budget, stale process cleanup,
-# GGUF metadata, and profile saving — no duplicates.
-#===============================================================================
+# autotune-model.sh — Sweep ctx, batch/ubatch, ngl, kv-quant, and spec-decode for a GGUF.
+# Usage: autotune-model.sh <model.gguf> [--workload chat|legal|agentic|mix] [--allow-contended|--refuse-contended]
 
 set -uo pipefail
 
 # ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
-# At most ONE heavy job runs on this box at a time: two of them oversubscribe all
-# 16 cores and starve every interactive turn (bin/heavy-job records the
-# measurement).  Re-entrant — an enclosing heavy-job exports HEAVY_JOB_HELD, so a
-# nested call (the autotune batch calling this per-model autotuner) passes through
-# instead of deadlocking on the lock its own parent holds.
-#
-# The LOCK IS TAKEN FURTHER DOWN — after the command line has been validated and the
-# model resolved (see the prologue after the MODEL_PATH check).  It used to be the very
-# first thing after `set -uo pipefail`, which meant an INVALID invocation (a typo, a
-# missing row, a file that does not exist) queued behind a running heavy job and only
-# failed once that job finished.  Nothing above that point is heavy — argument parsing,
-# sourcing the console helpers, one registry lookup — whereas a refusal to start must be
-# immediate; on a box with a real autotune/bench holding the lock the old order sat in
-# `heavy-job: waiting...` until the caller's own timeout (124).
-#
-# Captured here because the `shift` below consumes the model argument, and the heavy-job
-# re-exec must replay the FULL command line into the locked re-entry.
 _AUTOTUNE_ORIG_ARGS=("$@")
 
 # The model may be given as a registry row NUMBER or as a model FILE name.  Both are
-# accepted; the FILE name is the authoritative identity, and a number is resolved to one
-# ONCE (see the resolution below, which must run AFTER the console's registry helpers are
-# sourced — the reason it is not here).
 MODEL_REF="${1:?Usage: autotune-model.sh MODEL_NUM|MODEL_FILE [--workload chat|legal|agentic|mix] [--allow-contended]}"
 
 # AUTOTUNE-001: workload-selectable scoring payload.  The ctx/batch/TPS
-# winner is certified against the workload that matters — legal-RAG for the
-# investigator (long, structured, tool-call-shaped prompts), agentic loops,
-# the classic chat/physics burn (default), or a mix (interpolation across
-# sets).  The workload used is recorded in the registry row so a later
-# consumer knows which distribution scored the winner.
-# Env: LLM_AUTOTUNE_WORKLOAD (default chat) — the batch runner / investigator
-# profile sets it to "legal".
 WORKLOAD="${LLM_AUTOTUNE_WORKLOAD:-chat}"
 # 3c: contended runs persist stamped meas_state=indicative (retuning advised on a
-# quiet box) by default.  Pass --refuse-contended (or TAC_CONTENDED=0) to refuse
-# writing on contention instead.
 ALLOW_CONTENDED="${TAC_CONTENDED:-1}"
 shift  # drop MODEL_NUM
 while [[ $# -gt 0 ]]; do
@@ -362,42 +38,20 @@ _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 # env.sh's degraded-load report goes to stderr, which the line above discards —
-# so the exported sentinel is the reliable signal here.  Refuse before any GPU
-# work rather than spending a whole bench on a console whose helpers are
-# missing (2026-09-13: a sweep "certified" ten rows this way, changing nothing).
 if [[ "${TAC_LOAD_DEGRADED:-0}" == "1" ]]; then
     echo "Error: the console loaded degraded (sub-modules failed to load) — refusing to autotune." >&2
     echo "       Run 'source env.sh' in a shell to see which; nothing was benchmarked."
     exit 1
 fi
 # These are (re)loaded through the shared helper, which REPORTS a missing or failing
-# file instead of swallowing it (card f5bf87bc): `source ... 2>/dev/null || true` used
-# to discard BOTH the error and the status, so the script ran on with none of the
-# definitions below.  01-constants and 11-llm-manager are also in the interactive module
-# list (env.sh loads them; a failure already trips TAC_LOAD_DEGRADED above).
-# prompt-sets is a standalone library and is NOT in that list, so this is its primary
-# load here — a named failure is the difference between a real prompt set and the
-# built-in fallback being silently scored.
-# AUTOTUNE-001: the SPEC-DEC-006 legal/agentic prompt sets (shared with
-# spec-decode-bench.sh) — the scoring payload is built from the workload's
-# prompts, so the TPS floor is certified on the real input distribution.
 __tac_source_submodules "$PWD/scripts" "autotune-model" 01-constants 11-llm-manager prompt-sets
 
 # Source the tactical console for shared functions (__gguf_metadata, __kv_mb_per_1k,
-# __gpu_clear_stale_processes, __llm_autotune_profile_save)
-# Falls back to standalone mode if sourcing fails.
 
 # Resolve the model reference to a FILE NAME — the row's definitive identity — now that
-# the registry helpers are loaded.  Every idempotent use below (the row lookup, the save,
-# the temp-file names) hangs off this, so a `model scan` mid-run cannot make this run's
-# numbers land on a different model.  MODEL is then taken from the row itself, so the
-# display number is always the current one.
 MODEL=""
 MODEL_FILE=""
 # Startup-validation messages go to STDERR: they report a refusal to start, which is an
-# error by the repo's own convention (style checklist 5.4).  Wayne's ruling, 2026-09-17.
-# They previously went to stdout to match this script's sibling messages; that is the
-# wrong standard for an error path, and the sibling messages are moving with them.
 if [[ "$MODEL_REF" =~ ^[0-9]+$ ]]; then
     MODEL_FILE="$(__llm_registry_file_for_row "$MODEL_REF" 2>/dev/null || true)"
     [[ -n "$MODEL_FILE" ]] || { echo "Error: registry row $MODEL_REF does not exist" >&2; exit 1; }
@@ -418,15 +72,6 @@ MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH" >&2; exit 1; }
 
 # ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
-# Taken HERE — after the argument/workload validation and the model resolution above —
-# and NOT at the top of the file: those checks are cheap and a failed one is a refusal to
-# start, so it must not queue behind a heavy job (see the note at the top of this file).
-# Everything from this point on can spawn llama-server and saturate all 16 cores, which is
-# exactly what must be serialised box-wide.  Re-entrant — an enclosing heavy-job exports
-# HEAVY_JOB_HELD, so a nested call (the autotune batch calling this per-model autotuner)
-# passes straight through instead of deadlocking on the lock its own parent holds.  The
-# path is resolved from this script's own location so the guard does not depend on
-# ~/.local/bin being on PATH (a CI runner's PATH is not the box's).
 if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
     exec "$(cd "$_SELF_DIR/.." && pwd)/bin/heavy-job" \
         "${BASH:-bash}" "$_SELF_DIR/$(basename "${BASH_SOURCE[0]}")" \
@@ -434,9 +79,6 @@ if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
 fi
 
 # The ctx this row currently has recorded, captured before anything can mutate it.  The
-# phase-4 descent adds it as a candidate, so a run cannot certify a DIFFERENT window from the
-# one the registry holds without having MEASURED the held value — the x3/4 ladder steps over
-# values (row 12, 2026-09-17: ... 12288 -> 9216 -> 6656 skipped the recorded 8,192).
 PREV_CERT_CTX="${_ctx:-0}"
 
 SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
@@ -444,16 +86,6 @@ SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
 
 CPU_COUNT=$(nproc 2>/dev/null || echo 6)
 # SPEC-DEC-002: the thread count is hard-capped at the i9-12900HK P-core
-# count (6).  nproc inside WSL2 returns 12 (processors=12 in .wslconfig);
-# using it uncapped spills decode onto the E-cores and slows generation
-# (DFlash article hardware pitfall).  The cap is applied to registry reads
-# AND fallbacks so the registry can never hold a >6 value from here.
-# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
-# with DFlash" (Intel, TDS 2026)
-# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
-# __llm_thread_cap has ONE definition, in scripts/11d-llm-gpu.sh.  env.sh (sourced
-# above, exit-1 on failure) loads it, so the standalone fallback copy that used to
-# sit here was unreachable duplication and is deleted.
 if [[ "$_thr" =~ ^[0-9]+$ ]] && [[ $_thr -gt 0 ]] && [[ $_thr -le $CPU_COUNT ]]; then
     TUNE_THREADS=$(__llm_thread_cap "$_thr")
 else
@@ -493,48 +125,19 @@ KV_QUANTS=${LLM_AUTOTUNE_KV_QUANTS:-"q8_0/q8_0 q4_0/q4_0"}
 [[ $FILL_MAX_TOKENS -lt $FILL_MIN_TOKENS ]] && FILL_MAX_TOKENS=$FILL_MIN_TOKENS
 
 # --- WSL2 dxgkrnl leak accounting (CUDA context-cycle ledger) ---
-# dxgkrnl leaks GPU VA on every CUDA context create/destroy, and a fresh
-# llama-server per bench is one create/destroy: probe + beam + sweeps + Phase 4
-# are ~10-20 cycles per row, so a 10-row sweep is ~150-200 in one WSL session.
-# Leaking enough VA hangs the VM, and only `wsl --shutdown` clears it — so the
-# ledger is ENFORCED here, not merely counted (it used to be written and never
-# read, while the batch runner's own guard went unapplied whenever a row was
-# driven directly, as the 2026-09-13 sweep's ad-hoc driver did).
-#
-# Defined ahead of the pre-flight VRAM-baseline guard below (which calls
-# _cuda_guard_or_exit before any spawn) — bash resolves function calls at
-# runtime, not at parse time, so calling it before this block executes is a
-# "command not found" (2026-09-14: `autotune-model.sh` line 208 called the
-# guard while its definition sat ~250 lines further down, unreached).
-#
-# /dev/shm, not /tmp: this is the leak's ledger, and /tmp is cleaned aggressively
-# on this box — a mid-boot clean would silently reset the budget while the leak
-# persists (observed 2026-09-14). Namespaced by boot ID because a WSL restart is
-# the only leak reset. Exported so rows, batches and children share one ledger.
 _AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
 _CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
 _CUDA_STALL_FILE="${CUDA_STALL_FILE:-/dev/shm/autotune-degrade-stalls-${_AUTOTUNE_BOOT_ID:-unknown}}"
 _VRAM_BOOT_BASELINE_FILE="${TAC_VRAM_BASELINE_FILE:-/dev/shm/autotune-vram-baseline-${_AUTOTUNE_BOOT_ID:-unknown}}"
 export CUDA_CYCLE_FILE
 # Halting budget, same default and same counter file as run-autotune-batch.sh:
-# the batch runner derived 60 from the measured knee (~26 launch/kill cycles at
-# 109K ctx collapsed tps ~16 -> ~3.8, 2026-09-05); the probe is now capped near
-# 54K so each cycle leaks less, and 60 sits below the ~70-100 threshold there.
 CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"
 # Maximum allowed cumulative VRAM baseline drift (MiB) before halting due to VA fragmentation.
 LLM_AUTOTUNE_MAX_DRIFT_MIB="${LLM_AUTOTUNE_MAX_DRIFT_MIB:-1536}"
 # Consecutive launches that stall (health never ready, process still alive, no
-# architecture error) — the dxgkrnl degradation signature — before halting.
-# 0 disables. Two matches the standing bench rule: 2 consecutive failures and
-# stop for diagnosis. A legitimately over-large start ctx has the same shape,
-# which is why it takes two rather than one.
 CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
 
 # _fail — the one refusal path for a pre-measurement check.  It routes through the repo's
-# shared UI helper (item 10.7's sanctioned form) and falls back to stdout when the helper is
-# unavailable, so no call site adds an ad-hoc stderr redirect.
-# Wall-clock budget for the server health wait. ONE constant: the two waits and the
-# two >= tests must read the same value, or a lowered window turns a timeout into a pass.
 AT_WINDOW_S="${AT_WINDOW_S:-300}"
 
 # _fail — refuse before any launch: print the reason, then exit 1 with the class recorded.
@@ -545,16 +148,11 @@ _fail() {
         echo "ERROR: $*"
     fi
     # DEF-024: every _fail site is a pre-measurement refusal, so the result file must
-    # say "refused before any launch" rather than "all configurations failed".
     _PREFLIGHT_CLASS="${_FAIL_CLASS:-unclassified}"
     exit 1
 }
 
-# ---------------------------------------------------------------------------
 # DEF-024 — the run's verdict, and the refusal that never launched a server.
-# These sit HERE, above the VRAM baseline gate, because that gate (and the CUDA
-# ledger guard) can end the run before any of the probe helpers exist.
-# ---------------------------------------------------------------------------
 
 # __autotune_failure_label <token> — the operator-facing name of a classification.
 __autotune_failure_label() {
@@ -582,14 +180,9 @@ ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not 
 }
 
 # warn — one stderr channel for this file's operator messages. §18.3 10.7 counts a
-# hand-written `>&2` per site; routing new writes here keeps them off that count.
 warn() { printf '%s\n' "$*" >&2; }
 
 # _preflight_refuse <classification> <exit-rc> [detail] — end a run that never launched a
-# server, recording WHY for the result file.  The caller has already printed its own
-# message; this carries the verdict (and an optional one-line detail the caller composes
-# for a CALLER-side summary, e.g. the byte count a consumer would not otherwise see) to
-# the EXIT trap, so the operator message here stays exactly as it was.
 _preflight_refuse() {
     _PREFLIGHT_CLASS="${1:-unclassified}"
     _PREFLIGHT_RC="${2:-1}"
@@ -598,10 +191,6 @@ _preflight_refuse() {
 }
 
 # __autotune_write_result <rc> — the run's machine-readable verdict, written on EVERY
-# exit path when LLM_AUTOTUNE_RESULT_FILE names a path.  Callers that do not set it see
-# no change at all.  Deliberately key=value rather than JSON: no escaping layer, no
-# python dependency on a path that runs while the box may be unhealthy, and every value
-# is a single line except `tail=`, which may repeat.
 __autotune_write_result() {
     local _rc="${1:-0}" _out="${LLM_AUTOTUNE_RESULT_FILE:-}"
     local _stage="unknown" _cls="unclassified" _outcome="not_certified"
@@ -628,8 +217,6 @@ __autotune_write_result() {
         printf 'model=%s\n' "${MODEL_FILE:-}"
         printf 'row=%s\n' "${MODEL:-}"
         # The baseline provenance.  A census pass means the card was NOT empty: the
-        # declared tenants were resident, so the TPS describe a contended card.  Written
-        # unconditionally so a consumer can always tell which gate produced the row.
         if [[ -n "${_BASELINE_MODE:-}" ]]; then
             printf 'baseline=%s\n' "$_BASELINE_MODE"
             printf 'baseline_as_of=%s\n' "${_BASELINE_AS_OF:-}"
@@ -660,9 +247,6 @@ __autotune_write_result() {
 }
 
 # __autotune_exit_trap — one EXIT path for the lane hold AND the result file.  It
-# replaces the release-only trap so the two cannot fight over the handler (a second
-# `trap ... EXIT` replaces the first), and it preserves the script's exit status,
-# including exit 3 (adapter halt), which a driver branches on.
 __autotune_exit_trap() {
     local _rc=$?
     if [[ -n "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_release &>/dev/null; then
@@ -670,10 +254,6 @@ __autotune_exit_trap() {
         _tac_suspend_release "${_LANE_SUSPEND:-}" 2>/dev/null || true
     fi
     # Put back the lanes this run stood down (v127).  The watchdog is not a substitute: its
-    # recover() DEFERS while a heavy job holds the box, and this run IS that job — so when it
-    # ends nothing restarts the lane until the next tick, up to five minutes, and a stop that
-    # escalated to SIGKILL leaves the unit `failed` as well.  Measured 2026-11-10 09:16: the
-    # chat lane sat `failed` with /health dead from 09:16:17 until a hand start.
     if declare -f __llm_restore_stopped_lanes &>/dev/null; then
         __llm_restore_stopped_lanes
     fi
@@ -705,10 +285,6 @@ _bump_cuda_cycle() {
 }
 
 # _cuda_guard_or_exit — halt BEFORE the next spawn when the ledger says the
-# adapter is at risk. Called at top level (the pre-flight and ahead of every
-# phase), so a refusal stops the run instead of degrading into "one more failed
-# bench", and the overshoot is bounded by a single phase — well inside the
-# budget's margin. exit 3 is distinct so a driver can halt its whole sweep.
 _cuda_guard_or_exit() {
     local c s
     c=$(_cuda_cycles)
@@ -716,8 +292,6 @@ _cuda_guard_or_exit() {
         echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
         echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
         # DEF-024: a refused pre-flight is not a failed configuration list.  The class is
-        # left unclassified on purpose: the adapter state is the cause, and calling it
-        # "resource exhaustion" would send the operator to free VRAM instead of restarting WSL.
         _preflight_refuse unclassified 3 \
             "CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}); restart WSL"
     fi
@@ -762,17 +336,7 @@ _cuda_guard_or_exit() {
     return 0
 }
 
-# ---------------------------------------------------------------------------
 # VRAM-baseline guarantee: the KV-math START_CTX below is only trustworthy
-# if FREE_VRAM reflects a CLEARED GPU.  A concurrent llama-server or stale
-# CUDA process silently shrinks BUDGET and collapses START_CTX to MIN_CTX
-# (2026-08-27: Llama-3.2-3B certified 4096 while a parallel run held the
-# card — the machine had headroom for far more once VRAM was fully cleared).
-# Kill CUDA-held llama.cpp servers (the Xe fleet and the persistent llama
-# systemd units are structurally spared — they hold no CUDA VRAM) + stale
-# GPU processes + WSL2 ghost-VRAM double-kill BEFORE the baseline read, then
-# verify free VRAM against the card total.
-# ---------------------------------------------------------------------------
 if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
     __llm_kill_cuda_llama_servers || true
 else
@@ -780,29 +344,18 @@ else
 fi
 
 # The sweep above SPARES every declared lane — right for a sweep, fatal for a baseline on
-# a box whose lane holds the card.  Standing OUR OWN lane down is the deliberate act the
-# retune wrapper has done since 2026-09-15 and the direct entry point never did, so
-# `model autotune N` could not succeed while the lane was serving.  Measured 2026-11-02.
 if declare -f __llm_stand_down_cuda_lanes &>/dev/null; then
     __llm_stand_down_cuda_lanes || true
 fi
 
 # Keep the lane down for the WHOLE run.  The stop above only wins until the watchdog's
-# next tick, and the watchdog restarts a declared lane unless a live suspend hold says
-# otherwise (bin/llama-watchdog.sh: cuda_suspended()).  The retune wrapper has taken
-# this hold since 2026-09-15; the direct entry point had no hold, so a 40-minute autotune
-# would have had the lane restored underneath it and every later measurement taken on a
-# contended card.  The release is owner-checked and idempotent, so the EXIT trap is safe.
 if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" && -z "${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-}" ]]; then
     # Stubs cannot reach this: the hold is a file, not a command.  Under selftest the hold goes to
-    # a private path, so a test run can never stand a live service down.  The caller can still pick
-    # its own path by exporting LLAMA_WATCHDOG_CUDA_SUSPEND_FILE (the harness does, per case).
     LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="${TMPDIR:-/tmp}/autotune-selftest-$$.suspend"
     echo "selftest: suspend hold redirected to $LLAMA_WATCHDOG_CUDA_SUSPEND_FILE (never the real one)"
 fi
 _LANE_SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 # The suspend helpers live in bin/_tac-bin-lib.sh — the ONE reviewed implementation of
-# "held by a live pid".  Sourced by realpath so a repo path and an installed copy agree.
 # shellcheck source=../bin/_tac-bin-lib.sh
 # swallow-ok: the library is optional for a standalone copy; absence is reported by the declare -f guard below
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/_tac-bin-lib.sh" 2>/dev/null || true
@@ -812,8 +365,6 @@ if [[ -z "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_acquire &>/dev/n
     elif declare -f _tac_suspend_owner_is_ancestor &>/dev/null &&
          _tac_suspend_owner_is_ancestor "$_LANE_SUSPEND"; then
         # The holder is an ANCESTOR - bin/autotune-rows.sh, which took the hold for the whole
-        # sweep and keeps the lane down on our behalf. Its EXIT trap releases it. Warning here
-        # named our own parent as a foreign run (measured 2026-11-03, on every row).
         echo "suspend: already held by ancestor pid $(_tac_suspend_pid "$_LANE_SUSPEND") - this row runs under that hold"
     else
         warn "WARN: $_LANE_SUSPEND is held by another run " \
@@ -821,16 +372,8 @@ if [[ -z "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_acquire &>/dev/n
     fi
 fi
 # ONE exit handler, installed on every path: it releases the lane hold when this run
-# took one AND writes the result file (DEF-024).  A second `trap ... EXIT` would
-# REPLACE the first, which is why the release no longer has a trap of its own.
 trap '__autotune_exit_trap' EXIT
 # The OpenClaw gateway's local embedding workers each hold ~430 MiB VRAM
-# (embeddinggemma-300m on CUDA); the gateway respawns them on demand, so
-# killing them here is safe and self-healing. Bracket the pattern so
-# pkill -f cannot match this script's own cmdline (2026-08-28).
-# Graceful first — SIGKILL orphans the worker's CUDA handles in WSL2's dxgkrnl
-# VMBus channel; SIGTERM lets it exit and release them cleanly, escalating to
-# SIGKILL only if it does not exit within 10s.
 pkill -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
 _ew_wait=0
 while pgrep -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" >/dev/null 2>&1 && [[ $_ew_wait -lt 10 ]]; do
@@ -853,12 +396,6 @@ timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
 pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
 sleep 1
 # BOUNDED RETRY (2026-10-24): the run above forces kills and a cache drop, and a
-# single nvidia-smi immediately after a kill can return an EMPTY total while free
-# still answers - measured on the nightly runner, 03:36:59Z, run 40058960951:
-# `cannot read VRAM (total='' free='3965')`, which failed the below-floor selftest
-# case. That reading is transient, not absence: the same box reads both fields a
-# second later. Three attempts, one second apart, keep the fail-closed contract -
-# an unreadable card still refuses - without turning a lost race into a refusal.
 for _vram_attempt in 1 2 3; do
     VRAM_TOTAL=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
         nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
@@ -869,9 +406,6 @@ for _vram_attempt in 1 2 3; do
 done
 unset _vram_attempt
 # FAIL CLOSED (v85): these used to default to 4096/3965, so an unreadable card produced a
-# 131 MiB "gap" that passed the 800 MiB bound below and every later number — BUDGET,
-# START_CTX, the KV math — derived from a figure the card never reported.  A reading that
-# is not a number is a refusal, exactly as _tac_gpu_wait_used_below treats it.
 if ! [[ "$VRAM_TOTAL" =~ ^[0-9]+$ ]] || ! [[ "$FREE_VRAM" =~ ^[0-9]+$ ]]; then
     _fail "cannot read VRAM (total='${VRAM_TOTAL}' free='${FREE_VRAM}') - refusing to autotune."
 fi
@@ -880,56 +414,19 @@ if [[ ! -f "$_VRAM_BOOT_BASELINE_FILE" && "$FREE_VRAM" =~ ^[0-9]+$ ]]; then
     printf '%s\n' "$FREE_VRAM" > "$_VRAM_BOOT_BASELINE_FILE" 2>/dev/null || true
 fi
 # Trust check: after clearing, free VRAM must sit ~at the card total.  A
-# large gap means a foreign process still holds the GPU — a certification
-# against that baseline would be untrustworthy, so fail loudly instead.
-# Tolerance is generous (default 800 MiB) because the guard runs AFTER
-# the CUDA-scoped llama cleanup, so a surviving hold is either ghost VRAM or a
-# stable non-llama service that FREE_VRAM reflects deterministically and the
-# KV-math BUDGET accounts for.  A concurrent autotune/serving server would
-# hold >1 GB, still caught.
-#
-# 800 is the NO-LANE default only.  It is NOT sized for the lane this box keeps:
-# the guard deliberately spares LLAMA_LANE_KEEP_UNITS, and here that lane is a CUDA
-# llama-server holding 4094 MiB — five times the tolerant gap.  The old justification
-# ("~430 MiB memory-core-local-embedding-worker") described a Node worker that this
-# box does not run and that the pkill above already removes, so it sized nothing.
-# Hosts that keep a lane size the tolerance to that measurement in their profile
-# (asus-n1n-rtx-spark: 3500, the driver-only figure — its kept lane is declared to the
-# census below instead).  The arithmetic is in the profile's comment.
 BASELINE_GAP_MAX=${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}
 BASELINE_GAP=$(( VRAM_TOTAL - FREE_VRAM ))
 # CENSUS MODE (owner decision, 2026-11-05; card AUTOTUNE-BASELINE-002 v92).
-# The byte-only bound below cannot express this box: the guard deliberately spares
-# LLAMA_LANE_KEEP_UNITS, and here that lane is a CUDA llama-server holding a measured
-# composite gap of 4094 MiB (lane plus the driver reservation).  So the bound either
-# refuses every large-model row forever, or it is raised until it silently admits a real
-# serving lane - which is how three rows in the 2026-11-02 batch reported TPS below their
-# certified values.  A census answers the actual question ("who is resident, and are they
-# allowed to be?") instead of a proxy ("is the card empty?").
-#
-# The decision is delegated to LLM_AUTOTUNE_CENSUS / LLM_AUTOTUNE_CENSUS_MAX_MIB in the
-# host profile; with no census set, this gate is the byte-only bound it always was.  A
-# census pass is CONTENDED and says so: the run prints it, and a result file (when the
-# caller names one) records baseline=census.
-#
-# The holder list comes from bin/_tac-bin-lib.sh, which enumerates llama-server by
-# /proc/PID/exe: nvidia-smi cannot attribute memory on this box (it answers "No running
-# processes found" at 36 GiB used), so a census built on that list would check nothing.
 _VRAM_VERDICT=""
 _vram_rc=0
 if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
     # A selftest replaces the engine with canned curves and NEVER launches a server, so
-    # there is no baseline to distrust.  The gate itself is exercised by the census suite
-    # with injected holders; without this branch every selftest case (16 of them) would
-    # be refused by whatever happens to hold the real card — measured 2026-11-05, with a
-    # peer's row server resident.
     _VRAM_VERDICT=$'mode=selftest\nverdict=pass'
 elif declare -f _tac_vram_baseline_verdict &>/dev/null; then
     _VRAM_VERDICT=$(_tac_vram_baseline_verdict "$FREE_VRAM" "$VRAM_TOTAL")
     _vram_rc=$?
 else
     # bin/_tac-bin-lib.sh is mandatory for this script; a partial tree keeps the old
-    # byte-only bound rather than passing the gate on an unexamined card.
     if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
         _VRAM_VERDICT=$'mode=exclusive\nverdict=refuse\nreason=gap-exceeds-bound'
         _vram_rc=1
@@ -953,8 +450,6 @@ if (( _vram_rc != 0 )); then
          "(${BASELINE_GAP} MiB still held; ${_BASELINE_REASON})." \
          "Refusing to autotune against an untrustworthy baseline." >&2
     # Name the holder.  Without this the operator has to go and run nvidia-smi to learn
-    # which unit — and on this box the answer is a lane the sweep deliberately spared, so
-    # the refusal's own cause is invisible from the byte count alone (2026-11-02).
     if declare -f __llm_vram_holder_report &>/dev/null; then
         warn "Held by:"
         __llm_vram_holder_report >&2 || true
@@ -965,24 +460,17 @@ if (( _vram_rc != 0 )); then
     fi
     if [[ "$_BASELINE_REASON" == "unlisted-holder" ]]; then
         # "Outside the declared census <tenants>:" read as if the DECLARED tenant were the
-        # offender; what follows the colon is the offenders.  Measured 2026-11-06, a
-        # refusal whose only unlisted holder was a foreign agent's run.
         warn "Unlisted holders (declared tenants: ${_BASELINE_TENANTS:-<unset>}):"
         sed -n 's/^unlisted=//p' <<< "$_VRAM_VERDICT" | head -1 | tr ' ' '\n' | sed 's/^/  /' >&2
     fi
     warn "Remedy: stop the holding lane (model stop, or systemctl --user stop <unit>) and re-run; " \
          "a foreign run's GPU lock is never evicted by this check."
     # DEF-024: the card is held by someone else.  That is resource exhaustion from THIS
-    # run point of view, and it is NOT a verdict on the model - the row is left alone.
     _preflight_refuse resource_exhausted 1 \
         "VRAM baseline not cleared — ${BASELINE_GAP} MiB still held by another process (${_BASELINE_REASON})"
 fi
 if [[ "$_BASELINE_MODE" == "census" ]]; then
     # A CENSUS does not mean CONTENDED.  Measured 2026-11-06 14:22: the clean-room had just
-    # stopped the embedding lane and measured a 1,703 MiB driver floor, and this line still
-    # told the operator the TPS were "not clean-room" - a caveat asserted from the MODE
-    # rather than from the measurement it qualifies.  Say what was measured: a census with
-    # no resident tenant is a single-tenant run.
     if [[ "${_BASELINE_TENANT_COUNT:-0}" == "0" ]]; then
         warn "baseline: CENSUS — no declared tenant resident (${_BASELINE_TENANTS}); readings are single-tenant"
     else
@@ -995,16 +483,10 @@ fi
 # Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
 _cuda_guard_or_exit
 # The row names one file; llama.cpp loads the whole shard SET. Summing the set is what
-# makes MODEL_MB, BUDGET and START_CTX describe the model instead of its first shard —
-# an 88.0 GiB row printed 42788 MiB and probed ctx 262144 before this (2026-11-04).
-# Nothing here embeds a box size: MODEL_MB is a file fact, and the two pools it is
-# compared against are read on every run (FREE_VRAM from the card, _HOST_AVAIL_MB from
-# /proc/meminfo).  A hard-coded size here would fail silently the moment the carve moved.
 if declare -f __autotune_model_bytes &>/dev/null; then
     MODEL_BYTES=$(__autotune_model_bytes "$MODEL_PATH")
 else
     # 11b is mandatory for this script, so reaching here means a partial tree: keep the
-    # old single-file reading rather than refuse, and say which one was used.
     warn "  __autotune_model_bytes is not loaded — sizing on the named file alone (split GGUFs under-count)"
     MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
 fi
@@ -1023,17 +505,6 @@ fi
 BUDGET=$(( FREE_VRAM - MODEL_MB - 200 ))
 
 # NAME BOTH POOLS (2026-11-03).  This script sizes against FREE_VRAM, which is the GPU
-# pool — correct for offloaded weights and KV, but NOT the only pool a row draws on:
-# mmap, --cache-ram and the loader's own staging buffers come out of guest RAM, and on a
-# shared-memory host either pool can be the smaller one (measured across three boots of
-# this same box: GPU 81920/host 46.5 GiB, GPU 98304/host 30.5 GiB, GPU 24576/host 78.4 GiB).
-# A run that prints only the card's figure reads as though host memory were unlimited,
-# which is how a 60.9 GB row reached the kernel OOM killer with 8 kills and no line
-# saying memory was finite.  Printing both costs one read and makes the next refusal
-# (or kill) attributable from the log alone.
-# Prefer the figure host-profile took in the SAME pass as the GPU pool (v12).  The two are
-# then two readings of one moment; the /proc read is the fallback for a shell that never
-# loaded the profile (a standalone copy, a test harness).
 if [[ "${TAC_HOST_RAM_AVAIL_BYTES:-}" =~ ^[0-9]+$ ]] && (( TAC_HOST_RAM_AVAIL_BYTES > 0 ))
 then
     _HOST_AVAIL_MB=$(( TAC_HOST_RAM_AVAIL_BYTES / 1048576 ))
@@ -1049,12 +520,6 @@ else
 fi
 
 # SPLIT-GGUF STAGING PREFLIGHT (2026-11-04).  A split model is loaded by staging one
-# whole shard into host RAM: the 88 GiB Flash-Next row took 34.8 GiB that way and the
-# kernel OOM killer ended it (shmem-rss:36494880kB, 16:29:45) while the card reported
-# 70,351 MiB free — the wall was guest RAM, never VRAM.  A single FILE is mmapped and
-# needs none of this (gpt-oss-120b, 62,340 MiB in one file, certified with 16,052 MiB
-# available), so the gate fires only where a shard would actually be staged: refusing
-# costs a second, while discovering it at launch costs a CUDA cycle and an OOM kill.
 if declare -f __autotune_staged_shard_bytes &>/dev/null \
    && declare -f __autotune_staging_fits &>/dev/null; then
     _staged_bytes=$(__autotune_staged_shard_bytes "$MODEL_PATH")
@@ -1080,26 +545,17 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
         _n_layers=$(cut -d'|' -f3 <<< "$_meta")
         _native_ctx=$(cut -d'|' -f4 <<< "$_meta")
         # KV geometry (11d v35 fields 6 and 7) — see __kv_mb_per_1k.  Passing it means
-        # the start ctx is computed from this model's KV width rather than a constant;
-        # an empty/0 pair is the header-absent case and the estimate says so on stderr.
         _kv_heads=$(cut -d'|' -f6 <<< "$_meta")
         _kv_dim=$(cut -d'|' -f7 <<< "$_meta")
         _kv_mb=$(__kv_mb_per_1k "${_n_layers:-0}" "${_kv_heads:-0}" "${_kv_dim:-0}")
         echo "  kv geometry: layers=${_n_layers:-0} kv_heads=${_kv_heads:-0} head_dim=${_kv_dim:-0} -> ${_kv_mb} MiB/1k"
         # BOTH DIRECTIONS OF THE FALLBACK, SAID.  A header without the two keys still gets the
-        # shape-agnostic constant, but the run must not present that as geometry: for a GQA
-        # model the constant is high, for a 32-KV-head model it is low, and silence about
-        # which one was used is how the old estimate was wrong invisibly.
         if declare -f __kv_geometry_known &>/dev/null \
            && ! __kv_geometry_known "${_kv_heads:-0}" "${_kv_dim:-0}"; then
             warn "  kv geometry: absent from the GGUF header — falling back to the shape-agnostic" \
                  "${_kv_mb} MiB/1k constant (KV heads and head dim are unknown for this file)"
         fi
         # THE SECOND BUDGET (card bf92711c).  Everything above prices the probe against the GPU
-        # pool.  The guest holds a different set: the weights `ngl` leaves un-offloaded, plus the
-        # staging a split set needs.  A run admitted on the card alone is exactly the shape that
-        # OOM-killed this box (2026-11-03: 39.8 GB row + FA-off retry, 7 gateway kills in 25 min).
-        # So the same derivation is bounded on the host side too, with both numbers named.
         if declare -f __autotune_host_weight_bytes &>/dev/null \
            && declare -f __autotune_host_budget_verdict &>/dev/null; then
             _host_weights_bytes=$(__autotune_host_weight_bytes "$MODEL_BYTES" "${_n_layers:-0}" "${BENCH_NGL:-999}")
@@ -1121,9 +577,6 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
                     ;;
                 clamp)
                     # Above the tight band but inside the bound: go ahead, ask for the least the
-                    # model can serve, and name the pool that decided it.  The weights term is
-                    # set by ngl and cannot be shrunk by a ctx, which is why the hard case above
-                    # REFUSES rather than descending.
                     _HOST_CTX_CLAMP=1
                     warn "  host budget: footprint ${_host_need_mb} MiB (weights" \
                          "${_host_weights_mb} MiB at ngl=${BENCH_NGL:-999} + staging ${_staging_mb} MiB)" \
@@ -1165,30 +618,6 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
 
 # Probe bounds — floor AND ceiling — come from __autotune_ctx_bounds in
-# scripts/11b-llm-autotune.sh: a pure function, so the arithmetic is unit-tested
-# without a GPU (tests/unit/13-gguf-ctx-bounds.bats).  It is REQUIRED, not
-# best-effort: the console's modules are already mandatory for this script to record
-# anything (see the profile-save guard further down), so a standalone run only ever
-# burned card time and then refused to save.  Failing here is the same verdict before
-# the cost.  What the bounds encode (all measured 2026-09-16):
-#
-#   * ceiling = the model NATIVE window.  llama.cpp caps the served window to
-#     <arch>.context_length at load ("exceeds the training context of the model
-#     (2048) - capping"), so a probe above it measures the SAME window under a bigger
-#     label — and everything sized from that label is then rejected mid-request
-#     ("exceeds the available context size (4096 tokens)"), a 400 that killed the
-#     filled-cache certification and the TTFT probe on every clamped row.
-#   * ceiling, second cap = LLM_AUTOTUNE_VRAM_CAP_MULT × the KV-fit estimate (default
-#     2).  2× is an estimate of where the filled-cache decode collapses, and for a
-#     model whose real window is larger it under-probes BY DESIGN: Phi-3.5-mini
-#     (native 131072) serves 32768 FULL in 9 s while a 2× cap stops the probe near
-#     15360.  Raising it is not a licence to certify a slow window — Phase 4's
-#     TPS-first descent still refuses anything that cannot hold MIN_TPS.
-#   * floor = MIN_CTX, but it FOLLOWS THE CEILING DOWN.  A model whose window is below
-#     MIN_CTX (legalparam's 2048) must still be searchable; otherwise the phase-1 loop
-#     `while [[ $c -ge $MIN_CTX ]]` runs ZERO iterations and the row is aborted as an
-#     "unsupported model" having attempted nothing (three runs lost to that on
-#     2026-09-16).
 if ! declare -f __autotune_ctx_bounds &>/dev/null || ! declare -f __autotune_descent_candidates &>/dev/null; then
     echo "ERROR: __autotune_ctx_bounds / __autotune_descent_candidates are not loaded (scripts/11b-llm-autotune.sh missing?) — refusing to autotune without tested ctx bounds." >&2
     _preflight_refuse unclassified 1
@@ -1197,7 +626,6 @@ read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
     "$START_CTX" "${_native_ctx:-}" "${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}" "$MIN_CTX")
 
 # The host verdict's clamp lands here, after the bounds: both the start AND the ceiling drop to
-# MIN_CTX, so the run cannot climb back into a footprint the host already said was tight.
 if [[ "${_HOST_CTX_CLAMP:-0}" == "1" ]]; then
     START_CTX=$MIN_CTX
     MAX_CTX=$MIN_CTX
@@ -1209,59 +637,25 @@ fmt() { printf "%'d" "$1"; }
 fmts() { local _c _out=""; for _c in "$@"; do _out+="$(printf "%'d:%'d " "${_c%%:*}" "${_c##*:}")"; done; printf '%s' "${_out% }"; }
 
 # ── 3c: the certification's write gate ──────────────────────────────────────
-# A tps measured on a CONTENDED box is indicative, not certified (the same rule the
-# end-of-run warning names), so by DEFAULT a contended box REFUSES to write: storing
-# an indicative number that reads as certified is the silent failure this gate stops.
-# --allow-contended writes it anyway, stamped meas_state=indicative so the 2b columns
-# carry the caveat.  Prints exactly one verdict word:
-#   certified   load <= cores        write it as certified
-#   indicative  contended + allowed  write it, stamped indicative
-#   refuse      contended, not allowed - and also an UNREADABLE load, because
-#               "unknown" is not proven quiet (fail closed, like the GPU gate).
 __autotune_measurement_verdict() {
     local load="${1:-}" cores="${2:-}" allow="${3:-0}" force="${4:-0}"
     local psi="${5:-}" ci="${6:-}"
     # The reason travels with the verdict: a CI or pressure refusal happens on a box whose
-    # LOAD is legitimately under the core count, so a caller that says "the load was
-    # contended" would be printing a sentence its own reading contradicts.
-    # The WORD travels the same way — one echo for a reader of stdout, one script-scope
-    # global so the caller can take it without capturing stdout in a subshell (v126).
     __AUTOTUNE_VERDICT=""
     __AUTOTUNE_VERDICT_REASON=""
     # A FORCED run cannot certify at all.  `--allow-contended` on its own only widens the
-    # contended branch: when the live load happens to sit at or under the core count, the
-    # verdict is `certified` and a bypassed run leaves a number that reads as quiet-box.
-    # Measured 2026-11-07: TAC_RESUME_CI_BYPASS=1 wrote rows 13/14 as meas_state=certified
-    # while 8 CI workers were live and llama-server held the rest of the load, so load>cores
-    # was false at the moment of the read.  force=1 means "this run was let through a gate",
-    # which is a fact the caller knows and the load figure does not.
     if [[ "$force" == "1" && "$allow" == "1" ]]; then
         __AUTOTUNE_VERDICT=indicative
         echo "$__AUTOTUNE_VERDICT"
         return 0
     fi
     # THE LOAD TERM IS NECESSARY, NOT SUFFICIENT (2026-11-08).  load<=cores certified two
-    # runs that were NOT quiet, and the number still read as a property of the model:
-    #   2026-11-07 22:14Z  load 3.48 / 8 cores, llama-server at 111%, two runners 92/75%
-    #   2026-11-08 12:52Z  load 5.12 / 8 cores, 2 CI workers + 1 vitest live
-    # A run-queue average cannot see a box whose load is carried by FEW THREADS that are
-    # each saturated.  Two independent terms below cover what it misses; both only ever
-    # make the verdict STRICTER, and neither can rescue a load term that already refused.
     local contended=""
     # TERM 1 — CI, and only CI.  v85 of 11e-llm-model.sh already treats a runner worker as
-    # NOT quiet for the build gate (the workflow calls bats directly, so no heavy-job lock
-    # sees it); this reuses that rule rather than inventing a second one.  Bracketed so the
-    # probe cannot match its own command line.
     if [[ "$ci" =~ ^[0-9]+$ ]] && (( ci > 0 )); then
         contended="${ci} CI runner worker(s) active"
     fi
     # TERM 2 — CPU pressure at the START of the run.  Deliberately NOT the window average:
-    # during the bench this box's OWN llama-server runs at exactly CPU_COUNT threads, and a
-    # controlled 8-spinner load on 8 cores measured some avg10=17.31 (idle box: 1.45), i.e.
-    # a legitimate run looks like contention while it is measuring.  Sampled before the
-    # server launches, the same figure describes FOREIGN load only.  An absent
-    # /proc/pressure/cpu (some kernels/hosts) is no evidence, NOT a refusal - failing closed
-    # on a missing instrument would break autotune on a box that never had it.
     if [[ "$psi" =~ ^[0-9]+([.][0-9]+)?$ ]] \
        && awk -v p="$psi" -v m="${LLM_AUTOTUNE_PSI_MAX_PCT:-10}" 'BEGIN{exit !(p > m)}'; then
         contended="cpu pressure ${psi}% (some avg10, threshold ${LLM_AUTOTUNE_PSI_MAX_PCT:-10}%)"
@@ -1289,23 +683,16 @@ __autotune_measurement_verdict() {
 }
 
 # __autotune_cpu_pressure_pct - `some avg10` from /proc/pressure/cpu, or EMPTY.
-# Empty means "no instrument here", which the verdict treats as no evidence.  Extracted so
-# the read has one definition and a test can feed it a fixture instead of a live box.
 __autotune_cpu_pressure_pct() {
     local line=""
     # swallow-ok: a kernel without CONFIG_PSI yields nothing, and the caller reads empty as no evidence
     line=$(</proc/pressure/cpu 2>/dev/null) || return 0
     # A line without some/avg10 yields EMPTY — "no instrument", the same reading as an
-    # absent file, which the verdict treats as no evidence.
     [[ "$line" =~ some[[:space:]]+avg10=([0-9]+([.][0-9]+)?) ]] || return 0
     printf '%s' "${BASH_REMATCH[1]}"
 }
 
 # __autotune_collapse_verdict <recorded> <measured> — the tps-collapse guard's predicate,
-# extracted for the same reason __autotune_measurement_verdict exists: it is a policy, so it
-# is a pure function that can be tested without a GPU.  True when the row's PREVIOUS
-# filled-cache tps (registry field 17) is a plausible measured decode — the OpenClaw
-# gateway's 1000000 sentinel is not one — and is at least DOUBLE the fresh reading.
 __autotune_collapse_verdict() {
     local recorded="${1:-}" measured="${2:-}"
     [[ "$recorded" =~ ^[0-9]+([.][0-9]+)?$ && "$measured" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
@@ -1313,16 +700,9 @@ __autotune_collapse_verdict() {
 }
 
 # ── 1a: the position term ────────────────────────────────────────────────────
-# The winner is a median of 5 samples taken at ONE point in the run, and this box
-# drifts with POSITION (the cache-ram probe measured 45-65% cold-decode drift across
-# its own positions against only ~13% run-to-run spread).  The bound below is the
-# probe's own DRIFT_WARN_PCT (scripts/cache-ram-probe.sh:94) — deliberately the SAME
-# number, so a drift flagged here means the same thing as a drift flagged there.
 AUTOTUNE_DRIFT_WARN_PCT=25
 
 # __autotune_position_drift <p1> <p2> — the probe's OWN formula (cache-ram-probe.sh:512,
-# (max-min)/max * 100), so the figure is directly comparable with that 25% bound.
-# Prints one number at 2dp, or NOTHING when either figure is absent or not positive.
 __autotune_position_drift() {
     local p1="${1:-}" p2="${2:-}"
     if [[ "$p1" =~ ^[0-9]+([.][0-9]+)?$ && "$p2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -1343,13 +723,6 @@ echo "  start:  ${START_TS}"
 echo ""
 START_EPOCH=$(date +%s)
 # FOREIGN CPU pressure, read NOW — before any server this run launches exists.  The
-# verdict's load term could not see a box whose load rode on a few saturated threads
-# (2026-11-07 22:14Z: load 3.48/8 with two runners at 92/75% still certified), and the
-# V85-style CI count cannot see a vitest run.  Read here rather than after the bench
-# because during the bench this box's OWN llama-server runs at CPU_COUNT threads:
-# measured 2026-11-08, a controlled 8-spinner load on 8 cores gave some avg10=17.31
-# against 1.45 on the same box idle, so a window read would call every real run contended.
-# Empty is "no instrument", which the verdict does not treat as contention.
 START_PSI_PCT=$(__autotune_cpu_pressure_pct)
 if [[ "$START_PSI_PCT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     echo "  psi:    cpu some avg10=${START_PSI_PCT}% before launch (foreign load only)"
@@ -1358,22 +731,12 @@ fi
 LLAMA_BIN="${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build-cuda/bin/llama-server}"
 
 # BUILD IDENTITY (card 8d144104, Wayne 2026-11-04: "Bench rows should carry build identity").
-# Asked ONCE per run, of the binary this run will measure with, so the row records what measured
-# it rather than a number typed by hand.  Guarded: this script can run without 11b loaded, and a
-# missing helper must leave the column empty, not abort the run.
 LLAMA_BUILD_ID=""
 if declare -F __llm_llama_build_id >/dev/null 2>&1; then
     LLAMA_BUILD_ID="$(__llm_llama_build_id "$LLAMA_BIN")"
 fi
 
 # ── Workload scoring payload (AUTOTUNE-001) ─────────────────────────────────
-# The scoring payload is built from the selected workload's SPEC-DEC-006
-# prompt set so the ctx/batch/TPS winner (and the filled-cache TPS floor) is
-# certified against the workload that matters.  chat = the classic physics
-# burn (default, unchanged for generic use); legal = the investigator's
-# legal-RAG prompts; agentic = tool-call loops; mix = interpolation across
-# sets (legal prompt under an agentic tool-call system instruction).
-# The workload used is recorded in the registry row.
 __workload_payload_json() {
     local _w="$1" _system=""
     case "$_w" in
@@ -1403,8 +766,6 @@ print(json.dumps(payload))
 PYEOF
 }
 # __workload_prompt_text <chat|legal|agentic|mix> — @stdout the plain prompt
-# text (without the system wrapper) used to pre-fill the KV cache, so the
-# fill distribution matches the scoring distribution.
 __workload_prompt_text() {
     case "$1" in
         legal)   printf '%s\n' "${PROMPTS_LEGAL[0]:-}" ;;
@@ -1418,13 +779,6 @@ PAYLOAD_FILE="/tmp/autotune-payload-${MODEL}.json"
 __workload_payload_json "$WORKLOAD" > "$PAYLOAD_FILE"
 
 # Filled-cache payload generator — pre-fills the KV cache with a long prompt
-# (FILL_RATIO x ctx, capped by LLM_AUTOTUNE_FILL_MAX_TOKENS) so the scoring
-# bench measures sustained decode at the ctx being certified instead of a burst
-# on an empty cache, and yields a real prefill tok/s measurement. On CPU-only
-# models prefill is slow, so the cap is tightened to keep a bench bounded.
-# The fill repeats the WORKLOAD prompt (not a generic sentence) so the cache
-# pressure matches the workload's token distribution (AUTOTUNE-001).
-# args: ctx payload_file
 gen_fill_payload() {
     local _ctx="$1" _out="$2"
     local _fill_tokens _source
@@ -1454,12 +808,6 @@ PYEOF
 }
 
 # Fast-reject payload generator — a SMALL prefill (2048 tokens) + tiny decode
-# budget (32 tokens) so the Phase-4 descent can classify a ctx as above/below
-# the TPS floor in ~1-2 min instead of the ~30 min a full 16K-token fill costs
-# at a spilling ctx. The spill signature (KV cache paging to host RAM) shows
-# within the first ~1K prefill tokens and collapses decode, so the small sample
-# is a faithful above/below-floor vote. The recorded number still comes from
-# the full-fill certification, so this never weakens the final result.
 gen_fast_fill_payload() {
     local _out="$1"
     local _source; _source="$(__workload_prompt_text "$WORKLOAD")"
@@ -1480,15 +828,9 @@ with open(out, "w") as f:
 PYEOF
 }
 
-#==============================================================================
 # Helpers
-#==============================================================================
 
 # Shared cleanup — kills llama-server, stale processes, and forces WSL2
-# ghost-VRAM release via nvidia-smi query-context reset (double-kill trick).
-# This is the fast path (~2 s). The full nvidia-uvm reload (clear_vram.sh)
-# runs between models in the bench loop, not between every ctx probe.
-# Nested function — captures $MODEL from parent scope for temp-file naming
 cleanup_gpu() {
     local max_retries="${1:-1}"
     local attempt=0
@@ -1503,8 +845,6 @@ cleanup_gpu() {
         fi
 
         # WSL2 ghost-VRAM workaround: kill nvidia-smi to recycle the CUDA
-        # query context, then double-kill to trigger dxgkrnl release.
-        # Does NOT reload nvidia-uvm (too slow for per-probe use).
         pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
         sleep 1
         sync 2>/dev/null || true
@@ -1530,15 +870,7 @@ cleanup_gpu() {
     return 1
 }
 
-# ---------------------------------------------------------------------------
 # _bench_stop <pid> — graceful llama-server shutdown (WSL2 dxgkrnl leak fix).
-#   SIGKILL bypasses llama-server's clean teardown and orphans its CUDA/DirectX
-#   handles in the host dxgkrnl VMBus channel; the orphaned contexts accumulate
-#   until dxgkio_destroy_allocation fails with -512.  SIGTERM lets llama-server
-#   run its destructor (ggml_backend_free → cudaFree) and release the handles
-#   cleanly.  Poll up to 15s for a graceful exit, escalating to SIGKILL only if
-#   the process is genuinely stuck.  A clean exit normally lands in 1-3s.
-# ---------------------------------------------------------------------------
 _bench_stop() {
     local _p="$1" _w=0
     [[ "$_p" =~ ^[0-9]+$ ]] || return 0
@@ -1551,11 +883,6 @@ _bench_stop() {
 }
 
 # _bench_stop_unknown — the stop action for a death with NEITHER an OOM witness NOR a load
-# signature.  Neither follow-on action is available: descending measures a ctx the failure never
-# implicated, and an FA-off retry asks for MORE host memory (the 2026-11-03 path).  It records the
-# observation and leaves the row stopped.  Reads its context from the CALLER's scope deliberately —
-# bash dynamic scoping — because _BENCH_PID, c/b/u, effective_ngl and kv_k/kv_v are _bench_spawn's
-# locals; it is only ever called from that function's fa-retry arm.
 _bench_stop_unknown() {
     warn "  no OOM evidence and no load-failure signature — stopping this row (no descent, no FA retry)"
     _bench_stop "${_BENCH_PID:-}"
@@ -1564,32 +891,10 @@ _bench_stop_unknown() {
     _BENCH_FAIL_TYPE="loader_crash_unknown"
 }
 
-# ---------------------------------------------------------------------------
 # _bench_spawn — launch llama-server once (flash-attn retry), pre-flight, and
-#   warm up the GPU.  On success sets the module globals _BENCH_PID,
-#   _BENCH_HEALTH_URL and _BENCH_LOG and returns 0; on failure writes the
-#   "0|0|<type>" metric line and returns 1.  Split out of bench_once so a
-#   multi-sample bench can spawn ONE server and reuse its CUDA context across
-#   every sample instead of creating/destroying a context per sample (WSL2
-#   dxgkrnl leaks GPU VA on each context create/destroy — see bench_once_multi).
-#   args: ctx batch ubatch [mmap_mode] [ngl] [kv_k] [kv_v]
-# ---------------------------------------------------------------------------
-# _sampler_args — the anti-repetition sampler flags for THIS model, from the registry
-# row, one argv word per line (the __spec_launch_flags idiom).
-#
-# WHY THIS EXISTS (2026-09-28): the autotune's spawns produce every CERTIFIED tps.  If
-# the serve path applies a sampler and this path does not, the certified number and the
-# served decode are two different policies and the row means neither.  Both read the
-# same registry column through the same name-keyed lookup (__llm_registry_field), so
-# they cannot drift; blank means "not configured" and emits nothing, which is
-# llama.cpp's own default.  Deliberately NOT an env knob - see the note in 11e's builder.
 _sampler_args() {
     local _f="${1##*/}" _rp="" _rln=""
     # The model is an ARGUMENT, not a caller-scope global.  It used to read
-    # ${MODEL_PATH##*/}: a direct call then printed NOTHING and looked like dead wiring,
-    # and on 2026-09-29 three separate probes wrongly concluded "the autotune does not
-    # apply the sampler" for exactly that reason.  A hidden dependency is not a default,
-    # it is a trap — and an empty result must never be the answer to "which model?".
     if [[ -z "${1:-}" ]]; then
         __tac_info "Sampler" "[needs the model path - refusing to guess]" "${C_Warning:-}"
         return 1
@@ -1607,20 +912,9 @@ _sampler_args() {
     return 0
 }
 
-# ---------------------------------------------------------------------------
 # DEF-024 — the witness a failed run used to throw away.
-#
-# Every launch writes stdout+stderr to $_BENCH_LOG and every failure path then deletes
-# it on unwind, so the ONE line naming the cause was gone before the operator saw the
-# verdict.  Measured 2026-11-02: `model bench` reported "no working config" for a row
-# whose autotune had printed a VRAM-baseline refusal, and could not say what any launch
-# said.  The three functions below keep a BOUNDED tail, classify it from its own text,
-# and lend the same vocabulary to a refusal that never launched anything.
-# ---------------------------------------------------------------------------
 
 # _bench_log_tail <log> [lines] — the last N non-blank lines of a server log.
-# llama.cpp pads its progress output with blank lines; the witness is never blank.
-# @stdout the tail, one line per line. @returns 1 when the log is unreadable or empty.
 _bench_log_tail() {
     local _log="${1:-}" _n="${2:-20}" _tail=""
     [[ -n "$_log" && -r "$_log" ]] || return 1
@@ -1631,16 +925,6 @@ _bench_log_tail() {
 }
 
 # __autotune_classify_failure <log> — classify a failed launch FROM ITS OWN OUTPUT.
-# @stdout one token:
-#   resource_exhausted  an allocation failed: OOM, CUDA OOM, failed to allocate
-#   unsupported_arch    the build/backend does not support this model at all
-#   launch_error        the server rejected its own invocation (bad flag/argument), or could not
-#                       load the model file at all (corrupt/truncated/absent GGUF, shape mismatch)
-#   unclassified        nothing above matched — say so rather than guess
-# The order is deliberate.  Memory text is specific; the arch patterns are the ones
-# llama.cpp prints for a model it cannot map to a loader.  "failed to load model"
-# alone is NOT an unsupported-architecture signature — v80 paid for that lesson when
-# every load failure read as flash-attn, and it stays out of the patterns below.
 __autotune_classify_failure() {
     local _log="${1:-}" _text=""
     [[ -n "$_log" && -r "$_log" ]] || { printf 'unclassified'; return 0; }
@@ -1654,37 +938,10 @@ __autotune_classify_failure() {
     _re_unsupported+='requires ctx_other to be set|support for .* was not (built|compiled)|'
     _re_unsupported+='model architecture .* (not supported|unknown)'
     # A model the server could NOT LOAD was a shape this classifier was blind to.  _startup_fail_type
-    # (:1267) matches "failed to load model|error loading model|failed to open|no such file", but none of
-    # those strings appear in the three sets below - so every such row reached the ledger as
-    # "unclassified (the launch output matched no known signature)" while the log named its cause.
-    # That is the code-100k-Q8_0 case quoted at :1286, and it is the same discard this file already
-    # fixed for OOM, one arm over.
-    #
-    # Mapped to launch_error, NOT unsupported_arch: unsupported_arch marks the registry
-    # meas_state=unacceptable at :3227, and a corrupt, truncated or absent file is not an architecture
-    # verdict.  Whether an unloadable file should retire the row is a separate judgement, and this
-    # change deliberately does not make it - it only stops the ledger from claiming it did not know.
-    # The FILE and the LOADER disagree about metadata.  Measured 2026-11-06, both rows:
-    #   GLM-5.3             key not found in model: glm5-next.attention.indexer.kpool
-    #   Qwen3.8-Flash-Next  key qwen4exp.expert_count has wrong type arr but expected type u32
-    # The FIRST diagnosis was a stale binary, and it was WRONG: build 148 was rebuilt to 166 at
-    # HEAD 3ed7284f2 and BOTH still fail identically.  glm5-next.cpp:43 reads kpool with no
-    # optional flag, so the loader REQUIRES a key the file does not carry; the coder's
-    # expert_count is an array where llama-model.cpp:1490 reads a u32.  A rebuild cannot fix
-    # either - only a different GGUF can.  What matters for the ledger is that this is NOT
-    # MODEL-attributable in the "cannot run on this box" sense, and NOT capacity: under the old
-    # patterns the text matched _re_load -> launch_error and three failed boots would have
-    # ARCHIVED a 67 GiB model whose only fault is its converter.  It vetoes, as resource_exhausted
-    # does.
     local _re_vintage='key not found in model:|has wrong type .* but expected type|'
     _re_vintage+='error loading model hyperparameters|gguf version .* (not supported|unsupported)|'
     _re_vintage+='unsupported gguf version|unknown gguf (key|value type)|'
     # A TENSOR the loader names and the file lacks is the same disagreement one level deeper, and
-    # it reached the ledger as launch_error — MODEL-attributable — until 2026-11-09.  Measured on
-    # GLM-5.3-Flash-REAP50-IQ3_M.gguf after its metadata was repaired: "check_tensor_dims: tensor
-    # 'blk.0.hc_attn_fn.weight' not found", because its converter wrote the hc_* tensors without
-    # the `.weight` suffix the current loader appends.  Two such launches would have archived
-    # 67 GiB of intact weights over a naming difference.
     _re_vintage+='tensor .* not found|check_tensor_dims|wrong shape'
     local _re_load='failed to load model|error loading model|failed to open|cannot open model file|'
     _re_load+='no such file'
@@ -1707,38 +964,22 @@ __autotune_classify_failure() {
 }
 
 # _bench_class_from_startup <startup-type> — carry a DETECTED cause to the writer, or nothing.
-# _startup_fail_type answers a different question from __autotune_classify_failure:
-# load_fail|oom, read off the live server log.  Only oom is carried here.  load_fail
-# is OVERLOADED - the never-became-healthy check uses != load_fail to tell a STALL from
-# a real load failure - so the function has already declined to name an architecture, and
-# mapping it would manufacture a verdict the log never gave.  Pass nothing for it and let
-# re-derivation stand: the log text that produced load_fail survives the kill.
-# @stdout one token, or empty when nothing is carried.
 _bench_class_from_startup() {
     case "${1:-}" in
         oom) printf 'resource_exhausted' ;;
         # Carried through under its own name: this is not an OOM, and filing it as one is the defect
-        # the token exists to end.  It is a terminal observation for the row, not a classification of
-        # the model, so it must reach the result file saying exactly what it is.
         loader_crash_unknown) printf 'loader_crash_unknown' ;;
         *)   printf '' ;;
     esac
 }
 
 # _bench_record_failure <ctx> <batch> <ubatch> <ngl> <cache> [class] — keep the LAST failed
-# launch's witness for the operator.  bench_* run inside command substitutions, where
-# a global assignment never reaches the caller, so the side file is the channel (the
-# same contract /tmp/at-metrics-$$ already has).
 _bench_record_failure() {
     local _c="${1:-0}" _b="${2:-}" _u="${3:-}" _ngl="${4:-}" _kv="${5:-}"
     local _carried="${6:-}"
     local _log="${_BENCH_LOG:-}" _cls="" _tail="" _line=""
     _cls=$(__autotune_classify_failure "$_log")
     # The LOG is the arbiter and keeps winning whenever it names something - it can see a
-    # rejected invocation.  The carried token fills only the hole the log cannot fill: a
-    # SIGKILLed child leaves no signature at all, and "matched no known signature" is true
-    # of the file and false about the run.  Fill, never override - an override would let a
-    # defaulted oom clobber a log that actually said launch_error.
     if [[ -z "$_cls" || "$_cls" == "unclassified" ]] && [[ -n "$_carried" ]]; then
         _cls="$_carried"
     fi
@@ -1770,24 +1011,15 @@ _bench_spawn() {
     [[ $mmap_mode == off ]] && mmap_flag=(--load-mode none)
 
     # Flash-attn can hang or crash model load for some architectures (e.g.
-    # qwen35 / certain Q8/F16 quants) — retry once with it off before
-    # declaring the model unloadable.
     local flash_attn="on"
     local hw=0
     _launch_server() {
         local -a fa_args=()
         [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
         # The sampler fragment is built in BOTH launch helpers (the bench spawn and the
-        # TTFT server) from the same registry column, so no measurement in this script
-        # runs a decode policy the serve path does not.
         local -a sampler_args=()
         mapfile -t sampler_args < <(_sampler_args "$MODEL_PATH")
         # SPEC-DEC-004: the block-size sweep drives spec-decode via these
-        # globals (BENCH_SPEC_TYPE / BENCH_SPEC_N_MAX / BENCH_SPEC_DRAFT_MODEL);
-        # "off" (the default during the ctx/batch search) passes no flags.
-        # Flags use the VERIFIED llama.cpp @1692f9e50 names — the removed
-        # --draft-model / --speculative-ngram crash the server.
-        # REF: DFlash TDS article (Intel, 2026).
         local -a spec_args=()
         if [[ "${BENCH_SPEC_TYPE:-off}" == "ngram" ]]; then
             local _block="${BENCH_SPEC_N_MAX:-16}"
@@ -1816,21 +1048,12 @@ _bench_spawn() {
         return 1
     }
     # _startup_witness <pattern> — print the log line that produced a load_fail verdict.  The server
-    # log is deleted when the spawn unwinds, so this line is the only surviving evidence; a caller
-    # that will re-attempt suppresses it and leaves the one authoritative print to where the
-    # classification is USED (the pre-flight probe).
     _startup_witness() {
         local _w
         _w=$(grep -iE "$1" "$_BENCH_LOG" 2>/dev/null | tail -1)
         echo "  server log said: $_w" >&2
     }
     # _startup_load_fail <quiet|anything> — 0 when the server log names a load failure.  Holds the
-    # signature list next to the only consumer that prints it, so the pattern and its witness cannot
-    # drift apart.  `requires ctx_other to be set` belongs here, not with the arch patterns elsewhere:
-    # it is the hard stop a DRAFT/assistant GGUF hits when served STANDALONE (the draft arch needs its
-    # target's context), ctx cannot supply it, and the string is emitted only when that pointer is
-    # null — so it cannot mask a real OOM (2026-10-14: dflash2-qwen38-27b-Q8_0 walked 180,224 -> 2,816
-    # as OOM and helped exhaust the boot's cycle ledger).
     _startup_load_fail() {
         local _pat='unknown model architecture|failed to load model|error loading model|'
         _pat+='unsupported (model|architecture)|failed to open|no such file|'
@@ -1845,11 +1068,6 @@ _bench_spawn() {
             && __autotune_oom_evidence "$_BENCH_LOG" "${_BENCH_PID:-}"
     }
     # _startup_fail_type <quiet> — load_fail | oom | loader_crash_unknown, from the log and the kernel.
-    # Neither branch is a default: `oom` needs a witness (11b's __autotune_oom_evidence) and a death
-    # with none gets a name that claims nothing — the old `else` printed `oom` here, which is how the
-    # 70B spent a day reading as a memory failure: 16 "OOM at this ctx" lines while the card reported
-    # 95,516 MiB free and the kernel held zero OOM lines, the real cause being an 87.1 s load against
-    # a 90 s window.
     _startup_fail_type() {
         if _startup_load_fail "${1:-}"; then
             printf 'load_fail'
@@ -1860,20 +1078,12 @@ _bench_spawn() {
         fi
     }
     # Every path that used to `return` out of _bench_spawn lives here instead, so the 100-line
-    # counter measures this helper and not the tail of its parent.  Nested: it reads the caller's locals.
     _launch_or_record_failure() {
     _launch_server || {
         # Hand live AT_WINDOW_S expiry to the window_timeout path below, not loader_crash_unknown.
         (( hw >= AT_WINDOW_S )) && kill -0 "${_BENCH_PID:-}" 2>/dev/null \
             && ! _startup_load_fail quiet && return 0
         # The REASON must be READ, never assumed: labelling every launch failure
-        # "flash-attn" is how an unloadable GGUF read as an FA fault for hours
-        # (2026-10-14 — code-100k-Q8_0 logged load_model "failed to load model" at
-        # every ctx while each attempt claimed flash-attn).  And an OOM must not be
-        # retried with FA off at all — that asks for MORE memory than the attempt
-        # that just failed, which is what drove this guest into the kernel OOM killer
-        # and got openclaw-gateway killed 7 times on 2026-11-03.  The decision lives
-        # in __autotune_fa_retry (11b) so both directions are unit-tested.
         local _fa_cause _fa_act
         _fa_cause=$(_startup_fail_type quiet)
         if declare -f __autotune_fa_retry >/dev/null 2>&1
@@ -1881,7 +1091,6 @@ _bench_spawn() {
             _fa_act=$(__autotune_fa_retry "$_fa_cause" "$flash_attn" "$kv_v")
         else
             # Standalone run with no 11b on disk — this script already refuses to run
-            # without it, so reaching here means a partial tree; keep the old retry.
             _fa_act="retry"
         fi
         case "$_fa_act" in
@@ -1899,9 +1108,6 @@ _bench_spawn() {
                 ;;
             fa_required)
                 # llama.cpp refuses a quantised V cache with flash attention off, so the
-                # retry this branch replaces could only reload and fail again — and the row
-                # would then read as an unsupported model.  Recorded as load_fail so the
-                # callers stop rather than descend: a smaller ctx cannot fix a flag pair.
                 warn "  ${_fa_cause} with cache-type-v ${kv_v}: a quantised V needs flash-attn; not retrying"
                 _bench_stop "$_BENCH_PID"
                 _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
@@ -1911,7 +1117,6 @@ _bench_spawn() {
             stop) _bench_stop_unknown; return 1 ;;
             *)
                 # Unreachable through __autotune_fa_retry, but a silent fall-through
-                # would leave flash_attn "on" with the failure unclassified.
                 warn "  unrecognised fa-retry decision '${_fa_act}' — leaving flash attention as it is"
                 _bench_stop "$_BENCH_PID"
                 ;;
@@ -1919,26 +1124,11 @@ _bench_spawn() {
         }
     }
     # The helper returns 1 on exactly the paths that used to `return` straight out of
-    # _bench_spawn; the || keeps that exit where it was.  Nested so it still sees this
-    # function's locals (bash scoping is dynamic).
     _launch_or_record_failure || return 1
     if [[ $hw -ge "$AT_WINDOW_S" ]]; then
         # Tell a *stall* apart from a real load failure: the process is still
-        # alive and the log has no architecture/GGUF error, so the server simply
-        # never became healthy — the dxgkrnl degradation signature.  (A
-        # legitimately over-large start ctx looks the same, hence the
-        # consecutive threshold rather than a single trip.)
         local _sft; _sft=$(_startup_fail_type)
         # NO ERROR SIGNATURE IS NOT AN OOM (Wayne, 2026-11-04, option 1A). Reaching this line MEANS
-        # the readiness window expired - that is the loop's own exit condition - so 'window_timeout'
-        # is a reading and 'oom' was never one: it was the else arm of a grep, with no VRAM read, no
-        # kernel read and no liveness test behind it. Measured 2026-11-04: 16 'OOM at this ctx' lines
-        # at 95,516-95,646 MiB FREE, and the same model then loaded in 87.1s under a 300s window.
-        # Naming it moves no branch: this block stops the server and records load_fail either way,
-        # and __autotune_fa_retry is never called from here, so the descend does not change.
-        # A death here is a WINDOW read, not a memory claim: _startup_fail_type now returns
-        # loader_crash_unknown when no OOM witness exists, so both tokens mean "the window expired
-        # before a signature" at this call site and are named for it.
         case "$_sft" in
             oom|loader_crash_unknown) _sft=window_timeout ;;
             *) ;;
@@ -1946,10 +1136,6 @@ _bench_spawn() {
         if kill -0 "$_BENCH_PID" 2>/dev/null && [[ "$_sft" != "load_fail" ]]; then
             _cuda_stall_bump
             # Say it out loud.  The metrics field below keeps writing load_fail
-            # because that value is what makes the callers ABORT the remaining
-            # combos instead of descending — the right response for a stall too —
-            # but a stall is not an unsupported model, and the operator reading
-            # "unsupported model" is sent to the wrong place entirely.
             local _stall_msg="  the readiness window (${AT_WINDOW_S}s) expired with no error signature"
             _stall_msg+=" in the server log and the process stayed alive — dxgkrnl degradation"
             _stall_msg+=" or a model that simply needs longer, NOT an OOM and NOT an unsupported model"
@@ -1963,9 +1149,6 @@ _bench_spawn() {
     fi
 
     # Pre-flight: confirm model slot is actually ready to serve.
-    # /health can return OK before the GGUF memory-map completes, so the
-    # first real completion may stall or return 0 tokens (worst on slow
-    # mounts); probe one real completion before benchmarking.
     local pf_ok=0 pf_w=0
     while [[ $pf_w -lt 60 ]]; do
         if curl -sS --max-time 5 "$health_url/v1/chat/completions" \
@@ -1977,8 +1160,6 @@ _bench_spawn() {
         kill -0 "$_BENCH_PID" 2>/dev/null || {
             local _sft; _sft=$(_startup_fail_type)
             # _sft is derived HERE from the log, so it is always set (no -u risk) and it is
-            # the token this arm already trusts for the metrics line below; carry the same
-            # observation rather than re-deriving it from a log the kill emptied.
             _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" \
                 "$(_bench_class_from_startup "$_sft")"
             echo "0|0|$_sft" > "/tmp/at-metrics-$$"
@@ -1994,8 +1175,6 @@ _bench_spawn() {
     fi
 
     # GPU warmup: wake clocks from power-save (P5/P8 → P0).
-    # Laptop GPUs idle at 1035 MHz (~19 TPS) but can reach 1600+ MHz (60+ TPS).
-    # 8 tokens isn't enough compute — use 64 when cold, 8 when already warm.
     local warmup_tokens=8
     local _pstate; _pstate=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
         nvidia-smi --query-gpu=pstate --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
@@ -2011,11 +1190,7 @@ _bench_spawn() {
     return 0
 }
 
-# ---------------------------------------------------------------------------
 # _bench_resolve_payload — echo "payload_file|bench_timeout" for a bench at
-#   the given ctx + mode (quick / filled / filled fast-reject).  Resolved once
-#   so every sample of a multi-sample bench reuses the same payload file.
-# ---------------------------------------------------------------------------
 _bench_resolve_payload() {
     local c="$1" mode="$2"
     local payload_file="$PAYLOAD_FILE" bench_timeout="$BENCH_TIMEOUT"
@@ -2024,30 +1199,18 @@ _bench_resolve_payload() {
             payload_file="/tmp/at-fast-${MODEL}-${c}.json"
             [[ -f $payload_file ]] || gen_fast_fill_payload "$payload_file"
             # Fast-reject (Phase-4 descent): a 2K fill + 32-token decode is
-            # enough to vote above/below floor; keep the timeout tight so a
-            # hung spill fails fast instead of burning the descent.
             [[ $bench_timeout -lt 180 ]] && bench_timeout=180
         else
             payload_file="/tmp/at-fill-${MODEL}-${c}.json"
             [[ -f $payload_file ]] || gen_fill_payload "$c" "$payload_file"
             # Filled prefill can be slow: with the KV cache spilling into host RAM
-            # at huge ctx, prefill can drop below 55 tok/s, and lower still under
-            # concurrent load. Give generous headroom so slow-but-real prefills
-            # complete and are measured instead of timing out and being
-            # misclassified as OOM (which forces unnecessary Phase-4 descents).
             [[ $bench_timeout -lt 1200 ]] && bench_timeout=1200
         fi
     fi
     echo "${payload_file}|${bench_timeout}"
 }
 
-# ---------------------------------------------------------------------------
 # _bench_request_once — one completion request against the spawned server.
-#   args: mode payload_file bench_timeout
-#   Returns decode TPS on stdout (empty + rc 1 on OOM/sentinel); writes the
-#   metrics file.  Does NOT kill the server — the caller owns the lifecycle so
-#   multiple samples can share one CUDA context (see bench_once_multi).
-# ---------------------------------------------------------------------------
 _bench_request_once() {
     local mode="$1" payload_file="$2" bench_timeout="$3"
     local health_url="${_BENCH_HEALTH_URL:-http://127.0.0.1:${AUTOTUNE_PORT:-18082}}"
@@ -2059,8 +1222,6 @@ _bench_request_once() {
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
 
     # Parse usage + server timings in one pass. llama-server includes a
-    # timings block (prompt_per_second / predicted_per_second) in every
-    # /v1/chat/completions response; fall back to wall-clock if absent.
     local parsed; parsed=$(echo "$resp" | "$TAC_PYTHON" -c "
 import sys, json
 try:
@@ -2083,9 +1244,6 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     [[ "$prompt_tokens" =~ ^[0-9]+$ ]] || prompt_tokens=0
 
     # SPEC-DEC-003: counter-inflation guard — usage.completion_tokens can
-    # count accepted final-block tokens discarded at max_tokens, so the TPS
-    # the floor is judged on uses DELIVERED tokens (capped at the bench's
-    # requested output budget).  max_tokens is parsed from the payload file.
     local _req_max
     _req_max=$(grep -oE '"max_tokens"[[:space:]]*:[[:space:]]*[0-9]+' "$payload_file" 2>/dev/null | head -1 | grep -oE '[0-9]+$')
     [[ "$_req_max" =~ ^[0-9]+$ ]] || _req_max=0
@@ -2095,7 +1253,6 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     fi
 
     # SPEC-DEC-003: parse acceptance length + rate from this bench's server
-    # log (one stats line per completed request; the last is this request).
     local _acc_len="0" _acc_rate="0"
     if declare -f __spec_decode_stats &>/dev/null; then
         IFS='|' read -r _acc_rate _acc_n _acc_g _acc_len _acc_present \
@@ -2122,31 +1279,15 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     fi
 
     # Persist decode|prefill|failtype|accept_len|accept_rate|block|served_ctx for
-    # callers (survives the subshell that bench_ctx runs in — globals do not).  served_ctx
-    # is read from THIS function's live server: llama.cpp clamps the window to the model's
-    # own <arch>.context_length at load, so the ctx we ASK for is not necessarily the ctx a
-    # client receives.  Recording the request made 11 of 26 registry rows advertise a
-    # window no server serves (measured 2026-09-16).  The clamp is to the GGUF native
-    # window, NOT to what fits in VRAM: measured 2026-09-16 every reduced row served its
-    # native value exactly, and the same value came back across ngl 24/999 and --fit on/off.
     local _served_ctx=""
     _served_ctx=$(curl -s --max-time 5 "http://127.0.0.1:${AUTOTUNE_PORT:-18082}/props" 2>/dev/null \
         | jq -r '.default_generation_settings.n_ctx // empty' 2>/dev/null || true)
     [[ "$_served_ctx" =~ ^[0-9]+$ ]] || _served_ctx=""
     echo "${decode_tps:-0}|${prefill_tps:-0}||${_acc_len}|${_acc_rate}|${_spec_block}|${_served_ctx}" > "/tmp/at-metrics-$$"
     # ...and to its OWN file, on a successful read only.  Every failure path below
-    # rewrites the metrics line as "0|0|oom", which would erase a served ctx we HAD
-    # read: a request rejected mid-prompt (400) is enough to do it, and it cost the
-    # certification its served ctx on rows 3 and 4 (2026-09-16) even though earlier
-    # samples of the same server had answered.  The save site reads (and clears) this
-    # file around the certification, so a failure cannot erase the value and a stale
-    # one from an earlier probe cannot leak in.
     [[ -n "$_served_ctx" ]] && echo "$_served_ctx" > "/tmp/at-served-ctx-$$"
 
     # TPS sentinel guard: llama.cpp clamps t_gen_us to a 1 us floor, so a
-    # filled-cache decode that emits EOS in the same microsecond reports a
-    # degenerate 1e6 tps (1000000.00), not real throughput. Reject it so the
-    # caller keeps the real beam-search tps instead of certifying the sentinel.
     if [[ $mode == filled ]] && [[ $(echo "${decode_tps:-0} >= 1000" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; _BENCH_FAIL_TYPE="oom"
         return 1
@@ -2160,12 +1301,7 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     return 1
 }
 
-# ---------------------------------------------------------------------------
 # __autotune_task_quality_check — run one deterministic task-contract probe per
-#   selected legal/agentic task after tuning, using the final winner config.
-#   It does not score truth or alter the throughput samples; failures refuse profile save.
-# ---------------------------------------------------------------------------
-# __autotune_quality_error — report task-quality failures through the shared UI helper.
 __autotune_quality_error() {
     __tac_info "Autotune" "[ERROR: $1]" "${C_Error:-}"
 }
@@ -2221,16 +1357,6 @@ print(json.dumps({
 PYEOF
         ) || { __autotune_quality_error "could not build $_qworkload task-quality request"; _quality_failed=1; break; }
         # The checker's exit status is the verdict; its output carries a TYPED
-        # code — [fenced-json], [fenced-json-prose], [raw-syntax], [wrong-shape],
-        # [empty], [unsupported-tool], [bad-arguments] — plus the policy it was
-        # measured under.  Capture it so the log says WHICH contract clause broke:
-        # a winner rejected for wrapping a valid answer in ```json must not read
-        # the same as a model that cannot follow the tool contract at all.
-        # REF: "Jev Your Engines: Seven Open Decision Models vs. a Generative LLM"
-        # (Lambert Leong, TDS, 2026-10-15) —
-        # https://towardsdatascience.com/jev-your-engines-seven-open-decision-models-vs-a-generative-llm/
-        # Its 9.0% contract-failure rate was 100% fenced-valid-JSON, which is why
-        # the code is recorded rather than only a pass/fail verdict.
         _qresp=$(curl -fsS --max-time "$BENCH_TIMEOUT" \
             "$_BENCH_HEALTH_URL/v1/chat/completions" \
             -H "Content-Type: application/json" -d "$_qpayload") || _qresp=""
@@ -2259,19 +1385,7 @@ PYEOF
     return "$(( _quality_failed == 0 ? 0 : 1 ))"
 }
 
-# ---------------------------------------------------------------------------
 # bench_once — start server, run one benchmark, return decode TPS on stdout.
-#   args: ctx batch ubatch [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
-#   mmap_mode: "auto" (default: mmap) or "off" (--load-mode none)
-#   mode: "quick" (short prompt, discovery) or "filled" (scoring: pre-fills
-#         the KV cache with a FILL_RATIO x ctx prompt and measures sustained
-#         decode + prefill from the server timings)
-#   kv_k/kv_v: cache-type-k / cache-type-v (default q8_0)
-#   Writes "decode|prefill" (tok/s) to /tmp/at-metrics-$$ for callers that
-#   need the prefill half; stdout stays the decode TPS so existing callers
-#   are unchanged. Defaults to mmap (no flag) to avoid CUDA malloc ghost-VRAM
-#   OOM on WSL2.
-# ---------------------------------------------------------------------------
 bench_once() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
     local mode="${6:-quick}" kv_k="${7:-q8_0}" kv_v="${8:-q8_0}"
@@ -2303,16 +1417,7 @@ bench_once() {
     return 0
 }
 
-# ---------------------------------------------------------------------------
 # bench_once_multi — single-server multi-sample bench (WSL2 dxgkrnl fix).
-#   Spawn ONE llama-server and issue N requests against it, returning the
-#   median decode TPS.  Every spawn/kill is a CUDA context create/destroy
-#   cycle; WSL2's dxgkrnl leaks GPU VA on each one and eventually fails
-#   dxgkio_destroy_allocation with -512, deadlocking the adapter until
-#   `wsl --shutdown`.  Collapsing N cycles into one directly reduces the
-#   degradation the autotune causes (single-process context reuse).
-#   args: samples ctx batch ubatch [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
-# ---------------------------------------------------------------------------
 bench_once_multi() {
     local samples="$1" c="$2" b="$3" u="$4" mmap_mode="${5:-auto}" override_ngl="${6:-}"
     local mode="${7:-quick}" kv_k="${8:-q8_0}" kv_v="${9:-q8_0}"
@@ -2342,14 +1447,6 @@ bench_once_multi() {
     for ((_i = 0; _i < samples; _i++)); do
         _v=$(_bench_request_once "$mode" "$payload_file" "$bench_timeout") || _v=""
         # Sample 1 is the only COLD one.  llama.cpp caches the prompt prefix, so
-        # samples 2..N re-send the same filled prompt as a cache hit and their
-        # `timings` are not a prefill rate at all — while _bench_request_once
-        # overwrites /tmp/at-metrics-$$ on EVERY request, so without this capture
-        # the callers downstream record the last sample's cache-hit figure as
-        # `prefill_tps`.  Measured 2026-09-17: row 12 persisted prefill 17.87 tok/s
-        # where its own 1-sample rungs at the SAME ctx measured 934.73, and 17.87
-        # tracked its decode tps (18.45).  Decode still uses the median of ALL
-        # samples — prompt caching does not distort generated-token timing.
         if (( _i == 0 )); then
             _cold_metrics="$(cat "/tmp/at-metrics-$$" 2>/dev/null || true)"
         fi
@@ -2375,9 +1472,6 @@ bench_once_multi() {
     fi
     tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
     # Expose how many samples the figure really rests on (v85): the save used to stamp a
-    # hard-coded 5 even when bench_once_multi kept a single survivor.  A SIDE FILE, because
-    # every caller runs this inside $(...) and a global set here would be lost.  Spread is
-    # (max-min)/max over the survivors, the same shape as the position-drift figure.
     printf '%s\n' "${#vals[@]}" > "/tmp/at-samples-$$"
     _spread=$(printf '%s\n' "${vals[@]}" | LC_ALL=C sort -n \
         | awk 'NR==1{min=$1} {max=$1} END{if (max>0) printf "%.2f", (max-min)*100/max}')
@@ -2386,12 +1480,7 @@ bench_once_multi() {
     return 0
 }
 
-# ---------------------------------------------------------------------------
 # bench_ctx — returns decode TPS on stdout, empty on failure. RC 0/1.
-#   args: ctx batch ubatch [samples] [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
-#   Also refreshes /tmp/at-metrics-$$ with "decode|prefill" from the last
-#   bench_once run (see bench_once).
-# ---------------------------------------------------------------------------
 bench_ctx() {
     local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
     local mode="${7:-quick}" kv_k="${8:-q8_0}" kv_v="${9:-q8_0}"
@@ -2411,79 +1500,33 @@ bench_ctx() {
             echo ""; return 1
         fi
         # Phase 1: only check for actual OOM (0 tokens). TPS floor is applied
-        # at the final check — rejecting slow models mid-probe hides viable ctx.
         echo "$tps"
         return 0
     fi
 
     # Multi-sample (samples >= 2): spawn ONE server and issue N requests
-    # against it, returning the median of surviving samples.  Reusing one CUDA
-    # context across samples is the WSL2 dxgkrnl fix — each spawn/kill is a
-    # context create/destroy that leaks GPU VA and eventually fails
-    # dxgkio_destroy_allocation with -512 (see bench_once_multi).
     local tps; tps=$(bench_once_multi "$samples" "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$mode" "$kv_k" "$kv_v") || { echo ""; return 1; }
     # Refinement: only check for actual OOM (0 tokens). TPS floor is applied
-    # at the final check — rejecting here hides the true ceiling.
     echo "$tps"
     return 0
 }
 
 # --- AUTOTUNE_SELFTEST: canned bench_ctx for decision-logic regression ---
-# With AUTOTUNE_SELFTEST=1, bench_ctx returns a deterministic curve (8.5 tps at
-# every ctx by default), ttft_probe and cleanup_gpu are stubbed, and nothing is
-# persisted — so the whole probe -> descent -> certification decision path runs
-# SERVER-FREE in seconds.  Optional knobs:
-#   _SELFTEST_FIXTURE=<case>      plant a REAL metadata fixture (make-gguf-fixture.py)
-#                                 instead of the unparseable stub, so the capacity ctx
-#                                 comes from the fixture's <arch>.context_length
-#   _SELFTEST_FLOOR_ABOVE=<ctx>  12.0 tps at/below, 5.0 above (floor descent)
-#   _SELFTEST_OOM_ABOVE=<ctx>    load fails above the ceiling (OOM path — still walks)
-#   _SELFTEST_LOAD_FAIL=1        EVERY bench fails as a hard LOAD failure (the metrics
-#                                 field reads load_fail), so the ctx walk's stop-on-
-#                                 load-fail policy is exercised: the walk must NOT halve
-#   _SELFTEST_CERT_GAP_ABOVE=<ctx>   with _SELFTEST_CERT_GAP_FACTOR=<n>: a SINGLE sample
-#                                 reads the full rate at/above <ctx> while a 5-sample
-#                                 certification reads rate/<n> — the 2026-09-17 defect the
-#                                 post-certification descent exists to catch
-# Note the probe ceiling is min(native, start x LLM_AUTOTUNE_VRAM_CAP_MULT) and `start`
-# comes from live free-VRAM heuristics, so a case that needs a specific capacity ctx must
-# pin LLM_AUTOTUNE_VRAM_CAP_MULT as well, or its canned curve never fires.
-# Exercised by tests/unit/08-autotune-workload.bats.
-#
-# Policy under test — TPS-FIRST (2026-08-29, Wayne), which SUPERSEDES the
-# 2026-08-27 "certify the max probed ctx" decision this comment used to cite: a
-# model below the floor at its capacity ctx is NOT certified at capacity; Phase 4
-# descends until the floor is met, or to MIN_CTX, and then records the
-# best-effort config.  The stale 2026-08-27 note is why this harness was never
-# wired to a test: it asserted the opposite of what the code had been changed to
-# do.
 if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
     bench_ctx() {
         local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
         local mode="${7:-quick}"
         _BENCH_FAIL_TYPE=""
         # Optional OOM ceiling: _SELFTEST_OOM_ABOVE makes ctx beyond the
-        # threshold fail (returns OOM), reproducing the real binary-probe /
-        # floor-recovery OOM path deterministically (default: no OOM).
         if [[ -n "${_SELFTEST_OOM_ABOVE:-}" ]] && [[ $c -gt ${_SELFTEST_OOM_ABOVE} ]]; then
             echo ""; return 1
         fi
         # Optional hard-load-failure mode: _SELFTEST_LOAD_FAIL makes every bench
-        # return the load-fail classification, reproducing an unsupported/corrupt
-        # GGUF (default: no load failure).  It writes the metrics field
-        # last_fail_type reads, exactly as the real load-fail path does — a bare
-        # empty return would be classified OOM.
         if [[ -n "${_SELFTEST_LOAD_FAIL:-}" ]]; then
             echo "0|0|load_fail" > "/tmp/at-metrics-$$"
             echo ""; return 1
         fi
         # Optional LAUNCH-failure mode (DEF-024): _SELFTEST_LAUNCH_FAIL=<oom|unsupported|
-        # launch|unknown> writes a REPRESENTATIVE server log at the same path the real
-        # _bench_spawn uses, records it through the SAME recorder, and fails — so the
-        # capture -> classify -> report -> registry-mark path runs without a GPU and
-        # without a 60 GB model.  The metrics field stays faithful too: an unsupported
-        # launch is a load_fail (the walk STOPS), anything else is an oom (the walk
-        # halves), which is what the real classifier's callers do.
         if [[ -n "${_SELFTEST_LAUNCH_FAIL:-}" ]]; then
             _BENCH_LOG="/tmp/at-${MODEL}-c${c}-b${b}.log"
             case "$_SELFTEST_LAUNCH_FAIL" in
@@ -2519,10 +1562,6 @@ EOF
             echo ""; return 1
         fi
         # Optional TPS-floor threshold: _SELFTEST_FLOOR_ABOVE makes ctx above
-        # it return below-floor TPS and ctx at/below it return above-floor
-        # TPS — reproducing the TPS-first descent that finds the highest ctx
-        # sustaining MIN_TPS (2026-08-29).  Without it the canned curve is
-        # below-floor at every ctx (the "too slow for our purposes" path).
         local _st_tps="8.5"
         if [[ -n "${_SELFTEST_FLOOR_ABOVE:-}" ]]; then
             if [[ $c -gt ${_SELFTEST_FLOOR_ABOVE} ]]; then
@@ -2532,12 +1571,6 @@ EOF
             fi
         fi
         # _SELFTEST_CERT_GAP_ABOVE / _SELFTEST_CERT_GAP_FACTOR model the 2026-09-17 defect:
-        # at large ctx a SINGLE sample overstates the sustained rate, so the 5-sample
-        # certification lands FACTOR x lower AT THE SAME ctx.  Measured: rows 13/14 read
-        # 13.89 / 14.57 tps on one sample at ctx 131,072 and certified 2.95 / 3.12, while
-        # rows 2/12 at 4.6-6.6K agreed within 1.2-1.4x.  Ctx at or below the threshold is
-        # unaffected, which is what gives the post-certification descent a window that
-        # genuinely holds the floor to adopt.
         if [[ -n "${_SELFTEST_CERT_GAP_ABOVE:-}" ]] \
             && (( c >= _SELFTEST_CERT_GAP_ABOVE )) \
             && (( samples >= 5 )); then
@@ -2548,51 +1581,31 @@ EOF
         return 0
     }
     # TTFT probe stubbed too — it launches a real server at the certified
-    # ctx (multi-minute load at >250K ctx); the selftest must stay a
-    # server-free decision-logic regression (2026-08-27).
     ttft_probe() {
         echo "250.0|120.0"
         return 0
     }
     # cleanup_gpu stubbed — its ~4s of kill/sleep/drop-cache cycles per call
-    # dominate the selftest runtime (20+ calls through the beam search and
-    # sweeps); there is no real server to clean in the selftest.
     cleanup_gpu() {
         return 0
     }
 fi
 
-#==============================================================================
 # Probe
-#==============================================================================
 
 BEST_TPS="0"; BEST_COMBO=""; BEST_CTX=0; ANY_OK=false
 # Profile 1's prefill tok/s (filled-cache certification) and profile 2.
 BEST_PREFILL="0"
 # Profile 2 (interactive): config with the highest decode TPS anywhere in the
-# search, tiebreak higher ctx. Certified later with a filled-cache bench.
 P2_TPS="0"; P2_CTX=0; P2_B=""; P2_U=""; P2_PREFILL="0"
 # Set to 1 when the --load-mode none fallback produced the winner; the beam search,
-# sweeps, and Phase 4 must then bench with mmap off too.
 MMAP_FALLBACK_USED=0
 
 # Writes to BEST_TPS/BEST_COMBO/BEST_CTX/ANY_OK globals.
-#
-# Success metric — lexicographic capability (replaces the old ctx×tps product):
-#   1. A config that meets the TPS floor always beats one that does not.
-#   2. Among configs that meet the floor: highest ctx wins (context is the
-#      capability that keeps paying off once speed is acceptable); tiebreak by
-#      higher TPS.
-#   3. Among configs below the floor (model is too slow): highest TPS wins
-#      (fastest best-effort config); tiebreak by higher ctx.
-# ctx×tps conflated speed and context as interchangeable; once TPS clears the
-# floor, extra speed has diminishing value while extra context does not.
 record_best() {
     local c=$1 tps=$2 b=$3 u=$4
 
     # Profile 2 (interactive): highest decode TPS across every probed config,
-    # independent of the floor — it is the "fast" profile for short-context
-    # interactive flows. The prefill half is captured at certification time.
     if [[ $(echo "$tps > $P2_TPS" | bc 2>/dev/null || echo "0") == 1 ]] ||
        { [[ $(echo "$tps == $P2_TPS" | bc 2>/dev/null || echo "0") == 1 ]] &&
          [[ $(echo "$c > $P2_CTX" | bc 2>/dev/null || echo "0") == 1 ]]; }; then
@@ -2627,13 +1640,7 @@ record_best() {
     fi
 }
 
-# ---------------------------------------------------------------------------
 # last_fail_type — read the last bench's failure classification from the
-# metrics file. bench_ctx/bench_once run in command-substitution subshells
-# where global assignment does not propagate, so the file is the reliable
-# channel (REF: autotune-model.sh v4).
-# @stdout "load_fail", "oom", or empty.
-# ---------------------------------------------------------------------------
 last_fail_type() {
     cut -d'|' -f3 "/tmp/at-metrics-$$" 2>/dev/null | head -1
 }
@@ -2649,75 +1656,12 @@ _last_fail_label() {
 }
 
 # --- KV-quant certification gate (KVCACHE-CONSOLE-PROMPT-CACHE-001) ---
-# REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
-#      (Ibrahim, TDS, 2026-09-16) — https://towardsdatascience.com/the-kv-cache-tax-why-inference-servers-run-out-of-memory-before-compute/
-#
-# The KV-quant sweep may select a type only when it has passed the long-context
-# retrieval probe — a measurement of what the quantisation does to RETRIEVAL
-# quality at long ctx, not of what it does to speed.  That probe does not exist
-# yet (investigator card KVCACHE-QUANT-VALIDATE-001), so q8_0/q8_0 is the only
-# certified type and q4_0 is refused here.  The unquantised reference dtypes are
-# the exception (see KV_REFERENCE_TYPES below): they are the baseline the probe
-# compares against, so there is no quantisation for a probe to validate.
-#
-# Refused, NOT removed from the candidate list: LLM_AUTOTUNE_KV_QUANTS still
-# offers q4_0/q4_0 (env.sh), and the sweep prints a line naming the reason for
-# every ineligible pair.  A pair dropped from the list instead would be
-# indistinguishable from a pair nobody configured, which is the silent-narrowing
-# failure this gate exists to avoid.
-#
-# Deliberately NOT an env knob: what makes a KV type eligible is a measurement,
-# not a preference, and a gate an environment variable can widen is not a gate.
-#
-# The probe that gate waited for now exists: scripts/kv-recall-probe.py plants a needle
-# at several depths in a long context, asks for it, and scores recall PER DEPTH — never
-# as an average, because the cliff the audit doc warns about is exactly what an average
-# hides — recording to config/kv-recall-baseline.tsv.
-#
-# MEASURED 2026-09-27 — the rows in config/kv-recall-baseline.tsv.  A first pass at
-# ctx 8192 with ~3.7k-token prompts is superseded by this one: Llama-3.2-3B-Instruct
-# -Q4_K_M at the SERVING ctx 21504, depths 0.1..0.9, one trial each.  Prompt sizes, the
-# server's own count, from the two --record runs: q4_0 17,682..17,770 — q8_0 17,675..17,756.
-# config/kv-recall-baseline.tsv holds all 18 per-depth figures and is the record of
-# authority; --check re-measures without recording.
-#   q8_0  9/9 depths recalled    3376 MiB
-#   q4_0  9/9 depths recalled    2788 MiB
-# i.e. no recall loss measurable at this size either.  The 588 MiB footprint difference is
-# the KV allocation, and that is HOW the precision is evidenced: this build does not log
-# the cache type (its full log is 33 lines, no llama_kv_cache_init), so the flags each
-# server was launched with plus that footprint are the evidence.  The q8_0 run reproduced
-# the serving lane's own footprint exactly (3376 MiB), a second independent check that it
-# was the lane's configuration.
-#
-#   Still NOT a certification of q4_0/q4_0, and it stays refused: one model, one needle,
-#   one trial per depth, and the prompt is ~17.7k tokens against the lane's 21504 ceiling
-#   rather than at it.  Thin evidence does not widen a production gate.  What WOULD certify
-#   it: the investigator's real retrieval workload, several needles per depth, and trials
-#   enough to bound noise — recorded here with the numbers named in the commit.  Worth
-#   making deliberately: q4_0 buys ~588 MiB of headroom and costs nothing measurable here.
-#
-# Certifying a pair remains a measurement, not a preference:
-#   1. start a lane with that pair's --cache-type-k/-v (the probe requires the label);
-#   2. scripts/kv-recall-probe.py --kv-type <pair> --model <label> --record <baseline>
-#      (then --check it, which fails loudly on a recall that is not reproduced);
-#   3. add the pair below, naming the recorded recall and the model it was measured on.
 KV_CERTIFIED_PAIRS="q8_0/q8_0"
 
 # The REFERENCE dtypes are eligible without a retrieval probe, and that is not a
-# loophole: the probe asks what QUANTISATION costs recall, and f16/f32/bf16 are the
-# unquantised side of every such comparison.  What the recall probe does not measure is
-# SPEED, and the cache type moves it: vramcalculator's controlled run (two RTX 3090s,
-# same build and weights, 256K context, only the cache type changed) decoded 22.3 tok/s
-# on f16, 15.2 on q8_0 and 14.0 on q4_0 — 32% for q8_0 there, 7% at zero depth and 21%
-# at 131K on a Radeon R9700.  So f16 is the fastest cache whenever the window still
-# fits, and the sweep must be able to MEASURE it rather than assume q8_0.
-# REF: https://vramcalculator.com/llama-cpp-performance-flags/ step 6 (2026-09).
 KV_REFERENCE_TYPES="f16 f32 bf16"
 
 # kv_pair_status <type_k> <type_v> — print "certified" when this pair may be
-# probed, else the reason it may not.  The caller prints the reason, so the
-# narrowing is always visible in the sweep's output.  The token stays exactly
-# "certified" because both the sweep and its unit test compare it literally.
 kv_pair_status() {
     local _pair="$1/$2" _c
     for _c in $KV_CERTIFIED_PAIRS; do
@@ -2733,26 +1677,13 @@ kv_pair_status() {
     printf '%s\n' "not eligible: no long-context retrieval validation (KVCACHE-QUANT-VALIDATE-001)"
 }
 
-# ---------------------------------------------------------------------------
 # probe_upward — bounded ctx re-climb for a fixed config (quick benches).
-# Confirms the given ctx, then up to 2 ×1.5 climb steps and one binary probe.
-# Every successful test feeds record_best (max-ctx profile + profile-2
-# tracking), so the caller's BEST_* may end higher than the starting ctx.
-#   args: ctx batch ubatch [mmap] [ngl] [kv_k] [kv_v]
-# @returns 0 when the starting ctx confirmed, 1 when it failed.
-# ---------------------------------------------------------------------------
 probe_upward() {
     local _pc="$1" _pb="$2" _pu="$3" _pm="${4:-auto}" _pngl="${5:-$BENCH_NGL}"
     local _pkk="${6:-q8_0}" _pkv="${7:-q8_0}"
     local _tps _lo _hi=0 _steps=0 _mid _fail_label
 
     # Which decode policy is this row being measured under?  Say it ONCE per row, before
-    # any spawning: a log that is silent about the sampler cannot be audited afterwards
-    # (the server argv is never printed, so its absence proves nothing — 2026-09-29, when
-    # a certified tps could not be checked for the sampler at all).  "none configured" is
-    # STATED rather than omitted, because "unset" and "explicitly none" are different
-    # claims and only one of them is a decision.  One-shot per process, and a row is a
-    # process, so this is the row's own record.
     if [[ -z "${_SAMPLER_POLICY_LOGGED:-}" ]]; then
         _SAMPLER_POLICY_LOGGED=1
         local -a _policy_args=()
@@ -2824,8 +1755,6 @@ for combo in "${COMBOS[@]}"; do
             _lft=$(last_fail_type)
             fail_label=$(_last_fail_label "$_lft")
             # STOP, do not halve, on a hard load failure or an unclassified crash:
-            # shrinking ctx cannot fix an unloadable GGUF, and descending on an
-            # unwitnessed crash contradicts _bench_stop_unknown ("no descent").
             if [[ "$_lft" == "load_fail" ]]; then
                 break
             fi
@@ -2844,17 +1773,6 @@ for combo in "${COMBOS[@]}"; do
         record_best "$c" "$tps" "$b" "$u"
 
         # Always climb past the first success (fixed 2026-09-14): START_CTX
-        # is only an ESTIMATE of the KV-fit ceiling (kv-per-1k model, ignores
-        # GQA head-count and runtime KV-quant nuances) — a first-try success
-        # does not prove MAX_CTX is unreachable. Skipping the climb here
-        # silently capped every model at its KV-math guess instead of the
-        # empirically confirmed max, defeating the tool's purpose (find the
-        # highest ctx meeting the TPS floor). The climb below is still
-        # bounded by MAX_CTX and stops on the first OOM/load-fail.
-        # Phase 2: step up 50% — capacity-first (2026-08-27), climbs to
-        # MAX_CTX or OOM. The climb is clamped at MAX_CTX — probing past the
-        # native-ctx ceiling records RoPE-extended ctx values the machine
-        # cannot serve sanely.
         lo=$c; hi=0; c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
         while true; do
             [[ $c -eq $lo ]] && break
@@ -2862,9 +1780,6 @@ for combo in "${COMBOS[@]}"; do
             bench_ctx "$c" "$b" "$u" 1 > /tmp/at-tps-$$; rc=$?
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
             # REF: ubuntu-console card b564d801 — bench_ctx can return rc=0 with tps=0
-            # when the server replies successfully with 0 completion tokens.
-            # Catch both non-zero rc AND empty/zero tps as OOM to ensure consistent
-            # classification in the binary probe.
             if [[ $rc -ne 0 ]] || [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" || "$tps" == "0,00" ]]; then
                 hi=$c
                 fail_label=$(_last_fail_label)
@@ -2877,11 +1792,6 @@ for combo in "${COMBOS[@]}"; do
             fi
             lo=$c; record_best "$lo" "$tps" "$b" "$u"
             # Capacity-first (2026-08-27, Wayne): the climb does NOT stop on
-            # "TPS stable" — a slight TPS decline as ctx grows is normal, and
-            # the goal is the maximum VRAM-fitting context, not the fastest
-            # one. Only OOM/load-fail or the native-ctx cap (MAX_CTX) ends
-            # the climb; the filled-cache floor (Phase 4) still filters for
-            # sustained throughput afterwards.
             echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps - climbing to $(fmt $((c*3/2)))"
             c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
         done
@@ -2918,18 +1828,12 @@ for combo in "${COMBOS[@]}"; do
         fail_label=$(_last_fail_label)
         [[ $_ALL_LOAD_FAIL == true ]] && fail_label="unsupported model"
         # No attempt at all is NOT a model verdict.  _ALL_LOAD_FAIL is initialised
-        # true and cleared by a non-load failure, so a loop that never ran leaves it
-        # true and libels the model as unsupported.  The floor fix above should make
-        # this unreachable; if it ever fires again, the bug is in the probe bounds
-        # (START_CTX vs MIN_CTX), not in the GGUF — say so instead of accusing it.
         if [[ $test_num -eq 0 ]]; then
             fail_label="PROBE BUG (no ctx attempted)"
             echo "  WARNING: START_CTX=$(fmt "$START_CTX") < MIN_CTX=$(fmt "$MIN_CTX") — the probe never ran. This is a probe-bounds bug, NOT an unsupported model." >&2
         fi
         echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label} - model cannot run at any ctx"
         # Early abort: if the model never loaded at any ctx (load_fail at every
-        # step), skip remaining combos — stepping down won't make the GGUF
-        # load. Go straight to the --load-mode none fallback.
         if [[ $_ALL_LOAD_FAIL == true ]]; then
             echo "  (model cannot be loaded — skipping remaining combos)"
             break
@@ -2942,15 +1846,6 @@ for combo in "${COMBOS[@]}"; do
 done
 
 # --- mmap fallback ---
-# If the default (mmap) load failed at all ctx for all combos, retry with
-# --load-mode none.  (build 10955 removed --mmap/--no-mmap/--mlock; the old
-# spelling is a fatal "invalid argument", not a deprecation.)
-# Some architectures (phi3, gemma3n) need --load-mode none for stable VRAM allocation.
-# Extracted from the top-level flow with its body unchanged: a self-contained
-# pass that re-runs the probe with mmap off and shares the same globals.  `b`/`u`
-# stay global exactly as before, so the move is behaviour-preserving (a later
-# step can unify this with probe_upward, whose loop it duplicates).
-# _probe_no_mmap_climb <start_ctx> <batch> <ubatch> — step up ctx in --load-mode none until OOM or MAX_CTX.
 _probe_no_mmap_climb() {
     local _lo="$1" _b="$2" _u="$3" _c _tps _rc _fl
     _c=$((_lo * 3 / 2)); [[ $_c -gt $MAX_CTX ]] && _c=$MAX_CTX
@@ -2989,7 +1884,6 @@ probe_no_mmap() {
                 _lft=$(last_fail_type)
                 fail_label=$(_last_fail_label "$_lft")
                 # Same stop-on-load-fail rule as the mmap walk: an unloadable GGUF
-                # does not become loadable with --load-mode none.
                 if [[ "$_lft" == "load_fail" ]]; then
                     break
                 fi
@@ -3022,10 +1916,6 @@ probe_no_mmap() {
 }
 
 # A model that never loaded at any ctx (a load_fail at every step) is un-runnable
-# with mmap off too — the fallback exists for VRAM-allocation failures, where a
-# different load mode is the fix — so retrying the whole walk with --load-mode none
-# only re-spends spawns and CUDA cycles (2026-10-14: code-100k-Q8_0's fallback
-# doubled the wasted spawns before the boot's ledger was exhausted).
 if [[ $ANY_OK == false && ${_ALL_LOAD_FAIL:-true} != true ]]; then
     probe_no_mmap
 fi
@@ -3033,10 +1923,6 @@ fi
 _cuda_guard_or_exit
 
 # --- Beam search over batch/ubatch at the winning ctx ---
-# Replaces the fixed 128/256/512 ubatch pass. Evaluates a small anchor set,
-# then expands neighbors of the top performers (beam search). All evals are
-# quick single-sample benches at BEST_CTX; the floor itself is certified
-# later with a filled-cache bench.
 EFFECTIVE_MMAP="auto"
 [[ $MMAP_FALLBACK_USED == 1 ]] && EFFECTIVE_MMAP="off"
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
@@ -3162,7 +2048,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
     done
 
     # The beam winner may enable a higher ctx ceiling (smaller ubatch → less
-    # peak VRAM). Re-climb ctx for the winning combo.
     if [[ -n $BEST_COMBO ]]; then
         IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
         echo "  re-climbing ctx for combo $(fmt "$BEST_B")/$(fmt "$BEST_U")"
@@ -3173,43 +2058,15 @@ fi
 _cuda_guard_or_exit
 
 # --- n_gpu_layers / KV-quant sweep (the "almost fits" band) ---
-# The registry's __calc_gpu_layers is 999-or-0: models slightly too big for
-# full offload fall to CPU-only. In the band (model is a meaningful fraction
-# of free VRAM) probe alternate offload counts and cache quantizations —
-# partial offload or q4_0 KV can beat pure CPU and free VRAM for a higher ctx.
-# ...but only a CERTIFIED KV type may be probed: kv_pair_status() gates it, and
-# the sweep prints why a candidate was refused (see the gate, defined with the
-# probe helpers above).
 WIN_NGL="$BENCH_NGL"; WIN_KVK="q8_0"; WIN_KVV="q8_0"
 BAND_MIN_MB=$(awk -v f="$FREE_VRAM" -v fr="$NGL_BAND_FRAC" 'BEGIN{printf "%d", f*fr}')
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
     # ngl candidates: runtime-max offload (999) plus a short ladder down the
-    # GGUF layer count (3/4, 1/4) — on a 4 GB card partial offload can win
-    # anywhere in that band, and 999-or-half alone skips it.  The 1/2 midpoint
-    # is dropped to cut load/unload cycles: every candidate spawns a fresh CUDA
-    # context, which accelerates the WSL2 dxgkrnl degradation; 3/4 and 1/4
-    # still bracket the useful partial-offload band. Dedup against the
-    # registry's current value and against each other.
     NGL_CANDIDATES=()
     [[ "$BENCH_NGL" != "999" ]] && NGL_CANDIDATES+=("999")
     # SHARED-MEMORY HOSTS GET NO LADDER (2026-11-03).  The ladder exists for a discrete
-    # card, where fewer layers on the GPU means less VRAM pressure.  On a unified host
-    # the trade runs the other way: WHICHEVER POOL IS LARGER LOSES when layers step down,
-    # because a step down moves weights from the GPU pool into host RAM.  That is a
-    # RELATION between two pools read at run time, never a property of the box: the same
-    # arm64 host has served GPU 81920/host 46.5 GiB, GPU 98304/host 30.5 GiB and
-    # GPU 24576/host 78.4 GiB across three boots, so "the GPU pool is the LARGE side" is
-    # true of some boots and false of others (2026-11-08: 24,576 MiB of VRAM under
-    # 78.4 GiB of RAM inverts it).  The refusal below therefore stays keyed on the
-    # PROFILE's shared-memory fact, not on a measured pool size, and the size is printed
-    # rather than assumed — see the pools line above, which is read from the box.
-    # Measured on gpt-oss-120b (60.9 GB F16): the ladder
-    # reached ngl=27, MemAvailable fell to 448 MiB and the kernel OOM killer fired 8
-    # times in three minutes.  The same shape at ngl=999 held 64 GiB of the pool and
-    # never touched host memory (and measured 39-40 tps).  So 999 is not merely the best
-    # point here, it is the safe one — the ladder cannot help and can only hurt.
     if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
     then
         echo "  n_gpu_layers ladder: SKIPPED — shared memory: a step DOWN moves weights out of"
@@ -3244,10 +2101,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
     fi
 
     # KV-quant candidates: e.g. "q8_0/q8_0 q4_0/q4_0" — the default pair was
-    # implicitly probed by every bench so far; probe the alternates.  Only a
-    # pair that has passed the long-context retrieval probe may be probed; a
-    # refused pair is PRINTED with its reason rather than dropped, so the sweep's
-    # narrowing is visible in its own output (see kv_pair_status above).
     KV_PAIRS=()
     _pair=""
     for _pair in $KV_QUANTS; do
@@ -3281,14 +2134,6 @@ fi
 _cuda_guard_or_exit
 
 # --- Phase 4: filled-cache TPS floor recovery ---
-# The probe maximises ctx, which on a 4 GB card can leave a model swapping at
-# large context (high ctx, low TPS). The floor is now certified at a FILLED
-# KV cache — a long prompt pre-fills the context so decode is measured under
-# the cache pressure the recorded ctx actually produces. If the best config is
-# below the floor (decode or the optional prefill floor), step ctx DOWN — a
-# smaller KV cache raises TPS — until the floor is met or MIN_CTX is reached.
-# Descending top-down means the first ctx that meets the floor is the highest
-# ctx that sustains it, which is exactly the capability we record.
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
     echo ""
@@ -3297,9 +2142,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     _dc=$BEST_CTX
     _ft=""
     # TPS-first (2026-08-29, Wayne): the certified ctx is the highest ctx
-    # that sustains MIN_TPS at a FILLED cache. A model below the floor at
-    # its capacity ctx is NOT certified at capacity — it descends until the
-    # floor is met (or MIN_CTX), so the recorded ctx is the usable one.
     _FAST_REJECT=1
     _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
     if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
@@ -3316,21 +2158,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         if [[ $_dok == 0 || $_pok == 0 ]]; then
             echo "  below TPS floor at capacity ctx $(fmt "$_dc") — descending to the highest ctx that sustains ${MIN_TPS} tps"
             # Candidates are pre-built (descending, and including this row's PREVIOUS
-            # certification) so the walk cannot step over a value the row is known to hold —
-            # see __autotune_descent_candidates.
-            #
-            # FLAT-CURVE STOP (2026-11-03).  On a compute-bound model the filled-cache tps
-            # barely moves with ctx, so walking to MIN_CTX proves nothing and spends a CUDA
-            # cycle per step.  Measured on the 39.8 GB 70B: 5.72 / 6.17 / 6.23 / 5.93 / 5.80
-            # / 5.82 / 5.80 / 5.62 across 131072 -> 16896 (13 probes in total to reach the
-            # same verdict).  Two consecutive descents without a >10% gain while still below
-            # the floor is enough to say "too slow", and the verdict is saved as
-            # autotuned=slow so no later sweep re-spends it.
-            # (not `local`: this block is script scope, not a function — SC2168)
             _flat=0 _prev_tps=$_ft
             # The ladder is computed ONCE, from the ctx that failed, so capture it before the
-            # loop reassigns _dc.  `for x in $(...)` word-splits the emitter's output — benign
-            # only while every candidate is a bare number, and a trap the moment one is not.
             _dc_from=$_dc
             while IFS= read -r _dc; do
                 _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
@@ -3378,8 +2207,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fail_label=$(_last_fail_label)
         echo "  ctx $(fmt "$_dc") - filled ${fail_label} (capacity ctx failed the filled load — descending once)"
         # The capacity ctx failed the FILLED load (memory pressure at fill) — fall back to a
-        # quick descent for a working filled ctx.  Same candidate list, so it also cannot step
-        # below a window this row already holds without testing it.
         _dc_from=$_dc
         while IFS= read -r _dc; do
             _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
@@ -3393,23 +2220,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 
     # Final certification: multi-sample (median) at the winner for the
-    # recorded number — the persisted TPS is a robust estimate, not a burst.
-    # 5 samples (2026-09-14, was 3): this box spans ~45-67 tps on the same
-    # binary, prompt and n_predict (±15%), and a median-of-3 of that still
-    # carries ~10% standard error — enough to flip a row that sits near a role
-    # admission threshold.  bench_once_multi spawns ONE server and issues N
-    # requests against it, so the extra samples cost no extra CUDA contexts,
-    # only wall-clock.  Median SE falls as 1/sqrt(n): 5 gives ~29% less
-    # spread than 3.
     _FAST_REJECT=0
     : > "/tmp/at-served-ctx-$$" 2>/dev/null || rm -f "/tmp/at-served-ctx-$$" 2>/dev/null || true
     _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
     # The ctx the server ACTUALLY served, captured by bench_ctx from its live server.
-    # Carried to the save site, which has no server of its own to ask.  Read from the
-    # dedicated file FIRST: it holds the last successful /props read of this server, so a
-    # sample rejected mid-prompt (400) cannot drop it — the metrics line would have been
-    # rewritten as "0|0|oom".  Captured whether or not the tps sample survived, because
-    # the served window is a fact about the live server, not about the measurement.
     _served_now=$(cat "/tmp/at-served-ctx-$$" 2>/dev/null || true)
     IFS='|' read -r _fd2 _fp2 _ff2 _fa2 _fr2 _fb2 _served2 < "/tmp/at-metrics-$$" 2>/dev/null || true
     [[ -n "${_served_now:-}" ]] && _served2="$_served_now"
@@ -3422,19 +2236,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 
     # POST-CERTIFICATION FLOOR DESCENT (2026-09-17).  Phase 4's floor gate judges every rung
-    # from ONE sample, and at large ctx a single sample overstates the SUSTAINED rate by
-    # 3.6-4.7x.  Rows 13 and 14 passed the gate at ctx 131,072 (13.89 / 14.57 tps on one
-    # sample, reproduced on a cold boot) and then certified at 2.95 / 3.12 tps with the
-    # 5-sample median, with the ttft probe independently agreeing with the CERTIFICATION
-    # (3.28 vs 3.12).  So the gate passed windows the rows cannot hold, the descent never
-    # ran, and each was left advertising a ctx it cannot sustain.  It is ctx-dependent —
-    # rows 2 and 12 at 4.6-6.6K certify within 1.2-1.4x of their rungs — which is why it
-    # went unnoticed: only huge-context fills pay the cache pressure that depresses the
-    # later samples.
-    #
-    # Descending HERE, at the CERTIFICATION'S OWN sample count, makes the gate and the
-    # recorded value the same measurement.  The cost falls only on rows that fail the gate,
-    # and one bench_ctx call is one CUDA cycle per rung (N requests against one server).
     if [[ $BEST_CTX -gt $MIN_CTX ]] \
         && [[ $(echo "${BEST_TPS:-0} < $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "  certified ${BEST_TPS} tps is below the floor at ctx $(fmt "$BEST_CTX")" \
@@ -3462,7 +2263,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         done < <(__autotune_descent_candidates "$_cert_from" "$MIN_CTX" "$PREV_CERT_CTX")
     fi
     # Record GPU thermal/clock state alongside the certified number — heat
-    # soak on a laptop biases later benches; the temp explains outliers.
     if command -v nvidia-smi >/dev/null 2>&1; then
         _gpu_thermal=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
             nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
@@ -3470,14 +2270,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 
     # tps-collapse guard (WSL2 dxgkrnl degradation): the dmesg EOVERFLOW proxy
-    # can miss a leak, but the reliable symptom is a model re-certifying at a
-    # large factor below its previously-recorded filled-cache tps (registry
-    # field 17).  The OpenClaw gateway marks tiny/instant models with a
-    # sentinel 1000000, so a recorded value is only compared when it is a
-    # plausible measured decode (0 < tps < 1000).  A drop can also be a genuine
-    # hardware/quant regression, so it never ABORTS the run — but it does stop
-    # the row being stamped `certified` (see the write gate below): a figure this
-    # run has just called untrustworthy must not retire the row from the plan.
     if __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
         _meas_collapse=1
         echo ""
@@ -3491,32 +2283,16 @@ fi
 _cuda_guard_or_exit
 
 # After a TPS-floor descent, the interactive profile must never exceed the
-# certified ctx (a below-floor model's P2 was probed at its old capacity).
-#
-# Clamped BEFORE the certification below, deliberately — not after it. Applying
-# the clamp afterwards rewrote P2_CTX while leaving P2_TPS as measured at the
-# un-clamped ctx, so the persisted (p2_ctx, p2_tps) pair described a measurement
-# that was never taken at the ctx it names. That is how a row came to carry a
-# p2_tps several times BELOW a tps measured at the very same config (7.7x,
-# 2026-09-15), which no consumer could distinguish from a real regression.
-# Clamping first means the pair written to the registry is always one real
-# measurement at the ctx it reports, so nothing needs a "was it clamped?"
-# caveat to know whether p2_tps is trustworthy.
 if [[ $P2_CTX -gt $BEST_CTX ]]; then
     echo "  profile 2 ctx $(fmt "$P2_CTX") clamped to certified $(fmt "$BEST_CTX")"
     P2_CTX=$BEST_CTX
 fi
 
 # Profile 2 (interactive) certification: one filled bench at the max-TPS
-# config so the persisted numbers are honest sustained throughput.
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     if [[ "$P2_CTX|$P2_B:$P2_U" != "$BEST_CTX|$BEST_B:$BEST_U" ]]; then
         echo "  certifying profile 2 (interactive) at ctx=$(fmt "$P2_CTX")  $(fmt "$P2_B")/$(fmt "$P2_U")"
         # 3 samples (2026-09-14, was 1).  The old "one sample keeps churn to a
-        # single launch" reasoning was wrong: N samples reuse ONE spawn
-        # (bench_once_multi issues N requests against one server), so more
-        # samples cost no extra CUDA contexts — while a single sample of a
-        # ±15% measurement is not evidence at all.
         _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
         if [[ -n $_p2t ]] && [[ $(echo "$_p2t > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
             P2_TPS=$_p2t
@@ -3529,17 +2305,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
 fi
 
 # ── SPEC-DEC-004: speculative-decoding block-size sweep ─────────────────────
-# The article's central tuning rule: optimal block size
-# (num_speculative_tokens) depends on hardware + concurrency, so it must be
-# tuned empirically per model and the winner recorded.  On the 4 GB card the
-# sweep uses VRAM-free ngram spec-decode (no extra model, --spec-type
-# ngram-mod) with the verified llama.cpp flags; a CPU-placed draft model
-# (BENCH_SPEC_DRAFT_MODEL) is honoured when the user provides one.  The TPS
-# comparison uses the de-inflated delivered-token TPS (SPEC-DEC-003) and the
-# acceptance LENGTH of the winning block is recorded alongside.
-# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation with
-# DFlash" (Intel, TDS 2026)
-# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
 WIN_SPEC_TYPE=""; WIN_SPEC_N_MAX=""; WIN_SPEC_ACCEPT_LEN=""
 SPEC_N_MAX_LIST=${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-"4 8 16 32"}
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
@@ -3550,9 +2315,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     echo "  -------------------------------------"
     _sb_best_tps="0"
     # AUTOTUNE_SPEC_SWEEP=0 skips the sweep: it is FOUR launches per row and its
-    # result feeds only the recorded spec block.  Default is ON — for a slow
-    # model spec-decode is exactly the lever that raises tps, so this is an
-    # opt-out for a run that must conserve CUDA context cycles, not a saving.
     _sb_list="$SPEC_N_MAX_LIST"
     if [[ "${AUTOTUNE_SPEC_SWEEP:-1}" == "0" ]]; then
         _sb_list=""
@@ -3566,18 +2328,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fi
         BENCH_SPEC_TYPE="ngram"; BENCH_SPEC_N_MAX="$_sb_block"
         # samples=1 (not 3): the block sweep is a *selection*, not a recorded
-        # number — a single sample per block keeps the CUDA-context churn to
-        # 4 launches instead of 12, which matters because WSL2 dxgkrnl leaks
-        # GPU VA per launch (~26-cycle knee at huge ctx, measured 2026-09-05).
         _sb_t=$(bench_ctx "$BEST_CTX" "$_sb_b" "$_sb_u" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _sb_t=""
         _sb_t=$(echo "$_sb_t" | bc 2>/dev/null || echo "0"); [ -z "$_sb_t" ] && _sb_t=0
         _sb_al="0"; _sb_ar="0"
         IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
         echo "  block ${_sb_block}: ${_sb_t} tps (accept len ${_sb_al:-0}, rate ${_sb_ar:-0})"
         # ECONOMY (2026-11-03): two consecutive blocks that accepted nothing is enough
-        # evidence that ngram has no purchase here, and each remaining block costs a CUDA
-        # cycle plus a full model load. Checked BEFORE the win test so a zero-accept block
-        # can never be fast enough to matter.
         if [[ "${_sb_al:-0}" =~ ^[0-9]+$ ]] && (( _sb_al == 0 ))
         then
             _sb_zero=$((_sb_zero + 1))
@@ -3591,9 +2347,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fi
         if [[ $(echo "$_sb_t > $_sb_best_tps" | bc 2>/dev/null || echo "0") == 1 ]]; then
             # Faster is not enough: the block must actually PLACE draft tokens, or every
-            # token pays a lookup for nothing (measured 2026-11-03 — a row certified with
-            # spec_accept_len=0 because tps alone chose the winner).  See
-            # __autotune_spec_worth_keeping.
             if __autotune_spec_worth_keeping "${_sb_al:-0}" "${_sb_ar:-0}"
             then
                 _sb_best_tps="$_sb_t"
@@ -3615,17 +2368,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 fi
 
 
-# ---------------------------------------------------------------------------
 # ttft_probe — time-to-first-token at a config (AUTOTUNE-003).
-#   args: ctx batch ubatch [mmap] [ngl] [kv_k] [kv_v]
-# Launches the server exactly like the scoring bench, then sends a STREAMING
-# completion shaped like an agentic step — the WORKLOAD prompt pre-filling the
-# KV cache (FILL_RATIO x ctx), a short 64-token budget — and times the first
-# content token (the SSE stream delivers the first `delta.content` when the
-# first token is generated; TPS-style burst measurements cannot see this).
-# Also computes the per-step decode latency (ms/token after the first token).
-# Prints "ttft_ms|per_step_ms" on stdout; empty on failure.
-# ---------------------------------------------------------------------------
 if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]]; then
 ttft_probe() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
@@ -3646,8 +2389,6 @@ ttft_probe() {
         local -a fa_args=()
         [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
         # The sampler fragment is built in BOTH launch helpers (the bench spawn and the
-        # TTFT server) from the same registry column, so no measurement in this script
-        # runs a decode policy the serve path does not.
         local -a sampler_args=()
         mapfile -t sampler_args < <(_sampler_args "$MODEL_PATH")
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
@@ -3680,7 +2421,6 @@ ttft_probe() {
     fi
 
     # Pre-flight: one real completion confirms the slot is actually serving
-    # (the same guard the scoring bench uses).
     local pf_ok=0 pf_w=0
     while [[ $pf_w -lt 60 ]]; do
         if curl -sS --max-time 5 "$health_url/v1/chat/completions" \
@@ -3698,7 +2438,6 @@ ttft_probe() {
     fi
 
     # Streaming payload: the workload prompt fills the cache (same length
-    # policy as the scoring fill) with a short 64-token completion budget.
     local ttft_payload="/tmp/at-ttft-${MODEL}-${c}.json"
     local _fill_tokens
     _fill_tokens=$(awk -v cc="$c" -v r="$FILL_RATIO" 'BEGIN{printf "%d", cc*r}')
@@ -3731,9 +2470,6 @@ PYEOF
     local body="/tmp/at-ttft-body-$$"
     local parsed
     # AUTOTUNE-003: the stream probe must POST to the chat-completions
-    # endpoint — the bare server root (health_url without the path) answers
-    # with a non-SSE error in milliseconds, so TTFT was always 0 no matter
-    # how the SSE body was parsed (2026-08-27: 15/15 rows ttft_ms=0).
     parsed=$("$TAC_PYTHON" - "$health_url/v1/chat/completions" "$ttft_payload" "$start_ns" "$body" << 'PYEOF'
 import json, sys, time, urllib.request
 url, payload_path, start_ns, body_path = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
@@ -3754,10 +2490,6 @@ try:
             for raw in resp:
                 out.write(raw)
                 # SSE events are newline-delimited, but socket reads are NOT
-                # line-aligned: a chunk can hold a partial event, several
-                # events, or a split line. Buffer and split on "\n" so the
-                # first content delta is actually seen (AUTOTUNE-003: TTFT
-                # was always 0 because coalesced/split events never parsed).
                 buf += raw
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
@@ -3774,10 +2506,6 @@ try:
                         continue
                     delta = (obj.get("choices") or [{}])[0].get("delta") or {}
                     # AUTOTUNE-003: reasoning models (R1 distills,
-                    # MiniCPM-thinking) can stream the whole 64-token budget
-                    # as reasoning_content with no content delta at all —
-                    # the first token of EITHER field marks generation start
-                    # (2026-08-27: TTFT stayed 0 for such models).
                     if delta.get("content") or delta.get("reasoning_content"):
                         if ttft_ms == 0:
                             ttft_ms = (time.time_ns() - start_ns) // 1_000_000
@@ -3796,10 +2524,6 @@ PYEOF
     _bench_stop "$pid"
     if [[ $_tt_rc -ne 0 ]] || [[ -z "$parsed" ]]; then
         # A request/stream failure (HTTP 400, connection reset, etc.) is NOT
-        # a 0ms TTFT — the old fallback (`parsed="0|0"`) recorded a failed
-        # probe as an instantaneous response, which then persisted a
-        # fabricated ttft_ms=0 into the saved profile (2026-09-14). Propagate
-        # the failure so the caller reports it as "failed" instead.
         return 1
     fi
 
@@ -3818,16 +2542,11 @@ PYEOF
 fi  # AUTOTUNE_SELFTEST guard — the stub defined in the selftest block wins.
 
 # ── AUTOTUNE-003: time-to-first-token at the winning config ─────────────────
-# Agentic steps are latency-bound (long prompt, short completion) — TTFT is
-# the decisive metric and the burst TPS floor cannot see it.  One streaming
-# sample at the winning config; the TTFT is recorded in the registry
-# (column 34) and surfaced next to TPS in the summary.
 TTFT_MS=0; TTFT_PER_STEP=0
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
     echo ""
     # 1 sample (not 3): TTFT is a secondary latency metric; a single sample
-    # keeps the CUDA-context churn to one launch (WSL2 dxgkrnl VA leak).
     echo "  TTFT probe at ctx=$(fmt "$BEST_CTX")  (workload ${WORKLOAD}, 1 sample)"
     echo "  ---------------------"
     _tt_samples=()
@@ -3849,27 +2568,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 fi
 
 # ── AUTOTUNE-004 retired (2026-09-14): there is no envelope to measure ──────
-# The sweep that lived here tried 2/4/8/16 slots at the winning ctx and
-# recorded the largest that "served", on the premise that N slots at the full
-# ctx over-commit VRAM (unified-KV semantics).  The launcher never passed
-# --kv-unified, so kv_unified stayed false and each slot silently received
-# ctx/N — which is exactly why this recorded the MAXIMUM (16) in 34 of 35 rows:
-# under the premise it assumed, 16 x ~1.2 GB of KV could not fit a 4 GB card,
-# so its own result falsified its premise.  It certified the one property
-# nobody doubted (that it loads) and could not see the one that mattered (at
-# what window).  --parallel is now pinned to 1 in the launcher, so the column
-# records 1.  Retiring the sweep also removes FOUR llama-server launches per
-# row from the WSL2 dxgkrnl context-cycle budget.
 WIN_PARALLEL=1
 
 # REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT (18082), not the production port 18081
-# ---------------------------------------------------------------------------
-# _autotune_failure_report — the operator-facing failure verdict (DEF-024).
-# Defined HERE, before the final branch calls it: a function is only callable once the
-# definition has been executed, and the branch below ends the script.
-# Prints the classification, the last attempted configuration and that launch's
-# stderr tail; marks the registry row ONLY for a durable verdict.
-# ---------------------------------------------------------------------------
 _autotune_failure_report() {
     local _src="/tmp/at-fail-$$" _cls="unclassified" _config="" _log="" _line=""
     local -a _tail=()
@@ -3883,12 +2584,6 @@ _autotune_failure_report() {
     _FINAL_FAIL_CLASS="$_cls"
 
     # The headline must not outrun the class.  It used to say "the model cannot be loaded at any
-    # ctx" unconditionally, which the very next paragraph contradicts for every class but
-    # unsupported_arch - :3257 prints "not a verdict on the model" two lines below.  It also
-    # stopped being merely vague once the ledger learned to say resource_exhausted: a row that
-    # ran out of memory at its largest ctx was being introduced as a model that cannot be
-    # loaded at all.  The run's outcome is still not certified either way; what changes is
-    # whether the sentence blames the MODEL, which only unsupported_arch has evidence for.
     case "$_cls" in
         unsupported_arch)
             echo "  failed: the model cannot be loaded at any ctx — NOT CERTIFIED" ;;
@@ -3917,12 +2612,6 @@ _autotune_failure_report() {
     fi
 
     # A DURABLE verdict is one about the model or the build: an architecture the binary
-    # cannot map to a loader stays unloadable on every re-run, so the row is marked in the
-    # registry's own state vocabulary (meas_state=unacceptable — the terminal value the
-    # resume loop already defines) and leaves the plan.  A contended card, a dxgkrnl halt,
-    # an OOM at large ctx and an unclassified failure are properties of THIS RUN, not of
-    # the model: marking them would poison the row against a re-run, so the row is left
-    # exactly as it was and the message says so.
     if [[ "$_cls" == "unsupported_arch" ]]; then
         if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
             echo "  registry: would mark meas_state=unacceptable (selftest — registry untouched)"
@@ -3940,8 +2629,6 @@ _autotune_failure_report() {
         echo "  registry: row left unchanged — this failure is not a verdict on the model; fix it and re-run"
     fi
     # 2026-11-06 (Wayne): record every classified failure durably, and archive the ones
-    # that are CLEAR.  The archiver owns the rule (two strikes for unsupported_arch, an
-    # arithmetic capacity verdict for everything else); this call is only the observation.
     _arch="$(dirname "$(readlink -f "$0")")/../bin/llm-archive-unusable.sh"
     if [[ -x "$_arch" ]]; then
         # swallow-ok: the recorder must never change this row verdict; its own output is the record
@@ -3966,12 +2653,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
     # Capability verdict relative to the floor (filled-cache decode TPS). We
-    # always persist the best config we found (autotuned=yes ⇒ "this model has
-    # been profiled"), and the recorded TPS is the honest, machine-readable
-    # signal of usability:
-    #   tps >= floor  → usable; ctx is the maximum that sustains the floor.
-    #   tps <  floor  → too slow for our purposes even at min ctx; the saved
-    #                   config is the fastest one available (best-effort).
     if [[ $(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "  ✓ meets floor: ${BEST_TPS} tps >= ${MIN_TPS} at ctx $(fmt "$BEST_CTX")"
     else
@@ -3996,22 +2677,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 
     # Record what the server ACTUALLY served, not what we asked for.  llama.cpp clamps
-    # the served window to the model's own <arch>.context_length at load — measured
-    # 2026-09-16: requests of 47104, 65536, 100352 and 131072 all served 32768, 147456
-    # served 131072, and 476928 and 373248 served 262144, each exactly that model's native
-    # window.  It is NOT a VRAM-dependent reduction: the same values came back at ngl 24
-    # and ngl 999 and with --fit on and off, while every row asking for LESS than its native
-    # window served the full request.  Eleven of 26 rows carried a ctx no client would ever
-    # get — the 400-mid-prompt hazard docs/llm.md names, observed live as "ttft probe stream
-    # failed: HTTP Error 400" on a row asking 8192 of a 2048-native model — because the
-    # winner was recorded from the value the probe ASKED for.  Reading /props is the only
-    # honest source; when it cannot be read the run keeps the requested ctx and SAYS SO.
     if [[ $BEST_CTX -gt 0 ]]
     then
         # AUTOTUNE_SERVED_CTX was captured by bench_ctx from ITS live server, via the
-        # metrics line (the subshell does not export globals).  This site has no server of
-        # its own — the winner is a configuration, not a running process — which is why the
-        # first version of this check could only ever warn.
         if [[ "${AUTOTUNE_SERVED_CTX:-}" =~ ^[0-9]+$ ]] && (( AUTOTUNE_SERVED_CTX > 0 ))
         then
             if (( AUTOTUNE_SERVED_CTX != BEST_CTX ))
@@ -4042,49 +2710,16 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         KV_QUANT_SAVE="${_qc%%/*}/${WIN_KVK}/${WIN_KVV}"
     fi
     # Measurement context (2b/3c): the box's load is read ONCE, BEFORE the selftest and
-    # write branches, so the write stamps it (2b) AND the warning below reuses it on
-    # EVERY path — including the selftest path, which writes nothing but still reaches
-    # the warning.  Reading it inside the write branch alone left it unset under `set -u`
-    # on the selftest path and aborted the run (a regression from 2b, fixed 2026-10-13).
-    # (Not `local`: script scope.)
     _row_load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo "?")
     _row_cores=$(nproc 2>/dev/null || echo "?")
     # AUTOTUNE_SELFTEST never persists — the canned curve is a decision-logic
-    # regression, not a measurement (2026-08-27: a selftest run wrote its
-    # 524288/8.5 into registry row 3, polluting the real profile).
     if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
         echo "  (selftest — registry write skipped)"
     elif declare -f __llm_autotune_profile_save &>/dev/null; then
         # SPEC-DEC-004: record the winning spec block + measured acceptance
-        # length (registry fields 27/29/32) alongside the ctx/batch winner.
-        # AUTOTUNE-001: the scoring workload rides in field 33 so consumers
-        # know which prompt distribution certified the winner.
-        # AUTOTUNE-003: the median TTFT at the winning ctx rides in field 34.
-        # AUTOTUNE-004: the measured (ctx, parallel) envelope rides in the
-        # parallel column (field 12) — launches validate --parallel N against
-        # it and warn when over-subscribed (11e-llm-model.sh).
-        # The FILE name, not the row number: this run tuned MODEL_PATH, so this run's
-        # numbers belong to that file whatever the row numbering does meanwhile.
-        # 2b (2026-10-12): carry HOW this number was measured.  The load is read above,
-        # once, and stamped into the row; a load above the core count is the CONTENDED
-        # case that block names, so it is stamped INDICATIVE rather than dropped.
-        # 3c: the verdict decides whether this row may be written at all — "refuse"
-        # (contended, or an unreadable load, without --allow-contended) exits BEFORE
-        # the save; otherwise it is the meas_state the row carries.
-        # 2026-11-08: two more terms ride alongside the load figure — the CI worker count
-        # (the same rule v85 of 11e-llm-model.sh applies to the build gate) and the
-        # start-of-run CPU pressure sampled at START_PSI_PCT.  Both can only make the
-        # verdict stricter.
-        # A match count of zero is the quiet box this row wants, and pgrep exits 1 when
-        # nothing matches — the fallback states the count rather than treating "no match"
-        # as an error.  Every other unreadable term fails closed.
         # swallow-ok: pgrep exit 1 means no runners, which is the quiet reading — not an error
         _row_ci=$(pgrep -fc '[R]unner\.Worker' 2>/dev/null) || _row_ci=0
         # NOT in a subshell (v126).  Both the word and the reason are script-scope state, and
-        # `$( )` discards the reason: measured 21:48 today, row 3 refused and printed
-        # "load 3.14 on 20 cores" — a figure its own bound had already cleared — because the
-        # CI/pressure text never crossed the substitution.  stdout is discarded for the same
-        # reason: the word is read from the global, not captured.
         __AUTOTUNE_VERDICT=""
         __autotune_measurement_verdict "$_row_load" "$_row_cores" \
             "${ALLOW_CONTENDED:-0}" "${TAC_CONTENDED:-0}" \
@@ -4097,23 +2732,11 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             exit 1
         fi
         # The verdict is the WEAKEST of the three terms, not the load alone.  A collapse is a
-        # third way a reading can be untrustworthy, and it used to be warn-only: the row was
-        # written `certified`, the plan derivation drops certified rows, and the row retired
-        # itself on a number this same run had just called untrustworthy.  Measured
-        # 2026-10-17 22:34 — grounded-ai re-certified 15.08 -> 3.59 tps, saved `certified`,
-        # and left the plan (re-flagged by hand to `indicative` the same night).
         if [[ "${_meas_collapse:-0}" == "1" && "$_meas_state" == "certified" ]]; then
             echo "  stamping this row INDICATIVE: the collapse above makes this a re-tune owed, not a certification"
             _meas_state="indicative"
         fi
         # 1a — the POSITION term.  The winner above is a median of 5 taken at ONE point in
-        # the run, and this box drifts with position (the cache-ram probe measured 45-65%
-        # cold-decode drift across its own positions against only ~13% run-to-run spread).
-        # Measure the SAME config a SECOND time HERE — after profile 2 and the spec sweep, so
-        # it is a genuinely later position — and record the drift beside the number.  Above
-        # the probe's own 25% bound the row is stamped indicative, exactly as contention is.
-        # (The read/restore of AUTOTUNE_SERVED_CTX is NOT needed: its last reader, the
-        # served-ctx block, has already run above this point.)
         _meas_drift_pct=""
         _meas_pos2=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" \
             "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _meas_pos2=""
@@ -4121,9 +2744,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             && _meas_drift_pct=$(__autotune_position_drift "${BEST_TPS:-0}" "$_meas_pos2")
         if [[ -z "$_meas_drift_pct" ]]; then
             # FAIL CLOSED (v85): an unmeasurable second position is not evidence of stability.
-            # It used to warn and leave the state alone, so the row saved `certified` with no
-            # drift recorded — the one check that proves the number is position-stable missing
-            # and read as passed.  Demote it exactly as an over-bound drift does.
             echo "  the second-position re-measurement produced no figure — stamping this row INDICATIVE"
             _meas_state="indicative"
         elif awk -v d="$_meas_drift_pct" -v w="$AUTOTUNE_DRIFT_WARN_PCT" 'BEGIN{exit !(d > w)}'; then
@@ -4135,9 +2755,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                  "within the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound"
         fi
         # v85: a thermally throttled card is NOT a comparable measurement.  The SW Thermal
-        # Slowdown bit (0x20) is the driver capping the clock to chase its target — the state
-        # that saved 6.76/6.89 tps with tight drift.  Demote it exactly as contention is.
-        # Skipped under AUTOTUNE_SELFTEST, whose outcomes must not depend on this box's GPU.
         if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]]; then
             _throttle=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" nvidia-smi --query-gpu=clocks_throttle_reasons.active \
                 --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
@@ -4151,10 +2768,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             exit 1
         fi
         # CTXBUDGET-003: report how the certified window relates to the observed input
-        # profile (col 37).  The winner above stays the HIGHEST ctx that holds LLM_MIN_TPS
-        # (v6 semantics; D1(a)/D2(b)) — this verdict changes no score and no saved ctx.
-        # It is recorded in col 45 so an over/under-reserved row is visible rather than
-        # silently assumed to fit; profile-missing is a missing measurement, not a pass.
         _row_avg_prompt=$(awk -F'|' -v f="$MODEL_FILE" '$3 == f {print $37; exit}' "$LLM_REGISTRY")
         _ctx_policy=$(__autotune_window_policy "$BEST_CTX" "$_row_avg_prompt")
         case "$_ctx_policy" in
@@ -4170,17 +2783,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 echo "  WARNING: window policy returned an unexpected verdict '${_ctx_policy}'" ;;
         esac
         # v85: the REAL sample count and spread written by the last bench_once_multi (the
-        # second-position run on the winner config).  Absent/unreadable falls back to 5, the
-        # configured sample count, never to a value that hides a one-sample figure.
         _meas_n=5
         [[ -r "/tmp/at-samples-$$" ]] && _meas_n=$(< "/tmp/at-samples-$$")
         [[ "$_meas_n" =~ ^[0-9]+$ ]] || _meas_n=5
         _meas_spread=""
         [[ -r "/tmp/at-spread-$$" ]] && _meas_spread=$(< "/tmp/at-spread-$$")
         # A below-floor verdict is saved as autotuned=slow, not "yes" and not "no":
-        # the row HAS been profiled (so a sweep must not re-spend a descent on it) and it
-        # is NOT usable (so nothing may serve it as certified).  bin/autotune-rows.sh's
-        # --all-but-done treats both "yes" and "slow" as done.
         # swallow-ok: an unusable bc is the below-floor branch, which records "slow" — the safe side
         if [[ $(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]
         then
@@ -4198,10 +2806,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the
-        # `saved:` line below straight out of the unchanged registry row — a run
-        # that certified nothing while reading as success (2026-09-13: an entire
-        # sweep "completed" this way after the console's llm-manager sub-modules
-        # failed to load).  Fail loudly and non-zero so the caller marks the row.
         echo "  ERROR: __llm_autotune_profile_save is not loaded — the winner was NOT saved." >&2
         echo "         The console's llm-manager helpers failed to load; look for 'missing sub-module' above." >&2
         exit 1
@@ -4209,26 +2813,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     awk -F'|' -v f="$MODEL_FILE" '$3 == f {rp=($38==""?"none":$38); rln=($39==""?"none":$39); printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s sampler=%s/%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34, rp, rln}' "$LLM_REGISTRY"
 
     # Measurement context (2026-09-16).  A certified tps is only comparable to another
-    # row if the box was quiet when it was taken.  On 2026-09-16 this sweep ran at load
-    # 20-26 on 12 cores and row 2 recorded .96 tps mid-run, with NOTHING in the output
-    # saying so — the number reads as a property of the model.  Printing the load beside
-    # it is the cheap half of the fix; the warning is for the case where it is not cheap.
-    # (Not `local`: this block is script scope, not a function — SC2168.)
-    # (The read itself now happens before the save, which stamps it into the row.)
     if [[ "$_row_load" =~ ^[0-9.]+$ && "$_row_cores" =~ ^[0-9]+$ ]] \
         && awk -v l="$_row_load" -v c="$_row_cores" 'BEGIN{exit !(l > c)}'
     then
         echo "  WARNING: measured at load ${_row_load} on ${_row_cores} cores — the box was CONTENDED, so this row's tps is indicative, not certified (retuning advised on a quiet box)."
     elif [[ "${_meas_state:-}" == "indicative" ]]; then
         # DEFAULT THE PARAMETER.  `_meas_state` is assigned only inside the save branch, so
-        # on the SELFTEST path (which writes nothing) it is UNSET at script scope and this
-        # read aborted the run under `set -uo pipefail` — measured 2026-11-08: 08 cases 14
-        # and 52 went from green to "no output" the moment this branch was added, and back
-        # to green on stash.  A definite assignment is the older instance of the same trap
-        # (see the 2b comment above); this is a guard against repeating it.
-        # The load term is satisfied but another term refused, so this row is indicative
-        # WITHOUT load>cores being true — say which term, or the sentence reads as a
-        # claim about a load figure that is under the core count.
         echo "  WARNING: ${__AUTOTUNE_VERDICT_REASON:-an unstated term} — this row's tps is" \
              "INDICATIVE, not certified, even though load ${_row_load} was under" \
              "${_row_cores} cores (retuning advised on a quiet box)."
@@ -4241,13 +2831,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     exit 0
 else
     # ── DEF-024: say WHY, and never call an unqualified failure "unsupported" ────
-    # The pre-v89 line was `failed: unsupported model — model could not be loaded at any
-    # ctx`, printed from _ALL_LOAD_FAIL's walk policy (which treats every load_fail as
-    # unsupported) and with the failing server's own output already deleted.  An operator
-    # could not tell an unsupported architecture from an OOM from a bad-flag launch, and
-    # `model bench` collapsed all three into "no working config".  This block reads the
-    # witness the spawn kept, classifies it, prints it, and only then decides whether the
-    # registry row carries a durable verdict.
     _autotune_failure_report
     exit 1
 fi
