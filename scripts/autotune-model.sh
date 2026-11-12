@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 139
+# Module Version: 140
+#   v140 (2026-11-12): increase AT_WINDOW_S scaling for >40 GiB models (12s/GiB, cap 1200s);
+#     print 60s loading heartbeat during long waits; seed SEEN/COMBO_TPS in beam search to
+#     avoid re-testing BEST_COMBO; skip beam search for >=64 GiB models unless overridden.
 #   v139 (2026-11-12): scale AT_WINDOW_S for large multi-shard models (>40 GiB) when not
 #     explicitly set; emit window_timeout instead of load_fail on readiness expiry so descent
 #     reports "readiness timeout" rather than "unsupported model".
@@ -508,8 +511,8 @@ MODEL_MB=$(( MODEL_BYTES / 1048576 ))
 
 # Scale readiness window for large multi-shard models (>40 GiB) when AT_WINDOW_S wasn't pinned.
 if [[ -z "${_AT_WINDOW_USER_SET:-}" ]] && (( MODEL_MB >= 40960 )); then
-    _scaled_window=$(( 300 + ((MODEL_MB - 40960) / 1024) * 8 ))
-    (( _scaled_window > 900 )) && _scaled_window=900
+    _scaled_window=$(( 300 + ((MODEL_MB - 40960) / 1024) * 12 ))
+    (( _scaled_window > 1200 )) && _scaled_window=1200
     (( _scaled_window > AT_WINDOW_S )) && AT_WINDOW_S="$_scaled_window"
 fi
 
@@ -1065,6 +1068,8 @@ _bench_spawn() {
             sleep 1; hw=$((hw + 1))
             kill -0 "$_BENCH_PID" 2>/dev/null || return 1
             curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
+            (( AT_WINDOW_S > 300 && hw % 60 == 0 )) \
+                && warn "    ... still loading (${hw}s / ${AT_WINDOW_S}s)"
         done
         return 1
     }
@@ -1976,7 +1981,13 @@ _cuda_guard_or_exit
 # --- Beam search over batch/ubatch at the winning ctx ---
 EFFECTIVE_MMAP="auto"
 [[ $MMAP_FALLBACK_USED == 1 ]] && EFFECTIVE_MMAP="off"
-if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
+if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]] \
+    && (( MODEL_MB >= 65536 )) && [[ "${LLM_AUTOTUNE_BEAM_LARGE:-0}" != "1" ]]; then
+    IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
+    echo ""
+    echo "  beam search: skipped for ${MODEL_MB} MiB model (keeping ${BEST_B}/${BEST_U};" \
+         "set LLM_AUTOTUNE_BEAM_LARGE=1 to override)"
+elif [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
     BATCHES=()
@@ -2004,6 +2015,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
 
     declare -A SEEN=()
     declare -A COMBO_TPS=()
+    if [[ -n "${BEST_COMBO:-}" && -n "${BEST_TPS:-}" ]]; then
+        SEEN["$BEST_COMBO"]=1
+        COMBO_TPS["$BEST_COMBO"]="$BEST_TPS"
+    fi
     BEAM=()
     FRONTIER=()
 
