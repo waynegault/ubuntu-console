@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 132
+# Module Version: 133
+#   v133 (2026-11-12): default ALLOW_CONTENDED=${TAC_CONTENDED:-1} so contended runs
+#     persist their best configuration stamped meas_state=indicative (retuning advised
+#     on a quiet box) instead of discarding the run; add --refuse-contended to opt out.
 #   v132 (2026-11-12): do not let loader_crash_unknown intercept AT_WINDOW_S expiry when
 #     _BENCH_PID is still alive loading; hand off to the hw >= AT_WINDOW_S window_timeout
 #     and _cuda_stall_bump path instead of misreporting a live timeout as a crash.
@@ -334,16 +337,17 @@ MODEL_REF="${1:?Usage: autotune-model.sh MODEL_NUM|MODEL_FILE [--workload chat|l
 # Env: LLM_AUTOTUNE_WORKLOAD (default chat) — the batch runner / investigator
 # profile sets it to "legal".
 WORKLOAD="${LLM_AUTOTUNE_WORKLOAD:-chat}"
-# 3c: --allow-contended is the ONLY way to persist a row measured on a CONTENDED
-# box — it writes it stamped meas_state=indicative.  Without it the certification
-# refuses (see __autotune_measurement_verdict's call site).  Default: refuse.
-ALLOW_CONTENDED=0
+# 3c: contended runs persist stamped meas_state=indicative (retuning advised on a
+# quiet box) by default.  Pass --refuse-contended (or TAC_CONTENDED=0) to refuse
+# writing on contention instead.
+ALLOW_CONTENDED="${TAC_CONTENDED:-1}"
 shift  # drop MODEL_NUM
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workload) WORKLOAD="${2:-}"; shift 2 ;;
         --allow-contended) ALLOW_CONTENDED=1; shift ;;
-        *) echo "Unknown arg: $1 (usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix] [--allow-contended])" >&2; exit 2 ;;
+        --refuse-contended) ALLOW_CONTENDED=0; shift ;;
+        *) echo "Unknown arg: $1 (usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix] [--allow-contended|--refuse-contended])" >&2; exit 2 ;;
     esac
 done
 case "$WORKLOAD" in
@@ -4207,7 +4211,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if [[ "$_row_load" =~ ^[0-9.]+$ && "$_row_cores" =~ ^[0-9]+$ ]] \
         && awk -v l="$_row_load" -v c="$_row_cores" 'BEGIN{exit !(l > c)}'
     then
-        echo "  WARNING: measured at load ${_row_load} on ${_row_cores} cores — the box was CONTENDED, so this row's tps is indicative, not certified. Re-run it on a quiet box before trusting it."
+        echo "  WARNING: measured at load ${_row_load} on ${_row_cores} cores — the box was CONTENDED, so this row's tps is indicative, not certified (retuning advised on a quiet box)."
     elif [[ "${_meas_state:-}" == "indicative" ]]; then
         # DEFAULT THE PARAMETER.  `_meas_state` is assigned only inside the save branch, so
         # on the SELFTEST path (which writes nothing) it is UNSET at script scope and this
@@ -4220,7 +4224,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # claim about a load figure that is under the core count.
         echo "  WARNING: ${__AUTOTUNE_VERDICT_REASON:-an unstated term} — this row's tps is" \
              "INDICATIVE, not certified, even though load ${_row_load} was under" \
-             "${_row_cores} cores. Re-run on a quiet box before trusting it."
+             "${_row_cores} cores (retuning advised on a quiet box)."
     else
         echo "  measured at load ${_row_load} on ${_row_cores} cores"
     fi

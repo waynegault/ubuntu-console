@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 126
+# Module Version: 127
+#   v127 (2026-11-12): __model_autotune_clean_room defaults TAC_CONTENDED=1 so contended
+#     autotune runs persist stamped meas_state=indicative; __model_info notes retuning
+#     advised on non-certified rows.
 #   v126 (2026-11-12): __model_mmproj_compatible verifies GGUF projection_dim and
 #     general.basename/name before attaching a sibling mmproj*.gguf in a shared
 #     flat store (such as ~/models/active), preventing mismatched projectors from
@@ -3360,7 +3363,9 @@ function __model_info() {
             "$C_Error"
     elif [[ -n "${meas_state:-}" && "${meas_state:-}" != "certified" ]]
     then
-        __tac_info "certification" "[${meas_state} — the recorded numbers are not a certification]" "$C_Warning"
+        __tac_info "certification" \
+            "[${meas_state} — retuning advised; the recorded numbers are not a certification]" \
+            "$C_Warning"
     fi
     if [[ -f "$LLAMA_MODEL_DIR/$file" ]]
     then
@@ -3559,7 +3564,7 @@ function __autotune_script_path() {
 # @returns the wrapper's exit code; 2 on a malformed flag.
 # ---------------------------------------------------------------------------
 function __model_autotune_clean_room() {
-    local _wl="${LLM_AUTOTUNE_WORKLOAD:-}" _cont="${TAC_CONTENDED:-0}"
+    local _wl="${LLM_AUTOTUNE_WORKLOAD:-}" _cont="${TAC_CONTENDED:-1}"
     local -a _rows=()
     while (( $# > 0 ))
     do
