@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-11-12): delegate clean-room enter/restore to shared _tac_cleanroom_enter /
+#       _tac_cleanroom_restore in bin/_tac-bin-lib.sh so autotune-rows, bench-rows, and
+#       `model bench` share one implementation.
 #   v24 (2026-11-11): clean-room stops unsupervised CUDA llama-servers (no systemd unit) so
 #       the census no longer refuses on a `model use` or hand-started server; opt out with
 #       AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED=0.  `model autotune` now routes through here.
@@ -279,201 +282,18 @@ if ! _tac_suspend_acquire "$SUSPEND"; then
     warn "autotune-rows: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown})"
     exit 1
 fi
-# THE FLEET MUST NOT TRY A LANE THIS RUN IS ABOUT TO DENY (Wayne, 2026-11-07).  The
-# clean-room stops the coder lane a few lines below, and that lane is the fleet PRIMARY
-# model, so without this every agent request pays an ECONNREFUSED before failover
-# (measured 2026-11-06 23:41-23:42).  Switched HERE, the moment this run OWNS the card,
-# not at clean-room time: a run that refuses for want of the card changes nothing.
-if ! bash "$REPO/bin/fleet-model.sh" sweep >> "$LOG" 2>&1; then
-    echo "=== WARNING: fleet model NOT switched - agents will be denied $(basename "$LANE") during this sweep" | tee -a "$LOG"
-fi
-# Release only when THIS run owns the hold (card 7d3e7b95): the old trap removed a
-# hold it may not have set, releasing another run's hold mid-sweep.
-trap '_tac_suspend_release "$SUSPEND"' EXIT
-
-# ── Clean-room tenants (Wayne, 2026-11-06) ───────────────────────────────────
-# The census PERMITS the embedding lane to stay resident, which keeps memory search
-# alive during a sweep - but it also makes every reading contended BY CONSTRUCTION:
-# the run prints "TPS from this run are CONTENDED, not clean-room".  Wayne's ruling
-# 2026-11-06: autotune runs CLEAN.  Every declared tenant is stopped for the sweep
-# and restored when it ends, however it ends.  AUTOTUNE_CLEAN_ROOM=0 opts out (and
-# says so in the log, because a contended run must never look like a clean one).
+# ── Clean-room tenants (shared in bin/_tac-bin-lib.sh) ─────────────────────
+# Every declared tenant, watchdog, CI runner, and unsupervised CUDA server is stopped
+# for the sweep and restored on exit, however it ends.  AUTOTUNE_CLEAN_ROOM=0 opts out.
 AUTOTUNE_CLEAN_ROOM="${AUTOTUNE_CLEAN_ROOM:-1}"
-_TENANTS_STOPPED=()
-_WATCHDOGS_STOPPED=()
-_RUNNERS_STOPPED=()
-# cleanroom_restore restores stopped watchdogs, tenants, runners and fleet model.
-cleanroom_restore() {
-    local _t _w _r
-    # Timers back FIRST: a tenant restored while the watchdog is still held stays up, and
-    # the watchdog's next tick then finds it healthy instead of restarting it.
-    for _w in "${_WATCHDOGS_STOPPED[@]:-}"; do
-        [[ -n "$_w" ]] || continue
-# swallow-ok: a failed release is reported by the else branch below, never hidden
-        if systemctl --user start "$_w" >/dev/null 2>&1; then
-            echo "clean-room: released watchdog $_w"
-        else
-            warn "clean-room: FAILED to release $_w - start it by hand"
-        fi
-    done
-    _WATCHDOGS_STOPPED=()
-    for _t in "${_TENANTS_STOPPED[@]:-}"; do
-        [[ -n "$_t" ]] || continue
-# swallow-ok: a failed restore is reported by the else branch on the next line, never hidden
-        if systemctl --user start "$_t" >/dev/null 2>&1; then
-            echo "clean-room: restored tenant $_t"
-        else
-            warn "clean-room: FAILED to restore $_t - start it by hand"
-        fi
-    done
-    _TENANTS_STOPPED=()
-    for _r in "${_RUNNERS_STOPPED[@]:-}"; do
-        [[ -n "$_r" ]] || continue
-# swallow-ok: a failed release is reported by the else branch below, never hidden
-        if systemctl --user start "$_r" >/dev/null 2>&1; then
-            echo "clean-room: released runner $_r"
-        else
-            warn "clean-room: FAILED to release runner $_r - start it by hand"
-        fi
-    done
-    _RUNNERS_STOPPED=()
-    # ...and the fleet goes back to the lane it was on, LAST: switching before the tenant
-    # is serving would hand every agent a lane that cannot answer yet.
-    if ! bash "$REPO/bin/fleet-model.sh" restore; then
-        warn "clean-room: FAILED to restore the fleet model - run bin/fleet-model.sh restore"
-    fi
-}
-trap '_tac_suspend_release "$SUSPEND"; cleanroom_restore' EXIT
+trap '_tac_suspend_release "$SUSPEND"; _tac_cleanroom_restore' EXIT
 # ...and when the WRAPPER is the thing signalled, the case block below never runs at all
 # (measured 2026-11-03: `pkill -TERM` on this script left the log ending on a probe result,
 # with no verdict).  Say it, then exit through the EXIT trap so the hold is still released.
 trap '{ echo "=== WRAPPER KILLED by a signal — the rows were NOT measured to a verdict" \
             | tee -a "$LOG"
         exit 130; }' TERM INT
-if [[ "$AUTOTUNE_CLEAN_ROOM" == "1" && -n "${LLM_AUTOTUNE_CENSUS:-}" ]]; then
-    echo "=== clean-room: declared tenants will be stopped for the sweep" | tee -a "$LOG"
-    # THE WATCHDOG DEFEATED THE CLEAN-ROOM (measured 2026-11-06).  A tenant stopped ON PURPOSE
-    # looks dead to llama-watchdog, so at 14:31:20 - strike 2/2 - it restarted the embedding lane
-    # nine minutes into a sweep and logged "Recovery successful".  Every reading after that was
-    # contended, and the only trace was a baseline warning.  The CUDA suspend marker stops the
-    # watchdog STARTING the serving lane; it does not stop it REVIVING a tenant it judges
-    # unhealthy, so the timers are held for the duration and released on exit.
-    for _w in llama-watchdog.timer llama-watchdog-guard.timer llama-watchdog.service; do
-        systemctl --user is-active --quiet "$_w" || continue
-# swallow-ok: a failed hold is reported by the else branch below, never hidden
-        if systemctl --user stop "$_w" >/dev/null 2>&1; then
-            _WATCHDOGS_STOPPED+=("$_w")
-            echo "clean-room: held $_w (it would otherwise revive a stopped tenant)" | tee -a "$LOG"
-        else
-            echo "clean-room: could NOT hold $_w - a tenant may come back mid-sweep" | tee -a "$LOG"
-        fi
-    done
-    for _t in $LLM_AUTOTUNE_CENSUS; do
-        if systemctl --user is-active --quiet "$_t"; then
-# swallow-ok: a failed stop is reported by the else branch that follows it
-            if systemctl --user stop "$_t" >/dev/null 2>&1; then
-                _TENANTS_STOPPED+=("$_t")
-                echo "clean-room: stopped tenant $_t" | tee -a "$LOG"
-            else
-                echo "clean-room: could NOT stop $_t - the readings will be CONTENDED" | tee -a "$LOG"
-            fi
-        fi
-    done
-    _runner_units=""
-    _r=""
-    _p=""
-    _cmd=""
-    _w8=0
-    # CI runners contend the box if a push or cron triggers a job mid-sweep (Wayne, 2026-11-11).
-    # Holding the runner services prevents Runner.Worker from spawning during the bench.
-# swallow-ok: systemctl error listing units is handled by empty output
-    _runner_units=$(systemctl --user list-unit-files 'actions.runner.*' --no-legend 2>/dev/null | awk '{print $1}')
-    for _r in $_runner_units; do
-        [[ -n "$_r" ]] || continue
-        systemctl --user is-active --quiet "$_r" || continue
-# swallow-ok: a failed hold is reported by the else branch below, never hidden
-        if systemctl --user stop "$_r" >/dev/null 2>&1; then
-            _RUNNERS_STOPPED+=("$_r")
-            echo "clean-room: held runner $_r (prevents CI contention during sweep)" | tee -a "$LOG"
-        else
-            echo "clean-room: could NOT hold runner $_r - CI may contend the sweep" | tee -a "$LOG"
-        fi
-    done
-    # UNSUPERVISED CUDA SERVERS (Wayne, 2026-11-11).  A `model use` nohup launch or a
-    # hand-started llama-server has no unit, so nothing above stops it and the census
-    # then refuses on it as an `unlisted-holder` (measured 09:39: pid 278370, :8081).
-    # This run holds the box-wide heavy-job lock, so no other autotune or bench owns
-    # such a server.  It is TERMed (KILL after a bounded wait) and its command line is
-    # logged, because there is no unit to restore it from.  Opt out with
-    # AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED=0 (the census then refuses as before).
-    if [[ "${AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED:-1}" == "1" ]]; then
-        while IFS= read -r _p; do
-            [[ -n "$_p" ]] || continue
-            # swallow-ok: a process that exited mid-scan has no cmdline; the empty string is logged
-            _cmd="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)"
-            echo "clean-room: stopping unsupervised CUDA server pid $_p: ${_cmd:-unknown}" | tee -a "$LOG"
-            # swallow-ok: a pid that already exited is the outcome wanted; the wait below verifies
-            kill -TERM "$_p" 2>/dev/null || true
-            _w8=0
-            # swallow-ok: probe loop checking whether the process exited under TERM
-            while kill -0 "$_p" 2>/dev/null && (( _w8 < 15 )); do
-                sleep 1
-                _w8=$(( _w8 + 1 ))
-            done
-            # swallow-ok: checking whether the process survived TERM to escalate to KILL
-            if kill -0 "$_p" 2>/dev/null; then
-                # swallow-ok: the read-back below reports a survivor, so a failed KILL is never hidden
-                kill -KILL "$_p" 2>/dev/null || true
-                sleep 1
-            fi
-            # swallow-ok: read-back check verifying whether the process is gone
-            if kill -0 "$_p" 2>/dev/null; then
-                echo "clean-room: could NOT stop pid $_p - the census will refuse" | tee -a "$LOG"
-            else
-                echo "clean-room: stopped pid $_p (no unit to restore it - relaunch by hand)" | tee -a "$LOG"
-            fi
-        done < <(_tac_unsupervised_cuda_pids)
-    fi
-    # A stop is asynchronous: wait (bounded) for its memory to leave the card, so the
-    # baseline below describes a clean card rather than a race with a dying process.
-    # The bound is DERIVED, not declared: at a 24 GiB pool the WDDM driver alone
-    # holds ~2.4 GiB, so a fixed 800 MiB "clean" figure can never be met (measured
-    # 2026-11-06: 2,477 MiB held with the tenant stopped, and every run warned).  The
-    # card is drained when the reading stops FALLING - two equal polls - and that
-    # floor is printed, so the number a reader sees is the one this boot measured.
-    _cr_prev=""
-    _cr_stable=0
-    _cr_waited=0
-    _cr_used=""
-    while (( _cr_waited < 30 )); do
-        _cr_used="$(_tac_gpu_used_mib)"
-        if [[ "$_cr_used" =~ ^[0-9]+$ ]]; then
-            if [[ "$_cr_used" == "$_cr_prev" ]]; then
-                _cr_stable=$(( _cr_stable + 1 ))
-            else
-                _cr_stable=0
-            fi
-            (( _cr_stable >= 2 )) && break
-        fi
-        _cr_prev="$_cr_used"
-        sleep 2
-        _cr_waited=$(( _cr_waited + 2 ))
-    done
-    if (( _cr_stable >= 2 )); then
-        echo "clean-room: card drained - ${_cr_used} MiB is this boot driver floor after ${_cr_waited}s" | tee -a "$LOG"
-    else
-        echo "clean-room: WARNING still moving (${_cr_used:-unreadable} MiB) after ${_cr_waited}s - readings may be contended" | tee -a "$LOG"
-    fi
-else
-    echo "=== clean-room: DISABLED (AUTOTUNE_CLEAN_ROOM=${AUTOTUNE_CLEAN_ROOM}) - readings are CONTENDED by declaration" | tee -a "$LOG"
-fi
-# A stop that FAILS is not the same as a lane that was already down: `systemctl stop`
-# returns 0 for an inactive unit, so a non-zero status means the lane may still hold the
-# card.  Say so — the VRAM baseline below then refuses rather than measuring a contended
-# card.  (The old `|| true` swallowed both cases alike, so a failed stop read as success.)
-if ! systemctl --user stop "$LANE" >/dev/null 2>&1; then
-    warn "clean-room: could not stop $LANE — the card may still be held; the baseline below decides"
-fi
+_tac_cleanroom_enter "$REPO" "$LANE" "$LOG"
 
 # Require a TRUSTWORTHY baseline before launching the batch — through the SHARED
 # verdict (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM threshold.  The byte

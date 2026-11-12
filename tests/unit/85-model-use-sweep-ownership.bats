@@ -206,6 +206,7 @@ EOF
         __model_stop() { :; }
         __gpu_clear_stale_processes() { :; }
         __resolve_smi() { return 1; }
+        _tac_gpu_used_mib() { return 0; }
         wake() { :; }
         sudo() { return 0; }
         systemctl() { return 1; }
@@ -243,6 +244,80 @@ EOF
     [ "$(sed -n '1p' "$timeout_log")" -ge 600 ]
     [ "$(sed -n '2p' "$timeout_log")" -gt "$(sed -n '1p' "$timeout_log")" ]
     [ "$(sed -n '2p' "$timeout_log")" -ge 1500 ]
+}
+
+@test "__model_bench enters clean-room (stops census tenants, watchdogs, runners, lane) and restores on exit" {
+    touch "$LLAMA_MODEL_DIR/ready.gguf"
+    cat > "$LLM_REGISTRY" <<'EOF'
+#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
+1|Ready|ready.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|8192|6|1024|256|1|256|llama_server|auto|on|11.0|yes|no|no
+EOF
+    export ACTIVE_LLM_FILE="$SANDBOX/active_llm"
+    printf '%s\n' "ready.gguf" > "$ACTIVE_LLM_FILE"
+    local sys_log="$SANDBOX/systemctl.log"
+
+    run bash -c '
+        export HOME="$1" TAC_TEST_TMPDIR="$2" TAC_CACHE_DIR="$3"
+        export LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$6"
+        export LLM_BENCH_LOCK_FILE="$8/bench.lock"
+        export LLM_BENCH_PID_FILE="$8/bench.pid"
+        export LLM_BENCH_WATCHDOG_TIMER="nonexistent-bench-test.timer"
+        export LLM_BENCH_COOLDOWN_SEC=0
+        export LLM_AUTOTUNE_CENSUS="llama-cuda-qwen3embedding-embed.service"
+        export LLAMA_CUDA_LANE_UNIT="llama-cuda-qwen3coder-30b-chat.service"
+        export LLM_AUTOTUNE_VRAM_HOLDERS_FILE="/dev/null"
+        export SYS_LOG="$8/systemctl.log"
+        source "$9/env.sh" >/dev/null || exit 90
+        export LLM_REGISTRY="$4" LLAMA_MODEL_DIR="$5" ACTIVE_LLM_FILE="$7"
+        export LLM_STATE_DIR="$8/state" LLM_TPS_CACHE="$8/tps"
+        export LLM_WINDOW_MISMATCH_CACHE="$8/win_mismatch"
+        mkdir -p "$LLM_STATE_DIR"
+        __tac_header() { :; }
+        __tac_footer() { :; }
+        __tac_info() { :; }
+        __tac_cleanup_stale_locks() { :; }
+        __llm_bench_perf_prep() { :; }
+        __llm_autotune_done_for_model() { return 0; }
+        __model_stop() { :; }
+        __gpu_clear_stale_processes() { :; }
+        __resolve_smi() { return 1; }
+        _tac_gpu_used_mib() { return 0; }
+        wake() { :; }
+        sudo() { return 0; }
+        systemctl() {
+            if [[ "$1" == "--user" && "$2" == "list-unit-files" ]]; then
+                printf "actions.runner.test.service enabled\n"
+                return 0
+            fi
+            if [[ "$1" == "--user" && "$2" == "is-active" ]]; then
+                return 0
+            fi
+            printf "%s\n" "$*" >> "$SYS_LOG"
+            return 0
+        }
+        __bench_run_with_timeout() { shift; "$@"; }
+        __model_use() { return 0; }
+        burn() {
+            printf "BURN_MARKER\n" >> "$SYS_LOG"
+            printf "42.0 tps\n" > "$LLM_TPS_CACHE"
+            return 0
+        }
+        __model_bench
+    ' _ "$HOME" "$TAC_TEST_TMPDIR" "$TAC_CACHE_DIR" "$LLM_REGISTRY" "$LLAMA_MODEL_DIR" \
+        "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE" "$ACTIVE_LLM_FILE" "$SANDBOX" "$REPO_ROOT"
+
+    [ "$status" -eq 0 ] || { echo "status=$status output=$output"; return 1; }
+    # Tenant, watchdogs, runner, and primary lane stopped BEFORE burn; restored AFTER burn.
+    local burn_line
+    burn_line=$(grep -n "^BURN_MARKER$" "$sys_log" | cut -d: -f1)
+    [ -n "$burn_line" ]
+    head -n "$burn_line" "$sys_log" | grep -q "stop llama-cuda-qwen3embedding-embed.service"
+    head -n "$burn_line" "$sys_log" | grep -q "stop llama-watchdog-guard.timer"
+    head -n "$burn_line" "$sys_log" | grep -q "stop actions.runner.test.service"
+    head -n "$burn_line" "$sys_log" | grep -q "stop llama-cuda-qwen3coder-30b-chat.service"
+    tail -n +"$burn_line" "$sys_log" | grep -q "start llama-cuda-qwen3embedding-embed.service"
+    tail -n +"$burn_line" "$sys_log" | grep -q "start llama-watchdog-guard.timer"
+    tail -n +"$burn_line" "$sys_log" | grep -q "start actions.runner.test.service"
 }
 
 # end of file

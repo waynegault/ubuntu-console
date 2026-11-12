@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 127
+# Module Version: 128
+#   v128 (2026-11-12): __model_bench enters shared clean-room (_tac_cleanroom_enter /
+#     _tac_cleanroom_restore) when it owns the card (_bench_acquired_suspend=1) so
+#     declared tenants, watchdogs, CI runners, unsupervised CUDA servers, and the
+#     primary lane do not contend `model bench` or its inner autotune pass.
 #   v127 (2026-11-12): __model_autotune_clean_room defaults TAC_CONTENDED=1 so contended
 #     autotune runs persist stamped meas_state=indicative; __model_info notes retuning
 #     advised on non-certified rows.
@@ -3754,6 +3758,7 @@ function __model_bench() {
     local bench_cleanup_spawned_pids=()
     local _bench_cuda_suspend="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
     local _bench_acquired_suspend=0
+    local _bench_cleanroom_entered=0
     local __bench_signal_rc=0
     local __bench_cleaned=0
     local __bench_prev_int_trap=""
@@ -3820,6 +3825,13 @@ function __model_bench() {
             fi
             _bench_acquired_suspend=0
         fi
+        # Restore clean-room (watchdogs, tenants, CI runners, fleet model) if we entered it.
+        if (( _bench_cleanroom_entered == 1 )) && declare -f _tac_cleanroom_restore &>/dev/null
+        then
+            # swallow-ok: cleanup restore at exit; failures are already reported to stderr
+            _tac_cleanroom_restore || true
+            _bench_cleanroom_entered=0
+        fi
         # Remove guard files (unconditionally — these are /tmp files, safe to rm)
         rm -f "$bench_pid_file"
         if [[ -n "$bench_lock_fd" ]]
@@ -3879,6 +3891,15 @@ function __model_bench() {
             __tac_footer
             return 1
         fi
+    fi
+
+    # Enter clean-room when this bench owns the card so declared tenants (e.g. embedding
+    # lane), watchdogs, CI runners, unsupervised CUDA servers, and the primary lane are
+    # stopped before any autotune or benchmark probe runs.
+    if (( _bench_acquired_suspend == 1 )) && declare -f _tac_cleanroom_enter &>/dev/null
+    then
+        _tac_cleanroom_enter "${TAC_ROOT:-}" "${LLAMA_CUDA_LANE_UNIT:-}"
+        _bench_cleanroom_entered=1
     fi
 
     # Capture the model to restore afterwards as its FILE name (the stable identity): a
@@ -4253,6 +4274,12 @@ function __model_bench() {
         _bench_prev_num=$(__llm_registry_row_for_file "$_bench_prev_file" 2>/dev/null || true)
         __tac_info "Restoring" "Model #${_bench_prev_num:-?} ${_bench_prev_file}" "$C_Dim"
         [[ -n "$_bench_prev_num" ]] && __model_use "$_bench_prev_num" 2>/dev/null
+    fi
+
+    if (( _bench_cleanroom_entered == 1 )) && declare -f _tac_cleanroom_restore &>/dev/null
+    then
+        _tac_cleanroom_restore
+        _bench_cleanroom_entered=0
     fi
 
     if (( _bench_watchdog_was_active ))

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-11-12): enter shared clean-room (_tac_cleanroom_enter / _tac_cleanroom_restore)
+#   before the baseline wait so declared tenants, watchdogs, CI runners, and unsupervised
+#   CUDA servers do not contend validation benches.
 #   v11 (2026-11-05): the pre-flight asks the SHARED baseline verdict, not a byte
 #   threshold.  The kept embedding lane's 4094 MiB gap exceeds the 3500 MiB bound, so
 #   every bench aborted before its first row (measured 15:10:18).  Census mode names
@@ -128,9 +131,8 @@ if ! _tac_suspend_acquire "$SUSPEND"; then
 fi
 # Release only when THIS run owns the hold (card 7d3e7b95): the old trap removed a
 # hold it may not have set, releasing another run's hold mid-sweep.
-trap '_tac_suspend_release "$SUSPEND"' EXIT
-# swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
-systemctl --user stop "$LANE" >/dev/null 2>&1 || true
+trap '_tac_suspend_release "$SUSPEND"; _tac_cleanroom_restore' EXIT
+_tac_cleanroom_enter "$REPO" "$LANE" "$LOG"
 
 # Require a TRUSTWORTHY baseline before launching the bench — through the SHARED
 # verdict (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM threshold.  The byte

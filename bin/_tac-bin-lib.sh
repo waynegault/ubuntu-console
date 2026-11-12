@@ -16,7 +16,11 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
+#   v24 (2026-11-12): _tac_cleanroom_enter / _tac_cleanroom_restore — shared clean-room
+#     isolation (fleet-model sweep, watchdog hold, census tenant stop, CI runner hold,
+#     unsupervised CUDA server reap, lane stop, card drain) for autotune-rows.sh,
+#     bench-rows.sh, and __model_bench.
 #   v23 (2026-11-12): the suspend journal collapses newlines out of argv and bounds the
 #     recorded command. An argv element can contain a newline (a shell -c script does), so
 #     one acquire became several physical lines and the log stopped being one record per
@@ -973,6 +977,232 @@ _tac_dxg_health_check() {
         return 1
     fi
     return 0
+}
+
+# ── Shared clean-room isolation (autotune-rows, bench-rows, model bench) ──────
+_TAC_CLEANROOM_WATCHDOGS_STOPPED=()
+_TAC_CLEANROOM_TENANTS_STOPPED=()
+_TAC_CLEANROOM_RUNNERS_STOPPED=()
+_TAC_CLEANROOM_FLEET_SWITCHED=0
+_TAC_CLEANROOM_ENTERED=0
+_TAC_CLEANROOM_REPO=""
+_TAC_CLEANROOM_LOG=""
+
+# _tac_cleanroom_msg <message> — emit a clean-room status line and append to log if set.
+_tac_cleanroom_msg() {
+    printf '%s\n' "$*"
+    if [[ -n "${_TAC_CLEANROOM_LOG:-}" ]]; then
+        printf '%s\n' "$*" >> "$_TAC_CLEANROOM_LOG"
+    fi
+}
+
+# _tac_cleanroom_warn <message> — emit a clean-room warning to stderr (and log if set).
+_tac_cleanroom_warn() {
+    {
+        printf '%s\n' "$*"
+        if [[ -n "${_TAC_CLEANROOM_LOG:-}" ]]; then
+            printf '%s\n' "$*" >> "$_TAC_CLEANROOM_LOG"
+        fi
+    } >&2
+}
+
+# _tac_cleanroom_reap_unsupervised — TERM/KILL CUDA llama-server processes with no unit.
+_tac_cleanroom_reap_unsupervised() {
+    local _p _cmd _w8
+    while IFS= read -r _p; do
+        [[ -n "$_p" ]] || continue
+        # swallow-ok: a process that exited mid-scan has no cmdline
+        _cmd="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)" || _cmd=""
+        _tac_cleanroom_msg \
+            "clean-room: stopping unsupervised CUDA server pid $_p: ${_cmd:-unknown}"
+        # swallow-ok: a pid that already exited is the outcome wanted
+        kill -TERM "$_p" 2>/dev/null || true
+        _w8=0
+        # swallow-ok: probe loop checking whether the process exited under TERM
+        while kill -0 "$_p" 2>/dev/null && (( _w8 < 15 )); do
+            sleep 1
+            _w8=$(( _w8 + 1 ))
+        done
+        # swallow-ok: checking whether the process survived TERM to escalate to KILL
+        if kill -0 "$_p" 2>/dev/null; then
+            # swallow-ok: the read-back below reports a survivor
+            kill -KILL "$_p" 2>/dev/null || true
+            sleep 1
+        fi
+        # swallow-ok: read-back check verifying whether the process is gone
+        if kill -0 "$_p" 2>/dev/null; then
+            _tac_cleanroom_msg "clean-room: could NOT stop pid $_p - census may refuse"
+        else
+            _tac_cleanroom_msg \
+                "clean-room: stopped pid $_p (no unit to restore - relaunch by hand)"
+        fi
+    done < <(_tac_unsupervised_cuda_pids)
+}
+
+# _tac_cleanroom_drain_card — wait (bounded) for VRAM usage to settle after stops.
+_tac_cleanroom_drain_card() {
+    command -v nvidia-smi >/dev/null 2>&1 || return 0
+    local _cr_prev="" _cr_stable=0 _cr_waited=0 _cr_used=""
+    while (( _cr_waited < 30 )); do
+        _cr_used="$(_tac_gpu_used_mib)"
+        [[ -n "$_cr_used" ]] || break
+        if [[ "$_cr_used" =~ ^[0-9]+$ ]]; then
+            if [[ "$_cr_used" == "$_cr_prev" ]]; then
+                _cr_stable=$(( _cr_stable + 1 ))
+            else
+                _cr_stable=0
+            fi
+            (( _cr_stable >= 2 )) && break
+        fi
+        _cr_prev="$_cr_used"
+        sleep 2
+        _cr_waited=$(( _cr_waited + 2 ))
+    done
+    if (( _cr_stable >= 2 )); then
+        _tac_cleanroom_msg \
+            "clean-room: card drained - ${_cr_used} MiB driver floor after ${_cr_waited}s"
+    elif [[ -n "$_cr_used" ]]; then
+        _tac_cleanroom_msg \
+            "clean-room: WARNING still moving (${_cr_used} MiB) after ${_cr_waited}s"
+    fi
+}
+
+# _tac_cleanroom_enter [repo_root] [lane_unit] [log_file] — isolate GPU and CPU for
+# clean-room measurement.  Switches fleet model off the primary lane, holds watchdogs,
+# stops declared census tenants, holds actions.runner.* CI services, reaps unsupervised
+# CUDA servers, stops the primary lane, and waits for VRAM to drain.
+_tac_cleanroom_enter() {
+    local _default_repo
+    _default_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    _TAC_CLEANROOM_REPO="${1:-${REPO:-$_default_repo}}"
+    local _lane="${2:-${LLAMA_CUDA_LANE_UNIT:-}}"
+    _TAC_CLEANROOM_LOG="${3:-}"
+    _TAC_CLEANROOM_WATCHDOGS_STOPPED=()
+    _TAC_CLEANROOM_TENANTS_STOPPED=()
+    _TAC_CLEANROOM_RUNNERS_STOPPED=()
+    _TAC_CLEANROOM_FLEET_SWITCHED=0
+    _TAC_CLEANROOM_ENTERED=1
+
+    local _fleet_script="$_TAC_CLEANROOM_REPO/bin/fleet-model.sh"
+    local _openclaw_cfg="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
+    if [[ -f "$_openclaw_cfg" && -f "$_fleet_script" ]]; then
+        local _fleet_out=""
+        if _fleet_out=$(bash "$_fleet_script" sweep 2>&1); then
+            _TAC_CLEANROOM_FLEET_SWITCHED=1
+            [[ -n "$_fleet_out" ]] && _tac_cleanroom_msg "$_fleet_out"
+        else
+            [[ -n "$_fleet_out" ]] && _tac_cleanroom_msg "$_fleet_out"
+            _tac_cleanroom_msg \
+                "=== WARNING: fleet model NOT switched - agents will be denied ${_lane:-lane}"
+        fi
+    fi
+
+    if [[ "${AUTOTUNE_CLEAN_ROOM:-1}" == "1" ]]; then
+        _tac_cleanroom_msg "=== clean-room: isolating GPU and CPU for measurement"
+        local _w _t _r _runner_units=""
+        for _w in llama-watchdog.timer llama-watchdog-guard.timer llama-watchdog.service; do
+            # swallow-ok: inactive watchdog units have nothing to hold
+            systemctl --user is-active --quiet "$_w" 2>/dev/null || continue
+            # swallow-ok: a failed hold is reported by the else branch below, never hidden
+            if systemctl --user stop "$_w" >/dev/null 2>&1; then
+                _TAC_CLEANROOM_WATCHDOGS_STOPPED+=("$_w")
+                _tac_cleanroom_msg "clean-room: held $_w (would otherwise revive stopped tenants)"
+            else
+                _tac_cleanroom_msg "clean-room: could NOT hold $_w - a tenant may revive mid-run"
+            fi
+        done
+        for _t in ${LLM_AUTOTUNE_CENSUS:-}; do
+            # swallow-ok: inactive tenant units have nothing to stop
+            if systemctl --user is-active --quiet "$_t" 2>/dev/null; then
+                # swallow-ok: a failed stop is reported by the else branch below
+                if systemctl --user stop "$_t" >/dev/null 2>&1; then
+                    _TAC_CLEANROOM_TENANTS_STOPPED+=("$_t")
+                    _tac_cleanroom_msg "clean-room: stopped tenant $_t"
+                else
+                    _tac_cleanroom_msg "clean-room: could NOT stop $_t - readings will be CONTENDED"
+                fi
+            fi
+        done
+        # swallow-ok: systemctl error listing runner units is handled by empty output
+        _runner_units=$(systemctl --user list-unit-files 'actions.runner.*' --no-legend 2>/dev/null \
+            | awk '{print $1}') || _runner_units=""
+        for _r in $_runner_units; do
+            [[ -n "$_r" ]] || continue
+            # swallow-ok: inactive runner units have nothing to hold
+            systemctl --user is-active --quiet "$_r" 2>/dev/null || continue
+            # swallow-ok: a failed hold is reported by the else branch below, never hidden
+            if systemctl --user stop "$_r" >/dev/null 2>&1; then
+                _TAC_CLEANROOM_RUNNERS_STOPPED+=("$_r")
+                _tac_cleanroom_msg "clean-room: held runner $_r (prevents CI contention)"
+            else
+                _tac_cleanroom_msg "clean-room: could NOT hold runner $_r - CI may contend"
+            fi
+        done
+        if [[ "${AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED:-1}" == "1" ]]; then
+            _tac_cleanroom_reap_unsupervised
+        fi
+    else
+        _tac_cleanroom_msg \
+            "=== clean-room: DISABLED (AUTOTUNE_CLEAN_ROOM=${AUTOTUNE_CLEAN_ROOM:-})"
+    fi
+
+    if [[ -n "$_lane" ]]; then
+        # swallow-ok: failure to stop the lane is warned explicitly below
+        if ! systemctl --user stop "$_lane" >/dev/null 2>&1; then
+            _tac_cleanroom_warn "clean-room: could not stop $_lane — baseline below decides"
+        fi
+    fi
+
+    if [[ "${AUTOTUNE_CLEAN_ROOM:-1}" == "1" ]]; then
+        _tac_cleanroom_drain_card
+    fi
+}
+
+# _tac_cleanroom_restore — idempotently restore watchdogs, tenants, runners, and fleet model.
+_tac_cleanroom_restore() {
+    (( ${_TAC_CLEANROOM_ENTERED:-0} == 1 )) || return 0
+    _TAC_CLEANROOM_ENTERED=0
+    local _w _t _r
+    for _w in "${_TAC_CLEANROOM_WATCHDOGS_STOPPED[@]:-}"; do
+        [[ -n "$_w" ]] || continue
+        # swallow-ok: a failed release is reported by the else branch below, never hidden
+        if systemctl --user start "$_w" >/dev/null 2>&1; then
+            echo "clean-room: released watchdog $_w"
+        else
+            _tac_cleanroom_warn "clean-room: FAILED to release $_w - start it by hand"
+        fi
+    done
+    _TAC_CLEANROOM_WATCHDOGS_STOPPED=()
+    for _t in "${_TAC_CLEANROOM_TENANTS_STOPPED[@]:-}"; do
+        [[ -n "$_t" ]] || continue
+        # swallow-ok: a failed restore is reported by the else branch below, never hidden
+        if systemctl --user start "$_t" >/dev/null 2>&1; then
+            echo "clean-room: restored tenant $_t"
+        else
+            _tac_cleanroom_warn "clean-room: FAILED to restore $_t - start it by hand"
+        fi
+    done
+    _TAC_CLEANROOM_TENANTS_STOPPED=()
+    for _r in "${_TAC_CLEANROOM_RUNNERS_STOPPED[@]:-}"; do
+        [[ -n "$_r" ]] || continue
+        # swallow-ok: a failed release is reported by the else branch below, never hidden
+        if systemctl --user start "$_r" >/dev/null 2>&1; then
+            echo "clean-room: released runner $_r"
+        else
+            _tac_cleanroom_warn "clean-room: FAILED to release $_r - start it by hand"
+        fi
+    done
+    _TAC_CLEANROOM_RUNNERS_STOPPED=()
+    if (( ${_TAC_CLEANROOM_FLEET_SWITCHED:-0} == 1 )); then
+        _TAC_CLEANROOM_FLEET_SWITCHED=0
+        local _fleet_script="${_TAC_CLEANROOM_REPO:-}/bin/fleet-model.sh"
+        if [[ -f "$_fleet_script" ]]; then
+            if ! bash "$_fleet_script" restore; then
+                _tac_cleanroom_warn \
+                    "clean-room: FAILED to restore fleet model - run bin/fleet-model.sh restore"
+            fi
+        fi
+    fi
 }
 
 # end of file
