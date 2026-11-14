@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-11-14): v10 left a second `# Module Version:` line above the v9 changelog entry.
+#     This file's own v9 note says there is ONE canonical line and the rest is changelog, so the
+#     v9 line is now an indented entry like every other historical one.  No code change.
 #   v10 (2026-11-14): the load term reads through `_load1`, so a case can state the box it is
 #     describing.  `_quiet_verdict` read /proc/loadavg inline, which carries the RUNNER's load:
 #     tests/unit/88's warm-clock arm pinned pressure, pgrep and the clock, then refused with
 #     "load 20.06 on 20 cores" on a busy runner (CI case 1185) — the host deciding an assertion
 #     about a fixture.  Same shape as `_cpu_pressure_pct` and `_gpu_clock_mhz`, which were
 #     already overridable for exactly this reason.  No behaviour change on a real box.
-# Module Version: 9
 #   v9 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v8 (2026-11-09): the cold-card refusal reads as one sentence.  v7 wrapped the gate's reason in
