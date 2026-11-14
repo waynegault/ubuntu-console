@@ -16,7 +16,27 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 29
+#   v29 (2026-11-14): the v28 predicate and the fleet sweep move OUT of _tac_cleanroom_enter into
+#     _tac_cleanroom_stops_allowed / _tac_cleanroom_switch_fleet.  Inlining v28 took the function
+#     to 143 lines and tripped the §18.3 ratchet (41 -> 42 functions over 100 lines); the ratchet
+#     was right that the rise was my new code rather than the corpus growing.  No behaviour change.
+#   v28 (2026-11-14): the TAC_TEST_TMPDIR refusal has an OPT-IN SEAM, and the seam cannot
+#     open outside a test.  v27 refused every clean-room stop under TAC_TEST_TMPDIR, which
+#     is right for production safety and wrong for coverage: every bats suite sets that
+#     variable, so no suite could observe the stop ORDER at all (case 85 went red on
+#     75b5d3ad and stayed red -- the refusal fires upstream of the stub the case installs).
+#     TAC_CLEANROOM_ALLOW_STOPS=1 re-enables the stops under TAC_TEST_TMPDIR, but ONLY
+#     when `systemctl` is a shell function (`declare -F systemctl`).  That is the whole
+#     safety argument, and it is a property of the CALL, not a promise by the caller:
+#     every stop site below invokes bare `systemctl`, never `sudo`, `bash -c`, or a
+#     "$SYSTEMCTL" indirection (verified by enumeration, not by reading the list), and a
+#     shell function is inherited by command substitution -- so a stub covers all of them
+#     and an unstubbed `systemctl` is a binary on PATH, which fails `declare -F`.  A
+#     production shell can only satisfy the predicate by defining a fake systemctl first,
+#     which is not a state any script in this repo reaches.  The unsupervised-PID REAP
+#     stays refused under TAC_TEST_TMPDIR regardless of the seam: a stop is restorable and
+#     recorded in the stopped-list, a kill is neither, and no stub can cover it.
 #   v27 (2026-11-14): _tac_cleanroom_enter REFUSES every stop when TAC_TEST_TMPDIR is set.
 #     The stops are keyed on literal unit names and the host profile's lane, not on
 #     LLAMA_WATCHDOG_CUDA_SUSPEND_FILE, so sandboxing the marker left them live and a
@@ -1139,6 +1159,64 @@ _tac_cleanroom_drain_card() {
     fi
 }
 
+# _tac_cleanroom_switch_fleet [lane] -- point the fleet model away from the lane under test.
+# Sets _TAC_CLEANROOM_FLEET_SWITCHED on success so the restore path knows to switch it back.
+_tac_cleanroom_switch_fleet() {
+    local _lane="${1:-}"
+    local _fleet_script="$_TAC_CLEANROOM_REPO/bin/fleet-model.sh"
+    local _openclaw_cfg="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
+    [[ -f "$_openclaw_cfg" && -f "$_fleet_script" ]] || return 0
+    local _fleet_out=""
+    if _fleet_out=$(bash "$_fleet_script" sweep 2>&1); then
+        _TAC_CLEANROOM_FLEET_SWITCHED=1
+        [[ -n "$_fleet_out" ]] && _tac_cleanroom_msg "$_fleet_out"
+    else
+        [[ -n "$_fleet_out" ]] && _tac_cleanroom_msg "$_fleet_out"
+        _tac_cleanroom_msg \
+            "=== WARNING: fleet model NOT switched - agents will be denied ${_lane:-lane}"
+    fi
+}
+
+# _tac_cleanroom_stops_allowed -- may this clean-room stop units? (v28)
+#
+# THE PROBLEM.  The stops in _tac_cleanroom_enter are keyed on LITERAL unit names and on the
+# host profile's lane, NOT on LLAMA_WATCHDOG_CUDA_SUSPEND_FILE: that variable decides where the
+# hold is RECORDED, not what gets STOPPED.  So sandboxing the marker left the stops live, and a
+# test took the CUDA tier down three times (journal: watchdogs at 18:08:10, 18:42:12, 18:50:07;
+# embedding lane 18:08:11/18:42:12/18:50:08; coder lane 18:08:15/18:42:17/18:50:13).
+#
+# Exporting LLAMA_CUDA_LANE_UNIT / LLM_AUTOTUNE_CENSUS from a test does NOT help:
+# tools/host-profile.sh:442 UNSETS both before applying the profile, so a caller's value is
+# discarded by design.  Measured: with both exported, `source env.sh` still yields the real
+# units.  The override seam is not reachable from a test at all.
+#
+# THE PREDICATE.  TAC_TEST_TMPDIR is set by every suite that sandboxes this code and by nothing
+# in production.  Refusing is safe because the VRAM baseline gate downstream
+# (_tac_vram_baseline_verdict -> autotune-rows.sh:307-318 `exit 1`) refuses a resident lane as an
+# `unlisted-holder`, so a skipped stop ABORTS the batch rather than producing a contended reading
+# reported as clean.
+#
+# THE SEAM.  Refusing everything cost the only coverage of the stop ORDER -- every suite sets
+# TAC_TEST_TMPDIR, so case 85 could never observe a stop.  TAC_CLEANROOM_ALLOW_STOPS=1 reopens
+# the stops, and `declare -F systemctl` is what makes that safe: the predicate is about the CALL,
+# not the caller's promise.  Every stop site invokes bare `systemctl` -- never `sudo`,
+# `bash -c` or a "$SYSTEMCTL" indirection (4 sites, 0 indirections) -- so one function stub
+# covers them all; a function is inherited by command substitution; and an unstubbed systemctl
+# is a binary on PATH, which fails `declare -F`.  A production shell can only satisfy it by
+# defining a fake systemctl first, which no script in this repo does.
+#
+# The REAP is deliberately NOT covered by the seam: a stop is restorable and recorded in the
+# stopped-list, a kill is neither, and no systemctl stub can cover a `kill`.
+_tac_cleanroom_stops_allowed() {
+    [[ -z "${TAC_TEST_TMPDIR:-}" ]] && return 0
+    if [[ "${TAC_CLEANROOM_ALLOW_STOPS:-0}" == "1" ]] && declare -F systemctl >/dev/null 2>&1; then
+        _tac_cleanroom_msg \
+            "=== clean-room: stops ENABLED under TAC_TEST_TMPDIR (systemctl is a shell function stub)"
+        return 0
+    fi
+    return 1
+}
+
 # _tac_cleanroom_enter [repo_root] [lane_unit] [log_file] [quiet] — isolate GPU and CPU for
 # clean-room measurement.  Switches fleet model off the primary lane, holds watchdogs,
 # stops declared census tenants, holds actions.runner.* CI services, reaps unsupervised
@@ -1162,41 +1240,14 @@ _tac_cleanroom_enter() {
     _TAC_CLEANROOM_FLEET_SWITCHED=0
     _TAC_CLEANROOM_ENTERED=1
 
-    local _fleet_script="$_TAC_CLEANROOM_REPO/bin/fleet-model.sh"
-    local _openclaw_cfg="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "$_openclaw_cfg" && -f "$_fleet_script" ]]; then
-        local _fleet_out=""
-        if _fleet_out=$(bash "$_fleet_script" sweep 2>&1); then
-            _TAC_CLEANROOM_FLEET_SWITCHED=1
-            [[ -n "$_fleet_out" ]] && _tac_cleanroom_msg "$_fleet_out"
-        else
-            [[ -n "$_fleet_out" ]] && _tac_cleanroom_msg "$_fleet_out"
-            _tac_cleanroom_msg \
-                "=== WARNING: fleet model NOT switched - agents will be denied ${_lane:-lane}"
-        fi
-    fi
+    _tac_cleanroom_switch_fleet "$_lane"
 
-    # A TEST MUST NEVER STOP A PRODUCTION UNIT (measured 2026-11-14, twice).
-    # The stops below are keyed on LITERAL unit names and on the host profile's lane,
-    # NOT on LLAMA_WATCHDOG_CUDA_SUSPEND_FILE -- that variable decides where the hold is
-    # RECORDED, not what gets STOPPED.  So sandboxing the marker left the stops live:
-    # journalctl shows llama-watchdog.timer/-guard.timer stopped at 18:08:10, 18:42:12 and
-    # 18:50:07, the embedding lane at 18:08:11/18:42:12/18:50:08 and the coder lane at
-    # 18:08:15/18:42:17/18:50:13, during runs whose marker was already sandboxed.
-    #
-    # Exporting LLAMA_CUDA_LANE_UNIT / LLM_AUTOTUNE_CENSUS from a test does NOT help:
-    # tools/host-profile.sh:442 UNSETS both before applying the profile, so a caller's
-    # value is discarded by design (a profile constant describes a machine identity, and
-    # a parent's value is a foreign box's fact).  Measured: with both exported,
-    # `source env.sh` still yields the real coder/embedding units.  The override seam is
-    # therefore not reachable from a test at all.
-    #
-    # TAC_TEST_TMPDIR is the predicate that closes the class: every suite that sandboxes
-    # this code sets it, and nothing in production does.  Refusing is safe because the
-    # VRAM baseline gate downstream (_tac_vram_baseline_verdict -> autotune-rows.sh:307-318
-    # `exit 1`) refuses a resident lane as an `unlisted-holder`, so a skipped stop ABORTS
-    # the batch rather than producing a contended reading reported as clean.
-    if [[ -n "${TAC_TEST_TMPDIR:-}" ]]; then
+    # A test must never stop a production unit (measured 2026-11-14, three times).
+    # Predicate and safety argument: _tac_cleanroom_stops_allowed above.
+    local _stops_allowed=0
+    _tac_cleanroom_stops_allowed && _stops_allowed=1
+
+    if (( _stops_allowed == 0 )); then
         _tac_cleanroom_msg \
             "=== clean-room: REFUSING to stop real units under TAC_TEST_TMPDIR=${TAC_TEST_TMPDIR}" \
             "- a test must not take the production tier down; the baseline gate will refuse"
@@ -1241,18 +1292,24 @@ _tac_cleanroom_enter() {
                 _tac_cleanroom_msg "clean-room: could NOT hold runner $_r - CI may contend"
             fi
         done
+        # The reap is NOT covered by the seam: a stop is restorable and recorded in the
+        # stopped-list, a kill is neither, and no systemctl stub can cover a `kill`.
         if [[ "${AUTOTUNE_CLEAN_ROOM_REAP_UNSUPERVISED:-1}" == "1" ]]; then
-            _tac_cleanroom_reap_unsupervised
+            if [[ -n "${TAC_TEST_TMPDIR:-}" ]]; then
+                _tac_cleanroom_msg \
+                    "=== clean-room: REFUSING to reap unsupervised pids under TAC_TEST_TMPDIR"
+            else
+                _tac_cleanroom_reap_unsupervised
+            fi
         fi
     else
         _tac_cleanroom_msg \
             "=== clean-room: DISABLED (AUTOTUNE_CLEAN_ROOM=${AUTOTUNE_CLEAN_ROOM:-})"
     fi
 
-    # The lane stop is OUTSIDE the AUTOTUNE_CLEAN_ROOM block, so `AUTOTUNE_CLEAN_ROOM=0`
-    # skips the revivers and the tenants and still reaches here -- and prints "DISABLED"
-    # while doing it.  Same predicate, same reason: a test must not stop a real lane.
-    if [[ -n "$_lane" && -z "${TAC_TEST_TMPDIR:-}" ]]; then
+    # OUTSIDE the AUTOTUNE_CLEAN_ROOM block: =0 skips the revivers and tenants, still reaches
+    # here, and prints "DISABLED" while doing it. Same predicate: a test must not stop a lane.
+    if [[ -n "$_lane" ]] && (( _stops_allowed == 1 )); then
         # swallow-ok: failure to stop the lane is warned explicitly below
         if ! systemctl --user stop "$_lane" >/dev/null 2>&1; then
             _tac_cleanroom_warn "clean-room: could not stop $_lane — baseline below decides"

@@ -267,6 +267,12 @@ EOF
         export LLAMA_CUDA_LANE_UNIT="llama-cuda-qwen3coder-30b-chat.service"
         export LLM_AUTOTUNE_VRAM_HOLDERS_FILE="/dev/null"
         export SYS_LOG="$8/systemctl.log"
+        # The clean-room refuses every stop under TAC_TEST_TMPDIR (v27, 2026-11-14: a test
+        # took the CUDA tier down three times).  This case is the ONLY coverage of the
+        # stop ORDER, so it opens the seam -- and the seam is safe here for a reason the
+        # guard checks rather than trusts: systemctl is a shell function below, and
+        # `declare -F systemctl` is what the guard requires before it will stop anything.
+        export TAC_CLEANROOM_ALLOW_STOPS=1
         source "$9/env.sh" >/dev/null || exit 90
         export LLM_REGISTRY="$4" LLAMA_MODEL_DIR="$5" ACTIVE_LLM_FILE="$7"
         export LLM_STATE_DIR="$8/state" LLM_TPS_CACHE="$8/tps"
