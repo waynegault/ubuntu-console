@@ -1,6 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 138
+#   v138 (2026-11-14): the card gate calls gpu-busy.sh through TACTICAL_REPO_ROOT again.  v137
+#   shipped a second seam, `LLAMA_BUILD_GPU_BUSY_BIN`, for the same problem the test double
+#   already solves: tests/unit/44 mirrors the root and drops its own `bin/gpu-busy.sh`, and no
+#   case anywhere sets the variable, so it was a mechanism with no caller.  One seam, the one
+#   the suite uses.
 # Module Version: 137
 #   v137 (2026-11-14): a rebuilt lane's own servers are sanctioned, and the quiet gate sees the
 #   card.  Two causes from the 14:xx rebuild, one per surface.  In `bin/gpu-busy.sh` a sanctioned
@@ -5936,12 +5942,13 @@ function llm-build() {
     # Its --json carries the reasons, so those two cases are told apart instead of collapsed into
     # one busy word.
     #
-    # LLAMA_BUILD_GPU_BUSY_BIN is the SEAM, as HEAVY_JOB_BIN is for the lock: without one
-    # every case that builds asks the REAL card, so the three architecture cases (v83) went
-    # red on the CI runner simply because a GPU tenant held it at 14:48 (measured
-    # 2026-11-14, "held by foreign-app"), and passed here whenever the card was free.  A
-    # gate read through box state is not a test of the gate.
-    local card_held="" _busy_bin="${LLAMA_BUILD_GPU_BUSY_BIN:-${TACTICAL_REPO_ROOT:?}/bin/gpu-busy.sh}"
+    # The path is resolved through TACTICAL_REPO_ROOT, which is the seam the build cases use:
+    # tests/unit/44 mirrors the root and drops a `bin/gpu-busy.sh` double into it, so a case
+    # states the card's verdict instead of asking the real one.  Without that, the three
+    # architecture cases (v83) went red on the CI runner simply because a GPU tenant held the
+    # card at 14:48 (measured 2026-11-14, "held by foreign-app") and passed here whenever it
+    # was free - a gate read through box state is not a test of the gate.
+    local card_held=""
     # LLAMA_BUILD_ALLOW_CI deliberately does NOT waive this one: it exists to build THROUGH a CI
     # job, and a CI job is not a GPU tenant.  The card has its own override so that building past
     # a real tenant is a separate, named decision rather than a side effect of the CI waiver.
@@ -5949,7 +5956,7 @@ function llm-build() {
     then
         local _card_json=""
         # swallow-ok: an unreadable verdict leaves the gate as it was - the lock and CI inputs still decide
-        _card_json=$("$_busy_bin" --json 2>/dev/null) || true
+        _card_json=$("${TACTICAL_REPO_ROOT:?}/bin/gpu-busy.sh" --json 2>/dev/null) || true
         case "$_card_json" in
             *'"busy":true'*)
                 # Only a reason naming ANOTHER tenant is a refusal.  `foreign-app` and
