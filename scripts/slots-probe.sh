@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 10
+#   v10 (2026-11-14): the load term reads through `_load1`, so a case can state the box it is
+#     describing.  `_quiet_verdict` read /proc/loadavg inline, which carries the RUNNER's load:
+#     tests/unit/88's warm-clock arm pinned pressure, pgrep and the clock, then refused with
+#     "load 20.06 on 20 cores" on a busy runner (CI case 1185) — the host deciding an assertion
+#     about a fixture.  Same shape as `_cpu_pressure_pct` and `_gpu_clock_mhz`, which were
+#     already overridable for exactly this reason.  No behaviour change on a real box.
 # Module Version: 9
 #   v9 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
@@ -225,6 +232,18 @@ with open(path, "w", encoding="utf-8") as fh:
 PYEOF
 }
 
+# _load1 — the 1-minute load average, or EMPTY when there is no instrument.  A function, not
+# an inline read, for the same reason `_cpu_pressure_pct` and `_gpu_clock_mhz` are: /proc/loadavg
+# carries the RUNNER's load.  Measured 2026-11-14 on CI: the warm-clock arm of tests/unit/88
+# stubbed pressure, pgrep and the clock, then refused with "load 20.06 on 20 cores" because the
+# runner was busy — an assertion about the fixture that the host was allowed to decide.
+_load1() {
+    local _one="" rc=0
+    read -r _one _ < /proc/loadavg || rc=$?
+    (( rc == 0 )) || return 0
+    printf '%s' "$_one"
+}
+
 # _cpu_pressure_pct — `some avg10` from /proc/pressure/cpu, or EMPTY when there is no
 # instrument.  Same reading as scripts/autotune-model.sh uses, so the two tools judge the box
 # the same way; empty means "no evidence", never a refusal.
@@ -318,7 +337,7 @@ _warm_clock() {
 #     on load, 1.90, and still measured at the 656 MHz floor.
 _quiet_verdict() {
     local _load _cores _psi _ci _clk _sm _max _term=""
-    read -r _load _ _ < /proc/loadavg || _load=""
+    _load="$(_load1)"
     # swallow-ok: an unreadable core count leaves the load term unavailable, which is not a refusal
     _cores="$(nproc 2>/dev/null)" || _cores=""
     _psi="$(_cpu_pressure_pct)"

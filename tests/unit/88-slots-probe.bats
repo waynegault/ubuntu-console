@@ -177,7 +177,8 @@ JSON
 @test "slots-probe: the quiet verdict names the term that refuses" {
     # Catches: a probe that measures a busy box and reports the result as clean.  Each term is
     # fed a fixture, so the case decides the answer rather than the host's current load.
-    awk '/^_quiet_verdict\(\)/,/^}/' "$PROBE" > "$TMP/quiet.sh"
+    awk '/^_load1\(\)/,/^}/' "$PROBE" > "$TMP/quiet.sh"
+    awk '/^_quiet_verdict\(\)/,/^}/' "$PROBE" >> "$TMP/quiet.sh"
     grep -q '_quiet_verdict' "$TMP/quiet.sh" || { echo "helper not found"; return 1; }
     cat > "$TMP/bin/nproc" <<'EOS'
 #!/usr/bin/env bash
@@ -186,10 +187,18 @@ EOS
     chmod +x "$TMP/bin/nproc"
     # A box whose pressure is over the threshold refuses, and NAMES that term.  Pressure is
     # overridden as a function so the case decides it, not the live host.
-    run env PATH="$TMP/bin:$PATH" FAKE_CORES=4 LLM_AUTOTUNE_PSI_MAX_PCT=0 \
-        bash -c 'source "$1"; _cpu_pressure_pct() { printf "42"; }; _quiet_verdict' _ "$TMP/quiet.sh"
+    run env PATH="$TMP/bin:$PATH" FAKE_CORES=4 LLM_AUTOTUNE_PSI_MAX_PCT=0 bash -c '
+        source "$1"; _load1() { printf "0.50"; }
+        _cpu_pressure_pct() { printf "42"; }; _quiet_verdict' _ "$TMP/quiet.sh"
     [ "$status" -ne 0 ]
     [[ "$output" == *"cpu pressure 42%"* ]]
+    # A load above the core count refuses on its own, and names both numbers.  Catches a load
+    # term wired to /proc/loadavg directly: the helper is the only seam a case can state.
+    run env PATH="$TMP/bin:$PATH" FAKE_CORES=20 bash -c '
+        source "$1"; _load1() { printf "40.00"; }
+        _cpu_pressure_pct() { printf "0"; }; _quiet_verdict' _ "$TMP/quiet.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"load 40.00 on 20 cores"* ]]
     # An ACTIVE CI runner worker refuses on its own, whatever the load.
     cat > "$TMP/bin/pgrep" <<'EOS'
 #!/usr/bin/env bash
@@ -197,7 +206,8 @@ printf '2\n'
 EOS
     chmod +x "$TMP/bin/pgrep"
     run env PATH="$TMP/bin:$PATH" FAKE_CORES=20 bash -c '
-        source "$1"; _cpu_pressure_pct() { printf "0"; }; _quiet_verdict' _ "$TMP/quiet.sh"
+        source "$1"; _load1() { printf "0.50"; }
+        _cpu_pressure_pct() { printf "0"; }; _quiet_verdict' _ "$TMP/quiet.sh"
     [ "$status" -ne 0 ]
     [[ "$output" == *"CI runner worker"* ]]
 }
@@ -208,6 +218,7 @@ EOS
     # 656 of 3,003 MHz and the card drew 1.7 W.  Catches: a load-clean, clock-idle run reported
     # as a measurement.  Fixture-driven, so the live clock decides nothing here.
     awk '/^_gpu_clock_mhz\(\)/,/^}/' "$PROBE" > "$TMP/clock.sh"
+    awk '/^_load1\(\)/,/^}/' "$PROBE" >> "$TMP/clock.sh"
     awk '/^_quiet_verdict\(\)/,/^}/' "$PROBE" >> "$TMP/clock.sh"
     grep -q '_quiet_verdict' "$TMP/clock.sh" || { echo "helper not found"; return 1; }
     cat > "$TMP/bin/nproc" <<'EOS'
@@ -222,17 +233,25 @@ EOS
 exit 1
 EOS
     chmod +x "$TMP/bin/nproc" "$TMP/bin/pgrep"
+    # The load term is a fixture too.  /proc/loadavg carries the RUNNER's load, and without this
+    # stub the warm-clock arm read "load 20.06 on 20 cores" and failed on a busy runner
+    # (measured 2026-11-14, CI case 1185) while every other term was pinned.  The first arm is
+    # load-clean on purpose: the 2026-11-09 15:14 sweep it commemorates WAS clean on load (1.90),
+    # so a load refusal here would hide the clock term the case is about.
     # Below the 60% floor: refuse, and quote both numbers.
     run env PATH="$TMP/bin:$PATH" LLM_SLOTS_PROBE_CLOCK_MIN_PCT=60 bash -c '
         source "$1"
+        _load1() { printf "1.90"; }
         _cpu_pressure_pct() { printf "0"; }
         _gpu_clock_mhz() { printf "656 3003"; }
         _quiet_verdict' _ "$TMP/clock.sh"
     [ "$status" -ne 0 ]
     [[ "$output" == *"SM clock 656 MHz of 3003"* ]]
+    [[ "$output" != *"load " ]] || { echo "a load refusal hid the clock term"; return 1; }
     # Above the floor: the clock term stays silent, so a warm card is never refused for it.
     run env PATH="$TMP/bin:$PATH" LLM_SLOTS_PROBE_CLOCK_MIN_PCT=60 bash -c '
         source "$1"
+        _load1() { printf "1.90"; }
         _cpu_pressure_pct() { printf "0"; }
         _gpu_clock_mhz() { printf "2496 3003"; }
         _quiet_verdict' _ "$TMP/clock.sh"
@@ -241,6 +260,7 @@ EOS
     # An UNREADABLE clock is no evidence, not a refusal — the rule the PSI term already follows.
     run env PATH="$TMP/bin:$PATH" LLM_SLOTS_PROBE_CLOCK_MIN_PCT=60 bash -c '
         source "$1"
+        _load1() { printf "1.90"; }
         _cpu_pressure_pct() { printf "0"; }
         _gpu_clock_mhz() { return 0; }
         _quiet_verdict' _ "$TMP/clock.sh"
