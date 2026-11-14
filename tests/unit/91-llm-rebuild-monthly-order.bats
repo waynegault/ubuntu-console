@@ -20,10 +20,16 @@
 # ==============================================================================
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
-SUBJECT="${LLM_REBUILD_SCRIPT:-$HOME/.openclaw/workspace-jarvis/scripts/llm-rebuild-monthly.sh}"
+# The subject is VENDORED into this repo (bin/llm-rebuild-monthly.sh) and jarvis's copy is a
+# symlink to it, so this suite guards the script that actually runs.  While it lived only under
+# ~/.openclaw the file skipped on every CI run, and a skip reads green in a CI log - the wrong
+# guard for the defect it exists to catch.  LLM_REBUILD_SCRIPT overrides the path for a probe.
+SUBJECT="${LLM_REBUILD_SCRIPT:-$REPO_ROOT/bin/llm-rebuild-monthly.sh}"
 
 setup() {
-    [ -r "$SUBJECT" ] || skip "the monthly rebuild subject is not readable: $SUBJECT"
+    # NOT a skip: a missing subject in CI would mean the vendored copy is gone, which is a defect
+    # in this repo, not an environment fact to wave through.
+    [ -r "$SUBJECT" ] || { echo "the monthly rebuild subject is missing: $SUBJECT" >&2; return 1; }
 
     SANDBOX="$BATS_TEST_TMPDIR/sb"
     mkdir -p "$SANDBOX/bin" "$SANDBOX/llama/build-cuda/bin" "$SANDBOX/state"
