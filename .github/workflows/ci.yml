@@ -220,12 +220,18 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # Fast smoke subset.  12-gpu-exclusivity is excluded ON A
-          # SELF-HOSTED RUNNER: it takes the CUDA card lock, and this box also runs
-          # investigator's GPU pipelines.  Measured 2026-09-18, a validation bench was
-          # refused with "CUDA card is owned by another run" while a CI job held it — CI
-          # must never be the reason a measurement is refused.  It still runs locally and
-          # in any explicitly-listed run; it is not part of the nightly legacy suite.
+          # Fast smoke subset.  12-gpu-exclusivity is NOT here: it runs in the nightly
+          # workflow's "Run the unit suites CI excludes" step, which is the only place it is
+          # named as a bats argument.
+          #
+          # This comment used to say the suite "takes the CUDA card lock" and "is not part of
+          # the nightly legacy suite".  Both were false when checked on 2026-11-14: the suite
+          # sandboxes the lock (INVESTIGATOR_GPU_LOCK="$TAC_TEST_TMPDIR/gpu.lock"), stubs
+          # nvidia-smi, and never invokes heavy-job, so it contends for nothing - it ran 51/51
+          # in 36 s on this box while CI was active.  And nightly.yml:91 does run it.  The
+          # 2026-09-18 incident behind the old wording was real (a validation bench refused
+          # with "CUDA card is owned by another run" while a CI job held it), but the suite was
+          # made hermetic afterwards, so the exclusion is now a cadence choice, not a lock one.
           bats --print-output-on-failure tests/unit/01-refresh-keys.bats \
                tests/unit/02-so-startup.bats \
                tests/unit/04-llama-cpp-tools.bats \
