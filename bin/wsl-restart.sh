@@ -110,7 +110,15 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-11-14): the chunk gate tries TWO FILTERS, not one joined ERE (a later `[.]`
+#       inside an already-grouped ERE is read as a character class, so a joined pattern
+#       silently missed `pipeline.cli assess` rows and every one read CLEAR), and a filter
+#       pgrep cannot evaluate is retried as a literal.  The retry's own status is now read
+#       directly: the old `elif [[ $? -ne 1 ]]` ran after a MATCHING literal had left `$?`
+#       at 0, so a malformed filter fell through to CLEAR instead of UNKNOWN — measured
+#       2026-11-14, `pgrep -f '[unclosed'` exits 2 while `pgrep -f 'unclosed'` matched the
+#       caller's own shell.  A gate that cannot read the process table must never say clear.
 #   v28 (2026-11-12): add --now flag to --restart to immediately trigger schtasks /run
 #       after arming so the Windows confirmation dialogue appears without delay.
 #   v27 (2026-11-11): render_shutdown_step polls for host vmmemWSL.exe termination so WDDM
@@ -314,7 +322,18 @@ ARM_LOG="${TAC_WSL_RESTART_ARM_LOG:-$HOME/.local/state/tactical-console/restart-
 # so the pattern cannot match a probe's own command line, and it covers the batch, the
 # per-row driver and the bench cousins (rebench-rows.sh contains `bench-rows`).  The
 # override exists so a suite can drive both branches of the gate with real processes.
-CHUNK_PATTERN="${TAC_WSL_RESTART_CHUNK_PATTERN:-autotune[-]rows|run-autotune[-]batch|autotune[-]model|bench[-]rows}"
+#
+# TWO FILTERS, NOT PATTERN ALTERNATIVES (v1.5.0, 2026-11-14).  pgrep takes ONE pattern and
+# matches it as an EXTENDED REGEX.  The per-row driver's own filter, `pipeline[.]cli assess`,
+# carries an escaped dot, and an ERE that has already put `[.]` inside a GROUP (as `autotune[-]rows`
+# does) treats a LATER `[.]` as a character class -- the pattern becomes valid but silently wrong, so
+# every row of an investigator run reads CLEAR.  Joined with `|` it did: measured 2026-11-14, a live
+# `-m pipeline.cli assess` row and its runner both MISSED the joined pattern.  Each filter is
+# therefore tried on its own, and a pattern that is not valid as an ERE falls back to a literal
+# substring match -- waiting on a row is never wrong, and a restart that cuts one wastes it.
+CHUNK_PATTERNS="${TAC_WSL_RESTART_CHUNK_PATTERN:-autotune[-]rows|run-autotune[-]batch|autotune[-]model|bench[-]rows
+pipeline[.]cli assess
+run_vexed_measurement[.]py}"
 
 # The paths the wrapper needs, in the form the WINDOWS side must use.
 WRAPPER_WIN_DEFAULT='C:\Users\wayne\wsl-restart-action.cmd'
@@ -473,11 +492,14 @@ sanitize_reason() {
 #   exit 1 = a chunk is running, do NOT restart
 #   exit 2 = the check itself failed, which is NOT a clear
 precheck() {
-    local _pids="" _rc=0 _ledger="absent (fresh boot)" _f _p
-    _pids=$(pgrep -f "$CHUNK_PATTERN") || _rc=$?
-    case "$_rc" in
-        0)
-            _say "BUSY: a chunk is in flight - restart refused"
+    local _pids="" _rc=0 _ledger="absent (fresh boot)" _f _p _pat _filter _unknown=0
+    # Each filter on its own: see the TWO FILTERS note at CHUNK_PATTERNS.  A busy answer from ANY
+    # filter is BUSY; only when every filter is clean is the gate clear; any filter that could not
+    # be evaluated keeps the gate UNKNOWN, because an unreadable check is never a clear.
+    while IFS= read -r _filter; do
+        [[ -n "$_filter" ]] || continue
+        if _pids=$(pgrep -f "$_filter"); then
+            _say "BUSY: a chunk is in flight - restart refused (filter ${_filter})"
             for _p in $_pids; do
                 # A pid that exited since pgrep has no cmdline, and the gate's DECISION
                 # never depends on this text - the pid is reported either way.
@@ -487,21 +509,31 @@ precheck() {
             # "exit 3" is the batch's own documented halt signal, not this script's.
             _say "  wait for the batch to halt on its cycle budget (exit 3), then restart"
             return "$EXIT_PRE_BUSY"
-            ;;
-        1)
-            for _f in /dev/shm/autotune-cuda-cycles-*; do
-                [[ -e "$_f" ]] || continue
-                _ledger="$(< "$_f")"
-            done
-            _say "CLEAR: no chunk in flight; the boot CUDA cycle ledger reads $_ledger"
-            return 0
-            ;;
-        *)
-            # Fail closed: an unreadable process table must never license a restart.
-            _say "UNKNOWN: pgrep failed (rc=$_rc) - not a clear, restart refused"
-            return "$EXIT_STATUS_UNKNOWN"
-            ;;
-    esac
+        else
+            _rc=$?
+            # rc 1 is "no match".  Anything else is a pattern pgrep could not evaluate: the
+            # FILTER itself is unreadable, so the gate is UNKNOWN.  It is NOT a clear, and it is
+            # not rescued by a literal retry either — a literal that finds nothing (the ordinary
+            # case: the pattern is malformed, not the process table) would otherwise license a
+            # restart on a filter nobody evaluated.  Measured 2026-11-14: `pgrep -f '[unclosed'`
+            # exits 2, and the old fallback's `elif [[ $? -ne 1 ]]` read `$?` from a MATCHING
+            # literal (0) or from a no-match (1), so the gate printed CLEAR either way.
+            if [[ $_rc -ne 1 ]]; then
+                _unknown=1
+            fi
+        fi
+    done <<< "$CHUNK_PATTERNS"
+    if [[ $_unknown -ne 0 ]]; then
+        # Fail closed: an unreadable process table must never license a restart.
+        _say "UNKNOWN: pgrep could not evaluate a filter - not a clear, restart refused"
+        return "$EXIT_STATUS_UNKNOWN"
+    fi
+    for _f in /dev/shm/autotune-cuda-cycles-*; do
+        [[ -e "$_f" ]] || continue
+        _ledger="$(< "$_f")"
+    done
+    _say "CLEAR: no chunk in flight; the boot CUDA cycle ledger reads $_ledger"
+    return 0
 }
 
 # The OPERATOR GATE, rendered as the PowerShell the wrapper calls before it touches
