@@ -115,6 +115,29 @@ _lint_staged() {
     [[ "$output" == *"FAIL  docs-example.sh  (syntax)"* ]]
 }
 
+@test "a directory under bin/ is not shell, and a real bin script still is" {
+    # Catches: `bin/*` expanding to a `__pycache__/` left behind by importing a bin
+    # tool, so `bash -n bin/__pycache__` answers "Is a directory" and the whole-tree
+    # gate goes red for a gitignored artifact no change could fix (measured
+    # 2026-11-14).  --staged never sees it, because `git diff --cached --name-only`
+    # lists no directories; only the whole-tree loops do.
+    #
+    # The second assertion is the control: a `return 1` at the top of the function
+    # would satisfy the first while silently stopping every bin script being linted.
+    mkdir -p "$SANDBOX/bin/__pycache__"
+    awk '/^_tac_is_shell\(\)/,/^}/' "$SANDBOX/tools/lint.sh" > "$SANDBOX/is-shell.sh"
+    grep -q 'return 1' "$SANDBOX/is-shell.sh" || { echo "FAIL: _tac_is_shell not extracted"; return 1; }
+
+    run bash -c 'REPO_ROOT="$1"; source "$2"; _tac_is_shell "$1/bin/__pycache__"' \
+        _ "$SANDBOX" "$SANDBOX/is-shell.sh"
+    [ "$status" -eq 1 ] || { echo "a cache directory was accepted as a shell file"; return 1; }
+
+    printf '#!/usr/bin/env bash\ntrue\n' > "$SANDBOX/bin/good-tool"
+    run bash -c 'REPO_ROOT="$1"; source "$2"; _tac_is_shell "$1/bin/good-tool"' \
+        _ "$SANDBOX" "$SANDBOX/is-shell.sh"
+    [ "$status" -eq 0 ] || { echo "a real bin script was skipped"; return 1; }
+}
+
 # ── the hook, which must add no selection of its own ─────────────────────────────
 
 # A sandbox hook run: the four neighbouring tools are stubs (the subject is the

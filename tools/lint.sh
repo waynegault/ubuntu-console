@@ -14,6 +14,13 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 32
+#   v32 (2026-11-14): a DIRECTORY is never a shell file.  `bin/*` expands to every
+#   member, including a `__pycache__/` that importing a bin tool leaves behind, so
+#   `bash -n bin/__pycache__` failed with "Is a directory" and reddened the whole-tree
+#   gate for a gitignored build artifact (measured 2026-11-14, after a bin/ script was
+#   imported as a module).  Only regular files are analysed; a cache directory is not
+#   a corpus member and no change to it could make the gate pass.
 # Module Version: 31
 #   v31 (2026-11-10): CI Verdict Gate resolves interpreter through tools/python-runtime.sh.
 # Module Version: 30
@@ -341,6 +348,13 @@ _tac_is_shell() {
     # extension — the CUDA context mint bin/gpu-passthrough-check.sh calls. A shebang
     # test is how a reviewer tells it from an extensionless shell entry point (gh, so).
     local _rel="${1#"$REPO_ROOT"/}"
+    # A cache directory is a member of `bin/*` but not a file: `bash -n` answers
+    # "Is a directory" and reds the gate for an artifact no change could fix.
+    # Resolved through $_rel because --staged passes a repo-relative name while the
+    # whole-tree loops pass an absolute one.
+    if [[ ! -f "$REPO_ROOT/$_rel" ]]; then
+        return 1
+    fi
     case "$_rel" in
         *.py) return 1 ;;
     esac
