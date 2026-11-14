@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 140
+# Module Version: 141
+#   v141 (2026-11-12): re-arm the readiness window before the flash-attn-off retry in
+#     ttft_probe (the retry inherited an exhausted hw and timed out instantly), and emit
+#     the same 60s load heartbeat the bench spawn already prints.
 #   v140 (2026-11-12): increase AT_WINDOW_S scaling for >40 GiB models (12s/GiB, cap 1200s);
 #     print 60s loading heartbeat during long waits; seed SEEN/COMBO_TPS in beam search to
 #     avoid re-testing BEST_COMBO; skip beam search for >=64 GiB models unless overridden.
@@ -2469,6 +2472,8 @@ ttft_probe() {
             sleep 1; hw=$((hw + 1))
             kill -0 "$pid" 2>/dev/null || return 1
             curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
+            (( AT_WINDOW_S > 300 && hw % 60 == 0 )) \
+                && warn "    ... still loading (${hw}s / ${AT_WINDOW_S}s)"
         done
         return 1
     }
@@ -2476,11 +2481,21 @@ ttft_probe() {
         if [[ $flash_attn == "on" ]]; then
             _bench_stop "$pid"
             flash_attn="off"
+            # v141: re-arm the window.  The first launch consumed it, so a
+            # fallback launch inherited an exhausted hw and reported a timeout
+            # instantly.  The retry is a fresh launch: either it serves, or it
+            # earns its own full window.
+            hw=0
             _launch_ttft_server || true
         fi
     }
     if [[ $hw -ge "$AT_WINDOW_S" ]]; then
         _bench_stop "$pid"
+        # v141: publish the class the bench spawn already publishes, so a probe
+        # timeout is reported as one instead of the generic OOM label.  Written
+        # BESIDE the file the probes own: overwriting theirs would replace a
+        # real class (load_fail, loader_crash_unknown) with a later guess.
+        echo "0|0|window_timeout" > "/tmp/at-ttft-metrics-$$"
         echo ""; return 1
     fi
 

@@ -1,0 +1,40 @@
+[Unit]
+# install-profile: asus-n1n-rtx-spark
+# CARD: CUDA (NVIDIA)   MODEL: Qwen2.5-3B-Instruct   FUNCTION: measurement (VEXED)
+# CREATED 2026-11-13 for Wayne's route (b): the VEXED clean run measures a 3B, and the
+# only live 3B was llama-cpu-heartbeat-qwen25-3b-chat on :18088 — a CPU heartbeat
+# FALLBACK lane from a llama.cpp fork with no CUDA build. A three-hour population run
+# measured it because the profile's `chat` port was dead and a port was passed by hand.
+# A measurement belongs on the card this box has, so this lane serves the same weights
+# on CUDA and its port becomes the machine profile's `chat`.
+Description=llama.cpp server — CUDA card, Qwen2.5-3B-Instruct, measurement lane (port 18089)
+After=network-online.target
+Wants=network-online.target
+# HOST PROFILE, not architecture: ExecStart names a file in THIS box's model store, so
+# install.sh links it only where `# install-profile` matches (tools/host-profile.sh).
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+# Clears the card before loading and refuses to start while another run owns it —
+# one LLM on the CUDA card, ever (docs/llm.md).
+ExecStartPre=%h/.local/bin/llama-gpu-clear.sh %n
+# --cache-ram 0: explicit-disable of llama.cpp's 8192 MiB host prompt cache, which
+# nothing budgets (KVCACHE-PROMPT-CACHE-BUDGET-001). Change together with
+# LLAMA_CACHE_RAM_MB in scripts/01-constants.sh when the budget lands.
+# LAUNCH POLICY (pipeline/benchmark/launch_policy.py): a quantised V cache REQUIRES
+# flash attention on — never launch q8_0 V with FA off on this box. flash attention on;
+# --fit off with an explicit --ctx-size, because an omitted --fit inherits llama.cpp's
+# `on` and may silently shrink the served window to --fit-ctx (4096).
+# -ngl 99 puts the whole 3B on the card: Q4_K_M weights are ~2.1 GB, so it fits beside
+# nothing else — this lane and the 30B coder lane cannot both be resident in 8 GiB.
+ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/qwen2.5-3b-instruct-q4_k_m.gguf --alias qwen2.5-3b-instruct --port 18089 --host 127.0.0.1 --ctx-size 32768 --batch-size 1024 --ubatch-size 128 --threads 6 --n-gpu-layers 99 --parallel 1 --cache-ram 0 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off --metrics
+Restart=no
+# The 3B plus its KV at 32768 sits well under 7G; the cap keeps a runaway allocation
+# from taking the host down on a box that is already memory-tight.
+MemoryMax=6G
+TimeoutStopSec=20
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
