@@ -75,7 +75,19 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-11-14): clause (8) — the frontmatter `name` is the index label and shares the
+#   150-char line with its own link, so keep it under 60 characters.  WHY: the extractor kept
+#   writing names of 88-89 chars, and on a 59-char reference target that leaves 89 for name +
+#   separator + description, so the entry rendered at 152-153 chars and `test_note_name_cap`
+#   refused it — three consecutive passes in ~/.qwen on 2026-11-14, twice on the SAME note
+#   because the extractor rewrote its name after the repair.  The store-side tool
+#   (tools/shorten-note-names.py) fixes a name in seconds but cannot stop the rewrite, and the
+#   push hook only refuses it; the instruction is the only place that prevents it.  The bundle
+#   carries no name-length rule of its own — the "1-64 characters" string in the chunk is
+#   session-group naming, not the note name.  ACTIVATION: same as every version here — the
+#   prompt is loaded per daemon, so a --check reading `applied` is not evidence the extractor
+#   has read it; a window reload is owed.
 #   v7 (2026-11-11): clause (7) — the extractor must NOT write the MEMORY.md index line itself,
 #   and `index: core` is the only way to surface a note.  WHY: the CLI now BUILDS MEMORY.md from
 #   the notes (memoryCoreSplit at chunk-QAEZSJL6.js, `doc.core === true`), so a hand-written
@@ -131,7 +143,7 @@ EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
 # payload still contains reads every copy as "applied" and silently skips the upgrade —
 # measured 2026-11-09 landing clause (6), where the v4/v5 probe "NEVER begin a wrapped line"
 # is still inside v6, so all three copies reported ok and the new clause never arrived.
-RULE_NEWEST_CLAUSE="NEVER adds a line to"
+RULE_NEWEST_CLAUSE="is the INDEX LABEL and shares the 150-character line"
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -246,7 +258,11 @@ rule_text = (
     "line after the last paragraph. "
     "(7) NEVER adds a line to MEMORY.md: that index is BUILT from these notes, so a pointer "
     "you write is removed by the next render. To surface a note in the index, give the note "
-    "the frontmatter `index: core`; without it the note is stored but not listed."
+    "the frontmatter `index: core`; without it the note is stored but not listed. "
+    "(8) The frontmatter `name` is the INDEX LABEL and shares the 150-character line with its "
+    "own link, so keep it under 60 characters and let it state the one fact the note records. "
+    "A name too long for its line cannot be rendered: the entry overruns the cap and the note "
+    "is refused at push time. Shorten the name, never the note."
 )
 rule_literal = '"' + rule_text + '"'
 
@@ -296,7 +312,27 @@ V6_RULE_TEXT = (
     "line after the last paragraph."
 )
 v6_literal = '"' + V6_RULE_TEXT + '"'
-SUPERSEDED = (v6_literal, v5_literal, v3_literal, v2_literal, v1_literal)
+# v7 (clause 7, the MEMORY.md pointer) is now SUPERSEDED by v8: it is the payload the live
+# copies carry, so without a v7 literal they would be refused rather than upgraded in place.
+V7_RULE_TEXT = (
+    "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
+    "lints every note it holds, so: (1) EMPHASIS uses underscores ONLY, _like this_. The "
+    "asterisk must NEVER delimit emphasis -- re-read every span you emit and convert "
+    "*like this* to _like this_. STRONG text keeps its asterisks (**bold**); never convert "
+    "those to underscores. (2) A blank line before and after every list and heading. (3) The "
+    "single H1 repeats the frontmatter name value. (4) Every code block is fenced with a "
+    "language tag, never indented. (5) NEVER begin a wrapped line with +, -, * or #, and never "
+    "begin one with a number followed by a full stop: markdown reads a line-initial marker as a "
+    "list or heading, so keep a formula or a code span on ONE line even when it is long. "
+    "(6) The file ENDS with "
+    "EXACTLY ONE newline: no missing final newline (the linter reports MD047) and no blank "
+    "line after the last paragraph. "
+    "(7) NEVER adds a line to MEMORY.md: that index is BUILT from these notes, so a pointer "
+    "you write is removed by the next render. To surface a note in the index, give the note "
+    "the frontmatter `index: core`; without it the note is stored but not listed."
+)
+v7_literal = '"' + V7_RULE_TEXT + '"'
+SUPERSEDED = (v7_literal, v6_literal, v5_literal, v3_literal, v2_literal, v1_literal)
 
 MIN_ANCHOR = '"Memory file format reference:",...MEMORY_FRONTMATTER_EXAMPLE]'
 SPACED_ANCHOR = '"Memory file format reference:",\n  ...MEMORY_FRONTMATTER_EXAMPLE\n]'
@@ -357,7 +393,7 @@ if src.index(marker) > src.index(MIN_ANCHOR if min_hits == 1 else SPACED_ANCHOR)
     raise SystemExit("refusing to patch: the rule landed after the format reference, not before it")
 
 p.write_text(src, encoding="utf-8")
-print("  upgraded extractor-style (superseded payload -> v7)" if upgraded else "  patched  extractor-style")
+print("  upgraded extractor-style (superseded payload -> v8)" if upgraded else "  patched  extractor-style")
 PY
     then
         echo "  MISMATCH $name — an anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
