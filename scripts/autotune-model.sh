@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 142
+# Module Version: 143
+#   v143 (2026-11-14): OOM is a DIAGNOSIS, so only the `oom` token may print it.  The
+#     failure-label mapper ended in a `*) printf 'OOM'` catch-all, so every token it did
+#     not recognise - including the EMPTY string an unread /tmp/at-metrics-$$ yields -
+#     was printed as OOM.  Measured on autotune-20261107-004316-rows-...Sakura-Nemotron:
+#     line 48 says "no OOM evidence and no load-failure signature", line 49 labels the
+#     same attempt "OOM".  An unrecognised token now prints itself, so the next
+#     unclassified failure is visible instead of absorbed into the one label that
+#     carries a cause.  (Jarvis, life/defects/2026-11-14-autotune-oom-verdict-names-an-
+#     unseen-witness.md.)
 #   v142 (2026-11-14): the KV sweep prints the ELIGIBILITY GATE's own answer for a refused
 #     pair instead of a fixed sentence.  The line read "Skipped (requires retrieval
 #     validation test)" — a claim of our own that discarded which cause fired, while
@@ -1711,13 +1720,30 @@ last_fail_type() {
 }
 
 # _last_fail_label [fail_type] — map a bench_ctx failure token to its display label.
+#
+# The label must be DERIVED from the token, never asserted beside it.  Measured
+# 2026-11-14 (Jarvis, life/defects/2026-11-14-autotune-oom-verdict-names-an-unseen-witness.md):
+# this function used to end in `*) printf 'OOM'`, so EVERY unrecognised token — including
+# the empty string, which is what an unread /tmp/at-metrics-$$ yields — was printed as
+# `OOM`.  In autotune-20261107-004316-rows-...Sakura-Nemotron-3.5-Bolt-74B...log the
+# harness wrote "no OOM evidence and no load-failure signature" on line 48 and then
+# labelled the same attempt "OOM" on line 49, because the token was
+# loader_crash_unknown and the catch-all overrode it.  A row marked OOM was therefore
+# indistinguishable from a row marked OOM that actually saw one, and any downstream
+# count of OOM failures was unreliable.
+#
+# `oom` is now the ONLY token that prints OOM.  An unknown token prints itself, so the
+# next unclassified failure is visible as unclassified instead of being absorbed into
+# the one label that carries a diagnosis.
 _last_fail_label() {
     local _t="${1:-$(last_fail_type)}"
     case "$_t" in
+        oom)                  printf '%s\n' "OOM" ;;
         load_fail)            printf '%s\n' "unsupported model" ;;
         window_timeout)       printf '%s\n' "readiness timeout" ;;
         loader_crash_unknown) printf '%s\n' "unclassified crash" ;;
-        *)                    printf '%s\n' "OOM" ;;
+        "")                   printf '%s\n' "unclassified crash (no failure token recorded)" ;;
+        *)                    printf '%s\n' "unclassified crash (token: $_t)" ;;
     esac
 }
 

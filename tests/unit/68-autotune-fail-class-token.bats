@@ -350,3 +350,63 @@ report_with() {
     [[ "$output" == *'hw >= AT_WINDOW_S'* ]]
     [[ "$output" == *'kill -0 "${_BENCH_PID:-}"'* ]]
 }
+
+# ── the catch-all that printed OOM for every token it did not recognise ───────
+# Measured 2026-11-14 (Jarvis, life/defects/2026-11-14-autotune-oom-verdict-names-an-
+# unseen-witness.md).  In autotune-20261107-004316-rows-...Sakura-Nemotron-3.5-Bolt-74B...
+# log the harness wrote, on line 48:
+#
+#   no OOM evidence and no load-failure signature — stopping this row
+#
+# and then labelled the SAME attempt, on line 49:
+#
+#   Test 1: ctx 4096 - OOM: dropping to 2048
+#
+# Both cannot be true of one event.  The cause was this function's final arm:
+# `*) printf 'OOM'`.  The token was loader_crash_unknown, which HAS its own arm — but
+# the empty string, which is what an unread /tmp/at-metrics-$$ yields, fell through to
+# the catch-all and printed OOM.  So a row marked OOM was indistinguishable from a row
+# marked OOM that actually saw one, and any downstream count of OOM failures was
+# unreliable.
+#
+# The rule these arms pin: OOM is a DIAGNOSIS and only the `oom` token may print it.
+# An unrecognised token must print itself, so the next unclassified failure is visible
+# as unclassified rather than absorbed into the one label that carries a cause.
+
+@test "_last_fail_label prints OOM for the oom token and for nothing else" {
+    run bash -c '
+        source "$1" || exit 90
+        for t in oom load_fail window_timeout loader_crash_unknown "" garbage_token; do
+            printf "0|0|%s\n" "$t" > "/tmp/at-metrics-$$"
+            printf "%s=[%s]\n" "${t:-<empty>}" "$(_last_fail_label)"
+        done
+        rm -f "/tmp/at-metrics-$$"
+    ' _ "$HARNESS"
+    [ "$status" -eq 0 ]
+    # The one arm that may say OOM.
+    [[ "$output" == *"oom=[OOM]"* ]]
+    # Every other token must NOT.  This is the assertion the old catch-all failed.
+    [[ "$output" != *"load_fail=[OOM]"* ]]
+    [[ "$output" != *"window_timeout=[OOM]"* ]]
+    [[ "$output" != *"loader_crash_unknown=[OOM]"* ]]
+    [[ "$output" != *"<empty>=[OOM]"* ]]
+    [[ "$output" != *"garbage_token=[OOM]"* ]]
+    # An unknown token names itself, so the next one is diagnosable.
+    [[ "$output" == *"garbage_token=[unclassified crash (token: garbage_token)]"* ]]
+    # An absent token says so rather than borrowing a diagnosis.
+    [[ "$output" == *"<empty>=[unclassified crash (no failure token recorded)]"* ]]
+}
+
+@test "no catch-all arm in _last_fail_label can print OOM" {
+    # The RULE, not one spelling of it: a future author may reorder the arms or add a
+    # token, and this must still hold.  Extract the function and assert that the only
+    # line printing OOM is the one guarded by the `oom)` pattern.
+    run bash -c '
+        awk "/^_last_fail_label\(\) \{/,/^\}/" "$1" \
+          | grep -n "OOM" \
+          | grep -v "^[0-9]*: *#" \
+          | grep -v "oom)"
+    ' _ "$SCRIPT"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
