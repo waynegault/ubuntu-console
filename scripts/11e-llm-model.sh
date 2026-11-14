@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 137
+#   v137 (2026-11-14): a rebuilt lane's own servers are sanctioned, and the quiet gate sees the
+#   card.  Two causes from the 14:xx rebuild, one per surface.  In `bin/gpu-busy.sh` a sanctioned
+#   tree's `.prev-<commit>` incarnation now counts as ours, because the lanes keep running from
+#   the moved path; here, the gate asked only about the lock and CI workers, so a pytest GPU
+#   suite holding 5768 of 8192 MiB read "free".  `gpu-busy.sh --json` is the third input;
+#   `foreign-app`, `declared:` and `lock:` refuse, our own `util`/`serving` do not, and the
+#   override is `LLAMA_BUILD_ALLOW_CARD` because `LLAMA_BUILD_ALLOW_CI` answers another question.
 # Module Version: 136
 #   v136 (2026-11-14): the watchdog-active probe in __model_info addresses the timer through
 #   LLM_BENCH_WATCHDOG_TIMER instead of the literal llama-watchdog.timer.  A literal is a
@@ -2127,7 +2135,20 @@ function __model_mmproj_compatible() {
     then
         _py=$(_tac_python_path "${TACTICAL_REPO_ROOT:-.}")
     fi
-    [[ -n "$_py" && -x "$_py" ]] || return 0
+    # An interpreter that cannot RUN the check is not evidence of compatibility.  This
+    # returned 0 (compatible) when none resolved, so on a host whose PATH python3 is
+    # broken every projector was attached to every model — measured 2026-11-14 on the CI
+    # runner (case 1210: a 5120-dim projector attached to a 4096-dim Bolt-74B).
+    # The refusal direction is SKIP, not attach: a missing projector fails loudly on every
+    # image request, while a wrong one answers /health and text completions happily.
+    # `python3 -c pass` is asked, not `-x`: a resolvable-but-unrunnable interpreter is
+    # exactly the runner's shape (it cannot load libpython).
+    if [[ -z "$_py" ]] || ! "$_py" -c 'pass' >/dev/null 2>&1
+    then
+        warn "  projector: no runnable python3 to verify $(basename "$_p_path") — SKIPPING it"
+        warn "             rather than attaching one that may not match this model"
+        return 1
+    fi
     # swallow-ok: non-zero means GGUF metadata proved a mismatch; unreadable/parse errors return 0 below
     "$_py" - "$_m_path" "$_p_path" 2>/dev/null <<'PY'
 import struct, sys
@@ -5914,7 +5935,13 @@ function llm-build() {
     # lane doing useful work is a normal time to rebuild, as long as nothing else holds the card.
     # Its --json carries the reasons, so those two cases are told apart instead of collapsed into
     # one busy word.
-    local card_held=""
+    #
+    # LLAMA_BUILD_GPU_BUSY_BIN is the SEAM, as HEAVY_JOB_BIN is for the lock: without one
+    # every case that builds asks the REAL card, so the three architecture cases (v83) went
+    # red on the CI runner simply because a GPU tenant held it at 14:48 (measured
+    # 2026-11-14, "held by foreign-app"), and passed here whenever the card was free.  A
+    # gate read through box state is not a test of the gate.
+    local card_held="" _busy_bin="${LLAMA_BUILD_GPU_BUSY_BIN:-${TACTICAL_REPO_ROOT:?}/bin/gpu-busy.sh}"
     # LLAMA_BUILD_ALLOW_CI deliberately does NOT waive this one: it exists to build THROUGH a CI
     # job, and a CI job is not a GPU tenant.  The card has its own override so that building past
     # a real tenant is a separate, named decision rather than a side effect of the CI waiver.
@@ -5922,7 +5949,7 @@ function llm-build() {
     then
         local _card_json=""
         # swallow-ok: an unreadable verdict leaves the gate as it was - the lock and CI inputs still decide
-        _card_json=$("${TACTICAL_REPO_ROOT:?}/bin/gpu-busy.sh" --json 2>/dev/null) || true
+        _card_json=$("$_busy_bin" --json 2>/dev/null) || true
         case "$_card_json" in
             *'"busy":true'*)
                 # Only a reason naming ANOTHER tenant is a refusal.  `foreign-app` and

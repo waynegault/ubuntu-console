@@ -64,6 +64,38 @@ BIN
     # moment (CMAKE_LOCK_LOG) - "stays quiet" is the property, not "started".
     MOCK_BIN_DIR="$BATS_TEST_TMPDIR/mockbin"
     mkdir -p "$MOCK_BIN_DIR"
+    # The card probe (v110) is a stub script so a case can present any verdict shape; the default
+    # is FREE because these cases are about the build flow, not the card.  A case that wants BUSY
+    # writes the JSON it would answer to $BATS_TEST_TMPDIR/gpu-busy.json.
+    # TACTICAL_REPO_ROOT is a HARD-ASSIGNED constant that other tools resolve through
+    # (`$TACTICAL_REPO_ROOT/bin/heavy-job`), so it cannot simply point at the mock dir: that
+    # would repoint heavy-job too and the first build step would fail.  The stub is therefore
+    # staged in a MIRROR of the root - bin/gpu-busy.sh is the stub, bin/heavy-job is linked.
+    MOCK_ROOT="$BATS_TEST_TMPDIR/mockroot"
+    mkdir -p "$MOCK_ROOT/bin" "$MOCK_ROOT/tools"
+    ln -sf "$REPO_ROOT/bin/heavy-job" "$MOCK_ROOT/bin/heavy-job"
+    # 01-constants.sh sources "$TACTICAL_REPO_ROOT/tools/host-profile.sh", so the mirror needs it
+    # or the loader aborts and every case in the file fails.
+    ln -sf "$REPO_ROOT/tools/host-profile.sh" "$MOCK_ROOT/tools/host-profile.sh"
+    cat > "$MOCK_ROOT/bin/gpu-busy.sh" <<'GPU_STUB'
+#!/usr/bin/env bash
+# The probe as a double, written whole rather than sourcing the real one: bin/gpu-busy.sh runs its
+# verdict at the BOTTOM of the file with `exit`, so sourcing it exits the caller before any
+# override can apply (measured while building this case).  The double keeps the real probe's
+# `--json` shape - busy/reasons/arm/checked - so the interface under test is unchanged.
+if [[ -r "${GPU_BUSY_JSON:-}" ]]; then
+    cat "$GPU_BUSY_JSON"
+    case "$(cat "$GPU_BUSY_JSON")" in
+        *'"busy":true'*) exit 1 ;;
+        *) exit 0 ;;
+    esac
+fi
+printf '%s\n' '{"busy":false,"reasons":[],"arm":"none","checked":[]}'
+exit 0
+GPU_STUB
+    chmod +x "$MOCK_ROOT/bin/gpu-busy.sh"
+    export GPU_BUSY_REAL="$REPO_ROOT/bin/gpu-busy.sh"
+    export TACTICAL_REPO_ROOT="$MOCK_ROOT"
     cat > "$MOCK_BIN_DIR/cmake" <<'CMAKE_STUB'
 #!/usr/bin/env bash
 [[ -z "${CMAKE_LOG:-}" ]] || printf '%s\n' "$*" >> "$CMAKE_LOG"
@@ -194,9 +226,12 @@ _run_build() {
 }
 
 @test "llm-build: the architecture is the card's, read from the driver (v83)" {
-    # Criterion (v83): -DCMAKE_CUDA_ARCHITECTURES carries the card's compute capability,
-    # so one command targets sm_121 on this box and sm_86 on the x86 box.
-    # Catches: any fixed default reaching a card it does not fit.
+    # Criterion (v110): a Blackwell GB10 (compute 12.1) is configured as the `a-real` variant,
+    # because architecture-accelerated sm_121a Tensor Core instructions are only emitted for it.
+    # Measured 2026-11-14: the code has emitted `121a-real` since the model-use/arch change, but
+    # this case asserted `=121`, which substring-matches `=121a-real` — so it passed while stating
+    # a different value than the one under test.  Catches: any fixed default reaching a card it
+    # does not fit, and the arch degrading to plain 121 without a test noticing.
     CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
     : > "$CMAKE_LOG"
     mkdir -p "$BATS_TEST_TMPDIR/driver"
@@ -208,25 +243,32 @@ _run_build() {
     result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     [ "$rc" -eq 0 ]
-    grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=121" "$CMAKE_LOG"
+    grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=121a-real" "$CMAKE_LOG"
 }
 
 @test "llm-build: a card that cannot be read is answered by LLAMA_CUDA_ARCH (v83)" {
-    # The host profile's declaration is the only fallback there is: an unreadable
-    # driver plus a declared 121 must configure for 121.
+    # The host profile's declaration is the only fallback there is: an unreadable driver plus a
+    # declared arch must configure for THAT arch.
+    # Measured 2026-11-14: this case grep'd for `-DCMAKE_CUDA_ARCHITECTURES=121` with one `M`
+    # missing (`DCMAKE_…`), so it could never match and never failed - a gate that cannot fail.
+    # The expected value is the profile's own declaration, read from it, so the two cannot drift.
+    local declared
+    declared=$(grep -oE 'LLAMA_CUDA_ARCH:=[^}"]*' "$REPO_ROOT/config/hosts.d/asus-n1n-rtx-spark.conf" \
+        | head -1 | cut -d= -f2)
+    [ -n "$declared" ]
     CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
     : > "$CMAKE_LOG"
     mkdir -p "$BATS_TEST_TMPDIR/nocard"
     printf '#!/usr/bin/env bash\nexit 1\n' > "$BATS_TEST_TMPDIR/nocard/nvidia-smi"
     chmod +x "$BATS_TEST_TMPDIR/nocard/nvidia-smi"
     PATH="$BATS_TEST_TMPDIR/nocard:$PATH"
-    LLAMA_CUDA_ARCH=121
+    LLAMA_CUDA_ARCH="$declared"
 
     local result rc
     result="$(_run_build --no-pull --yes)"
     rc="${result%%$'\n'*}"
     [ "$rc" -eq 0 ]
-    grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=121" "$CMAKE_LOG"
+    grep -qF -- "-DCMAKE_CUDA_ARCHITECTURES=${declared}" "$CMAKE_LOG"
 }
 
 @test "llm-build: an unreadable card with no declared arch refuses instead of guessing (v83)" {
@@ -659,4 +701,47 @@ _prev_trees() {
     [ -f "$LLAMA_ROOT/build.prev-${head}-2/OLD-TREE" ]
     [ -f "$LLAMA_ROOT/build.prev-${head}/KEEP-ME" ]
     [ ! -e "$LLAMA_ROOT/build.prev-${head}/OLD-TREE" ]
+}
+
+# ---- v110 (2026-11-14): the card itself is a quiet-gate input ------------------------------
+# Measured 2026-11-14: a pytest GPU suite held 5768 of 8192 MiB while `heavy-job --status` read
+# free and no CI worker existed, so a rebuild would have started into it.  The two older inputs
+# cannot see a consumer that takes no lock and starts no runner job.
+
+@test "llm-build: a FOREIGN CUDA resident refuses the build before anything is configured (v110)" {
+    # Catches: the gate clearing a rebuild into another tenant's GPU work.  The reason names which
+    # resident, because "the card is busy" alone cannot tell our own lane from someone else's job.
+    printf '%s\n' '{"busy":true,"reasons":["foreign-app pid=42 python3 exe=/Python/x"],"arm":"foreign-app"}' \
+        > "$BATS_TEST_TMPDIR/gpu-busy.json"
+    export GPU_BUSY_JSON="$BATS_TEST_TMPDIR/gpu-busy.json"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -ne 0 ]
+    [[ "$out" == *"the CUDA card is held by foreign-app pid=42"* ]]
+    [[ "$out" != *"Done"* ]]
+    [ ! -s "$CMAKE_LOG" ]
+}
+
+@test "llm-build: our OWN lanes using the card do not refuse the build (control, v110)" {
+    # The control that keeps the case above honest: a serving lane reads `serving:`/`util:`, which
+    # is a normal time to rebuild.  Without this, "refuses when the card is busy" could be a rule
+    # that refuses whenever the box is serving - which is most of the time.
+    printf '%s\n' '{"busy":true,"reasons":["serving:18087 pid=9","util-suppressed:92%>=15%"],"arm":"utilisation"}' \
+        > "$BATS_TEST_TMPDIR/gpu-busy.json"
+    export GPU_BUSY_JSON="$BATS_TEST_TMPDIR/gpu-busy.json"
+    CMAKE_LOG="$BATS_TEST_TMPDIR/cmake.log"
+    : > "$CMAKE_LOG"
+
+    local result rc out
+    result="$(_run_build --no-pull --yes)"
+    rc="${result%%$'\n'*}"
+    out="${result#*$'\n'}"
+    [ "$rc" -eq 0 ]
+    [[ "$out" == *"Done"* ]]
+    [ -s "$CMAKE_LOG" ]
 }

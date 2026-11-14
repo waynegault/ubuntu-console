@@ -27,16 +27,19 @@
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 LAUNCHER="$REPO_ROOT/scripts/11e-llm-model.sh"
 
-# _py — the interpreter to build GGUF fixtures with, resolved the way the SHIPPED tools
-# resolve it (repo venv when executable, else PATH).  The projector case named
-# "$REPO_ROOT/.venv/bin/python3" literally, which exists on this box and not in the CI
-# runner's checkout: measured 2026-11-14, case 1210 exited 127 there and nowhere else.
-# Same helper as tests/unit/88-slots-probe.bats, including the fallback validation.
+# _py — an interpreter that can actually RUN, resolved the way the shipped tools resolve
+# it (repo venv when executable, else PATH).  `-x` is not enough: the CI runner's PATH
+# python3 resolves but cannot load its own libpython, which is how case 1210 both exited
+# 127 and then read every projector as compatible (measured 2026-11-14).  Each candidate
+# is asked to run before it is trusted; same shape as tests/unit/88-slots-probe.bats.
 _py() {
-    local p="$REPO_ROOT/.venv/bin/python3"
-    [[ -x "$p" ]] || p="$(command -v python3 || true)"
-    [[ -x "$p" ]] || return 1
-    printf '%s\n' "$p"
+    local p
+    for p in "$REPO_ROOT/.venv/bin/python3" "$(command -v python3 || true)" \
+             "$(command -v python || true)"; do
+        [[ -n "$p" && -x "$p" ]] || continue
+        "$p" -c 'pass' >/dev/null 2>&1 && { printf '%s\n' "$p"; return 0; }
+    done
+    return 1
 }
 
 setup() {
@@ -77,6 +80,11 @@ set -uo pipefail
 __spec_launch_flags() { :; }
 __tac_info() { printf '%s\n' "$2"; }
 __llm_registry_field() { :; }
+# The shipped compatibility check reads TAC_PYTHON first; give it one that RUNS.  Left to
+# PATH, the CI runner's python3 resolves but cannot load libpython, and the check then
+# skipped every projector — measured 2026-11-14, case 1210 attaching a 5120-dim projector
+# to a 4096-dim model on the runner while this box never reproduced it.
+export TAC_PYTHON="$TAC_PY_FOR_TEST"
 source "$1"
 llm_backend="native"
 LLAMA_SERVER_BIN="/stub/llama-server"
@@ -102,7 +110,8 @@ if [[ -n "${5:-}" ]]; then export LLAMA_MMPROJ="$5"; fi
 __model_use_build_command || { echo "FAIL: builder returned non-zero"; exit 1; }
 printf '%s\n' "${cmd[@]}"
 EOS
-    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$SANDBOX/$_dir" \
+    TAC_PY_FOR_TEST="$(_py)" || { echo "FAIL: no runnable python3 for the compatibility check"; return 1; }
+    TAC_PY_FOR_TEST="$TAC_PY_FOR_TEST" bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$SANDBOX/$_dir" \
         "$_arch" "$_bench" "$_mmproj" "$_model_name"
 }
 

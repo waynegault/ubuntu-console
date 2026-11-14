@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.14.0 (2026-11-14: a rebuild's MOVED tree is still ours.  A fresh-tree rebuild
+#          renames build-cuda -> build-cuda.prev-<commit> while the lanes keep running from it,
+#          so their /proc/PID/exe reads the moved path.  _is_sanctioned_exe compared by exact
+#          string, called it foreign, and the watchdog stopped BOTH lanes 22 s into the compile:
+#          GPU busy - stopping ... [probe: foreign-app exe=.../build-cuda.prev-2cbe0ec42/bin/llama-server].
+#          A sanctioned tree's own previous incarnation is now accepted; a DIFFERENT project's
+#          .prev tree stays foreign, because the prefix must be that tree's dirname exactly.
 # Version: 1.13.0 (2026-11-09: the verdict now names WHICH ARM fired and which arms ran
 #          before it (card 62fbc8cb, criterion (b) as Wayne ruled). The card asked for
 #          "positive evidence of a DECLARED workload before a busy stop", and that cannot
@@ -126,7 +133,10 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 22
+# Module Version: 23
+#   v23 (2026-11-14): a rebuild's MOVED tree is sanctioned - see the 1.14.0 entry at the top of
+#     this file.  `_is_sanctioned_exe` accepted only an exact path, so lanes still running from
+#     build-cuda.prev-<commit> read foreign and the watchdog stopped both mid-compile.
 #   v21 (2026-11-08): the serving check asks every CUDA lane on the card (card 62fbc8cb) —
 #     see the 1.12.0 entry at the top of this file.  No other behaviour changes.
 #   v20 (2026-11-06): the declared reason is assembled in a variable instead of one
@@ -428,12 +438,26 @@ _sanctioned_exes() {
     done
 }
 
-# 0 (TRUE) when this resolved exe is one of the sanctioned server binaries.
+# 0 (TRUE) when this resolved exe is one of the sanctioned server binaries — including a
+# server still executing out of a tree that has been MOVED ASIDE to `<tree>.prev-<commit>`.
+#
+# Measured 2026-11-14: a rebuild moves build-cuda -> build-cuda.prev-<commit>, and the lanes
+# keep running from the moved path (/proc/PID/exe is the real inode, unaffected by the
+# rename). This probe compared that path to `<root>/build-cuda/bin/llama-server` by exact
+# string, called it foreign, and the watchdog stopped BOTH lanes 22 s into the compile —
+# `GPU busy — stopping … [probe: foreign-app … exe=…/build-cuda.prev-2cbe0ec42/bin/llama-server]`.
+# A sanctioned tree's own previous incarnation is never a foreign tenant, so the suffix is
+# accepted for the named tree only. A DIFFERENT project's llama-server under a .prev name is
+# still foreign: the prefix must match that tree's dirname exactly.
 _is_sanctioned_exe() {
-    local _exe="$1" _a
+    local _exe="$1" _a _dir
     [[ -n "$_exe" ]] || return 1
     while IFS= read -r _a; do
-        [[ -n "$_a" && "$_exe" == "$_a" ]] && return 0
+        [[ -n "$_a" ]] || continue
+        [[ "$_exe" == "$_a" ]] && return 0
+        # `${_a%/bin/llama-server}.prev-<commit>/bin/llama-server`
+        _dir="${_a%/bin/llama-server}"
+        [[ "$_dir" != "$_a" ]] && [[ "$_exe" == "$_dir".prev-*/bin/llama-server ]] && return 0
     done < <(_sanctioned_exes)
     return 1
 }

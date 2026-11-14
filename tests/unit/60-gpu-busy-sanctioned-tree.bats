@@ -110,6 +110,42 @@ resolved_exes() {
     [ "$output" = "$explicit" ]
 }
 
+# ---- The tree a rebuild MOVED ASIDE is still ours (2026-11-14) -------------------------------
+# A fresh-tree rebuild renames build-cuda -> build-cuda.prev-<commit> while the lanes keep running
+# from it, so their /proc/PID/exe reads the moved path.  The exact-string comparison called that
+# foreign and the watchdog stopped BOTH lanes 22 s into the compile:
+#   GPU busy — stopping … [probe: foreign-app pid=… exe=…/build-cuda.prev-2cbe0ec42/bin/llama-server]
+# Catches: any future narrowing back to an exact match, which would take the lanes down again on
+# the next rebuild.
+
+# Exe out of a sanctioned tree that a rebuild has moved aside.
+prev_exe() {
+    local dir="$1" name="$2"
+    mkdir -p "$dir"
+    printf '#!/bin/sh\n' > "$dir/llama-server"
+    printf '%s\n' "$dir/llama-server"
+}
+
+@test "a resident in this tree's own .prev-<commit> tree is SANCTIONED (v3.16)" {
+    make_tree cuda
+    local exe
+    exe="$(prev_exe "$FAKE_HOME/llama.cpp/build-cuda.prev-2cbe0ec42/bin" server)"
+    run env -u LLAMA_CUDA_SERVER_BIN -u LLAMA_XE_SERVER_BIN HOME="$FAKE_HOME" \
+        bash -c 'source "$1"; _is_sanctioned_exe "$2"' _ "$TAC_TEST_TMPDIR/probe.sh" "$exe"
+    [ "$status" -eq 0 ]
+}
+
+@test "ANOTHER project's .prev tree is still foreign (the control, v3.16)" {
+    # Without this, "accept .prev trees" could be "accept every .prev name", which would let a
+    # different checkout's server hold the card unnoticed for the length of a compile.
+    make_tree cuda
+    local exe
+    exe="$(prev_exe "$FAKE_HOME/other-project/build-cuda.prev-abc1234/bin" server)"
+    run env -u LLAMA_CUDA_SERVER_BIN -u LLAMA_XE_SERVER_BIN HOME="$FAKE_HOME" \
+        bash -c 'source "$1"; _is_sanctioned_exe "$2"' _ "$TAC_TEST_TMPDIR/probe.sh" "$exe"
+    [ "$status" -ne 0 ]
+}
+
 # The falsification that matters: a list naming ONLY the legacy tree cannot sanction
 # a resident at the build-cuda path. That is the exact shape of the eleven-hour gap —
 # the pre-fix default named build/bin, the lane ran build-cuda, and the probe answered
