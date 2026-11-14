@@ -50,6 +50,22 @@ REGISTRY
     # since it was written; the e2e suite calls the same function without it.
     # Pointing the marker at the sandbox is what makes the take hermetic.
     export LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$TAC_TEST_TMPDIR/fake-watchdog-cuda.suspend"
+    # THE STOPS, and this is the part the marker does NOT cover -- measured 2026-11-14.
+    # LLAMA_WATCHDOG_CUDA_SUSPEND_FILE decides where the hold is RECORDED; it does not
+    # decide what gets STOPPED.  bin/_tac-bin-lib.sh:1176 stops three LITERAL watchdog
+    # unit names and :1224 stops "$_lane" -- and neither reads the marker.  So a
+    # perfectly sandboxed claim still took the CUDA tier down: journalctl shows
+    # llama-watchdog.timer/-guard.timer at 18:08:10 and 18:42:12, the embedding lane at
+    # 18:08:11/18:42:12 and the coder lane at 18:08:15/18:42:17, during runs whose
+    # marker was already in the sandbox.
+    #
+    # Exporting LLAMA_CUDA_LANE_UNIT / LLM_AUTOTUNE_CENSUS here does NOT work, and the
+    # attempt is recorded because it is the trap: tools/host-profile.sh:442 UNSETS both
+    # before applying the profile, so a caller's value is discarded by design.  Measured
+    # with both exported: `source env.sh` still yields the real coder/embedding units.
+    # The fix is the TAC_TEST_TMPDIR predicate in _tac_cleanroom_enter, which refuses
+    # the stops outright; TAC_TEST_TMPDIR is set by every sandboxing suite and by
+    # nothing in production.
     export LLM_KEEPER_DIR="$TAC_TEST_TMPDIR"
     export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR"
     export LLM_BENCH_MODEL_TIMEOUT=10

@@ -16,7 +16,13 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 27
+#   v27 (2026-11-14): _tac_cleanroom_enter REFUSES every stop when TAC_TEST_TMPDIR is set.
+#     The stops are keyed on literal unit names and the host profile's lane, not on
+#     LLAMA_WATCHDOG_CUDA_SUSPEND_FILE, so sandboxing the marker left them live and a
+#     test took the CUDA tier down three times (18:08, 18:42, 18:50).  The lane stop is
+#     guarded separately: it sits outside the AUTOTUNE_CLEAN_ROOM block, so =0 skipped
+#     the revivers and tenants, still stopped the lane, and printed "DISABLED".
 #   v26 (2026-11-12): _tac_adapter_health_check / _tac_cuda_cycle_check / _tac_cuda_stall_check —
 #     first-check guards for WSL2 GPU adapter degradation and CUDA cycle budget exhaustion.
 #   v25 (2026-11-12): _tac_cleanroom_enter accepts optional quiet flag/mode; _tac_cleanroom_msg
@@ -1170,7 +1176,31 @@ _tac_cleanroom_enter() {
         fi
     fi
 
-    if [[ "${AUTOTUNE_CLEAN_ROOM:-1}" == "1" ]]; then
+    # A TEST MUST NEVER STOP A PRODUCTION UNIT (measured 2026-11-14, twice).
+    # The stops below are keyed on LITERAL unit names and on the host profile's lane,
+    # NOT on LLAMA_WATCHDOG_CUDA_SUSPEND_FILE -- that variable decides where the hold is
+    # RECORDED, not what gets STOPPED.  So sandboxing the marker left the stops live:
+    # journalctl shows llama-watchdog.timer/-guard.timer stopped at 18:08:10, 18:42:12 and
+    # 18:50:07, the embedding lane at 18:08:11/18:42:12/18:50:08 and the coder lane at
+    # 18:08:15/18:42:17/18:50:13, during runs whose marker was already sandboxed.
+    #
+    # Exporting LLAMA_CUDA_LANE_UNIT / LLM_AUTOTUNE_CENSUS from a test does NOT help:
+    # tools/host-profile.sh:442 UNSETS both before applying the profile, so a caller's
+    # value is discarded by design (a profile constant describes a machine identity, and
+    # a parent's value is a foreign box's fact).  Measured: with both exported,
+    # `source env.sh` still yields the real coder/embedding units.  The override seam is
+    # therefore not reachable from a test at all.
+    #
+    # TAC_TEST_TMPDIR is the predicate that closes the class: every suite that sandboxes
+    # this code sets it, and nothing in production does.  Refusing is safe because the
+    # VRAM baseline gate downstream (_tac_vram_baseline_verdict -> autotune-rows.sh:307-318
+    # `exit 1`) refuses a resident lane as an `unlisted-holder`, so a skipped stop ABORTS
+    # the batch rather than producing a contended reading reported as clean.
+    if [[ -n "${TAC_TEST_TMPDIR:-}" ]]; then
+        _tac_cleanroom_msg \
+            "=== clean-room: REFUSING to stop real units under TAC_TEST_TMPDIR=${TAC_TEST_TMPDIR}" \
+            "- a test must not take the production tier down; the baseline gate will refuse"
+    elif [[ "${AUTOTUNE_CLEAN_ROOM:-1}" == "1" ]]; then
         _tac_cleanroom_msg "=== clean-room: isolating GPU and CPU for measurement"
         local _w _t _r _runner_units=""
         for _w in llama-watchdog.timer llama-watchdog-guard.timer llama-watchdog.service; do
@@ -1219,7 +1249,10 @@ _tac_cleanroom_enter() {
             "=== clean-room: DISABLED (AUTOTUNE_CLEAN_ROOM=${AUTOTUNE_CLEAN_ROOM:-})"
     fi
 
-    if [[ -n "$_lane" ]]; then
+    # The lane stop is OUTSIDE the AUTOTUNE_CLEAN_ROOM block, so `AUTOTUNE_CLEAN_ROOM=0`
+    # skips the revivers and the tenants and still reaches here -- and prints "DISABLED"
+    # while doing it.  Same predicate, same reason: a test must not stop a real lane.
+    if [[ -n "$_lane" && -z "${TAC_TEST_TMPDIR:-}" ]]; then
         # swallow-ok: failure to stop the lane is warned explicitly below
         if ! systemctl --user stop "$_lane" >/dev/null 2>&1; then
             _tac_cleanroom_warn "clean-room: could not stop $_lane — baseline below decides"
