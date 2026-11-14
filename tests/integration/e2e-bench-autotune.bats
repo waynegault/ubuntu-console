@@ -41,6 +41,15 @@ REGISTRY
     # showed Stopped+Started around one [F1] run, and a test that can start the scheduler
     # mid-run can disturb someone else's GPU run (the investigator's 18th briefing).
     export LLM_BENCH_WATCHDOG_TIMER="$TAC_TEST_TMPDIR/fake-watchdog.timer"
+    # The CUDA-suspend MARKER is the other half of that same rule, and it was missed.
+    # bin/llama-watchdog.sh:362 defaults it to /dev/shm/llama-watchdog-cuda.suspend, so
+    # `__model_bench` below (line ~203) wrote a REAL production suspend marker: the
+    # watchdog then saw a live owner, suspended the real coder/embedding/measure lanes,
+    # and the owner died with the test -- 53 acquires to 12 releases on 2026-11-14, and
+    # 121 "NOT HELD" events before anyone noticed. 04-watchdog.bats:32 has had this line
+    # since it was written; the e2e suite calls the same function without it.
+    # Pointing the marker at the sandbox is what makes the take hermetic.
+    export LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$TAC_TEST_TMPDIR/fake-watchdog-cuda.suspend"
     export LLM_KEEPER_DIR="$TAC_TEST_TMPDIR"
     export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR"
     export LLM_BENCH_MODEL_TIMEOUT=10
