@@ -108,17 +108,25 @@ ENVS
 
     # A curl that answers health without a network: 200 only when the lane's tree has a binary,
     # which is how the suite models "the tree was there when the lane answered".
-    cat > "$SANDBOX/bin/curl" <<'CU'
-#!/usr/bin/env bash
-for a in "$@"; do
-    case "$a" in
-        http*) printf '%s' "${STUB_HEALTH:-200}"; exit 0 ;;
-    esac
-done
-printf '000'
-exit 0
-CU
-    chmod +x "$SANDBOX/bin/curl"
+    #
+    # EXPORTED, not a file in $SANDBOX/bin: the subject sets its own PATH, so a PATH stub is never
+    # reached - the file stub that used to sit here was dead code.  Measured 2026-11-14: none of
+    # the seven cases reaches health_ok at all (0 calls with a probe in this function), because
+    # each exits before the post-restart wait.  Kept as a guard rather than deleted: that wait is
+    # a 240 x 5 s loop, so a future case that does reach it must not be able to poll the REAL
+    # lanes on 18087/18080 for twenty minutes.
+    curl() {
+        local a
+        for a in "$@"; do
+            case "$a" in
+                http*) printf '%s' "${STUB_HEALTH:-200}"; return 0 ;;
+            esac
+        done
+        printf '000'
+        return 0
+    }
+    export -f curl
+    export STUB_HEALTH="${STUB_HEALTH:-200}"
 
     export PATH="$SANDBOX/bin:$PATH"
     export SYSTEMCTL="$SANDBOX/bin/systemctl"
