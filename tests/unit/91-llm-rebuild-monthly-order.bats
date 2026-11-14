@@ -29,7 +29,7 @@ SUBJECT="${LLM_REBUILD_SCRIPT:-$REPO_ROOT/bin/llm-rebuild-monthly.sh}"
 setup() {
     # NOT a skip: a missing subject in CI would mean the vendored copy is gone, which is a defect
     # in this repo, not an environment fact to wave through.
-    [ -r "$SUBJECT" ] || { echo "the monthly rebuild subject is missing: $SUBJECT" >&2; return 1; }
+    [[ -r "$SUBJECT" ]] || { echo "the monthly rebuild subject is missing: $SUBJECT" >&2; return 1; }
 
     SANDBOX="$BATS_TEST_TMPDIR/sb"
     mkdir -p "$SANDBOX/bin" "$SANDBOX/llama/build-cuda/bin" "$SANDBOX/state"
@@ -147,7 +147,7 @@ ENVS
 }
 
 teardown() {
-    [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"
+    [[ -n "${SANDBOX:-}" ]] && rm -rf "$SANDBOX"
 }
 
 # _run — drive the real script against the sandbox.  Every path is a seam the script honours.
@@ -177,9 +177,9 @@ _order_grep() {
     local stop_line move_line
     stop_line=$(grep -n 'systemctl stop' "$ORDER" | head -1 | cut -d: -f1)
     move_line=$(grep -n 'llm-build tree-exists=no' "$ORDER" | head -1 | cut -d: -f1)
-    [ -n "$stop_line" ]
-    [ -n "$move_line" ]
-    [ "$stop_line" -lt "$move_line" ]
+    [[ -n "$stop_line" ]]
+    [[ -n "$move_line" ]]
+    [[ "$stop_line" -lt "$move_line" ]]
 }
 
 @test "the lanes are stopped, and the units named, before llm-build is invoked" {
@@ -210,11 +210,11 @@ SF
     run env LLAMA_ROOT="$SANDBOX/llama" CONSOLE="$SANDBOX/console" STATE="$SANDBOX/state" \
         LANES="lane-a.service" SYSTEMCTL="$SANDBOX/bin/systemctl-stop-fails" \
         bash "$SUBJECT"
-    [ "$status" -ne 0 ]
+    [[ "$status" -ne 0 ]]
     # The stop was actually attempted, the tree is still the serving tree, and the build never ran.
     _order_grep "stop lane-a.service"
-    [ -d "$SANDBOX/llama/build-cuda" ]
-    [ "$(grep -c 'llm-build' "$ORDER")" -eq 0 ]
+    [[ -d "$SANDBOX/llama/build-cuda" ]]
+    [[ "$(grep -c 'llm-build' "$ORDER")" -eq 0 ]]
     grep -q 'refusing to move the tree' "$SANDBOX/state/rebuild.log"
 }
 
@@ -256,12 +256,12 @@ SL
     run env LLAMA_ROOT="$SANDBOX/llama" CONSOLE="$SANDBOX/console" STATE="$SANDBOX/state" \
         LANES="lane-a.service" SYSTEMCTL="$SANDBOX/bin/systemctl-latched" \
         bash "$SUBJECT"
-    [ "$status" -eq 0 ]
+    [[ "$status" -eq 0 ]]
     # The build must still be the one serving: no rollback was taken.  A positive count, not
     # `! grep` - errexit is suppressed for a negated command, so the negated form cannot fail here.
-    [ "$(grep -c 'RESTORING' "$SANDBOX/state/rebuild.log")" -eq 0 ]
+    [[ "$(grep -c 'RESTORING' "$SANDBOX/state/rebuild.log")" -eq 0 ]]
     _order_grep 'reset-failed'
-    [ ! -f "$ORDER.latch" ]
+    [[ ! -f "$ORDER.latch" ]]
 }
 
 @test "a failed deploy KEEPS the built tree instead of deleting it (2026-11-14)" {
@@ -269,12 +269,12 @@ SL
     # a956a852c was destroyed because a latched unit would not restart, so the next run recompiled
     # from nothing and the binary could not be inspected.
     STUB_BUILD_RC=1 _run
-    [ "$status" -ne 0 ]
+    [[ "$status" -ne 0 ]]
     local kept
     kept=$(ls -d "$SANDBOX"/llama/build-cuda.failed-* 2>/dev/null | head -1)
-    [ -n "$kept" ]
-    [ -x "$kept/bin/llama-server" ]
-    [ -x "$SANDBOX/llama/build-cuda/bin/llama-server" ]
+    [[ -n "$kept" ]]
+    [[ -x "$kept/bin/llama-server" ]]
+    [[ -x "$SANDBOX/llama/build-cuda/bin/llama-server" ]]
 }
 
 @test "a FAILED build restores the tree and clears a latched unit before restarting" {
@@ -282,14 +282,14 @@ SL
     # quickly" - which is not cleared by restart, so the rollback reports done over a dead lane
     # (measured 2026-11-14: the rollback's own restart failed for exactly this reason).
     STUB_BUILD_RC=1 _run
-    [ "$status" -ne 0 ]
+    [[ "$status" -ne 0 ]]
     local reset_line restart_line
     reset_line=$(grep -n 'systemctl reset-failed' "$ORDER" | head -1 | cut -d: -f1)
     restart_line=$(grep -n 'systemctl restart' "$ORDER" | tail -1 | cut -d: -f1)
-    [ -n "$reset_line" ]
-    [ -n "$restart_line" ]
-    [ "$reset_line" -lt "$restart_line" ]
-    [ -d "$SANDBOX/llama/build-cuda" ]
+    [[ -n "$reset_line" ]]
+    [[ -n "$restart_line" ]]
+    [[ "$reset_line" -lt "$restart_line" ]]
+    [[ -d "$SANDBOX/llama/build-cuda" ]]
 }
 
 @test "a lane unit that does not resolve refuses BEFORE the tree is touched" {
@@ -297,8 +297,8 @@ SL
     run env LLAMA_ROOT="$SANDBOX/llama" CONSOLE="$SANDBOX/console" STATE="$SANDBOX/state" \
         LANES="typo.service" SYSTEMCTL="$SANDBOX/bin/systemctl" STUB_UNIT_MISSING=1 \
         bash "$SUBJECT"
-    [ "$status" -ne 0 ]
-    [ -d "$SANDBOX/llama/build-cuda" ]
+    [[ "$status" -ne 0 ]]
+    [[ -d "$SANDBOX/llama/build-cuda" ]]
     grep -q 'lane unit does not exist' "$SANDBOX/state/rebuild.log"
 }
 
@@ -310,17 +310,17 @@ SL
     chmod +x "$SANDBOX/bin/heavy-job-busy"
     cp "$SANDBOX/bin/heavy-job-busy" "$SANDBOX/console/bin/heavy-job"
     _run
-    [ "$status" -eq 0 ]
-    [ -d "$SANDBOX/llama/build-cuda" ]
+    [[ "$status" -eq 0 ]]
+    [[ -d "$SANDBOX/llama/build-cuda" ]]
     grep -q 'SKIP: box busy' "$SANDBOX/state/rebuild.log"
 }
 
 @test "a DRY RUN plans and moves nothing (the timer's rehearsal)" {
     _run --dry-run
-    [ "$status" -eq 0 ]
-    [ -d "$SANDBOX/llama/build-cuda" ]
+    [[ "$status" -eq 0 ]]
+    [[ -d "$SANDBOX/llama/build-cuda" ]]
     # Positive counts, not `! grep`: errexit is suppressed for a negated command, so the negated
     # form of either assertion below could never fail this case.
-    [ "$(grep -c 'llm-build' "$ORDER")" -eq 0 ]
+    [[ "$(grep -c 'llm-build' "$ORDER")" -eq 0 ]]
     grep -q 'PLAN: rebuild from' "$SANDBOX/state/rebuild.log"
 }
