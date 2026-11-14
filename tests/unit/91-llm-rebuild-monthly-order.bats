@@ -76,6 +76,18 @@ exit 0
 HJ
     chmod +x "$SANDBOX/bin/heavy-job"
 
+    # The subject's quiet gate refuses when a CI runner worker is active, and under CI the worker
+    # running THIS JOB is that process - so every case SKIPped with "1 CI runner worker(s) active"
+    # and the suite could never pass on a runner (measured 2026-11-14, CI cases 1222-1225, 1228).
+    #
+    # A PATH stub cannot fix it: the subject SETS its own PATH (line 50, "PATH is SET, not
+    # inherited"), so nothing in $SANDBOX/bin is ever consulted for `pgrep`.  An EXPORTED BASH
+    # FUNCTION is inherited by the child `bash "$SUBJECT"` and takes precedence over any PATH
+    # lookup, which is the only seam available without editing another lane's script.
+    # `-c` prints 0 and exits 1 when nothing matches, which is the shape the subject reads.
+    pgrep() { printf '0\n'; return 1; }
+    export -f pgrep
+
     # A CONSOLE whose env.sh defines llm-build as a fake that records WHEN it ran and what the
     # tree looked like at that moment - that pairing is what the ordering cases assert.
     # heavy-job is copied from $SANDBOX/bin: the script resolves it through "$CONSOLE/bin", so a
