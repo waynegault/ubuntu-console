@@ -1,4 +1,21 @@
-#!/bin/sh
+#!/usr/bin/env bash
+# Module Version: 1
+#   v1 (2026-11-14, vendored into ubuntu-console): three repairs so this file obeys the repo it
+#     now lives in, each measured here.
+#     * The shebang was `#!/bin/sh` while the body uses `[[ ]]` throughout.  The systemd unit's
+#       ExecStart names the script directly, so the shebang applies and dash answers
+#       "[[: not found" for EVERY guard — and the script keeps going, exit 0.  Run under `sh`,
+#       `--help` printed that error five times and still returned 0, i.e. the quiet gate, the
+#       lane-existence check, the stop-failure check and the dry-run check were all skipped
+#       silently.  That is the 2026-11-14 class of failure (lanes lost under a rebuild) with the
+#       guards that would have caught it disabled.  Now bash, which the body always required.
+#     * `LANES` was expanded unquoted in eight places, each guarded by a shellcheck suppression
+#       comment.  Suppression is not a fix: the unquoted form also GLOBS, so a unit name
+#       containing a wildcard would expand to filenames.  It is split once into an array
+#       (`read -ra`) and every use is quoted.
+#     * `# Version: 1.0.3` is the lane's own scheme; `# Module Version:` is what this repo's
+#       cross-script guard and tools/check-module-versions.sh read (cf. bin/gpu-busy.sh, which
+#       carries both).  Added, so the file is governed like every other bin/ script.
 # AI INSTRUCTION: increment Version below on every edit
 # Version: 1.0.3
 # 1.0.3 (2026-11-13): LANES named a unit that does not exist. It said
@@ -59,6 +76,9 @@ export PATH
 : "${CONSOLE:=$HOME/github-wsl/ubuntu-console}"
 : "${STATE:=$HOME/.openclaw/state/llm-rebuild}"
 : "${LANES:=llama-cuda-qwen3coder-30b-chat.service llama-cuda-qwen3embedding-embed.service}"
+# Split ONCE, on IFS whitespace, so every later use can be quoted.  The unquoted form this
+# replaced also GLOBBED, so a unit name containing a wildcard would have expanded to filenames.
+read -ra _lane_units <<< "$LANES"
 : "${CHAT_PORT:=18087}"
 : "${EMBED_PORT:=18080}"
 : "${SYSTEMCTL:=systemctl}"
@@ -100,13 +120,11 @@ restore() {
     # Measured 2026-11-14 - the rollback's own restart failed for exactly this reason.
     # A unit that was never latched answers this non-zero; that is not a failure to report, so the
     # status is ignored on purpose and the restart below is what proves the lanes came back.
-    # shellcheck disable=SC2086  # LANES is a deliberate space-separated list
     # swallow-ok: a unit that was never latched answers non-zero; the restart below is what proves the lanes
-    if ! "$SYSTEMCTL" --user reset-failed $LANES 2>/dev/null; then
+    if ! "$SYSTEMCTL" --user reset-failed "${_lane_units[@]}" 2>/dev/null; then
         say "NOTE: reset-failed reported a unit with nothing to clear"
     fi
-    # shellcheck disable=SC2086  # as above
-    "$SYSTEMCTL" --user restart $LANES
+    "$SYSTEMCTL" --user restart "${_lane_units[@]}"
     exit 1
 }
 
@@ -126,7 +144,7 @@ say "=== monthly llama.cpp rebuild ==="
 # ---- problem: `systemctl restart` restarts the names it knows and reports the rest as not found,
 # ---- so a bad name leaves that lane running the OLD binary while health_ok() still reads 200
 # ---- from the process that was already up. Measured 2026-11-13 with the previous LANES value.
-for u in $LANES; do
+for u in "${_lane_units[@]}"; do
     if ! "$SYSTEMCTL" --user cat "$u" >/dev/null 2>&1; then
         say "FAIL: lane unit does not exist: $u - refusing to rebuild"
         exit 1
@@ -197,8 +215,10 @@ fi
 # ---- Cost is the lane being down for the compile, which is the same cost the restart already
 # ---- pays -- but taken at a point where the failure is recoverable.
 say "stopping the lanes before the move: $LANES"
-# shellcheck disable=SC2086  # LANES is a deliberate space-separated list, expanded on purpose
-"$SYSTEMCTL" --user stop $LANES || { say "FAIL: could not stop the lanes - refusing to move the tree"; exit 1; }
+if ! "$SYSTEMCTL" --user stop "${_lane_units[@]}"; then
+    say "FAIL: could not stop the lanes - refusing to move the tree"
+    exit 1
+fi
 
 # ---- Move aside, then build. llm-build pulls --ff-only from origin/master, configures for the
 # ---- card's arch, and builds into the tree that the launcher resolves.
@@ -234,7 +254,7 @@ esac
 # ---- exactly how the 1.0.3 bad-unit-name defect would have read green. So the MainPID of every
 # ---- lane must CHANGE, which is the only evidence that the new binary is the one serving.
 old_pids=""
-for u in $LANES; do
+for u in "${_lane_units[@]}"; do
     # swallow-ok: the pre-restart MainPID is compared with the post one; empty makes the comparison fail loudly
     old_pids="$old_pids $("$SYSTEMCTL" --user show -p MainPID --value "$u" 2>/dev/null)"
 done
@@ -244,12 +264,11 @@ done
 # and a COMPLETED build is thrown away by the rollback.  Measured 2026-11-14 21:16:27: the build
 # produced 384 at a956a852c, the restart hit the latch, and the script restored c75fba30c - a good
 # binary discarded over a unit's bookkeeping state.
-# shellcheck disable=SC2086  # LANES is a deliberate space-separated list
 # swallow-ok: a unit that was never latched answers non-zero; the restart below is what proves the lanes
-if ! "$SYSTEMCTL" --user reset-failed $LANES 2>/dev/null; then
+if ! "$SYSTEMCTL" --user reset-failed "${_lane_units[@]}" 2>/dev/null; then
     say "NOTE: reset-failed reported a unit with nothing to clear"
 fi
-"$SYSTEMCTL" --user restart $LANES
+"$SYSTEMCTL" --user restart "${_lane_units[@]}"
 rc=$?
 if [[ "$rc" -ne 0 ]]; then
     say "FAIL: systemctl restart rc=$rc"
@@ -268,7 +287,7 @@ fi
 # ---- Every lane must be a NEW process. A pid that did not move means that lane is still serving
 # ---- the binary this run replaced, whatever /health says.
 set -- $old_pids
-for u in $LANES; do
+for u in "${_lane_units[@]}"; do
     was=$1; shift
     # swallow-ok: as above: the post-restart MainPID, whose mismatch is the failure the caller reports
     now=$("$SYSTEMCTL" --user show -p MainPID --value "$u" 2>/dev/null)
