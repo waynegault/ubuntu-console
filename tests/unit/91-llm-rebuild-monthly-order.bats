@@ -101,13 +101,21 @@ HJ
     mkdir -p "$SANDBOX/console/bin"
     cp "$SANDBOX/bin/heavy-job" "$SANDBOX/console/bin/heavy-job"
     chmod +x "$SANDBOX/console/bin/heavy-job"
+    # The built binary as its own FILE: a stub that reads the commit when it RUNS.  Generating it
+    # inline in the env.sh heredoc baked the commit in at fixture-creation time, which made the
+    # script's own "binary does not report" check fail for a reason unrelated to the property
+    # under test (measured while adding the latched-unit case).
+    cat > "$SANDBOX/bin/built-llama-server" <<'BIN'
+#!/usr/bin/env bash
+printf 'version: test (build 2, commit %s)\n' "$(git -C "$STUB_ROOT" rev-parse --short HEAD)"
+BIN
+    chmod +x "$SANDBOX/bin/built-llama-server"
+    export STUB_ROOT="$SANDBOX/llama"
     cat > "$SANDBOX/console/env.sh" <<ENVS
 llm-build() {
     printf 'llm-build tree-exists=%s\n' "\$([ -d $SANDBOX/llama/build-cuda ] && echo yes || echo no)" >> "$ORDER"
     mkdir -p "$SANDBOX/llama/build-cuda/bin"
-    printf '#!/usr/bin/env bash\nprintf "version: test (build 2, commit %s)\\\\n" "\$(git -C $SANDBOX/llama rev-parse --short HEAD)"\n' \
-        > "$SANDBOX/llama/build-cuda/bin/llama-server"
-    chmod +x "$SANDBOX/llama/build-cuda/bin/llama-server"
+    cp "$SANDBOX/bin/built-llama-server" "$SANDBOX/llama/build-cuda/bin/llama-server"
     return "\${STUB_BUILD_RC:-0}"
 }
 ENVS
@@ -208,6 +216,65 @@ SF
     [ -d "$SANDBOX/llama/build-cuda" ]
     [ "$(grep -c 'llm-build' "$ORDER")" -eq 0 ]
     grep -q 'refusing to move the tree' "$SANDBOX/state/rebuild.log"
+}
+
+@test "a LATCHED unit is reset before the SUCCESS restart, so a good build is not rolled back" {
+    # Catches the 2026-11-14 21:16:27 shape exactly: the build produced 384 at a956a852c, then
+    # `restart` returned 1 with "Start request repeated too quickly" - a latch restart does not
+    # clear - and the script restored the OLD binary, discarding a good build over unit
+    # bookkeeping.  The fake systemctl here REFUSES restart while it holds a latch, and only
+    # reset-failed clears that latch, so the case passes only if reset comes first.
+    cat > "$SANDBOX/bin/systemctl-latched" <<'SL'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "$ORDER"
+latch="${ORDER}.latch"
+case "$*" in
+    *" reset-failed "*) rm -f "$latch"; exit 0 ;;
+    *" restart "*)
+        if [ -f "$latch" ]; then
+            printf 'Start request repeated too quickly.\n' >&2
+            exit 1
+        fi
+        exit 0
+        ;;
+    *" show "*)
+        # A restarted lane is a NEW process: hand back a different MainPID from here on, so the
+        # script's own "did this lane actually restart" check is satisfied by the restart rather
+        # than failing the case for a reason unrelated to the latch.
+        n=$(( $(cat "${ORDER}.pid" 2>/dev/null || echo 1000) + 1 ))
+        printf '%s\n' "$n" > "${ORDER}.pid"
+        printf '%s\n' "$n"
+        exit 0
+        ;;
+    *" stop "*|*" cat "*) exit 0 ;;
+    *) exit 0 ;;
+esac
+SL
+    chmod +x "$SANDBOX/bin/systemctl-latched"
+    # Seed the latch as a pre-run state: the lane was already latched before the rebuild began.
+    : > "$ORDER.latch"
+    run env LLAMA_ROOT="$SANDBOX/llama" CONSOLE="$SANDBOX/console" STATE="$SANDBOX/state" \
+        LANES="lane-a.service" SYSTEMCTL="$SANDBOX/bin/systemctl-latched" \
+        bash "$SUBJECT"
+    [ "$status" -eq 0 ]
+    # The build must still be the one serving: no rollback was taken.  A positive count, not
+    # `! grep` - errexit is suppressed for a negated command, so the negated form cannot fail here.
+    [ "$(grep -c 'RESTORING' "$SANDBOX/state/rebuild.log")" -eq 0 ]
+    _order_grep 'reset-failed'
+    [ ! -f "$ORDER.latch" ]
+}
+
+@test "a failed deploy KEEPS the built tree instead of deleting it (2026-11-14)" {
+    # Catches: restore() removing the tree it is replacing.  Measured 21:16:27 - a good build of
+    # a956a852c was destroyed because a latched unit would not restart, so the next run recompiled
+    # from nothing and the binary could not be inspected.
+    STUB_BUILD_RC=1 _run
+    [ "$status" -ne 0 ]
+    local kept
+    kept=$(ls -d "$SANDBOX"/llama/build-cuda.failed-* 2>/dev/null | head -1)
+    [ -n "$kept" ]
+    [ -x "$kept/bin/llama-server" ]
+    [ -x "$SANDBOX/llama/build-cuda/bin/llama-server" ]
 }
 
 @test "a FAILED build restores the tree and clears a latched unit before restarting" {

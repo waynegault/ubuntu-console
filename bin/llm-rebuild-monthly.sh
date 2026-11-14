@@ -77,7 +77,22 @@ say() {
 # every failure after the move, including a binary that does not report the pulled commit.
 restore() {
     say "RESTORING $prev -> build-cuda and restarting the lanes"
-    rm -rf "$LLAMA_ROOT/build-cuda"
+    # The tree being discarded may be a COMPLETED build whose deploy failed, not a wreck:
+    # measured 2026-11-14 21:16:27, when a build of a956a852c was discarded because a latched
+    # unit would not restart.  Move it aside under its own name so it survives for inspection or
+    # a manual deploy; a later run prunes it by its own rule.  Only a tree that cannot be moved
+    # is removed, because the move back needs the path free.
+    if [ -d "$LLAMA_ROOT/build-cuda" ]; then
+        # swallow-ok: the commit only names the kept tree; "unknown" is still a usable name
+        built_commit=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+        failed_tree="$LLAMA_ROOT/build-cuda.failed-$built_commit-$(date -u +%H%M%S)"
+        if mv "$LLAMA_ROOT/build-cuda" "$failed_tree"; then
+            say "kept the replaced build for inspection: $failed_tree"
+        else
+            say "WARN: could not move the built tree aside; removing it to free build-cuda"
+            rm -rf -- "$LLAMA_ROOT/build-cuda"
+        fi
+    fi
     mv "$prev" "$LLAMA_ROOT/build-cuda" || say "FAIL: could not move $prev back"
     # reset-failed FIRST: a unit that latched "start request repeated too quickly" is not revived
     # by restart, so the rollback would put the tree back and report done over a dead lane.
@@ -222,6 +237,17 @@ for u in $LANES; do
     # swallow-ok: the pre-restart MainPID is compared with the post one; empty makes the comparison fail loudly
     old_pids="$old_pids $("$SYSTEMCTL" --user show -p MainPID --value "$u" 2>/dev/null)"
 done
+# Reset BEFORE the success restart, for the same reason restore() does it.  The stop above leaves
+# the unit Result=signal (a SIGKILL after the stop timeout); if it was ALSO latched before this
+# run - "Start request repeated too quickly", which restart does not clear - then restart returns 1
+# and a COMPLETED build is thrown away by the rollback.  Measured 2026-11-14 21:16:27: the build
+# produced 384 at a956a852c, the restart hit the latch, and the script restored c75fba30c - a good
+# binary discarded over a unit's bookkeeping state.
+# shellcheck disable=SC2086  # LANES is a deliberate space-separated list
+# swallow-ok: a unit that was never latched answers non-zero; the restart below is what proves the lanes
+if ! "$SYSTEMCTL" --user reset-failed $LANES 2>/dev/null; then
+    say "NOTE: reset-failed reported a unit with nothing to clear"
+fi
 "$SYSTEMCTL" --user restart $LANES
 rc=$?
 if [ "$rc" -ne 0 ]; then
