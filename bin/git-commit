@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
+#   v1 (2026-11-12): created.  `git commit -o -F <file> -- <paths>` is the ONLY ordering
+#     that works, and the two wrong ones fail with messages that describe a pathspec
+#     rather than the argument order: `-m <body> -- <paths>` swallows the body as a
+#     pathspec ("did not match any file(s) known to git"), and `-- <paths> -F <file>`
+#     makes git parse `-F` and the file as pathspecs too.  Measured three attempts in a
+#     row on one commit (2026-11-12, ubuntu-console d71c3dad).
+#
+# git-commit — commit ONLY named paths, with the message from a file, in the one order
+# git accepts.  A thin wrapper, because the ordering is a git-parsing trap and not a
+# thing to remember.
+#
+# WHY THIS EXISTS.  A shared tree holds another lane's staging, so `git commit` (which
+# publishes the WHOLE index) is unsafe and `-o/--only` is required.  Combining `--only`
+# with a message is where it breaks: git stops option parsing at `--`, so anything after
+# it — including `-F <file>` — is a pathspec, and `-m` placed before `--` is consumed as
+# one when the body is multi-line.  Both failures name a pathspec and neither names the
+# order, so the fix is to stop writing the order by hand.
+#
+# USAGE
+#   git-commit -F <message-file> -- <path> [<path>...]
+#   git-commit -F <message-file> <path> [<path>...]     # `--` optional; added if absent
+#
+# Exit: 0 committed, 1 refused (bad arguments, or git's own failure), 64 usage.
+set -uo pipefail
+
+# warn — this tool's ONE stderr path, so every refusal has the same shape (§18.3 10.7).
+warn() { printf 'git-commit: %s\n' "$*" >&2; }
+
+# _usage — print the USAGE block from this file's own header, then exit 64 (EX_USAGE).
+_usage() {
+    sed -n '/^# USAGE$/,/^# Exit:/p' "$0" | sed 's/^# \{0,1\}//' >&2
+    # 64 is EX_USAGE: the caller asked for something this wrapper cannot parse.
+    exit 64
+}
+
+_message_file=""
+_paths=()
+
+# Parse: `-F <file>` (or `--file=<file>`) may appear anywhere BEFORE `--`; every other
+# argument is a path.  A `--` is accepted and skipped, so the documented form and the
+# bare form both work.
+while (( $# > 0 )); do
+    case "$1" in
+        -F)
+            [[ $# -ge 2 ]] || { warn "-F needs a message file"; _usage; }
+            _message_file="$2"
+            shift 2
+            ;;
+        --file=*)
+            _message_file="${1#--file=}"
+            shift
+            ;;
+        --)
+            shift
+            ;;
+        -h|--help)
+            _usage
+            ;;
+        -*)
+            warn "unsupported option '$1' — this wrapper forwards only -F/--file, and the paths"
+            _usage
+            ;;
+        *)
+            _paths+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$_message_file" ]]; then
+    warn "a message file is required (-F <file>): a multi-line -m body before -- is consumed as a pathspec"
+    _usage
+fi
+if [[ ! -f "$_message_file" ]]; then
+    warn "message file not found: $_message_file"
+    exit 1
+fi
+if [[ ! -s "$_message_file" ]]; then
+    warn "message file is empty: $_message_file — git would abort with an empty message after the gates ran"
+    exit 1
+fi
+if (( ${#_paths[@]} == 0 )); then
+    warn "no paths given — refusing: without --only this would publish the whole index, including another lane's staging"
+    _usage
+fi
+
+# The one order git accepts: options first, then `--`, then the pathspecs.
+exec git commit -o -F "$_message_file" -- "${_paths[@]}"
+
+# end of file

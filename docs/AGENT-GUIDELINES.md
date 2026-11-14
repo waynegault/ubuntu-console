@@ -211,6 +211,24 @@ tac-exec le
 
 ---
 
+## Committing in a shared tree
+
+Two lanes edit this checkout, so the index can hold staging that is not yours and a bare
+`git commit` publishes all of it. `bin/git-commit` (linked to `~/.local/bin`) is the
+wrapper for the safe form:
+
+```bash
+# message from a FILE (a multi-line -m body is consumed as a pathspec), only these paths
+git-commit -F .git/msg.txt -- scripts/autotune-model.sh systemd/some.service
+```
+
+It emits git's one valid order — `git commit -o -F <file> -- <paths>` — and refuses
+(exit 64) with no message file, no paths, or an unsupported option. The ordering is a git
+parsing trap, not a thing to remember: `-- <paths> -F <file>` makes git read `-F` and the
+file as pathspecs, and `-m <body> -- <paths>` does the same to the body. Both failures
+name a pathspec and neither names the order (measured 2026-11-12, three attempts on one
+commit).
+
 ## Error Handling
 
 All commands return:

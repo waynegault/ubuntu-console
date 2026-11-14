@@ -322,7 +322,9 @@ jobs:
                tests/unit/89-model-idle-release.bats \
                tests/unit/90-model-mmproj.bats \
                tests/unit/91-health-timeout.bats \
-               tests/unit/92-lane-arbiter.bats
+               tests/unit/92-lane-arbiter.bats \
+               tests/unit/93-suspend-hold-liveness.bats \
+               tests/unit/94-git-commit.bats
 
       - name: Run integration tests
         run: |

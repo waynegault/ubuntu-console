@@ -1,6 +1,14 @@
 # docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh
 # id<TAB>count.  A count may FALL freely; raising one is a deliberate act.
 #
+# 2026-11-12 (latest): 10.7 252 -> 253 — CORPUS GROWTH, not drift.  bin/git-commit is a
+# new shell tool (the wrapper that owns git's -F/-- ordering).  Every refusal goes through
+# one warn() helper, so the +1 is that helper's OWN definition line — the irreducible site
+# this counter's header documents (the tools/check-ruff-pin.sh and bin/llm-pull
+# precedents).  Its other stderr write is the usage block, which is the sanctioned form.
+# No other counter rose: 8.1.8 FELL 287 -> 285 from the same file.  Re-baselined by hand
+# rather than with `--update`, which rewrites the whole file and drops other lanes' notes.
+#
 # 2026-11-05 (latest): 10.7 241 -> 242 — CORPUS GROWTH, not drift.  bin/llm-pull is a
 # new shell tool; its five hand-written `echo/printf … >&2` sites were routed through one
 # warn() helper at the source, so the +1 that remains is that helper's OWN definition line
@@ -264,5 +272,5 @@
 9.5	116
 9.7	79
 10.4	41
-10.7	252
+10.7	253
 10.8	0
