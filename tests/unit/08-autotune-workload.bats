@@ -1211,7 +1211,7 @@ STUB
     local sb="$BATS_TEST_TMPDIR/unsup"
     run _selftest_run "$sb" _SELFTEST_LAUNCH_FAIL=unsupported
     [[ "$status" -eq 1 ]]
-    [[ "$output" == *"reason:  unsupported architecture / no matching backend"* ]]
+    [[ "$output" == *"reason:  unsupported architecture / non-generative model"* ]]
     [[ "$output" == *"unknown model architecture: 'gpt-oss'"* ]]
     grep -qx 'classification=unsupported_arch' "$sb/autotune.result"
     # A durable verdict: the row would be marked in the registry's OWN terminal vocabulary.
