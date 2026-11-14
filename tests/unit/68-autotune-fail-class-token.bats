@@ -330,10 +330,18 @@ report_with() {
 }
 
 @test "main combo walk handles loader_crash_unknown without descending to half ctx" {
+    # The RULE, not one spelling of it.  This asserted the exact source text
+    # `if [[ "$_lft" == "loader_crash_unknown" ]]; then`, which a later change replaced
+    # with a condition that also stops on window_timeout (2026-11-14) — the behaviour the
+    # case protects was still there, so the case was pinning the shape (measured: it went
+    # red on the runner and here while the abort was intact).  Assert that the crash class
+    # is in the stop condition AND that the walk aborts, without dictating the operator.
     run awk '/^    test_num=0; c=\$c0;/,/^done$/' "$SCRIPT"
     [ "$status" -eq 0 ]
-    [[ "$output" == *'if [[ "$_lft" == "loader_crash_unknown" ]]; then'* ]]
+    [[ "$output" == *'"loader_crash_unknown"'* ]]
     [[ "$output" == *'_ABORT_COMBO_WALK=1'* ]]
+    # ...and it must stop, not halve: no descent line on that branch.
+    [[ "$output" == *'break'* ]]
 }
 
 @test "_launch_or_record_failure hands off live AT_WINDOW_S timeout instead of stopping as loader_crash_unknown" {

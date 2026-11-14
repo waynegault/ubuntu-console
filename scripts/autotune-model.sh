@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 141
+# Module Version: 142
+#   v142 (2026-11-14): the KV sweep prints the ELIGIBILITY GATE's own answer for a refused
+#     pair instead of a fixed sentence.  The line read "Skipped (requires retrieval
+#     validation test)" — a claim of our own that discarded which cause fired, while
+#     kv_pair_status already returns the reason (it names KVCACHE-QUANT-VALIDATE-001).
+#     Measured 2026-11-14: tests/unit/23-prompt-cache-and-gpu-classify.bats could only
+#     assert a literal it no longer printed, so a real refusal reason was both discarded
+#     and untestable.
 #   v141 (2026-11-12): re-arm the readiness window before the flash-attn-off retry in
 #     ttft_probe (the retry inherited an exhausted hw and timed out instantly), and emit
 #     the same 60s load heartbeat the bench spawn already prints.
@@ -2175,7 +2182,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
         [[ "$_kk" == "$WIN_KVK" && "$_kv" == "$WIN_KVV" ]] && continue
         _kv_status=$(kv_pair_status "$_kk" "$_kv")
         if [[ "$_kv_status" != "certified" ]]; then
-            echo "  • KV Cache ($_kk/$_kv): Skipped (requires retrieval validation test)"
+            # Print the GATE's reason, not a sentence of our own.  kv_pair_status can refuse
+            # for different causes, and a fixed message replaced the one fact that tells an
+            # operator which: measured 2026-11-14, the sweep said "Skipped (requires
+            # retrieval validation test)" while the gate's answer carries the card id
+            # (KVCACHE-QUANT-VALIDATE-001) and any future cause it learns to name.
+            echo "  • KV Cache ($_kk/$_kv): Skipped — $_kv_status"
             continue
         fi
         KV_PAIRS+=("$_pair")

@@ -69,8 +69,17 @@ SPARED_LANE_FOOTPRINT_MIB=4094
     # An absence check (grep -c "430 MiB" == 0) would also fail on a comment that
     # QUOTES the old figure to explain why it was wrong — which is what the fix does.
     # A test that forbids a string forbids the correction that mentions it.
-    run grep -c "4094 MiB" "$REPO_ROOT/scripts/autotune-model.sh"
-    [ "$output" -ge 1 ]
+    #
+    # It is searched across the files that can carry it, not one: the guard's rationale
+    # moved from scripts/autotune-model.sh into _tac_vram_baseline_verdict
+    # (bin/_tac-bin-lib.sh) when the verdict became a shared predicate, and pinning the
+    # old file turned a correct relocation into a red case (measured 2026-11-14: the
+    # figure is still documented, in the library and in 11d/autotune-rows).
+    run grep -rl "4094 MiB" "$REPO_ROOT/scripts/autotune-model.sh" \
+        "$REPO_ROOT/bin/_tac-bin-lib.sh" "$REPO_ROOT/scripts/11d-llm-gpu.sh" \
+        "$REPO_ROOT/bin/autotune-rows.sh"
+    [ "$status" -eq 0 ] || { echo "FAIL: no file documents the 4094 MiB driver+lane measurement"; return 1; }
+    [ -n "$output" ]
 }
 
 # ── The census (owner decision 2026-11-05, card AUTOTUNE-BASELINE-002) ─────────

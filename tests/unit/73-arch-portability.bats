@@ -128,6 +128,12 @@ stub_uname() {
     # Criterion: CUDA is arch-neutral — an arm64 CUDA box builds and owns its own
     # lane.  This box's CUDA lanes are kept off other hosts by their profile marker,
     # not by ConditionArchitecture, which would also block a legitimate arm64 lane.
+    #
+    # The COUNT is a floor, not the census: it exists so an empty glob cannot satisfy the
+    # per-unit checks vacuously.  A new CUDA lane is a normal event —
+    # llama-cuda-qwen25-3b-measure.service arrived on 2026-11-13 — and pinning the exact
+    # total turned a correct addition into a red suite (measured 2026-11-14: "expected 4
+    # CUDA units, matched 5").  The per-unit assertions are what the criterion is about.
     local unit count=0
     for unit in "$REPO_ROOT"/systemd/llama-cuda-*.service
     do
@@ -138,7 +144,10 @@ stub_uname() {
             || grep -qx '# install-profile: asus-n1n-rtx-spark' "$unit" \
             || { echo "FAIL: $(basename "$unit") is not marked for a host profile"; return 1; }
     done
-    [ "$count" -eq 4 ] || { echo "FAIL: expected 4 CUDA units, matched $count"; return 1; }
+    [ "$count" -ge 1 ] || { echo "FAIL: the CUDA lane glob matched nothing"; return 1; }
+    # The lane this box must always have, named so the floor cannot be met by a stray.
+    grep -qx '# install-profile: asus-n1n-rtx-spark' \
+        "$REPO_ROOT/systemd/llama-cuda-qwen3coder-30b-chat.service"
 }
 
 @test "the CPU lane unit stays architecture-neutral" {

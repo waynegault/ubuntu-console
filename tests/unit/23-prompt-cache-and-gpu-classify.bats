@@ -629,13 +629,22 @@ EOS
     # the narrowing happens.  Both the gate call and the reason text must be inside
     # it: a pair removed from the list with no line saying why is indistinguishable
     # from a pair nobody configured — the silent failure this gate exists to stop.
+    #
+    # The rule is that the line carries the GATE'S OWN ANSWER, not a fixed phrase.  This
+    # asserted the literal "NOT TESTED", which the sweep no longer prints (it said
+    # "Skipped (requires retrieval validation test)", a sentence of its own that discarded
+    # which cause fired); both were shape checks on wording, and neither said the thing
+    # that matters.  $_kv_status is now echoed, so the pair's refusal names its own reason
+    # (measured 2026-11-14: the gate answers with the card id, KVCACHE-QUANT-VALIDATE-001).
     awk '/^    for _pair in \$KV_QUANTS; do/,/^    done$/' "$AUTOTUNE" > "$SANDBOX/sweeploop.sh"
     grep -q 'kv_pair_status' "$SANDBOX/sweeploop.sh" \
         || { echo "FAIL: the sweep does not consult the eligibility gate"; return 1; }
-    grep -q 'NOT TESTED' "$SANDBOX/sweeploop.sh" \
-        || { echo "FAIL: a refused pair is dropped without a printed reason"; return 1; }
     grep -q '\$_kv_status' "$SANDBOX/sweeploop.sh" \
-        || { echo "FAIL: the refusal does not print the gate's reason"; return 1; }
+        || { echo "FAIL: a refused pair is dropped without printing the gate's reason"; return 1; }
+    # ...and the status must reach a PRINTER, not merely be assigned: a captured
+    # $_kv_status with no echo would satisfy the check above and still drop the pair.
+    grep -qE '^[^#]*echo[^#]*\$_kv_status' "$SANDBOX/sweeploop.sh" \
+        || { echo "FAIL: the gate's reason is never printed"; return 1; }
 }
 
 @test "kv-quant: q4_0 stays a configured candidate, so the refusal path stays reachable" {

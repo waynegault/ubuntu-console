@@ -27,6 +27,18 @@
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 LAUNCHER="$REPO_ROOT/scripts/11e-llm-model.sh"
 
+# _py — the interpreter to build GGUF fixtures with, resolved the way the SHIPPED tools
+# resolve it (repo venv when executable, else PATH).  The projector case named
+# "$REPO_ROOT/.venv/bin/python3" literally, which exists on this box and not in the CI
+# runner's checkout: measured 2026-11-14, case 1210 exited 127 there and nowhere else.
+# Same helper as tests/unit/88-slots-probe.bats, including the fallback validation.
+_py() {
+    local p="$REPO_ROOT/.venv/bin/python3"
+    [[ -x "$p" ]] || p="$(command -v python3 || true)"
+    [[ -x "$p" ]] || return 1
+    printf '%s\n' "$p"
+}
+
 setup() {
     export SANDBOX="$BATS_TEST_TMPDIR/fixtures"
     mkdir -p "$SANDBOX"
@@ -183,7 +195,8 @@ _has_flag_value() {
 
 @test "mmproj: shared directory skips mismatched GGUF projector and keeps matching GGUF projector" {
     mkdir -p "$SANDBOX/shared"
-    "$REPO_ROOT/.venv/bin/python3" - "$SANDBOX/shared" <<'PY'
+    PY="$(_py)" || { echo "FAIL: no usable python3 to build the fixture"; return 1; }
+    "$PY" - "$SANDBOX/shared" <<'PY'
 import struct, sys
 from pathlib import Path
 
