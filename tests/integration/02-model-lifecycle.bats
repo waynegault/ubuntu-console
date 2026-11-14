@@ -153,9 +153,14 @@ setup() {
     local fn_src
     fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"stable"* ]]
-    [[ "$fn_src" == *"TPS stable"* ]]
+    # The stability KNOB, not the prose that once explained it.  This asserted the
+    # comment text "TPS stable", which a comment-consolidation commit deleted
+    # (6e419544, 2026-11-13: 1423 comment lines removed, 6 added, no code touched) —
+    # so a documentation tidy-up reddened a suite about behaviour.  `nsamples` is the
+    # mechanism: a probe samples more than once so jitter is measured rather than
+    # inferred, and the median is what the winner is chosen on.
     [[ "$fn_src" == *"nsamples"* ]]
+    [[ "$fn_src" == *"median"* ]]
 }
 
 @test "integration: autotune-model.sh honors a minimum TPS floor" {

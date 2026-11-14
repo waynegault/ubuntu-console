@@ -1,6 +1,19 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 136
+#   v136 (2026-11-14): the watchdog-active probe in __model_info addresses the timer through
+#   LLM_BENCH_WATCHDOG_TIMER instead of the literal llama-watchdog.timer.  A literal is a
+#   second, un-overridable call site: measured by tests/integration/e2e-bench-autotune.bats
+#   F3, whose stubbed run still queried the REAL unit.
+#   v135 (2026-11-14): the quiet gate gains a THIRD input - the card itself.  The lock and the
+#   Runner.Worker count cannot see a GPU consumer that takes no lock and starts no runner job; an
+#   investigator pytest suite (tests/gpu, -n 8) held 5768 of 8192 MiB while `heavy-job --status`
+#   read free and no worker existed, so a rebuild would have started into it.  `bin/gpu-busy.sh
+#   --json` is asked additively; only a reason naming ANOTHER tenant (`foreign-app`, `declared:`,
+#   `lock:`) refuses, because a serving lane reads `util`/`serving` and that is a normal time to
+#   rebuild.  It has its own override, `LLAMA_BUILD_ALLOW_CARD` - `LLAMA_BUILD_ALLOW_CI` does not
+#   waive it, since building through a CI job and alongside a GPU tenant are different decisions.
 # Module Version: 134
 #   v134 (2026-11-12): pass --now to wsl-restart.sh so confirmation dialogue appears immediately;
 #     auto-trigger restart mid-bench on rc=3 without interactive prompt.
@@ -4681,7 +4694,12 @@ function __model_doctor() {
         __llm_registry_entry_by_file "$default_file" >/dev/null && default_in_registry=1
     fi
 
-    if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet llama-watchdog.timer 2>/dev/null
+    # The timer name is the OVERRIDE, as everywhere else: a literal here is a second,
+    # un-overridable call site, and the F3 contract is that the bench addresses the
+    # watchdog ONLY through LLM_BENCH_WATCHDOG_TIMER (measured 2026-11-14: this line
+    # named llama-watchdog.timer literally, so a stubbed run still queried the real unit).
+    if command -v systemctl >/dev/null 2>&1 \
+       && systemctl --user is-active --quiet "${LLM_BENCH_WATCHDOG_TIMER:-llama-watchdog.timer}" 2>/dev/null
     then
         watchdog_active=1
     fi
@@ -5885,6 +5903,42 @@ function llm-build() {
     then
         lock_busy=true
         lock_note="${ci_workers} CI runner worker(s) active - set LLAMA_BUILD_ALLOW_CI=1 to build anyway"
+    fi
+
+    # ---- Third input: the CARD itself ---------------------------------------------------------
+    # The two inputs above cannot see a GPU consumer that takes no lock and starts no runner job.
+    # Measured 2026-11-14: an investigator pytest suite (tests/gpu, -n 8) held 5768 of 8192 MiB
+    # while `heavy-job --status` read free and no runner worker existed, so a rebuild would have
+    # started into it.  `gpu-busy.sh` is the box's card detector; it is asked here additively,
+    # under the same override, because it also answers BUSY when our OWN lane is serving - and a
+    # lane doing useful work is a normal time to rebuild, as long as nothing else holds the card.
+    # Its --json carries the reasons, so those two cases are told apart instead of collapsed into
+    # one busy word.
+    local card_held=""
+    # LLAMA_BUILD_ALLOW_CI deliberately does NOT waive this one: it exists to build THROUGH a CI
+    # job, and a CI job is not a GPU tenant.  The card has its own override so that building past
+    # a real tenant is a separate, named decision rather than a side effect of the CI waiver.
+    if [[ -z "${LLAMA_BUILD_ALLOW_CARD:-}" && "$lock_busy" != "true" ]]
+    then
+        local _card_json=""
+        # swallow-ok: an unreadable verdict leaves the gate as it was - the lock and CI inputs still decide
+        _card_json=$("${TACTICAL_REPO_ROOT:?}/bin/gpu-busy.sh" --json 2>/dev/null) || true
+        case "$_card_json" in
+            *'"busy":true'*)
+                # Only a reason naming ANOTHER tenant is a refusal.  `foreign-app` and
+                # `declared:` say something else holds the card; `util`/`suppressed`/`serving`
+                # describe our own lane's work, which is a normal time to rebuild.  The arm
+                # field is not read: `"arm":"foreign-app"` repeats the word and would make a
+                # reasons-less verdict look held.
+                card_held=$(printf '%s' "$_card_json" | tr ',' '\n' \
+                    | grep -oE '"(foreign-app[^"]*|declared:[^"]*|lock:[^"]*)"' | head -1 | tr -d '"')
+                ;;
+        esac
+        if [[ -n "$card_held" ]]
+        then
+            lock_busy=true
+            lock_note="the CUDA card is held by ${card_held} - set LLAMA_BUILD_ALLOW_CARD=1 to build anyway"
+        fi
     fi
 
     # ---- Pre-flight plan: what would actually change, and what does it affect?

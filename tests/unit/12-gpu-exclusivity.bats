@@ -599,6 +599,7 @@ EOS
         llama-xe-embeddinggemma-embed.service
         llama-xe-llama32-3b-chat.service
         llama-cuda-llama32-3b-chat.service
+        llama-cuda-qwen25-3b-measure.service
         llama-cuda-qwen35-4b-pipeline.service
         llama-cuda-qwen3coder-30b-chat.service
         llama-cuda-qwen3embedding-embed.service

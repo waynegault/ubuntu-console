@@ -383,6 +383,15 @@ LLM_BENCH_LOCK_WAIT_SECONDS=1"
     # a single [F1] run.  A test that can start the scheduler mid-run can disturb someone
     # else's GPU run, so the unit name is an override and the stub below records every
     # systemctl argument this bench makes.
+    #
+    # THE RULE NARROWED IN v128 (2026-11-12), deliberately: __model_bench now enters the
+    # shared clean-room when it owns the card, and _tac_cleanroom_enter holds the REAL
+    # watchdog units (llama-watchdog.timer, llama-watchdog-guard.timer, the service) so a
+    # measurement is uncontended.  That is the feature, and this case asserted its absence
+    # — it went red the moment the bench stopped being "only through the override".
+    # What still holds, and is what the 2026-09-18 incident was about, is that the bench
+    # does not RESTART a watchdog it did not hold: a start/restart of the real timer would
+    # revive a tenant mid-run.  Clean-room only ever stops, and restores what it stopped.
     local bin="$TAC_TEST_TMPDIR/stubbin"
     mkdir -p "$bin"
     cat > "$bin/systemctl" <<'EOS'
@@ -405,12 +414,21 @@ EOS
     [[ "$status" -ne 125 ]]
     # A stub that answered nothing would prove nothing about which name is used.
     local seen; seen=$(cat "$calls" 2>/dev/null || true)
-    if [[ "$seen" != *fake-watchdog.timer* || "$seen" == *llama-watchdog.timer* ]]
-    then
+    # 1. The bench's OWN timer handling goes through the override.
+    [[ "$seen" == *fake-watchdog.timer* ]] || {
         printf 'systemctl calls the bench made:\n%s\n' "${seen:-<none>}"
+        echo "FAIL: the bench never addressed LLM_BENCH_WATCHDOG_TIMER"
+        return 1
+    }
+    # 2. It never STARTS or RESTARTS the real watchdog — the 2026-09-18 hazard.  A stop
+    #    is clean-room holding the unit, which v128 made deliberate; a start would revive
+    #    a tenant mid-measurement, which is the thing that must not happen.
+    if grep -E -- '--user (start|restart|try-restart|reload-or-restart) .*llama-watchdog' <<< "$seen" >/dev/null
+    then
+        printf 'systemctl calls the bench made:\n%s\n' "$seen"
+        echo "FAIL: the bench STARTS a real watchdog unit — that revives a tenant mid-run"
+        return 1
     fi
-    [[ "$seen" == *fake-watchdog.timer* ]]
-    [[ "$seen" != *llama-watchdog.timer* ]]
 }
 
 # ===== G) REGRESSION: EXISTING SUITE ALIGNMENT ===============================

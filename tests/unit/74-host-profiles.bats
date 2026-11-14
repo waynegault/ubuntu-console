@@ -169,15 +169,24 @@ selected_with() {
     [ "$output" = "intel-xe-cuda|5|4294967296|quant-guide.conf" ]
 }
 
-@test "applying the arm64 profile claims its two CUDA lanes and no quant ratings" {
+@test "applying the arm64 profile claims its own CUDA lanes and no quant ratings" {
     # Catches: the 4 GB quant guide (which auto-archives on `model scan`) or this
     # box's lanes being applied on a machine they do not describe.
+    #
+    # The lane check NAMES the lanes instead of counting them.  It asserted exactly 2,
+    # which is a census: llama-cuda-qwen25-3b-measure.service (2026-11-13) is this box's
+    # own lane and made a correct profile addition look like a leak (measured 2026-11-14).
+    # What the criterion is about is WHICH lanes arrive — no Xe lane, no CPU lane.
     run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
         bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s|%s|%s\n" \
-            "$TAC_HOST_PROFILE" "$(printf "%s\n" "$LLAMA_LANE_SPECS" | grep -c .)" \
+            "$TAC_HOST_PROFILE" "$LLAMA_LANE_SPECS" \
             "${QUANT_GUIDE:-}" "$VRAM_TOTAL_BYTES_FALLBACK"' _ "$LIB"
     [ "$status" -eq 0 ]
-    [ "$output" = "asus-n1n-rtx-spark|2||0" ]
+    [[ "$output" == "asus-n1n-rtx-spark|"*"||0" ]]
+    [[ "$output" == *"llama-cuda-qwen3coder-30b-chat.service|18087"* ]]
+    [[ "$output" == *"llama-cuda-qwen3embedding-embed.service|18080"* ]]
+    [[ "$output" != *"llama-xe-"* ]]
+    [[ "$output" != *"llama-cpu-"* ]]
 }
 
 @test "the arm64 profile exports its production lane and service port" {
