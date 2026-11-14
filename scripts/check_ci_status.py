@@ -627,7 +627,7 @@ def _read_cache_payload() -> dict | None:
     """
     try:
         payload = json.loads(CACHE_FILE.read_text())
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         logger.debug("no usable CI status cache", exc_info=True)
         return None
     return payload if isinstance(payload, dict) else None
