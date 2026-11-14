@@ -64,10 +64,11 @@ export PATH
 : "${SYSTEMCTL:=systemctl}"
 LOG=$STATE/rebuild.log
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+[[ "${1:-}" = "--dry-run" ]] && DRY_RUN=1
 
 mkdir -p "$STATE" || exit 1
 
+# say - one timestamped line, to the run log and to stdout.
 say() {
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG"
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
@@ -82,7 +83,7 @@ restore() {
     # unit would not restart.  Move it aside under its own name so it survives for inspection or
     # a manual deploy; a later run prunes it by its own rule.  Only a tree that cannot be moved
     # is removed, because the move back needs the path free.
-    if [ -d "$LLAMA_ROOT/build-cuda" ]; then
+    if [[ -d "$LLAMA_ROOT/build-cuda" ]]; then
         # swallow-ok: the commit only names the kept tree; "unknown" is still a usable name
         built_commit=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
         failed_tree="$LLAMA_ROOT/build-cuda.failed-$built_commit-$(date -u +%H%M%S)"
@@ -116,7 +117,7 @@ health_ok() {
     c=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CHAT_PORT/health" 2>/dev/null)
     # swallow-ok: as above: 000 is the not-ready answer, not a silent failure
     e=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$EMBED_PORT/health" 2>/dev/null)
-    [ "$c" = "200" ] && [ "$e" = "200" ]
+    [[ "$c" = "200" ]] && [[ "$e" = "200" ]]
 }
 
 say "=== monthly llama.cpp rebuild ==="
@@ -143,8 +144,8 @@ esac
 # pgrep -c prints 0 and exits 1 when nothing matches, so the printed value is the answer.
 # swallow-ok: pgrep -c prints 0 and exits 1 for no match; the printed value is the answer
 ci=$(pgrep -fc '[R]unner\.Worker' 2>/dev/null)
-[ -n "$ci" ] || ci=0
-if [ "$ci" -gt 0 ]; then
+[[ -n "$ci" ]] || ci=0
+if [[ "$ci" -gt 0 ]]; then
     say "SKIP: $ci CI runner worker(s) active"
     exit 0
 fi
@@ -159,7 +160,7 @@ git -C "$LLAMA_ROOT" fetch --quiet origin 2>/dev/null ||
 remote_short=$(git -C "$LLAMA_ROOT" rev-parse --short origin/master 2>/dev/null || echo unknown)
 serving_short=$("$LLAMA_ROOT/build-cuda/bin/llama-server" --version 2>&1 |
     sed -n 's/.*commit \([0-9a-fA-F]\{7,\}\).*/\1/p')
-if [ -n "$serving_short" ] && [ "$serving_short" = "$remote_short" ]; then
+if [[ -n "$serving_short" ]] && [[ "$serving_short" = "$remote_short" ]]; then
     say "SKIP: already serving $serving_short, which is origin/master"
     exit 0
 fi
@@ -171,16 +172,16 @@ say "behind: serving ${serving_short:-unknown}, origin/master $remote_short"
 head_short=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null) || {
     say "FAIL: $LLAMA_ROOT is not a git checkout"; exit 1; }
 prev=$LLAMA_ROOT/build-cuda.prev-$head_short
-if [ -e "$prev" ]; then
+if [[ -e "$prev" ]]; then
     say "FAIL: rollback target already exists ($prev) - refusing rather than nesting the move"
     exit 1
 fi
-if [ ! -x "$LLAMA_ROOT/build-cuda/bin/llama-server" ]; then
+if [[ ! -x "$LLAMA_ROOT/build-cuda/bin/llama-server" ]]; then
     say "FAIL: no serving binary at build-cuda/bin/llama-server - nothing to move aside"
     exit 1
 fi
 
-if [ "$DRY_RUN" = "1" ]; then
+if [[ "$DRY_RUN" = "1" ]]; then
     say "PLAN: rebuild from $head_short; rollback tree would be $prev"
     exit 0
 fi
@@ -207,7 +208,7 @@ say "moved build-cuda aside -> $prev"
 out=$(bash -lc "source $CONSOLE/env.sh >/dev/null 2>&1; llm-build --yes" 2>&1)
 rc=$?
 printf '%s\n' "$out" >>"$LOG"
-if [ "$rc" -ne 0 ]; then
+if [[ "$rc" -ne 0 ]]; then
     say "FAIL: llm-build rc=$rc"
     restore
 fi
@@ -219,7 +220,7 @@ say "built from $new_head"
 # ---- Prove the artefact: the binary must report the commit just pulled. --version writes to
 # ---- STDERR, so 2>&1 is what makes this check able to pass at all.
 bin=$LLAMA_ROOT/build-cuda/bin/llama-server
-[ -x "$bin" ] || { say "FAIL: no binary at $bin"; restore; }
+[[ -x "$bin" ]] || { say "FAIL: no binary at $bin"; restore; }
 version=$("$bin" --version 2>&1)
 say "version: $(printf '%s' "$version" | tr '\n' ' ')"
 case $version in
@@ -250,12 +251,12 @@ if ! "$SYSTEMCTL" --user reset-failed $LANES 2>/dev/null; then
 fi
 "$SYSTEMCTL" --user restart $LANES
 rc=$?
-if [ "$rc" -ne 0 ]; then
+if [[ "$rc" -ne 0 ]]; then
     say "FAIL: systemctl restart rc=$rc"
     restore
 fi
 i=0
-while [ "$i" -lt 240 ]; do
+while [[ "$i" -lt 240 ]]; do
     health_ok && break
     i=$((i + 1))
     sleep 5
@@ -271,7 +272,7 @@ for u in $LANES; do
     was=$1; shift
     # swallow-ok: as above: the post-restart MainPID, whose mismatch is the failure the caller reports
     now=$("$SYSTEMCTL" --user show -p MainPID --value "$u" 2>/dev/null)
-    if [ -z "$now" ] || [ "$now" = "0" ] || [ "$now" = "$was" ]; then
+    if [[ -z "$now" ]] || [[ "$now" = "0" ]] || [[ "$now" = "$was" ]]; then
         say "FAIL: $u did not restart (MainPID was $was, now ${now:-unreadable})"
         restore
     fi
@@ -279,8 +280,8 @@ done
 
 # ---- Keep this run's rollback for the next one; drop older ones.
 for old in "$LLAMA_ROOT"/build-cuda.prev-*; do
-    [ -e "$old" ] || continue
-    [ "$old" = "$prev" ] && continue
+    [[ -e "$old" ]] || continue
+    [[ "$old" = "$prev" ]] && continue
     say "pruning older rollback: $old"
     rm -rf "$old"
 done
