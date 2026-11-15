@@ -870,8 +870,16 @@ CFG
     __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key'"
     __so_gateway_phase() { printf 'unknown\n'; }
     sleep() { :; }
-    # 1 s after boot: older than the classifier's 900 s window by any margin.
+    # The gateway entered 1 s after boot, so the AGE is what the 900 s window is compared
+    # against — and the age is a difference of two BOX facts, not a timestamp. This case used
+    # to mock only the entry stamp and read the real /proc/uptime for "now", which made the
+    # assertion depend on how long the HOST had been up: measured red on ubuntu-console main
+    # (run 43721715309, 2026-11-15) at uptime 860 s, where age = 859 s is NOT older than the
+    # window, so the gateway was correctly held and the case failed; it passed locally at
+    # uptime 1416 s. Both clocks are now pinned: entry at 1 s, now at 3601 s -> age 3600 s.
     __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *ActiveEnterTimestampMonotonic*) echo 1000000;; *is-active*) echo active;; esac; exit 0"
+    export TAC_UPTIME_FILE="$TAC_TEST_TMPDIR/uptime"
+    printf '%s %s\n' "3601.00" "99999.00" > "$TAC_UPTIME_FILE"
     : > "$SYSTEMCTL_LOG"
 
     run oc-refresh-keys

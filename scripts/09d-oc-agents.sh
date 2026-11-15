@@ -121,7 +121,13 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 69
+# Module Version: 70
+#   v70 (2026-11-15): `TAC_UPTIME_FILE` names the monotonic clock (default /proc/uptime) for the
+#     UNKNOWN-phase age exemption in oc-refresh-keys' gateway step. The clock is a BOX FACT, and
+#     case 23 of 01-refresh-keys could not fake it by choosing an entry stamp: it computed
+#     age = (real uptime - 1 s) and required > 900 s, so it went red on a runner booted 14 min
+#     earlier (measured: CI run 43721715309 at uptime 860 s, age 859 s). Behaviour with the
+#     variable unset is unchanged.
 #   v69 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v68 (2026-11-05): `__bridge_windows_api_keys --async` — the shell-start call site no longer
@@ -2932,7 +2938,16 @@ function oc-refresh-keys() {
                 # /proc/uptime's first field is SECONDS WITH A FRACTION ("49990.84 960643.87"),
                 # so it must be truncated before any integer test — the version that did not was
                 # measured reading no age at all, which is the bug this whole branch exists for.
-                read -r _now_us _ < /proc/uptime
+                #
+                # TAC_UPTIME_FILE (2026-11-15): the monotonic clock is a BOX FACT, and a test
+                # cannot fake it by choosing a timestamp — on a distro booted 14 minutes ago no
+                # unit CAN be 900 s old.  Measured: ubuntu-console CI run 43721715309 failed
+                # case 23 of tests/unit/01-refresh-keys.bats at uptime 860 s (age 859 s < 900),
+                # so the gateway was HELD instead of restarted, while the same case passed
+                # locally at uptime 1416 s.  The override names a file with the same two-field
+                # /proc/uptime shape, so the truncation below is unchanged and the seam cannot
+                # be satisfied by a number of the wrong scale.
+                read -r _now_us _ < "${TAC_UPTIME_FILE:-/proc/uptime}"
                 _now_us="${_now_us%%.*}"
                 if [[ "$_now_us" =~ ^[0-9]+$ ]] && (( _now_us * 1000000 > _enter_us ))
                 then
