@@ -592,7 +592,7 @@ PROFILE
         # (': "${VAR:=...}"') honoured, so a default is the value tested.
         run bash -c '
             LLAMA_LANE_SPECS=""; LLAMA_LANE_KEEP_UNITS=""; LLM_AUTOTUNE_CENSUS=""
-            # shellcheck disable=SC1090
+            # shellcheck source=/dev/null
             . "$1" >/dev/null 2>&1 || true
             for k in ${LLAMA_LANE_KEEP_UNITS:-}; do
                 for c in ${LLM_AUTOTUNE_CENSUS:-}; do
