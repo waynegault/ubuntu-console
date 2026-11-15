@@ -219,11 +219,14 @@ selected_with() {
                  "$LLM_AUTOTUNE_CENSUS_MAX_MIB" "$(__llm_thread_cap 16)"' \
         _ "$LIB" "$REPO_ROOT/scripts/11d-llm-gpu.sh"
     [ "$status" -eq 0 ]
-    # The census names BOTH non-kept lanes: the embed lane and the measurement lane.  It
-    # named only the embed lane until 2026-11-14, while LLAMA_LANE_SPECS already carried the
-    # measure lane -- so the clean-room left it resident and the baseline gate refused it as
-    # an unlisted-holder on every boot (autotune-resume.service, exit 4, 2 rows owed).
-    [ "$output" = "0|llama-cuda-qwen3embedding-embed.service llama-cuda-qwen25-3b-measure.service|6144|16" ]
+    # The census names BOTH non-kept lanes: chat and measure.  The embed lane is in
+    # LLAMA_LANE_KEEP_UNITS, so it must NOT be a census tenant -- the clean-room stops every
+    # census tenant, and naming a kept lane would stand down the always-on embedding lane
+    # that backs memory search.  Corrected 2026-11-15: the census named {embed, measure} and
+    # this assertion pinned that string, which is why the fault survived two fixes -- the
+    # test was holding the wrong answer in place.  The comment above it said "both non-kept
+    # lanes" while listing a kept one, so the prose agreed with the bug.
+    [ "$output" = "0|llama-cuda-qwen3coder-30b-chat.service llama-cuda-qwen25-3b-measure.service|6144|16" ]
 }
 
 @test "an unmatched host keeps generic defaults and says so once" {
@@ -530,4 +533,76 @@ PROFILE
     [ -e "$unit_dir/llama-xe-llama32-3b-chat.service" ]
     [ -e "$unit_dir/llama-cuda-llama32-3b-chat.service" ]
     [ -e "$unit_dir/llama-cpu-qwen25-3b-chat.service" ]
+}
+
+@test "the autotune census names exactly LLAMA_LANE_SPECS minus LLAMA_LANE_KEEP_UNITS" {
+    # Catches: the census drifting from the rule its own config comment states --
+    #   "the two lists must name the same lanes minus LLAMA_LANE_KEEP_UNITS".
+    #
+    # WHY THIS CASE EXISTS.  That rule was prose and nothing asserted it, so it was
+    # missed TWICE in consecutive fixes, in opposite directions:
+    #   3639f014 (2026-11-14) added the measure lane to LLAMA_LANE_SPECS and forgot the
+    #     census -> measure was a permanent `unlisted-holder` on every boot.
+    #   dcd9a025 (2026-11-15) added measure to the census but KEPT embed -> the census
+    #     then named a KEEP unit.  The clean-room at bin/_tac-bin-lib.sh:1298 stops every
+    #     census tenant, so that fix would have stood down the always-on embedding lane
+    #     that backs memory search, to free VRAM the drain was told to keep.
+    # A comment cannot fail.  This can.
+    #
+    # It reads the profile the way the code reads it -- source it, apply it -- rather than
+    # grepping the conf, so a value arriving from a different assignment still counts.
+    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        bash -c 'source "$1"; tac_host_profile_apply
+            # LLAMA_LANE_SPECS is pipe-delimited (unit|port); the census and KEEP are
+            # space-delimited unit lists.  Normalise all three to one unit per line,
+            # sorted, so the comparison is on the SET and not on ordering or syntax.
+            specs=$(printf "%s\n" "$LLAMA_LANE_SPECS" | awk -F"|" "NF{print \$1}")
+            keep=$(printf "%s\n" "${LLAMA_LANE_KEEP_UNITS:-}" | tr " " "\n" | grep -c . || true)
+            census=$(printf "%s\n" "${LLM_AUTOTUNE_CENSUS:-}" | tr " " "\n" | grep -c . || true)
+            expected=$(printf "%s\n" "$specs" | grep . | while read -r u; do
+                in_keep=0
+                for k in ${LLAMA_LANE_KEEP_UNITS:-}; do
+                    [ "$u" = "$k" ] && in_keep=1
+                done
+                [ "$in_keep" -eq 0 ] && printf "%s\n" "$u"
+            done | sort)
+            actual=$(printf "%s\n" "${LLM_AUTOTUNE_CENSUS:-}" | tr " " "\n" | grep . | sort)
+            if [ "$expected" != "$actual" ]; then
+                printf "CENSUS DRIFT\n"
+                printf "  expected (SPECS - KEEP):\n%s\n" "$expected" | sed "s/^/    /"
+                printf "  actual   (LLM_AUTOTUNE_CENSUS):\n%s\n" "$actual" | sed "s/^/    /"
+                printf "  keep (%s unit(s)): %s\n" "$keep" "${LLAMA_LANE_KEEP_UNITS:-}"
+                printf "  census (%s unit(s)): %s\n" "$census" "${LLM_AUTOTUNE_CENSUS:-}"
+                exit 1
+            fi
+            printf "ok\n"' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ok" ]
+}
+
+@test "no host profile names a LLAMA_LANE_KEEP_UNITS unit in its autotune census" {
+    # The subset of the rule above that is dangerous rather than merely untidy, applied to
+    # EVERY shipped profile so a second box cannot acquire the same fault unobserved.
+    #
+    # Naming a KEEP unit in the census is not a drift, it is an eviction order: the
+    # clean-room stops every census tenant, and LLAMA_LANE_KEEP_UNITS exists precisely to
+    # say which lanes a VRAM drain must NOT stand down.
+    for conf in "$PROFILE_DIR"/*.conf; do
+        # Values are read by sourcing in a subshell with the file's own indirection
+        # (': "${VAR:=...}"') honoured, so a default is the value tested.
+        run bash -c '
+            LLAMA_LANE_SPECS=""; LLAMA_LANE_KEEP_UNITS=""; LLM_AUTOTUNE_CENSUS=""
+            # shellcheck disable=SC1090
+            . "$1" >/dev/null 2>&1 || true
+            for k in ${LLAMA_LANE_KEEP_UNITS:-}; do
+                for c in ${LLM_AUTOTUNE_CENSUS:-}; do
+                    [ "$k" = "$c" ] && printf "%s\n" "$k"
+                done
+            done' _ "$conf"
+        if [ -n "$output" ]; then
+            echo "FAIL: ${conf##*/} names KEEP unit(s) in its census: $output"
+            echo "  A census tenant is STOPPED by the clean-room; a KEEP unit must survive."
+            return 1
+        fi
+    done
 }
