@@ -219,7 +219,11 @@ selected_with() {
                  "$LLM_AUTOTUNE_CENSUS_MAX_MIB" "$(__llm_thread_cap 16)"' \
         _ "$LIB" "$REPO_ROOT/scripts/11d-llm-gpu.sh"
     [ "$status" -eq 0 ]
-    [ "$output" = "0|llama-cuda-qwen3embedding-embed.service|6144|16" ]
+    # The census names BOTH non-kept lanes: the embed lane and the measurement lane.  It
+    # named only the embed lane until 2026-11-14, while LLAMA_LANE_SPECS already carried the
+    # measure lane -- so the clean-room left it resident and the baseline gate refused it as
+    # an unlisted-holder on every boot (autotune-resume.service, exit 4, 2 rows owed).
+    [ "$output" = "0|llama-cuda-qwen3embedding-embed.service llama-cuda-qwen25-3b-measure.service|6144|16" ]
 }
 
 @test "an unmatched host keeps generic defaults and says so once" {
