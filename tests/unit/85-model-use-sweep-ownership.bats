@@ -263,8 +263,12 @@ EOF
         export LLM_BENCH_PID_FILE="$8/bench.pid"
         export LLM_BENCH_WATCHDOG_TIMER="nonexistent-bench-test.timer"
         export LLM_BENCH_COOLDOWN_SEC=0
-        export LLM_AUTOTUNE_CENSUS="llama-cuda-qwen3embedding-embed.service"
-        export LLAMA_CUDA_LANE_UNIT="llama-cuda-qwen3coder-30b-chat.service"
+        # NOT exported before env.sh sources the host profile: tac_host_profile_apply
+        # unsets LLM_AUTOTUNE_CENSUS and LLAMA_CUDA_LANE_UNIT and re-reads them from the
+        # profile, so a value set here is discarded.  This case used to assert the embed
+        # lane, which was in the census until 2026-11-15T11:01Z corrected it -- naming the
+        # KEEP lane there made the clean-room stand down the lane LLAMA_LANE_KEEP_UNITS
+        # says must survive.  The census is now {chat, measure} and this case follows it.
         export LLM_AUTOTUNE_VRAM_HOLDERS_FILE="/dev/null"
         export SYS_LOG="$8/systemctl.log"
         # The clean-room refuses every stop under TAC_TEST_TMPDIR (v27, 2026-11-14: a test
@@ -314,16 +318,28 @@ EOF
 
     [ "$status" -eq 0 ] || { echo "status=$status output=$output"; return 1; }
     # Tenant, watchdogs, runner, and primary lane stopped BEFORE burn; restored AFTER burn.
+    # The tenant named is the one the host profile declares: the embedding lane is a KEEP
+    # unit and must NOT be in this list (see config/hosts.d/asus-n1n-rtx-spark.conf:215).
     local burn_line
     burn_line=$(grep -n "^BURN_MARKER$" "$sys_log" | cut -d: -f1)
     [ -n "$burn_line" ]
-    head -n "$burn_line" "$sys_log" | grep -q "stop llama-cuda-qwen3embedding-embed.service"
+    head -n "$burn_line" "$sys_log" | grep -q "stop llama-cuda-qwen25-3b-measure.service"
     head -n "$burn_line" "$sys_log" | grep -q "stop llama-watchdog-guard.timer"
     head -n "$burn_line" "$sys_log" | grep -q "stop actions.runner.test.service"
     head -n "$burn_line" "$sys_log" | grep -q "stop llama-cuda-qwen3coder-30b-chat.service"
-    tail -n +"$burn_line" "$sys_log" | grep -q "start llama-cuda-qwen3embedding-embed.service"
+    tail -n +"$burn_line" "$sys_log" | grep -q "start llama-cuda-qwen25-3b-measure.service"
     tail -n +"$burn_line" "$sys_log" | grep -q "start llama-watchdog-guard.timer"
     tail -n +"$burn_line" "$sys_log" | grep -q "start actions.runner.test.service"
+    # The KEEP lane must never be stopped, even though it is a resident lane the clean-room
+    # would otherwise evict.  This asserts the corrected census holds at runtime, not just
+    # in the profile comment.  Three outcomes, not two: rc 2 is a read error, and `! grep`
+    # would read it as "no match" and pass this case for the wrong reason.
+    local keep_rc=0
+    grep -q "stop llama-cuda-qwen3embedding-embed.service" "$sys_log" || keep_rc=$?
+    [ "$keep_rc" -eq 1 ] || {
+        echo "KEEP lane handling wrong (grep rc=$keep_rc; expected 1 = no stop recorded)"
+        return 1
+    }
 }
 
 # end of file
