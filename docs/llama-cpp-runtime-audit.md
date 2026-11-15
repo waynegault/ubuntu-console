@@ -320,14 +320,28 @@ probe currently reports `degraded` on a healthy box.
 **Read the count from `journalctl -k -b`, never `dmesg`.** Measured on the same box minutes
 apart: `dmesg` said **2**, the journal said **30**. The ring buffer evicts entries.
 
-**Status of the NO_VMM hypothesis: UNPROVEN · MECHANISM-JUSTIFIED · CHEAP.** The
-mechanism is real by construction — the VMM pool reserves 32 GiB of VA per process
-(`ggml-cuda.cu:537`, `:593`), removed entirely under `#ifndef GGML_USE_VMM`, and confirmed
-present at runtime as `NO_VMM = 1`. But the leak was never measured: this counter cannot
-arbitrate it (see the table), and 24 cycles is ~5% of the historically recorded
-~350-440-cycle cliff. **Do not let this drift into "the leak was never real" — we tested an
-instrument that cannot see it.** Genuine evidence would need a per-spawn count of VA
-reservations, or a run to the cliff with `wsl --shutdown` in hand.
+**Status of the NO_VMM hypothesis: MECHANISM NOT OPERATING AT THIS SIZE (measured
+2026-11-15).** The earlier status was `UNPROVEN · MECHANISM-JUSTIFIED · CHEAP`, resting on the
+claim that the VMM pool's 32 GiB per-process VA reservation (`ggml-cuda.cu:586`,
+`CUDA_POOL_VMM_MAX_SIZE = 1ull << 35`) is what produces `dxgkio_reserve_gpu_va: -75`. The
+decisive probe has been run and the claim does not hold: a standalone program calling
+`cuMemAddressReserve(32 GiB)` / `cuMemAddressFree` against the same driver llama.cpp loads
+(`/usr/lib/wsl/lib/libcuda.so.1`) produced **zero** `-75` lines over 400 cycles (two runs of
+200), 1 TiB was **accepted**, and the counter fired only when a reservation was **refused**
+(64 TiB: **233,145** lines in ~4 minutes, and the call hung rather than returning).
+
+So the counter tracks *refusals*, not reservations. A 32 GiB reservation is two orders of
+magnitude below the refusal boundary, which makes the reservation an implausible cause on
+arithmetic alone, and `NO_VMM` would not remove a refusal it does not produce. **This
+supersedes the "instrument that cannot see it" caveat above for the reservation hypothesis
+specifically** — that caveat still applies to whether a leak exists at all, and to any claim
+that `-75` is unrelated to context length. What would re-open it: a per-spawn count of VA
+*refusals* (not reservations) correlated with a real high-ctx run, or evidence that `-75`
+arises from something other than a refused reservation.
+
+Side observation, deliberately not characterised: the refused 64 TiB call did not fail fast —
+it blocked until killed at 30 s while the kernel log filled at ~1,000 lines/second. Avoid
+reproducing it; it is not a measured property of the driver, only a hazard seen once.
 
 **Side effect of the rebuild:** `--load-mode` / `--no-mmap` aside, the rebuild was proven
 numerically neutral. Three runs × three prompts comparing the old and new binaries produced

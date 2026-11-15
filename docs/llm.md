@@ -1046,24 +1046,43 @@ death, not by the count.**
 Always count from `journalctl -k -b`, never `dmesg` — the ring buffer evicts:
 measured minutes apart here, `dmesg` said 2 while the journal said 30.
 
-Note also that "the leak" itself remains unmeasured. Disabling the CUDA VMM pool
-(`-DGGML_CUDA_NO_VMM=ON`) removes a 32 GiB per-process VA reservation by
-construction and is runtime-verifiable as `NO_VMM = 1`, but no test has shown it
-changes the counter or the failure rate. **Decided 2026-11-09: `llm-build` does
-not pass it, and a fresh tree configures to `OFF`.** The evidence is the
-2026-09-14 spike (`docs/llama-cpp-runtime-audit.md` §4): 24 spawn/kill cycles on
-both builds, the boot-scoped `dxgkio_reserve_gpu_va: -75` counter never moved off
-30, and decode speed was identical (57-59 tps). That is a WEAK null, not a
-refutation: the leak knee was measured at ~109K ctx and the spike ran at 16K, so
-the high-ctx regime this box serves in was never tested. What the decision rests on
-is narrower - no measured benefit has ever been shown, and the production teardown
-(SIGTERM + 15 s grace) already prevents the orphaned pool reservation, so there is
-no evidence base for turning a default on. **Re-open** when a high-ctx (~54K-109K)
-A/B with the counter read either side of it shows a difference, or when the cheap
-decisive probe does: a tiny CUDA program calling `cuMemAddressReserve(32 GiB)` then
-`cuMemAddressFree` in a loop, no model or VRAM needed, which tests whether the
-reservation itself produces `-75`. Then it is a one-line deliberate override
-(`-DGGML_CUDA_NO_VMM=ON`), never a default.
+**The decisive probe has now been run, and it came back negative (2026-11-15).**
+The proposed mechanism was that the VMM pool's 32 GiB per-process VA reservation
+(`CUDA_POOL_VMM_MAX_SIZE = 1ull << 35`, `ggml-cuda.cu:586`) is what produces
+`dxgkio_reserve_gpu_va: -75`. A standalone CUDA program calling
+`cuMemAddressReserve(32 GiB)` then `cuMemAddressFree` in a loop, linked against
+the same driver llama.cpp loads (`/usr/lib/wsl/lib/libcuda.so.1`), does **not**
+produce it:
+
+| Run | Result | `-75` delta |
+|---|---|---|
+| 1 cycle, 32 GiB (positive control) | reserved and freed, `vmm_supported=1` | **0** |
+| 200 cycles x 32 GiB, run twice | 400/400 ok | **0** |
+| 1 TiB in one call | **succeeded** | 0 |
+| 64 TiB in one call | refused; call hung, killed at 30 s | **233,145** |
+
+The last row is the falsifier, and it is why the zeros above are trustworthy: the
+counter absolutely can fire, and it fired only when the driver *refused* a
+reservation. The counter was 0 for the entire 29-hour boot until that control ran.
+Two facts follow. First, the reservation llama.cpp makes is nowhere near the
+refusal boundary - 1 TiB is accepted, so 32 GiB cannot be causing a refusal.
+Second, `-75` tracks *refusals*, not reservations, so "the leak" is not explained
+by the pool's reservation and `NO_VMM` would not remove it.
+
+Side observation, not characterised: the refused 64 TiB call **hung** rather than
+returning an error, and the log filled at roughly 1,000 lines/second until killed.
+Treat that as a driver behaviour to avoid reproducing, not as a measured property.
+
+**Decided 2026-11-09, confirmed by the probe 2026-11-15: `llm-build` does not pass
+`GGML_CUDA_NO_VMM`, and a fresh tree configures to `OFF`.** The earlier evidence
+was the 2026-09-14 spike (`docs/llama-cpp-runtime-audit.md` §4) - 24 spawn/kill
+cycles on both builds, the counter never moved off 30, decode speed identical
+(57-59 tps) - which was a WEAK null because the leak knee was measured at ~109K ctx
+and the spike ran at 16K. The probe closes that gap without needing the high-ctx
+regime at all: it tests the mechanism directly, and the mechanism does not operate.
+**Re-open** only on a per-spawn count of VA *refusals* correlated with a real
+high-ctx run, or on evidence that `-75` arises from something other than a refused
+reservation. A reservation-only A/B is now known to be the wrong experiment.
 
 Both `autotune-model.sh` and `run-autotune-batch.sh` therefore share one
 boot-scoped ledger in `/dev/shm` and halt with a resume hint when:
@@ -1932,7 +1951,7 @@ cmake -B "${LLAMA_BUILD_DIR:-build}" \
 | `GGML_CUDA_NCCL` | `ON` | NCCL multi-GPU support (harmless when only one GPU is present) |
 | `GGML_CUDA_FORCE_MMQ` | `OFF` | Keep the default cuBLAS matmul path (MMQ is slower on Ampere) |
 | `GGML_CUDA_COMPRESSION_MODE` | `size` | Compresses the compiled CUDA **binary** (`nvcc -compress-mode`). It does **not** touch model weights and buys **no** VRAM headroom — see the note below. |
-| `GGML_CUDA_NO_VMM` | not passed, decided | `llm-build` does not set this, and a FRESH tree configures it to `OFF` — measured 2026-11-09 by configuring a new tree from the v107 guard, so the `ON` in the x86 box's `build/` is a value someone passed by hand, never an inherited default (this box's `build-cuda/` reads `OFF`, 2026-11-05). Decided 2026-11-09 to leave it out: the 2026-09-14 bench-scale spike ran 24 spawn/kill cycles on both builds and the boot-scoped `dxgkio_reserve_gpu_va: -75` counter never moved off 30, with identical decode speed — a weak null (the knee was measured at ~109K ctx, the spike ran at 16K), so it is the absence of any measured benefit plus the SIGTERM + 15 s teardown already preventing the orphaned reservation that keeps the default off, not a refutation of the mechanism. Re-open on a high-ctx (~54K-109K) A/B showing a counter difference, or on the `cuMemAddressReserve` probe, and then pass `-DGGML_CUDA_NO_VMM=ON` as a deliberate override. See `docs/llama-cpp-runtime-audit.md` §4. |
+| `GGML_CUDA_NO_VMM` | not passed, decided | `llm-build` does not set this, and a FRESH tree configures it to `OFF` — measured 2026-11-09 by configuring a new tree from the v107 guard, so the `ON` in the x86 box's `build/` is a value someone passed by hand, never an inherited default (this box's `build-cuda/` reads `OFF`, 2026-11-05). Decided 2026-11-09 to leave it out on the absence of any measured benefit; **confirmed 2026-11-15 by the decisive probe, which came back negative** — 400 clean `cuMemAddressReserve(32 GiB)` / `cuMemAddressFree` cycles produced zero `dxgkio_reserve_gpu_va: -75` lines, 1 TiB was accepted, and the counter fired only when a reservation was *refused* (64 TiB: 233,145 lines). So the counter tracks refusals, not reservations, and the reservation this flag would remove is not what produces it. Pass `-DGGML_CUDA_NO_VMM=ON` only as a deliberate override backed by a per-spawn count of VA refusals correlated with a real high-ctx run; a reservation-only A/B is now known to be the wrong experiment. See `docs/llama-cpp-runtime-audit.md` §4. |
 | `GGML_NATIVE` | `ON` | Detect host CPU and enable all available instruction sets (AVX2, FMA, BMI2 on i9-12900HK). Without this flag, only a portable baseline is used. |
 | `GGML_OPENMP` | `ON` | OpenMP parallelisation for CPU fallback layers. Essential when VRAM is tight and some layers land on CPU. |
 | `GGML_CCACHE` | `ON` | Cache compiled object files. With only 12 vCPUs this is marginal for clean builds but **significantly** speeds up incremental rebuilds after `git pull`. The cache lives at `~/.cache/ccache`; `ccache -s` reports ~0.9 GiB in use against a 5 GiB cap, so the cap is not a constraint at this scale. |
