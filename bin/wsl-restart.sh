@@ -110,7 +110,20 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-11-15): DOCUMENTED, not changed — what a clean stop does NOT promise.  The gateway's
+#       drain budget is ~20s (SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15e3 in the bundle, with no
+#       env override), and measured 2026-11-08..15: 43 drains, 23 of which hit that budget and
+#       proceeded with shutdown anyway — 53%.  Those abandon 2-6 queued items, typically agent runs
+#       mid-tool-call, which do not finish because the wait is longer.  This is NOT a bug to fix by
+#       raising a number (there is no knob, and unbounded waiting is not on offer here either: this
+#       wrapper caps the wait at WAIT_TRIES x 6s anyway).  It is the DESIGN: bounded abandonment,
+#       with recovery — not a clean drain — as what makes it survivable.  Each stop's evidence dir
+#       (state/gateway-stop-attribution/<utc>-pid<pid>/summary.txt) now names what was abandoned,
+#       `abandoned-runs=N runIds=...`, so "my run vanished" has a thread to pull; before 2026-11-15
+#       the summary carried only a count of agentRuns and no identity.  A reader who expects STEP 1b
+#       to mean "work was safely finished" will read a correct shutdown as a failure — this note is
+#       so they do not, and so nobody re-opens the search for a drain timeout to raise.
 #   v29 (2026-11-14): the chunk gate tries TWO FILTERS, not one joined ERE (a later `[.]`
 #       inside an already-grouped ERE is read as a character class, so a joined pattern
 #       silently missed `pipeline.cli assess` rows and every one read CLEAR), and a filter
@@ -891,6 +904,11 @@ render_wrapper() {
         'taskkill /f /im Code.exe >> "%LOG%" 2>&1' \
         ''
     # STEP 1b — the gateway is stopped and waited for BEFORE the VM goes down (v16).
+    # NOTE (v30): "waited for" is BOUNDED and does not mean "work finished".  53% of drains
+    # (23 of 43, 2026-11-08..15) hit the gateway's own ~20s budget and proceed with runs still
+    # queued.  STEP 1b exists so the stop is GRACEFUL rather than a mid-drain SIGKILL — that is
+    # the whole claim, and it is worth the wait.  Do not read a log line about abandoned runs as
+    # this step failing; the abandoned set is named in each stop's summary.txt.
     render_quiesce_step
     # STEP 2 — restart distro and wait for host vmmemWSL.exe teardown (v27).
     render_shutdown_step
