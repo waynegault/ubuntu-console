@@ -155,7 +155,29 @@ jobs:
         # otherwise prints the failed line and nothing else, discarding the captured output —
         # which for a script-under-test is where the cause is named.  Verified 2026-09-18 with
         # a two-arm control: without the flag the markers are absent, with it both streams print.
-        run: bats --print-output-on-failure tests/tactical-console-fast.bats
+        #
+        # The output is also written to a file and uploaded below.  On 2026-11-15 this step went
+        # red on 3f22f4e7 after 1m40s and the cause could not be recovered: a later commit's run
+        # took the same job, so gh served no log for it and the runner had already pruned its
+        # own copy.  Re-running the same commit four times gave 68/68 each time, so the red was
+        # real and its evidence was gone.  `> ... 2>&1` keeps stderr (bats' own errors) as well
+        # as the TAP, and tee keeps the job log readable without the artifact.
+        run: |
+          set -o pipefail
+          bats --print-output-on-failure tests/tactical-console-fast.bats \
+            2>&1 | tee "$RUNNER_TEMP/fast-tests.tap"
+
+      - name: Upload the fast suite's output
+        # always(): the runs worth reading are the failed and the cancelled ones, and a plain
+        # `if: failure()` skips a cancelled step.  warn on a missing file, never error — this
+        # step must not turn a real red into a different red.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-tests-${{ github.sha }}
+          path: ${{ runner.temp }}/fast-tests.tap
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Run lint script
         # Same GH_TOKEN reason as the lint job's canonical step: the CI verdict gate inside
@@ -232,6 +254,11 @@ jobs:
           # 2026-09-18 incident behind the old wording was real (a validation bench refused
           # with "CUDA card is owned by another run" while a CI job held it), but the suite was
           # made hermetic afterwards, so the exclusion is now a cadence choice, not a lock one.
+          #
+          # Captured to a file for the same reason as the fast job (see its artifact step): a
+          # red whose output only exists on the runner is unrecoverable once the next run takes
+          # the job.  `set -o pipefail` keeps bats' exit status through the tee.
+          set -o pipefail
           bats --print-output-on-failure tests/unit/01-refresh-keys.bats \
                tests/unit/02-so-startup.bats \
                tests/unit/04-llama-cpp-tools.bats \
@@ -332,16 +359,39 @@ jobs:
                tests/unit/91-llm-rebuild-monthly-order.bats \
                tests/unit/92-lane-arbiter.bats \
                tests/unit/93-suspend-hold-liveness.bats \
-               tests/unit/94-git-commit.bats
+               tests/unit/94-git-commit.bats \
+            2>&1 | tee "$RUNNER_TEMP/unit-tests.tap"
+
+      - name: Upload the unit suite's output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-tests-${{ github.sha }}
+          path: ${{ runner.temp }}/unit-tests.tap
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Run integration tests
         run: |
+          set -o pipefail
           bats --print-output-on-failure tests/integration/01-maintenance.bats \
                tests/integration/02-model-lifecycle.bats \
                tests/integration/03-backup-restore.bats \
                tests/integration/04-watchdog.bats \
                tests/integration/05-refresh-keys.bats \
-               tests/integration/e2e-bench-autotune.bats
+               tests/integration/e2e-bench-autotune.bats \
+            2>&1 | tee "$RUNNER_TEMP/integration-tests.tap"
+
+      # Same gap as the fast job: this is the job that runs most of the unit suites, and its
+      # output died with the runner's own pruned copy on 2026-11-15.
+      - name: Upload the integration suite's output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-${{ github.sha }}
+          path: ${{ runner.temp }}/integration-tests.tap
+          retention-days: 14
+          if-no-files-found: warn
 
   module-count:
     name: Module Integrity
