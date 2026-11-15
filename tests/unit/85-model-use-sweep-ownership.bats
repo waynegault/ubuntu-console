@@ -207,6 +207,14 @@ EOF
         __gpu_clear_stale_processes() { :; }
         __resolve_smi() { return 1; }
         _tac_gpu_used_mib() { return 0; }
+        # The adapter pre-check reads the REAL dmesg, so on a box with dxgkrnl errors
+        # __model_bench refuses before the subject of the case is reached (measured
+        # 2026-11-15, ubuntu-console CI red on main, cases 1169/1170). It is a box
+        # fact, not the property under test, and it has its own coverage in
+        # tests/test_dxg_health.py, so it is stubbed like every other box-touching
+        # step in this file. (No apostrophes below: this block is inside a
+        # single-quoted bash -c string, where a stray one would close it.)
+        _tac_adapter_health_check() { return 0; }
         wake() { :; }
         sudo() { return 0; }
         systemctl() { return 1; }
@@ -292,6 +300,9 @@ EOF
         __gpu_clear_stale_processes() { :; }
         __resolve_smi() { return 1; }
         _tac_gpu_used_mib() { return 0; }
+        # See the note in the case above: the adapter pre-check reads the real dmesg
+        # and would refuse before the clean-room ordering is exercised.
+        _tac_adapter_health_check() { return 0; }
         wake() { :; }
         sudo() { return 0; }
         systemctl() {
