@@ -16,7 +16,13 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
+#   v33 (2026-11-15): _tac_vram_baseline_verdict matches holders against the census UNION
+#     LLAMA_LANE_KEEP_UNITS, and excludes keep units from tenant_count.  The old match was
+#     census-only, which read as correct only while the census wrongly NAMED the kept
+#     embedding lane; once the census became SPECS-KEEP the kept lane was resident-and-omitted
+#     by design and every run refused it as `unlisted-holder`.  `unlisted` still means a holder
+#     nobody asked for, so a stranger is still refused.
 #   v32 (2026-11-15): (no behavioural change) the swallow markers moved to their own comment
 #     lines above each rm, because the inline form pushed both past 120 chars and tripped the
 #     §18.3 count ratchet; the ratchet is right, the comment was too long.
@@ -848,7 +854,7 @@ _tac_vram_baseline_verdict() {
     local _gap_max="${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}"
     local _census="${LLM_AUTOTUNE_CENSUS:-}"
     local _cap="${LLM_AUTOTUNE_CENSUS_MAX_MIB:-}"
-    local _gap _pid _unit _exe _t _matched _count _unlisted _holders
+    local _gap _pid _unit _exe _t _matched _count _unlisted _holders _listed _keeplist
     if ! [[ "$_free" =~ ^[0-9]+$ && "$_total" =~ ^[0-9]+$ ]]
     then
         printf 'mode=unknown\nverdict=refuse\nreason=unreadable-vram\n'
@@ -880,12 +886,32 @@ _tac_vram_baseline_verdict() {
     _holders="$(_tac_vram_holder_identities)"
     _count=0
     _unlisted=""
+    # A KEPT LANE IS LISTED, THOUGH IT IS NOT A CENSUS TENANT (2026-11-15T11:06Z).
+    #
+    # The match below originally tested the holder against $_census alone.  That is correct
+    # only while LLAMA_LANE_KEEP_UNITS and LLM_AUTOTUNE_CENSUS are disjoint -- which they
+    # were NOT: the census named the kept embedding lane, so the lane was 'listed' by
+    # accident, while the lane the census omitted (chat) was the one reported as unlisted.
+    #
+    # Correcting the census to SPECS-KEEP made the kept lane resident-and-omitted by
+    # DESIGN, so the match started refusing the clean-room's own intended end state:
+    # measured 2026-11-15T11:06Z, census={chat,measure}, embed resident ->
+    #   unlisted=4029568:llama-cuda-qwen3embedding-embed.service:llama-server
+    #   verdict=refuse reason=unlisted-holder
+    # That is a permanent refusal: the embedding lane backs memory search and is always on.
+    #
+    # So the matched set is the census UNION the keep list.  Keep units are excluded from
+    # `tenant_count` -- that number is read at autotune-model.sh:509 to decide whether a
+    # reading is CONTENDED, and a keep lane is by definition not a contender -- but they
+    # must never be reported as unlisted holders.  `unlisted` keeps its exact meaning:
+    # a holder we did not ask for.  `tenants` in the stdout stays the census, unchanged.
+    _listed="$_census ${LLAMA_LANE_KEEP_UNITS:-}"
+    _keeplist=" ${LLAMA_LANE_KEEP_UNITS:-} "
     while IFS='|' read -r _pid _unit _exe
     do
         [[ -n "${_pid:-}" ]] || continue
-        _count=$(( _count + 1 ))
         _matched=0
-        for _t in $_census
+        for _t in $_listed
         do
             if [[ -n "$_unit" && "$_unit" == "$_t" ]] || [[ -n "$_exe" && "$_exe" == "$_t" ]]
             then
@@ -893,7 +919,13 @@ _tac_vram_baseline_verdict() {
                 break
             fi
         done
-        (( _matched )) || _unlisted+="${_pid}:${_unit:-no-unit}:${_exe:-unknown} "
+        (( _matched )) || { _unlisted+="${_pid}:${_unit:-no-unit}:${_exe:-unknown} "; continue; }
+        # Listed.  Count it as a tenant only if it is a CENSUS member, not merely kept.
+        if [[ "$_keeplist" == *" ${_unit:-} "* ]]
+        then
+            continue
+        fi
+        _count=$(( _count + 1 ))
     done <<< "$_holders"
     printf 'mode=census\ntenants=%s\ntenant_count=%s\nheld_mib=%s\nheld_cap_mib=%s\n' \
         "$_census" "$_count" "$_gap" "$_cap"

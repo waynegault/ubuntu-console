@@ -299,3 +299,61 @@ BINLIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
     [ "$status" -eq 2 ]
     [[ "$output" == *"--workload needs a value"* ]]
 }
+
+@test "census: a KEEP unit resident is LISTED, not an unlisted holder" {
+    # Catches: the guard refusing the clean-room's own intended end state.
+    #
+    # The match tested each holder against LLM_AUTOTUNE_CENSUS alone.  That read as
+    # correct only because the census happened to NAME the kept embedding lane -- which
+    # it should never have done (a census tenant is STOPPED by the clean-room, and the
+    # keep list exists to say which lanes must survive).  Once the census was corrected
+    # to SPECS-KEEP, the kept lane became resident-and-omitted BY DESIGN and the guard
+    # refused it as unlisted on every run:
+    #   measured 2026-11-15T11:06Z  unlisted=<pid>:llama-cuda-qwen3embedding-embed.service:llama-server
+    #   verdict=refuse reason=unlisted-holder
+    # The embedding lane backs memory search and is always on, so that refusal is permanent.
+    printf '4242|llama-cuda-qwen3embedding-embed.service|llama-server\n' > "$BATS_TEST_TMPDIR/holders"
+    run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$BATS_TEST_TMPDIR/holders" \
+        LLM_AUTOTUNE_CENSUS="llama-cuda-qwen3coder-30b-chat.service llama-cuda-qwen25-3b-measure.service" \
+        LLAMA_LANE_KEEP_UNITS="llama-cuda-qwen3embedding-embed.service" \
+        LLM_AUTOTUNE_CENSUS_MAX_MIB=6144 \
+        bash -c 'source "$1"; _tac_vram_baseline_verdict 77826 81920' _ "$BINLIB"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"verdict=pass"* ]]
+    [[ "$output" != *"unlisted-holder"* ]]
+    # A keep lane is not a CONTENDER, so it must not inflate tenant_count -- that value
+    # drives the "readings are CONTENDED" warning at autotune-model.sh:509.
+    [[ "$output" == *"tenant_count=0"* ]]
+}
+
+@test "census: a KEEP unit resident alongside a census tenant counts only the tenant" {
+    # The union must not swallow real contention.  With the kept lane AND a census
+    # tenant both resident, tenant_count is 1: the kept lane is listed but not a tenant.
+    printf '4242|llama-cuda-qwen3embedding-embed.service|llama-server\n4343|llama-cuda-qwen25-3b-measure.service|llama-server\n' \
+        > "$BATS_TEST_TMPDIR/holders"
+    run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$BATS_TEST_TMPDIR/holders" \
+        LLM_AUTOTUNE_CENSUS="llama-cuda-qwen3coder-30b-chat.service llama-cuda-qwen25-3b-measure.service" \
+        LLAMA_LANE_KEEP_UNITS="llama-cuda-qwen3embedding-embed.service" \
+        LLM_AUTOTUNE_CENSUS_MAX_MIB=6144 \
+        bash -c 'source "$1"; _tac_vram_baseline_verdict 77826 81920' _ "$BINLIB"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"verdict=pass"* ]]
+    [[ "$output" == *"tenant_count=1"* ]]
+}
+
+@test "census: a stranger still refuses while a KEEP unit is resident" {
+    # The union must not become a blanket allowance.  Adding keep-list membership to the
+    # matched set proves nothing unless a genuinely foreign holder is STILL refused.
+    printf '4242|llama-cuda-qwen3embedding-embed.service|llama-server\n4343|llama-rogue.service|llama-server\n' \
+        > "$BATS_TEST_TMPDIR/holders"
+    run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$BATS_TEST_TMPDIR/holders" \
+        LLM_AUTOTUNE_CENSUS="llama-cuda-qwen3coder-30b-chat.service llama-cuda-qwen25-3b-measure.service" \
+        LLAMA_LANE_KEEP_UNITS="llama-cuda-qwen3embedding-embed.service" \
+        LLM_AUTOTUNE_CENSUS_MAX_MIB=6144 \
+        bash -c 'source "$1"; _tac_vram_baseline_verdict 77826 81920' _ "$BINLIB"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"reason=unlisted-holder"* ]]
+    [[ "$output" == *"llama-rogue.service"* ]]
+    # and the kept lane must NOT be named among the unlisted
+    [[ "$output" != *"llama-cuda-qwen3embedding-embed.service:llama-server"* ]]
+}
