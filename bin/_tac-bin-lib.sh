@@ -16,7 +16,13 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-11-15): the EXPIRED refusal names the AGE in minutes, ceil'd, so a reader of the
+#     watchdog log can tell "three minutes stale" from "twenty-five hours stale" without
+#     arithmetic.  The 2026-11-14 16:56:48Z refusal printed ttl=1794585852 now=1794675408 and
+#     the only way to learn it was 24.9h past a 6h TTL was to convert two epochs by hand — which
+#     is why the record's age went unremarked for a day.  Presentation only: the predicate above
+#     it (now > ttl) is untouched and still returns 1, so no behaviour changes.
 #   v29 (2026-11-14): the v28 predicate and the fleet sweep move OUT of _tac_cleanroom_enter into
 #     _tac_cleanroom_stops_allowed / _tac_cleanroom_switch_fleet.  Inlining v28 took the function
 #     to 143 lines and tripped the §18.3 ratchet (41 -> 42 functions over 100 lines); the ratchet
@@ -320,7 +326,7 @@ requested_stop_active() {
     if (( _now > _ttl ))
     then
         log "requested-stop: the record for ${_unit}.service EXPIRED" \
-            "(ttl=$_ttl, now=$_now, pid=$_pid) — not attributable"
+            "(ttl=$_ttl, now=$_now, age=$(( (_now - _ttl + 59) / 60 ))m, pid=$_pid) — not attributable"
         return 1
     fi
     if [[ -z "$_start" || "$_start" == "unknown" ]]
