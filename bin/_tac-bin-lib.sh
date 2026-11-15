@@ -16,7 +16,18 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 32
+#   v32 (2026-11-15): (no behavioural change) the swallow markers moved to their own comment
+#     lines above each rm, because the inline form pushed both past 120 chars and tripped the
+#     §18.3 count ratchet; the ratchet is right, the comment was too long.
+#   v31 (2026-11-15): _tac_suspend_held CLEARS a marker whose owner is dead.  It always answered
+#     liveness correctly and left the file in place, so every caller that only READS (the
+#     watchdog's cuda_suspended, the arbiter's begin check) re-reported the same dead owner on
+#     every tick — 25 times in one night on pid 3495129, which had been gone for hours.  The
+#     acquire path already overwrote on takeover, so the file survived exactly where NOTHING took
+#     over, which is the case with no other cleaner.  The /proc answer the reader just computed is
+#     the justification: an acquirer writes its OWN live pid, so the rm cannot delete a live hold.
+#     Both dead branches (gone pid, unreaped Z/X) clear.
 #   v30 (2026-11-15): the EXPIRED refusal names the AGE in minutes, ceil'd, so a reader of the
 #     watchdog log can tell "three minutes stale" from "twenty-five hours stale" without
 #     arithmetic.  The 2026-11-14 16:56:48Z refusal printed ttl=1794585852 now=1794675408 and
@@ -498,7 +509,15 @@ _tac_suspend_held() {
     # branch or it is unreachable — kill -0 succeeds on a zombie.
     if [[ ! -e "/proc/$_pid" ]]
     then
-        log "suspend: NOT HELD — owner pid $_pid is gone ($_f); a killed holder cannot release its own hold"
+        # v31: a marker whose owner is GONE is dead weight, not history.  Every
+        # caller that only READS (the watchdog's cuda_suspended, the arbiter's
+        # begin check) left the file behind forever, emitting this same line once
+        # per tick — measured 25 times in one night on a marker whose pid 3495129
+        # had been dead for hours.  Safe because the answer was already decided
+        # from /proc, and an acquirer writes its own LIVE pid.
+        # swallow-ok: best-effort clear; the NOT HELD answer is what callers act on
+        rm -f "$_f" 2>/dev/null
+        log "suspend: NOT HELD — owner pid $_pid is gone ($_f); cleared the stale marker"
         return 1
     fi
     local _state
@@ -507,8 +526,13 @@ _tac_suspend_held() {
     _state=$(awk '{print $3}' "/proc/$_pid/stat" 2>/dev/null)   # swallow-ok: an unreadable stat yields empty, which the test below treats as HELD (conservative)
     if [[ "$_state" == "Z" || "$_state" == "X" ]]
     then
+        # v31: same reasoning as the gone-owner branch above — an unreaped dead
+        # owner cannot release its own hold either, so nothing else will ever
+        # clean this up.
+        # swallow-ok: as above — no other cleaner exists for an unreaped owner
+        rm -f "$_f" 2>/dev/null
         log "suspend: NOT HELD — owner pid $_pid has EXITED (state $_state, unreaped) ($_f);" \
-            "it cannot release its own hold"
+            "cleared the stale marker"
         return 1
     fi
     log "suspend: HELD by live pid $_pid (state ${_state:-unknown}) ($_f)"

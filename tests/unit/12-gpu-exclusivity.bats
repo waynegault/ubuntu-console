@@ -1610,3 +1610,34 @@ EOS
     [ ! -s "$sb/stopped" ] || { echo "a selftest stopped a lane: $(cat "$sb/stopped")"; return 1; }
     [[ "$output" == *"selftest — not standing any lane down"* ]] || { echo "out: $output"; return 1; }
 }
+
+# ------------------------------------------------------------------------------
+# v31: a marker whose owner is GONE must be CLEARED by the reader, not left
+# behind to log forever. Measured 2026-11-15: pid 3495129 was long dead and the
+# watchdog logged the same "NOT HELD" line 25 times in one night, because every
+# caller only READS. The acquire path overwrote on takeover, so the file survived
+# exactly where nothing took over — the case with no other cleaner.
+# ------------------------------------------------------------------------------
+
+@test "suspend: a marker whose owner is GONE is cleared, not left to log forever (v31)" {
+    local f="$TAC_TEST_TMPDIR/suspend.stale"
+    printf '%s\n' 999999 > "$f"        # a pid that cannot exist
+    run bash "$TAC_TEST_TMPDIR/probe.sh" "$BATS_TEST_DIRNAME/../../bin/_tac-bin-lib.sh" \
+        "_tac_suspend_held_at $f"
+    # call it directly instead, since the helper takes an argument
+    run bash -c "set -uo pipefail; source '$BATS_TEST_DIRNAME/../../bin/_tac-bin-lib.sh'; _tac_suspend_held '$f'"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cleared the stale marker"* ]]
+    [ ! -e "$f" ]                      # THE assertion: the file is gone
+}
+
+@test "suspend: a LIVE holder's marker is NEVER deleted (v31 falsification)" {
+    # The dangerous direction: an unconditional rm would drop a live hold and the
+    # watchdog would restart a lane somebody is still measuring on.
+    local f="$TAC_TEST_TMPDIR/suspend.live"
+    printf '%s\n' $$ > "$f"
+    run bash -c "set -uo pipefail; source '$BATS_TEST_DIRNAME/../../bin/_tac-bin-lib.sh'; _tac_suspend_held '$f'"
+    [ "$status" -eq 0 ]
+    [ -e "$f" ]
+    [ "$(cat "$f")" = "$$" ]
+}
