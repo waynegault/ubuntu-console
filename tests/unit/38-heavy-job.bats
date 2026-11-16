@@ -240,3 +240,105 @@ _hold_lock() {
     [ -n "$guard_line" ] && [ -n "$restart_line" ]
     [ "$guard_line" -lt "$restart_line" ]
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLAMA-LANE-PARK-001 — the two guards that decide "someone else owns the card"
+# must share ONE definition, and a held lane must SAY it is held.
+# ─────────────────────────────────────────────────────────────────────────────
+# Measured 2026-11-15T18:52Z: `heavy-job --status` answered "free (last holder pid=7682
+# 16:40:54Z)" while `fuser gpu.lock` showed a LIVE sweep.  recover() tested only
+# _tac_heavy_job_busy, so it proceeded to start; the start gate at the `else` arm refused
+# on gpu_claim_held; the lane landed inactive with each guard assuming the other owned it.
+# The card's own direction was to derive the population from the LOCK rather than from who
+# remembers to register, so both guards now ask the same two questions.
+
+@test "LLAMA-LANE-PARK-001: recover() defers on a gpu.lock holder, not only a registered heavy job" {
+    # Would catch: the exact 2026-11-15 shape — a lock holder that never registered as a
+    # heavy job.  A test that only asserted _tac_heavy_job_busy would pass on the broken
+    # code, which is why this asserts the SECOND predicate by name.
+    local body
+    body=$(sed -n '/^recover() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ "$body" == *"_tac_heavy_job_busy || gpu_claim_held"* ]]
+}
+
+@test "LLAMA-LANE-PARK-001: the deferral predicate is the SAME one the start gate uses" {
+    # The defect was two guards disagreeing, so pinning either one alone is not enough:
+    # the deferral must name the same predicate the start gate refuses on.  If someone
+    # later narrows one side, this fails rather than silently re-opening the gap.
+    local recover_body gate_body
+    recover_body=$(sed -n '/^recover() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    gate_body=$(sed -n '/GPU free but CUDA unit not active/,/^        else$/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ "$recover_body" == *"gpu_claim_held"* ]]
+    [[ "$gate_body" == *"gpu_claim_held"* ]]
+}
+
+@test "LLAMA-LANE-PARK-001: a held lane ANNOUNCES the hold once per state change" {
+    # Would catch: the silence that made the 2026-11-15 park take 26 minutes to find.  The
+    # timer was healthy and ticking every five minutes and logged NOTHING on those ticks.
+    # parked_announce is the fix; this pins that the held branch calls it, and that the
+    # helper is state-change-gated rather than logging every tick.
+    local gate_body helper
+    gate_body=$(sed -n '/GPU free but CUDA unit not active/,/^        else$/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ "$gate_body" == *"parked_announce"* ]]
+    helper=$(sed -n '/^parked_announce() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    # The gate: an unchanged reason returns early, so a long hold does not spam the log.
+    [[ "$helper" == *'[[ "$prev" == "$reason" ]]'* ]]
+    [[ "$helper" == *"return 0"* ]]
+}
+
+@test "LLAMA-LANE-PARK-001: parked_announce logs once, then stays quiet, then re-announces a NEW reason" {
+    # Behavioural, not textual: run the REAL helper against a sandboxed marker file.
+    # Would catch: a helper that logs every tick (noise) or never logs (the original bug).
+    #
+    # The helpers are EXTRACTED rather than sourced: llama-watchdog.sh runs its dispatch at
+    # the bottom of the file, so sourcing it would start supervising lanes from a test.
+    local marker helpers out1 out2 out3
+    marker="$BATS_TEST_TMPDIR/parked"
+    helpers="$BATS_TEST_TMPDIR/parked-helpers.sh"
+    {
+        # `log` comes from bin/_tac-bin-lib.sh in production; a stub keeps this case about
+        # the announce GATE rather than about the logger's formatting.
+        echo 'log() { printf "%s\n" "$*"; }'
+        sed -n '/^parked_announce() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh"
+        sed -n '/^parked_clear() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh"
+    } > "$helpers"
+    # The extraction must have found both functions, or every assertion below is vacuous.
+    grep -q '^parked_announce() {' "$helpers"
+    grep -q '^parked_clear() {' "$helpers"
+
+    _run_announce() {
+        bash -c '
+            source "$1"
+            TAC_LOG_TO_FILE=0
+            CUDA_PARKED_FILE="$2"
+            parked_announce "unit-a" "$3"
+        ' _ "$helpers" "$marker" "$1"
+    }
+    out1=$(_run_announce "held by a bench")
+    [[ "$out1" == *"PARKED unit-a: held by a bench"* ]]
+    out2=$(_run_announce "held by a bench")
+    [[ -z "$out2" ]]
+    out3=$(_run_announce "held by a gpu.lock holder")
+    [[ "$out3" == *"PARKED unit-a: held by a gpu.lock holder"* ]]
+}
+
+@test "LLAMA-LANE-PARK-001: parked_clear is silent when nothing was recorded" {
+    # An always-on lane calls this every tick; a clear that logged would be the noise the
+    # announce gate exists to avoid.
+    local marker helpers out
+    marker="$BATS_TEST_TMPDIR/parked-clear"
+    helpers="$BATS_TEST_TMPDIR/parked-helpers-clear.sh"
+    {
+        echo 'log() { printf "%s\n" "$*"; }'
+        sed -n '/^parked_announce() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh"
+        sed -n '/^parked_clear() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh"
+    } > "$helpers"
+    out=$(bash -c '
+        source "$1"
+        TAC_LOG_TO_FILE=0
+        CUDA_PARKED_FILE="$2"
+        parked_clear
+    ' _ "$helpers" "$marker")
+    [[ -z "$out" ]]
+    [[ ! -e "$marker" ]]
+}

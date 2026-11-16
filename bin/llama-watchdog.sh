@@ -148,7 +148,23 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 32
+# Module Version: 33
+#   v33 (2026-11-16, card LLAMA-LANE-PARK-001): the two guards that decide "someone else owns
+#     the card" now share ONE definition.  recover() tested only `_tac_heavy_job_busy`, which reads
+#     `heavy-job --status` and answers FREE for any process that took gpu.lock without registering
+#     as a heavy job — measured 2026-11-15T18:52Z: heavy-job said "free (last holder pid=7682
+#     16:40:54Z)" while `fuser gpu.lock` showed a LIVE sweep.  So recover() proceeded to start, the
+#     start gate at the `else` arm refused it on `gpu_claim_held`, and the lane landed inactive with
+#     each guard assuming the other owned it.  recover() now tests `_tac_heavy_job_busy ||
+#     gpu_claim_held`, so deferral and the start gate cannot disagree again.
+#     The parked state is also LOGGED once per state change: thirty minutes of silence on those
+#     ticks is why the 2026-11-15 park took 26 minutes to find.  A lane that is down and staying
+#     down now says so, with the reason, instead of logging nothing.
+#     NOT fixed here, and named rather than hidden: the emitter still reads "gpu.lock is flocked"
+#     as "a CUDA consumer owns the card" (bin/gpu-busy.sh cuda_owner_busy), so a lock holder that
+#     never touches the card still stops the lane.  That is a change to the gate's own semantics
+#     and needs a decision about fail-closed behaviour, so it is left to the card rather than
+#     guessed at here.
 #   v32 (2026-11-11, card 55a6fe89 defect 1): a deliberate stop no longer leaves the unit
 #     latched `failed`.  KillSignal=SIGKILL + TimeoutStopSec=5 completes as Result=signal, and
 #     systemd keeps ActiveState=failed until something resets it — measured 2026-11-04, the
@@ -545,6 +561,38 @@ gpustop_clear() {
     fi
 }
 
+# --- parked-state log (v33, card LLAMA-LANE-PARK-001) ---
+# A lane that is DOWN and STAYING DOWN used to log nothing at all on those ticks, which is
+# why the 2026-11-15 park took 26 minutes to find: the timer was healthy, ticking every five
+# minutes, and silent.  Silence on a working tick is the right default for a healthy lane and
+# the wrong one for a held lane, so a hold now says so ONCE PER STATE CHANGE — the reason
+# string is the state, so a hold that changes cause re-announces while an unchanged hold does
+# not repeat every tick.
+#
+# READ-ONLY on the lane: this only writes its own /dev/shm marker.  It never starts or stops
+# anything, so a bug here cannot hold a lane down that nothing else was holding down.
+CUDA_PARKED_FILE="${LLAMA_WATCHDOG_CUDA_PARKED_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.parked}"
+# parked_announce — say the lane is held, once per state change (the reason IS the state).
+parked_announce() {
+    local unit="$1" reason="$2" prev
+    # swallow-ok: an absent marker is the normal first-tick state, not a fault
+    prev=$(cat "$CUDA_PARKED_FILE" 2>/dev/null || true)
+    if [[ "$prev" == "$reason" ]]; then
+        return 0
+    fi
+    # swallow-ok: the failure is REPORTED on the next line, which is the whole point of the ||
+    printf '%s\n' "$reason" > "$CUDA_PARKED_FILE" 2>/dev/null \
+        || log "WARNING: cannot write the parked marker $CUDA_PARKED_FILE (a held lane will re-announce every tick)"
+    log "PARKED $unit: $reason"
+}
+# parked_clear — the lane is up (or being started), so the parked state is over.  Silent
+# when nothing was recorded: an always-on lane calls this every tick and must not log.
+parked_clear() {
+    [[ -e "$CUDA_PARKED_FILE" ]] || return 0
+    # swallow-ok: a marker that cannot be removed only costs one extra announce, never a hold
+    rm -f "$CUDA_PARKED_FILE" 2>/dev/null || true
+}
+
 # --- flap bookkeeping (v3.8) ---
 # flap_record — stamp an unexpected CUDA-lane death, pruning stamps older than the
 # window in the same write so the file cannot grow without bound.  A stamp is only
@@ -938,8 +986,15 @@ recover() {
     # left failed.  A campaign OWNS the card while it runs and its own clean-room puts the lane
     # back when it ends, so a restart now can only be preempted.  Deferring is the whole fix on
     # this side: it can only PREVENT a restart, never force one.
-    if _tac_heavy_job_busy; then
-        log "recover DEFERRED for $unit — a heavy job holds the box; its clean-room restores the lane when it ends"
+    #
+    # LLAMA-LANE-PARK-001 (measured 2026-11-15T18:52Z): the predicate was too narrow.  A sweep held
+    # gpu.lock without registering as a heavy job, so this test answered FREE and recovery proceeded
+    # into a start gate that refused it — the two guards disagreed and the lane parked.  The card's
+    # own direction was to derive the population from the LOCK rather than from who remembers to
+    # register, so both guards now ask the same two questions.
+    if _tac_heavy_job_busy || gpu_claim_held; then
+        log "recover DEFERRED for $unit — a heavy job or a gpu.lock holder owns the box;" \
+            "its clean-room restores the lane when it ends"
         return 0
     fi
     state=$(systemctl --user show "$unit.service" -p ActiveState --value 2>/dev/null || true)
@@ -1151,6 +1206,7 @@ supervise_cuda_lane() {
     elif [[ "$cuda_state" == "active" ]]; then
         # The lane is up, so any pending marker has served its purpose (or is stale).
         gpustop_clear
+        parked_clear
         health "$CUDA_PORT"; cuda_health=$?
         if (( cuda_health == 0 )); then
             strike_reset "$STRIKE_CUDA"
@@ -1175,8 +1231,13 @@ supervise_cuda_lane() {
     else
         # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
         if bench_lock || gpu_claim_held; then
+            # v33: say it ONCE per state change.  This branch is the one that parked the lane
+            # silently on 2026-11-15 — the card was free, the lane was down, and the tick logged
+            # nothing, so the only way to learn the lane was held was to notice it was not serving.
+            parked_announce "$CUDA_UNIT" "GPU free but a bench or gpu.lock holder owns the card — not starting yet"
             log "GPU free but a bench holds the card — not starting $CUDA_UNIT yet"
         else
+            parked_clear
             # Down with a free card is USUALLY an unexpected death (v3.8) — but not if
             # WE stopped it for a foreign GPU owner and the card has since freed.  The
             # marker is SINGLE-USE: consuming it here means it can explain exactly one
