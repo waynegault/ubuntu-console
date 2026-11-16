@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.17.0 (2026-11-16, card FOREIGN-APP-001): the "a resident holding no device
+#          memory is not a tenant" rule is now READ, not guessed from two names.  The
+#          watchdog stopped llama-cuda-llama32-3b-chat TWICE in one evening —
+#          17:39:49 and 18:04:50 — both `[probe: foreign-app pid=N python3
+#          exe=/usr/bin/python3.12]`, because _is_non_gpu_resident() exempted only an
+#          embedding worker and a pytest runner by cmdline and a plain `python3
+#          scripts/e2e_smoke.py` matches neither.  The class cannot be enumerated by
+#          name: what makes such a process harmless is that nvidia-smi reports no
+#          device memory for it, and that column reads `[N/A]` on this WSL host
+#          (dxgkrnl does not account per-process VRAM).  _reports_no_device_memory()
+#          reads it: a pid PRESENT with a non-numeric figure is exempt, while an
+#          unreadable table, an absent pid or a NUMERIC figure (0 included) is NOT —
+#          the exemption releases a lane, so it fails closed.  The cmdline patterns stay
+#          as a redundant documented path.  Both readers of the predicate
+#          (foreign_apps_busy, sanctioned_residents_only) get the corrected class.
 # Version: 1.16.0 (2026-11-16, card LLAMA-LANE-PARK-002): on a SHARED-MEMORY host an
 #          empty compute-apps table is not "no residents".  WSL2 unified memory leaves
 #          `nvidia-smi --query-compute-apps=pid` EMPTY while our own lanes hold the card
@@ -159,7 +174,13 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-11-16): the no-device-memory exemption is READ, not enumerated by name - see the
+#     1.17.0 entry at the top of this file.  Measured 17:39:49 and 18:04:50: two deliberate
+#     stops of the CUDA lane, both for `python3 exe=/usr/bin/python3.12`, which matched neither
+#     of the two cmdline patterns.  _reports_no_device_memory() reads nvidia-smi's per-process
+#     figure (`[N/A]` here) and fails CLOSED on an unreadable table, an absent pid or a numeric
+#     value, because the exemption's effect is to leave a lane UP.
 #   v25 (2026-11-16): a shared-memory host answers an EMPTY compute-apps table with a /proc
 #     scan - see the 1.16.0 entry at the top of this file.  Measured 15:25:12: the table was
 #     empty, the idle card read 25-26%, and the watchdog SIGKILLed the chat lane on
@@ -510,17 +531,65 @@ _is_sanctioned_exe() {
 #     the watchdog stopped that lane. A process holding no device memory is not the
 #     tenant the watchdog frees VRAM for.
 #
+# THE NAMED PATTERNS ARE NOT THE CLASS (v1.17.0, measured 2026-11-16). They were, and
+# the watchdog stopped the CUDA lane twice in one evening for a plain
+# `python3 scripts/e2e_smoke.py` — `exe=/usr/bin/python3.12`, no device memory — which
+# matches neither pattern. A list of names cannot bound "a resident that holds no device
+# memory", so that fact is now READ, by _reports_no_device_memory(), and the names are a
+# documented redundant path rather than the whole rule.
+#
 # Read by foreign_apps_busy() AND sanctioned_residents_only(). Skipping it in the
 # foreign probe alone leaves the lane condemned by the utilisation heuristic, which is
 # only suppressed when EVERY remaining resident is a sanctioned server.
 _is_non_gpu_resident() {
     local _pid="$1" _cmdline
+    if _reports_no_device_memory "$_pid"; then
+        return 0
+    fi
     _cmdline=$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null || true)  # swallow-ok: a resident that exited mid-probe has no cmdline, and an absent one must read "not exempt", never abort the probe
     case "$_cmdline" in
         *memory-core-local-embedding-worker*) return 0 ;;
         *run_pytest_script.py*|*" -m pytest"*|*"/pytest "*) return 0 ;;
     esac
     return 1
+}
+
+# _reports_no_device_memory <pid> — 0 when nvidia-smi's own per-process figure for this
+# resident carries NO device memory, 1 when it carries a number or when the figure could
+# not be read at all.
+#
+# This asks the question _is_non_gpu_resident's comment has always claimed to answer.
+# The figure is `[N/A]` on this WSL host — dxgkrnl does not account per-process VRAM — so
+# the exemption is "no memory REPORTED", never "0 MiB reported": a placeholder means the
+# driver knows this process holds no accounted device memory, whereas an unreadable
+# answer is a FAILED READ and must not release anything.
+#
+# The reading is taken from the SAME `used_gpu_memory` column scripts/11d-llm-gpu.sh
+# already treats as absent on this box (there it is used only for a display figure), so
+# the two cannot disagree about whether the column is answerable here.
+#
+# FAIL-CLOSED BY DEFAULT: with no readable figure for this pid, this returns 1 and the
+# caller keeps its previous behaviour — cmdline patterns, then a foreign-app verdict.
+_reports_no_device_memory() {
+    local _pid="$1" _query
+    # The failed read is turned into a foreign-app verdict by the parser below.
+    _query=$(nvidia-smi --query-compute-apps=pid,used_gpu_memory \
+        --format=csv,noheader,nounits 2>/dev/null)  # swallow-ok: parser answers 1 below
+    # The pid must be PRESENT and every line parseable; a table that does not name this
+    # pid is not a reading about it.
+    awk -F',' -v p="$_pid" '
+        BEGIN { found = 0 }
+        NF != 2 { bad = 1; next }
+        { gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2) }
+        $1 !~ /^[0-9]+$/ { bad = 1; next }
+        $1 == p { found = 1; mem = $2 }
+        END {
+            if (bad || !found) exit 1
+            # A number (including 0) is device memory: the process holds some.
+            if (mem ~ /^[0-9]+$/ || mem ~ /^[0-9]+\.[0-9]+$/) exit 1
+            exit 0
+        }
+    ' <<< "$_query"
 }
 
 # _proc_scan_residents — echo "pid|exe" for every llama-server resident found by

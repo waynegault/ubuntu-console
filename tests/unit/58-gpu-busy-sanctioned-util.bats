@@ -49,12 +49,23 @@ setup() {
     # DISCRETE reading so the pre-existing cases keep their meaning; the shared-memory
     # case sets it to 1 explicitly.
     unset TAC_HOST_PROFILE_SHARED_MEMORY
+    # The per-process device-memory figure the no-device-memory exemption reads (v1.17.0).
+    # `[N/A]` when unset, so the column is answerable and the asked-for-permission line
+    # below is exercised; the cases that turn it off unset this to model an unreadable table.
+    export STUB_APP_MEM="[N/A]"
 
     mkdir -p "$TAC_TEST_TMPDIR/bin"
     cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
 #!/usr/bin/env bash
 # Stub: answers only the queries gpu-busy.sh makes, from the test environment.
 case "$*" in
+    # The per-process form (v1.17.0) is asked FIRST: its column list is a superset, so a
+    # bare-pid match would read it as the plain table and lose the memory figure.
+    *--query-compute-apps=pid,used_gpu_memory*)
+        [ -n "${STUB_PIDS:-}" ] || exit 0
+        while IFS= read -r _p; do
+            [ -n "$_p" ] && printf '%s, %s\n' "$_p" "${STUB_APP_MEM:-[N/A]}"
+        done <<< "$STUB_PIDS" ;;
     *--query-compute-apps=pid*)  printf '%s\n' "${STUB_PIDS:-}" ;;
     *--query-gpu=utilization.gpu*) printf '%s\n' "${STUB_UTIL:-0}" ;;
     *--query-gpu=memory.used*)   printf '%s\n' "${STUB_VRAM:-0}" ;;
@@ -197,6 +208,11 @@ run_probe_scan() {
     export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
     export STUB_PIDS="$RESIDENT_PID"
     export STUB_UTIL=95
+    # The resident must actually HOLD device memory for this case to be about a tenant:
+    # since v1.17.0 a resident with no accounted memory (the suite's `sleep`, or the
+    # 2026-11-16 `python3`) is exempt by that fact alone.  Stated, not left to the stub's
+    # default, so the case cannot quietly become a test of the exemption instead.
+    export STUB_APP_MEM="18432.00"
 
     run run_probe
     [ "$status" -eq 0 ]
@@ -404,6 +420,9 @@ llamacpp:requests_processing 1'
     export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
     export STUB_PIDS="$RESIDENT_PID"
     export STUB_UTIL=91
+    # A stranger worth shielding against is one holding device memory; see the note on
+    # "unsanctioned resident at high utilisation" above.
+    export STUB_APP_MEM="18432.00"
     export STUB_LLAMA_UNITS='llama-cuda-qwen3embedding-embed.service 18080'
     export STUB_METRICS_18080='llamacpp:requests_processing 1'
 
@@ -438,4 +457,100 @@ llamacpp:requests_processing 1'
     [ "$status" -eq 0 ]
     [[ "$output" == *"busy reasons=util=91%"* ]]
     [[ "$output" != *"lane-serving"* ]]
+}
+
+# ── FOREIGN-APP-001: a resident holding no device memory is not a tenant ────────
+# Measured 2026-11-16, twice in one evening (17:39:49 and 18:04:50):
+#   GPU busy — stopping llama-cuda-llama32-3b-chat to free VRAM ... [probe:
+#     foreign-app pid=N python3 exe=/usr/bin/python3.12]
+# The resident was a plain `python3 scripts/e2e_smoke.py` that matched neither cmdline
+# pattern, so a healthy serving lane was taken down for a process nvidia-smi showed
+# holding no accounted device memory.  Each case below states the wrong outcome it
+# catches; the CONTROL case is what stops a blanket "any interpreter is exempt" fix —
+# an interpreter that DOES hold device memory must still be foreign.
+
+@test "foreign-app: an interpreter holding no device memory is not a tenant" {
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
+    export STUB_PIDS="$RESIDENT_PID"
+    export STUB_APP_MEM="[N/A]"
+    export STUB_UTIL=0
+
+    run run_probe
+    # Catches: the 2026-11-16 stop — a resident with no device memory read as foreign.
+    [ "$status" -eq 0 ]
+    [[ "$output" == free* ]]
+    [[ "$output" != *"foreign-app"* ]]
+}
+
+@test "foreign-app CONTROL: an interpreter holding device memory IS still foreign" {
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
+    export STUB_PIDS="$RESIDENT_PID"
+    export STUB_APP_MEM="18432.00"
+    export STUB_UTIL=0
+
+    run run_probe
+    # Catches: a fix that exempts every non-sanctioned resident, or every interpreter —
+    # which would let a real tenant hold the card while the lane kept serving.
+    [ "$status" -eq 0 ] || { echo "expected busy, got: $output"; return 1; }
+    [[ "$output" == *"foreign-app pid=$RESIDENT_PID"* ]]
+}
+
+@test "foreign-app: a reported ZERO is device memory, never an exemption" {
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
+    export STUB_PIDS="$RESIDENT_PID"
+    export STUB_APP_MEM="0"
+    export STUB_UTIL=0
+
+    run run_probe
+    # Catches: reading 0 MiB as "no memory" — the class is "none REPORTED", and a driver
+    # that can account 0 for a process can account more for it a second later.
+    [[ "$output" == *"foreign-app pid=$RESIDENT_PID"* ]]
+}
+
+@test "foreign-app: an UNREADABLE memory table fails closed and is still foreign" {
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
+    export STUB_PIDS="$RESIDENT_PID"
+    export STUB_APP_MEM="[N/A]"
+    export STUB_UTIL=0
+    # Model a driver that answers the plain table but not the per-process one.
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-compute-apps=pid,used_gpu_memory*) exit 1 ;;
+    *--query-compute-apps=pid*) printf '%s\n' "${STUB_PIDS:-}" ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+
+    run run_probe
+    # Catches: treating a FAILED READ as "no memory reported" — the exemption leaves a
+    # lane UP, so its failure direction must be the foreign-app verdict.
+    [[ "$output" == *"foreign-app pid=$RESIDENT_PID"* ]]
+}
+
+@test "foreign-app: a pid absent from the memory table is not exempt" {
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /usr/bin/true)"
+    export STUB_PIDS="$RESIDENT_PID"
+    export STUB_APP_MEM="[N/A]"
+    export STUB_UTIL=0
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-compute-apps=pid,used_gpu_memory*) printf '999999, [N/A]\n' ;;
+    *--query-compute-apps=pid*) printf '%s\n' "${STUB_PIDS:-}" ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+
+    run run_probe
+    # Catches: reading another process's row as this one's. A table that does not name
+    # the pid is not a reading about it.
+    [[ "$output" == *"foreign-app pid=$RESIDENT_PID"* ]]
 }
