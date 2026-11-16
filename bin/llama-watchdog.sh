@@ -148,7 +148,23 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-11-16, card LLAMA-LANE-PARK-001 item 3): a lane PARKED BY gpu_busy now RECOVERS
+#     when the card is provably idle.  v33 fixed the predicate that decided whether to DEFER; it
+#     left the way back open only as long as `gpustop_active` held, and that marker's 1800s TTL
+#     conflated two different facts — "we never stopped this lane" and "we stopped it and the
+#     window ran out".  A marker that expired while the card was still held fell through to the
+#     unexpected-death arm and charged the stop as a FLAP; three of those inside an hour trip the
+#     30-minute cooling-off and hold the tier down on an idle card.  That is the same one-way
+#     ratchet v3.8 documents, reached through the TTL instead of through re-arming.
+#     `gpustop_stale` now names the expired case, and `provably_idle` decides whether the lane may
+#     come back: no heavy job, no gpu.lock holder, the probe answering FREE (NOT "unknown" — an
+#     unreadable process table is a FAILED READ and must fail closed), and the card drawing under
+#     IDLE_POWER_W.  The card's own item 3 said "no active gpu.lock holder should recover", which
+#     would repeat the 2026-11-15 mistake inverted: measured that night, no actionable holder, an
+#     EMPTY compute table, and 6998 MiB still used with 1181 MiB free — a 30B Q4 cannot fit there.
+#     The power reading is what survives an empty table; it is why the arm tests four readings and
+#     requires them all to agree.
 #   v33 (2026-11-16, card LLAMA-LANE-PARK-001): the two guards that decide "someone else owns
 #     the card" now share ONE definition.  recover() tested only `_tac_heavy_job_busy`, which reads
 #     `heavy-job --status` and answers FREE for any process that took gpu.lock without registering
@@ -383,6 +399,13 @@ CUDA_SUSPEND_FILE="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-c
 # exactly one restart and never mask a genuine death after that.
 CUDA_GPUSTOP_FILE="${LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.gpustop}"
 CUDA_GPUSTOP_TTL_S="${LLAMA_WATCHDOG_CUDA_GPUSTOP_TTL_S:-1800}"
+# v34 (item 3): the power draw at or below which an otherwise-unheld card counts as idle for
+# the PARKED-RECOVERY arm only.  Measured 2026-11-15T19:18Z: an idle GB10 sits at 2.14-2.43 W,
+# while a lane loading a 30B reads tens of watts.  10 W is the top of the observed idle band
+# with room for the clock manager's wander, and it is deliberately tight: this figure only
+# ever RELEASES a lane, so a wrong value in the high direction restarts into a held card,
+# while one in the low direction merely leaves the lane parked (the status quo, and recoverable).
+IDLE_POWER_W="${LLAMA_WATCHDOG_IDLE_POWER_W:-10}"
 # A lane systemd started very recently is LOADING, and loading a 17-18 GiB model is itself
 # what raises the utilisation the busy gate reads.  Measured 2026-11-09 18:34:31 (boot): the
 # chat lane started at :29, began loading at :30, and the next tick read
@@ -551,6 +574,25 @@ gpustop_active() {
     [[ "$until" =~ ^[0-9]+$ ]] || return 1
     (( $(date +%s) < until ))
 }
+# gpustop_stale — the marker is PRESENT but its hold has EXPIRED.
+#
+# v34 (2026-11-16, card LLAMA-LANE-PARK-001 item 3): `gpustop_active` answering "no"
+# CONFLATES two different facts — "we never stopped this lane for a foreign owner" and "we
+# did, but the 1800s window ran out while the card was still held".  The second is the park
+# this card is about: the busy ticks renew the marker, so the only way to expire it is for
+# the card to have gone free and then busy again inside one tick's blind spot, or for the
+# stop to predate a long hold.  Downstream, `gpustop_active` false means the lane falls into
+# the unexpected-death arm and is charged a flap for a stop WE designed.  Keeping the two
+# facts apart is what lets the restart below skip the flap charge without weakening the
+# marker into "always true".
+gpustop_stale() {
+    local until
+    [[ -e "$CUDA_GPUSTOP_FILE" ]] || return 1
+    # swallow-ok: an unreadable marker is answered "no" by the -n test below, keeping this arm closed
+    until=$(cat "$CUDA_GPUSTOP_FILE" 2>/dev/null || true)
+    [[ "$until" =~ ^[0-9]+$ ]] || return 1
+    (( $(date +%s) >= until ))
+}
 # gpustop_clear — drop the "GPU is busy, keep the lane down" marker.  Stated rather
 # than swallowed: if the marker cannot be removed it OUTLIVES the hold it recorded,
 # and the next tick then explains a real death away with a stale one (v3.8's point).
@@ -718,6 +760,46 @@ gpu_busy() {
         GPU_BUSY_PROBE_WARNED=1
     fi
     return 0
+}
+
+# provably_idle — is the CUDA card PROVABLY unused?  (v34, card LLAMA-LANE-PARK-001 item 3)
+#
+# The card's own item 3 said: "a lane parked by gpu_busy with NO active gpu.lock holder should
+# recover on the next tick".  That sentence is the defect it was written about — it reads an
+# absent LOCK as an idle CARD, which is exactly the substitution that produced the 26-minute
+# park in the first place, only inverted.  Measured 2026-11-15T18:52Z: no lock holder we could
+# act on, compute table EMPTY, and the card still read 6998 MiB used — a 30B Q4 at 131072 ctx
+# cannot fit in the 1181 MiB left.  So this helper asks the question the card actually needs
+# answered, and it must answer it THREE ways, not two:
+#
+#   YES  the card is unused, by four independent readings that all agree.
+#   NO   something is using it (a lock holder, a heavy job, a probe answering BUSY).
+#   NO   we cannot prove it is unused (the probe ERRORED — an unreadable process table is a
+#        FAILED READ, never an idle card).  This is the LLM-LANE-STOP-001 rule and the reason
+#        `gpu_busy` collapses "unknown" into BUSY instead of into FREE.
+#
+# The power reading is the part that survives an empty compute table: on 2026-11-15 the
+# discriminator between "the sweep is running" and "the sweep wrote 7 GB of leaked VRAM and is
+# doing arithmetic on an API" was 2.43 W at 7% util, not the memory figure.  A card drawing
+# under IDLE_POWER_W with no lock holder and a FREE probe is as close to "provably idle" as this
+# box can state; it is deliberately stricter than either reading alone.
+provably_idle() {
+    local w
+    # 1. The two guards that decide "card is taken" must BOTH say no.  Same predicate the
+    #    start gate and recover() refuse on, so this arm cannot pass where they would refuse.
+    _tac_heavy_job_busy && return 1
+    gpu_claim_held && return 1
+    # 2. The probe must answer FREE.  A probe ERROR is "unknown" and is NOT idle.
+    gpu_busy && return 1
+    (( GPU_BUSY_PROBE_ERROR == 0 )) || return 1
+    # 3. The card must be drawing near-nothing.  No reading at all means we cannot prove
+    #    idleness, so an unreadable figure fails CLOSED (the same direction as the probe).
+    # swallow-ok: an unreadable power figure is DELIBERATELY indistinguishable from a missing
+    # one — the regex below rejects both and the helper fails CLOSED.
+    # swallow-ok: nvidia-smi's own stderr for a wedged driver adds nothing the regex does not
+    w=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | head -1)
+    [[ "$w" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+    awk -v w="$w" -v lim="$IDLE_POWER_W" 'BEGIN { exit (w <= lim) ? 0 : 1 }'
 }
 
 # --- driver-level fail-closed classification (v3.13) ---
@@ -1246,6 +1328,25 @@ supervise_cuda_lane() {
             _counted=0
             if gpustop_active; then
                 log "GPU free; the stop was ours for a foreign owner — restarting $CUDA_UNIT without recording a flap"
+                gpustop_clear
+            elif gpustop_stale && provably_idle; then
+                # ITEM 3 (2026-11-16): a lane parked by gpu_busy recovers when the card is
+                # PROVABLY idle.  Before this arm the only marker-reading branch was
+                # `gpustop_active`; a marker that had EXPIRED fell through to the
+                # unexpected-death arm, so a stop WE took was charged as a flap — and three
+                # such stops inside the hour tripped the 30-minute cooling-off, holding the
+                # tier down on an idle card.  That is the same one-way ratchet the flap
+                # comment above documents, reached by the marker's TTL instead of by
+                # re-arming.
+                #
+                # `provably_idle` is the card's open question.  It is NOT "the compute
+                # table is empty": on 2026-11-15 the table read EMPTY while the card showed
+                # 6998 MiB used, and treating that as idle is what would have started a 30B
+                # Q4 into 1181 MiB.  Idle here means the lock is gone, no bench is live, the
+                # probe says FREE (not "unknown" — an unreadable table is a failed READ, and
+                # a failed read must keep failing CLOSED), and the card is drawing near-nothing.
+                log "GPU free and $CUDA_UNIT was parked by a gpu_busy stop whose marker has" \
+                    "expired — the card reads provably idle, so restarting without recording a flap"
                 gpustop_clear
             elif [[ -e "$FLAP_HOLD_FILE" ]] && flap_hold_active; then
                 # A live cooling-off is a deliberate, bounded stop and THIS tick makes no

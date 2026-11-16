@@ -267,7 +267,14 @@ _hold_lock() {
     # later narrows one side, this fails rather than silently re-opening the gap.
     local recover_body gate_body
     recover_body=$(sed -n '/^recover() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh")
-    gate_body=$(sed -n '/GPU free but CUDA unit not active/,/^        else$/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    # NOTE: the `else` this range used to stop at is the INNER one three lines into the
+    # branch, so gate_body could never contain the start-gate predicates it is asserted
+    # about and those assertions passed vacuously.  Anchored on the last line of the arm.
+    local _s _e
+    _s=$(grep -n "GPU free but CUDA unit not active" "$REPO_ROOT/bin/llama-watchdog.sh" | head -1 | cut -d: -f1)
+    _e=$(grep -n 'log "GPU free and \$CUDA_UNIT not active' "$REPO_ROOT/bin/llama-watchdog.sh" | head -1 | cut -d: -f1)
+    gate_body=$(sed -n "${_s},${_e}p" "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ -n "$gate_body" ]]
     [[ "$recover_body" == *"gpu_claim_held"* ]]
     [[ "$gate_body" == *"gpu_claim_held"* ]]
 }
@@ -278,7 +285,14 @@ _hold_lock() {
     # parked_announce is the fix; this pins that the held branch calls it, and that the
     # helper is state-change-gated rather than logging every tick.
     local gate_body helper
-    gate_body=$(sed -n '/GPU free but CUDA unit not active/,/^        else$/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    # NOTE: the `else` this range used to stop at is the INNER one three lines into the
+    # branch, so gate_body could never contain the start-gate predicates it is asserted
+    # about and those assertions passed vacuously.  Anchored on the last line of the arm.
+    local _s _e
+    _s=$(grep -n "GPU free but CUDA unit not active" "$REPO_ROOT/bin/llama-watchdog.sh" | head -1 | cut -d: -f1)
+    _e=$(grep -n 'log "GPU free and \$CUDA_UNIT not active' "$REPO_ROOT/bin/llama-watchdog.sh" | head -1 | cut -d: -f1)
+    gate_body=$(sed -n "${_s},${_e}p" "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ -n "$gate_body" ]]
     [[ "$gate_body" == *"parked_announce"* ]]
     helper=$(sed -n '/^parked_announce() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh")
     # The gate: an unchanged reason returns early, so a long hold does not spam the log.
@@ -341,4 +355,125 @@ _hold_lock() {
     ' _ "$helpers" "$marker")
     [[ -z "$out" ]]
     [[ ! -e "$marker" ]]
+}
+
+@test "LLAMA-LANE-PARK-001 item 3: an EXPIRED gpustop marker is not the same fact as NO marker" {
+    # v34.  gpustop_active answers "no" for two different worlds — we never stopped this lane,
+    # and we stopped it but the 1800s window ran out.  Collapsing them charged a stop WE
+    # designed to the flap counter, and three of those in an hour hold the tier down.
+    # Would catch: the helper being folded back into gpustop_active.
+    local helpers out
+    helpers="$BATS_TEST_TMPDIR/gpustop-helpers.sh"
+    {
+        echo 'log() { printf "%s\n" "$*"; }'
+        sed -n '/^gpustop_active() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh"
+        sed -n '/^gpustop_stale() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh"
+    } > "$helpers"
+    grep -q '^gpustop_stale() {' "$helpers"
+
+    _probe() { # _probe <marker-file> -> "active stale"
+        bash -c '
+            source "$1"
+            CUDA_GPUSTOP_FILE="$2"
+            a=0; s=0
+            gpustop_active && a=1
+            gpustop_stale  && s=1
+            printf "%s %s\n" "$a" "$s"
+        ' _ "$helpers" "$1"
+    }
+    local now; now=$(date +%s)
+
+    # absent: neither — we never stopped this lane
+    out=$(_probe "$BATS_TEST_TMPDIR/absent")
+    [[ "$out" == "0 0" ]]
+
+    # live: active, not stale
+    printf '%s\n' "$(( now + 600 ))" > "$BATS_TEST_TMPDIR/live"
+    out=$(_probe "$BATS_TEST_TMPDIR/live")
+    [[ "$out" == "1 0" ]]
+
+    # expired: STALE but NOT active — the case that used to be indistinguishable from absent
+    printf '%s\n' "$(( now - 600 ))" > "$BATS_TEST_TMPDIR/expired"
+    out=$(_probe "$BATS_TEST_TMPDIR/expired")
+    [[ "$out" == "0 1" ]]
+
+    # garbage: neither.  An unparseable marker is not evidence of anything, so it must not
+    # reach the recovery arm (and must not be treated as live either).
+    printf 'not-a-number\n' > "$BATS_TEST_TMPDIR/garbage"
+    out=$(_probe "$BATS_TEST_TMPDIR/garbage")
+    [[ "$out" == "0 0" ]]
+}
+
+@test "LLAMA-LANE-PARK-001 item 3: provably_idle requires all four readings, and fails CLOSED on an unknown" {
+    # The card's open question.  "No gpu.lock holder" is NOT idle: measured 2026-11-15T18:52Z,
+    # no actionable holder, the compute table EMPTY, and 6998 MiB still in use with 1181 MiB
+    # free.  Would catch: the arm degrading to "the lock is gone", which is the same
+    # substitution that caused the original park with the sign flipped.
+    local helpers
+    helpers="$BATS_TEST_TMPDIR/idle-helpers.sh"
+    {
+        echo 'log() { printf "%s\n" "$*"; }'
+        echo '_tac_heavy_job_busy() { return "${STUB_BUSY:-1}"; }'
+        echo 'gpu_claim_held() { return "${STUB_LOCK:-1}"; }'
+        echo 'gpu_busy() { return "${STUB_PROBE_BUSY:-1}"; }'
+        echo 'nvidia-smi() { printf "%s\n" "${STUB_POWER:-2.14}"; }'
+        sed -n '/^provably_idle() {/,/^}/p' "$REPO_ROOT/bin/llama-watchdog.sh"
+    } > "$helpers"
+    grep -q '^provably_idle() {' "$helpers"
+
+    _idle() { # _idle -> 0 idle, 1 not idle
+        bash -c 'source "$1"; GPU_BUSY_PROBE_ERROR=${STUB_PROBE_ERR:-0}; IDLE_POWER_W=10; provably_idle' _ "$helpers"
+    }
+
+    # all four agree -> idle
+    out=$(STUB_POWER=2.14 _idle && echo idle || echo held)
+    [[ "$out" == "idle" ]]
+
+    # a heavy job -> held
+    out=$(STUB_BUSY=0 STUB_POWER=2.14 _idle && echo idle || echo held)
+    [[ "$out" == "held" ]]
+
+    # a live gpu.lock holder -> held (this is the 2026-11-15 holder that was never a CUDA user)
+    out=$(STUB_LOCK=0 STUB_POWER=2.14 _idle && echo idle || echo held)
+    [[ "$out" == "held" ]]
+
+    # the probe says BUSY -> held
+    out=$(STUB_PROBE_BUSY=0 STUB_POWER=2.14 _idle && echo idle || echo held)
+    [[ "$out" == "held" ]]
+
+    # the probe ERRORED: free verdict, but "unknown" is not "idle" -> held (FAIL CLOSED)
+    out=$(STUB_PROBE_ERR=1 STUB_POWER=2.14 _idle && echo idle || echo held)
+    [[ "$out" == "held" ]]
+
+    # the card is drawing power -> held
+    out=$(STUB_POWER=48.0 _idle && echo idle || echo held)
+    [[ "$out" == "held" ]]
+
+    # no power reading at all -> held (an unreadable figure proves nothing)
+    out=$(STUB_POWER="[N/A]" _idle && echo idle || echo held)
+    [[ "$out" == "held" ]]
+}
+
+@test "LLAMA-LANE-PARK-001 item 3: the free-tick gate consults the expired marker BEFORE the death arm" {
+    # Order matters and is the whole fix: if the unexpected-death arm is reached first, the
+    # stop is charged as a flap and provably_idle is never asked.  This pins the branch order
+    # in the source, because no unit-level stub can observe the ordering safely.
+    local gate_body start_line end_line
+    start_line=$(grep -n "GPU free but CUDA unit not active" "$REPO_ROOT/bin/llama-watchdog.sh" | head -1 | cut -d: -f1)
+    end_line=$(grep -n 'log "GPU free and \$CUDA_UNIT not active' "$REPO_ROOT/bin/llama-watchdog.sh" | head -1 | cut -d: -f1)
+    [[ -n "$start_line" && -n "$end_line" ]]
+    (( start_line < end_line ))
+    gate_body=$(sed -n "${start_line},${end_line}p" "$REPO_ROOT/bin/llama-watchdog.sh")
+    # The range must actually CONTAIN the arm, or every assertion below is vacuous — the
+    # failure mode this suite exists to catch, found in this very test on first run: the
+    # original sed range stopped at the first inner `else`, three lines in.
+    [[ "$gate_body" == *"elif gpustop_stale && provably_idle; then"* ]]
+    # the recovery arm must sit above the hold arms and the flap charge
+    local stale_line hold_line count_line
+    stale_line=$(printf '%s\n' "$gate_body" | grep -n "gpustop_stale && provably_idle" | head -1 | cut -d: -f1)
+    hold_line=$(printf '%s\n' "$gate_body" | grep -n "flap_hold_active" | head -1 | cut -d: -f1)
+    count_line=$(printf '%s\n' "$gate_body" | grep -n 'flap_record "\$FLAP_CUDA"' | head -1 | cut -d: -f1)
+    [[ -n "$stale_line" && -n "$hold_line" && -n "$count_line" ]]
+    (( stale_line < hold_line ))
+    (( stale_line < count_line ))
 }
