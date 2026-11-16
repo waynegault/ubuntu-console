@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 144
+# Module Version: 145
+#   v145 (2026-11-16): the dxgkrnl pre-flight gate is skipped under AUTOTUNE_SELFTEST.
+#     The gate reads the REAL dmesg, so a box whose kernel log still carried dxgkrnl
+#     errors from an earlier run refused every def-024 case before the classifier was
+#     reached (measured 2026-11-16 on the intel-xe-cuda box: 40 stale
+#     `dxgkio_reserve_gpu_va: Ioctl failed: -75` lines, four red cases in
+#     tests/unit/08-autotune-workload.bats).  A selftest never launches a server, so the
+#     gate is not applicable to it; it still runs for every real autotune and keeps its
+#     own coverage in tests/test_dxg_health.py.  Same selftest-only posture as the VRAM
+#     verdict a hundred lines below.
 #   v144 (2026-11-16): the tps-collapse guard can see a FRESH row and now HALTS instead
 #     of saving.  It compared the certification only to the registry baseline (`_tps`),
 #     which is 0 for a first-time model, so three 27B rows were recorded `autotuned=slow`
@@ -353,7 +362,14 @@ _cuda_guard_or_exit() {
                 "${s} consecutive launches stalled (dxgkrnl degradation); restart WSL"
         fi
     fi
-    if declare -f _tac_dxg_health_check >/dev/null 2>&1; then
+    # AUTOTUNE_SELFTEST never launches a server, so a live adapter-health gate is not
+    # applicable to it: the check reads the REAL dmesg, and a box whose kernel log still
+    # carried dxgkrnl errors from an earlier run refused every def-024 case before the
+    # classifier was reached (measured 2026-11-16 on the intel-xe-cuda box).  The gate
+    # keeps its own coverage in tests/test_dxg_health.py and still runs for every real
+    # autotune — this is the same selftest-only posture as the VRAM verdict above.
+    if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]] \
+        && declare -f _tac_dxg_health_check >/dev/null 2>&1; then
         local _dxg_err
         if ! _dxg_err=$(_tac_dxg_health_check); then
             warn "ERROR: WSL2 dxgkrnl reported critical kernel GPU errors (-12/-75/wait timeout):"
