@@ -44,6 +44,11 @@ setup() {
     export INVESTIGATOR_GPU_LOCK="$TAC_TEST_TMPDIR/nonexistent-gpu.lock"
     unset INVESTIGATOR_PRODUCTION_OUTPUT
     unset LLAMA_XE_SERVER_BIN
+    # The host profile exports this in a real session, and the shared-memory fallback
+    # (v1.16.0) changes what an empty compute-apps table means.  Default to the
+    # DISCRETE reading so the pre-existing cases keep their meaning; the shared-memory
+    # case sets it to 1 explicitly.
+    unset TAC_HOST_PROFILE_SHARED_MEMORY
 
     mkdir -p "$TAC_TEST_TMPDIR/bin"
     cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
@@ -116,8 +121,11 @@ EOS
     local last
     last=$(grep -n '^if busy; then$' "$SRC" | tail -1 | cut -d: -f1)
     [ -n "$last" ] || { echo "could not locate the main block in $SRC" >&2; return 1; }
-    head -n "$((last - 2))" "$SRC" > "$TAC_TEST_TMPDIR/probe.sh"
-    cat >> "$TAC_TEST_TMPDIR/probe.sh" <<'EOS'
+    # Functions only, so a case can override one predicate (the /proc scan) and still
+    # drive the real busy() chain.  probe.sh is the ordinary entry point.
+    head -n "$((last - 2))" "$SRC" > "$TAC_TEST_TMPDIR/probe-funcs.sh"
+    cat > "$TAC_TEST_TMPDIR/probe.sh" <<'EOS'
+source "$TAC_TEST_TMPDIR/probe-funcs.sh"
 REASONS=()
 if busy; then
     printf 'busy reasons=%s\n' "${REASONS[*]}"
@@ -152,6 +160,24 @@ run_probe() {
     bash "$TAC_TEST_TMPDIR/probe.sh"
 }
 
+# run_probe_scan <pid> <exe> — drive the real busy() chain with the /proc scan pinned
+# to one resident.  The scan reads LIVE /proc, so without this the box's own lanes
+# would decide the case; the predicate under test is what the scan's answer does.
+run_probe_scan() {
+    local _pid="$1" _exe="$2"
+    bash -c '
+        source "$1"
+        _scan_pid="$2"; _scan_exe="$3"
+        _proc_scan_residents() { printf "%s|%s\n" "$_scan_pid" "$_scan_exe"; }
+        REASONS=()
+        if busy; then
+            printf "busy reasons=%s\n" "${REASONS[*]}"
+        else
+            printf "free reasons=%s\n" "${REASONS[*]:-none}"
+        fi
+    ' _ "$TAC_TEST_TMPDIR/probe-funcs.sh" "$_pid" "$_exe"
+}
+
 @test "sanctioned resident at high utilisation is NOT busy (the 02:34 regression)" {
     start_resident
     export LLAMA_CUDA_SERVER_BIN="$(readlink -f /bin/sleep)"
@@ -179,14 +205,48 @@ run_probe() {
     [[ "$output" != *"util="* ]]
 }
 
-@test "high utilisation with no compute-app listing still fails closed" {
+@test "high utilisation with no compute-app listing still fails closed (discrete host)" {
     # No metric either: the lane is not serving, so an unattributable util is BUSY.
+    # DISCRETE host: the /proc fallback is scoped to shared-memory hosts, so an empty
+    # table here is still "no residents" (the shared-memory case is pinned below).
+    export TAC_HOST_PROFILE_SHARED_MEMORY=0
     export STUB_PIDS=""
     export STUB_UTIL=95
 
     run run_probe
     [ "$status" -eq 0 ]
     [[ "$output" == *"util=95%"* ]]
+}
+
+@test "shared-memory host: an empty compute-apps table is answered by the /proc scan" {
+    # WSL2 unified memory leaves the table EMPTY while our own lanes hold the card
+    # (AGENTS.md §1).  Measured 2026-11-16 15:25:12: the watchdog SIGKILLed the chat
+    # lane on `util=20%>=15%` with nothing else on the card.  The scan must find the
+    # sanctioned server, so utilisation is suppressed instead of killing the lane.
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /bin/sleep)"
+    export TAC_HOST_PROFILE_SHARED_MEMORY=1
+    export STUB_PIDS=""
+    export STUB_UTIL=26
+
+    run run_probe_scan "$RESIDENT_PID" "$(readlink -f /bin/sleep)"
+    [ "$status" -eq 0 ]
+    [[ "$output" == free\ reasons=*"util-suppressed:26%"* ]]
+    [[ "$output" != *"busy"* ]]
+}
+
+@test "discrete host: the same empty table still fails closed on utilisation" {
+    # The control: the /proc fallback is scoped to shared-memory hosts, so a discrete
+    # card keeps the old reading — an empty table is not evidence of our own residents.
+    start_resident
+    export LLAMA_CUDA_SERVER_BIN="$(readlink -f /bin/sleep)"
+    export TAC_HOST_PROFILE_SHARED_MEMORY=0
+    export STUB_PIDS=""
+    export STUB_UTIL=26
+
+    run run_probe_scan "$RESIDENT_PID" "$(readlink -f /bin/sleep)"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"util=26%"* ]]
 }
 
 @test "no compute-app listing while the lane serves its own request is NOT busy (00:13:53)" {

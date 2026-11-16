@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.16.0 (2026-11-16, card LLAMA-LANE-PARK-002): on a SHARED-MEMORY host an
+#          empty compute-apps table is not "no residents".  WSL2 unified memory leaves
+#          `nvidia-smi --query-compute-apps=pid` EMPTY while our own lanes hold the card
+#          (AGENTS.md §1), so sanctioned_residents_only() could not suppress the
+#          utilisation arm: the card reads 25-26% while idle, the 15% threshold is met
+#          permanently, and the watchdog SIGKILLed the chat lane at 15:25:12 with
+#          `[probe: util=20%>=15%]` while nothing else was on the card.  The fallback is
+#          the /proc scan the box's own prober already uses: on a shared-memory host, an
+#          empty table is answered by scanning /proc/*/exe for a sanctioned server, so
+#          "no listing" is no longer read as "no residents".  A foreign llama-server
+#          still answers BUSY (fail-closed), and a discrete card keeps the old reading.
 # Version: 1.15.0 (2026-11-16, card LLAMA-LANE-PARK-001): the ownership arm's REASON now says
 #          what was measured.  cuda_owner_busy() asked ONE question — is gpu.lock flocked — and
 #          answered `cuda-owned-by-another-run`, which asserts the holder is a CUDA consumer.  It
@@ -148,7 +159,12 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-11-16): a shared-memory host answers an EMPTY compute-apps table with a /proc
+#     scan - see the 1.16.0 entry at the top of this file.  Measured 15:25:12: the table was
+#     empty, the idle card read 25-26%, and the watchdog SIGKILLed the chat lane on
+#     `util=20%>=15%`.  The fallback is scoped to `TAC_HOST_PROFILE_SHARED_MEMORY=1`, so a
+#     discrete card keeps the old fail-closed reading.
 #   v24 (2026-11-16): the ownership reason names what was MEASURED - see the 1.15.0 entry at the
 #     top of this file.  cuda_owner_busy() answered `cuda-owned-by-another-run` for any flock
 #     holder without checking whether the holder is a CUDA consumer; measured 2026-11-15T19:18Z an
@@ -507,6 +523,24 @@ _is_non_gpu_resident() {
     return 1
 }
 
+# _proc_scan_residents — echo "pid|exe" for every llama-server resident found by
+# scanning /proc.  WSL2 unified memory leaves nvidia-smi's compute-apps table EMPTY
+# even while our own lanes hold the card (AGENTS.md §1), so on a shared-memory host
+# the table cannot be the only residency read.  This is the same /proc fallback the
+# box's own prober uses (tools/box/prober.py, scripts/oc-restart-check.py).
+_proc_scan_residents() {
+    local _p _exe
+    for _p in /proc/[0-9]*; do
+        # swallow-ok: a process that exited mid-scan is not a resident
+        _exe=$(readlink -f "$_p/exe" 2>/dev/null) || continue
+        case "${_exe##*/}" in
+            llama-server) ;;
+            *) continue ;;
+        esac
+        printf '%s|%s\n' "${_p#/proc/}" "$_exe"
+    done
+}
+
 # 0 (TRUE) when nvidia-smi lists at least one compute app and EVERY one of them is a
 # sanctioned server binary; 1 otherwise (an unsanctioned resident, an unreadable
 # /proc, or no listing at all).
@@ -523,6 +557,22 @@ sanctioned_residents_only() {
     # "|| return 1" (not-busy-only), never by reading the error text as a pid.
     smi_out=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null)  # swallow-ok: see above
     if [[ -z "$smi_out" ]]; then
+        # On a SHARED-MEMORY host the empty table is the NORMAL reading while our own
+        # lanes hold the card (AGENTS.md §1), so ask /proc instead of concluding "no
+        # residents".  Measured 2026-11-16 15:25:12: the table was empty, the card read
+        # 25-26% while idle, and the watchdog killed the chat lane for it.
+        if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]; then
+            local _found=0 _spid _sexe
+            while IFS='|' read -r _spid _sexe; do
+                [[ -n "$_spid" ]] || continue
+                _found=1
+                _is_non_gpu_resident "$_spid" && continue
+                _is_sanctioned_exe "$_sexe" || return 1
+            done < <(_proc_scan_residents)
+            if (( _found )); then
+                return 0
+            fi
+        fi
         # No listing at all. This is the state that cannot be told apart from "a
         # foreign resident is listed" by the return value (both answer 1), so it is
         # recorded here and read only by utilisation_arm()'s free-path audit line.
