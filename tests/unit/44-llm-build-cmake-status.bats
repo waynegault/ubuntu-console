@@ -133,6 +133,31 @@ case "${1:-}" in
 esac
 CMAKE_STUB
     chmod +x "$MOCK_BIN_DIR/cmake"
+    # nvidia-smi IS STUBBED, and this is the fix for a real CI red (2026-11-16).
+    #
+    # llm-build reads the card's compute capability from `nvidia-smi --query-gpu=compute_cap`
+    # and REFUSES to guess when that is unreadable (scripts/11e-llm-model.sh:6403-6421).  The
+    # fixture unset LLAMA_CUDA_ARCH and left nvidia-smi to the host, so every case in this file
+    # depended on the LIVE DRIVER.  Measured 2026-11-16: the driver on this box was wedged
+    # (NVML init rc=9, 54 /dev/dxg failures in 30 min, gpu-passthrough-check state=unavailable),
+    # so all 10 cases failed with "compute capability unreadable and LLAMA_CUDA_ARCH unset" —
+    # a red about the GPU, reported as a red about CMake status handling.  The suite is about
+    # the build FLOW, so the card is now a fixture input like cmake is.
+    #
+    # 12.1 is the real card's capability (Blackwell GB10), so the arch path exercised is the
+    # one production takes; a case that wants the unreadable-card refusal overrides the stub.
+    cat > "$MOCK_BIN_DIR/nvidia-smi" <<'SMI_STUB'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-gpu=compute_cap*) printf '%s\n' "${STUB_COMPUTE_CAP:-12.1}" ;;
+    *--query-compute-apps=pid*) exit 0 ;;
+    *--query-gpu=utilization.gpu*) printf '0\n' ;;
+    *--query-gpu=memory.used*)   printf '0\n' ;;
+    *) exit 0 ;;
+esac
+exit 0
+SMI_STUB
+    chmod +x "$MOCK_BIN_DIR/nvidia-smi"
     export PATH="$MOCK_BIN_DIR:$PATH"
     # Exported, because the cmake stub is a child process now (it used to be a shell
     # function).  A case may reassign it; an exported name stays exported.
@@ -744,4 +769,21 @@ _prev_trees() {
     [ "$rc" -eq 0 ]
     [[ "$out" == *"Done"* ]]
     [ -s "$CMAKE_LOG" ]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The fixture must not depend on the LIVE DRIVER (2026-11-16)
+# ─────────────────────────────────────────────────────────────────────────────
+# Measured: this box's GPU driver was wedged (NVML init rc=9, 54 /dev/dxg failures in
+# 30 min) and all 10 cases in this file failed with "compute capability unreadable and
+# LLAMA_CUDA_ARCH unset" — a red about the GPU, reported as a red about CMake status
+# handling.  The suite is about the build FLOW, so the card is a fixture input.
+
+@test "llm-build fixture: the compute capability comes from the stub, not the host driver" {
+    # Would catch: a future edit that drops the nvidia-smi stub and re-couples every case
+    # in this file to whatever the box's driver happens to answer.
+    command -v nvidia-smi >/dev/null || skip "no nvidia-smi on PATH at all"
+    run nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+    [ "$status" -eq 0 ]
+    [ "$output" = "12.1" ]
 }
