@@ -1,7 +1,22 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 138
+# Module Version: 140
+#   v140 (2026-11-16): a scan that finds two identical copies of the same model offers to
+#   drop the older one.  The registry keys a row on the file PATH, so a model downloaded
+#   twice into the store (`X.gguf` and `X (1).gguf`) became two rows sharing one display
+#   name, two independent autotune records and two full copies on disk — measured
+#   2026-11-16: 30.3 GB across two byte-identical pairs, and in BOTH pairs the older `(1)`
+#   copy held the certified tuning while the newer one read `indicative`.  Identity is
+#   size + a head/tail witness, because a full hash of a 30 GB model is minutes of I/O on
+#   every scan; the newest mtime is kept and the older copy is offered for deletion under
+#   the same default/active guards `model delete` applies, plus a serving-lane check.  With
+#   no terminal to ask on it reports the pair and deletes nothing.
+# Module Version: 139
+#   v139 (2026-11-16): a mid-row tps collapse is rendered as its own stage.  The autotuner
+#   now exits 3 before saving a collapsed row (v144 there), and its result file says
+#   `stage=collapse`; without this arm the bench printed the generic "unclassified failure"
+#   and the operator could not tell a degraded adapter from a model that would not load.
 #   v138 (2026-11-14): the card gate calls gpu-busy.sh through TACTICAL_REPO_ROOT again.  v137
 #   shipped a second seam, `LLAMA_BUILD_GPU_BUSY_BIN`, for the same problem the test double
 #   already solves: tests/unit/44 mirrors the root and drops its own `bin/gpu-busy.sh`, and no
@@ -1060,7 +1075,223 @@ function __model_scan() {
         fi
     fi
 
+    # A second copy of the same weights is two rows, two tuning records and two full
+    # copies on disk.  Runs after the quant-guide archive pass so a row it just moved
+    # out of the store is not offered again.
+    __model_scan_duplicates
+
     __model_list
+}
+
+# ---------------------------------------------------------------------------
+# __model_duplicate_witness
+# @description Cheap content identity for a GGUF: "<bytes>:<sha256 of head+tail>".
+# @param $1  absolute path to the file
+# @returns 0 always; prints nothing when the file cannot be read.
+#
+# A full-file hash of a 30 GB model is minutes of I/O on every scan, so identity is
+# size plus the first and last 8 MiB.  The head carries the GGUF header (name, arch,
+# tensor table) and the tail carries the last tensor, so two files that agree on size
+# and on both ends are the same download.  Measured 2026-11-16: the two Qwen3.8 copies
+# and the two mona copies each matched on size and on this witness.
+# ---------------------------------------------------------------------------
+function __model_duplicate_witness() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    local bytes
+    # swallow-ok: an unstattable file yields no witness, so it is never called a duplicate
+    bytes=$(stat --format=%s -- "$f" 2>/dev/null) || return 0
+    [[ -n "$bytes" ]] || return 0
+    local digest
+    # swallow-ok: a read error yields no witness, which keeps the file out of the comparison
+    digest=$({ head -c 8388608 -- "$f"; tail -c 8388608 -- "$f"; } 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [[ -n "$digest" ]] || return 0
+    printf '%s:%s\n' "$bytes" "$digest"
+}
+
+# ---------------------------------------------------------------------------
+# __model_duplicate_file_in_lane
+# @description True when an enabled llama-* unit names this file in its ExecStart.
+# @param $1  the registry's file column (relative to the store)
+# @returns 0 when a lane names it, 1 otherwise.
+# ---------------------------------------------------------------------------
+function __model_duplicate_file_in_lane() {
+    local file="$1" _unit _units
+    # swallow-ok: a box without a systemd user manager has no lanes, which is the answer
+    command -v systemctl >/dev/null 2>&1 || return 1
+    # swallow-ok: no user manager or no llama units lists nothing, and "no lane names it" is the safe answer
+    _units=$(systemctl --user list-unit-files 'llama-*.service' --no-legend --plain 2>/dev/null | awk '{print $1}')
+    [[ -n "$_units" ]] || return 1
+    while IFS= read -r _unit
+    do
+        [[ -n "$_unit" ]] || continue
+        # swallow-ok: a unit that cannot be read names no file, which is the safe answer here
+        if systemctl --user cat "$_unit" 2>/dev/null | grep -Fq -- "$file"
+        then
+            return 0
+        fi
+    done <<< "$_units"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# __model_duplicate_delete
+# @description Ask, then delete one duplicate copy and its registry row.
+# @param $1  the registry's file column (relative to the store)
+# @returns 0 only when the file was removed; 1 when it was kept.
+#
+# Takes the FILE, not a row number: an earlier deletion in the same scan renumbers the
+# registry, so a number captured when the group was printed can name a different model
+# by the time the question is asked.  The guards are the ones `model delete` applies
+# (default, active) plus the serving-lane check, because a lane whose ExecStart names
+# this copy would fail to start once the file is gone.
+# ---------------------------------------------------------------------------
+function __model_duplicate_delete() {
+    local file="$1"
+    local num
+    num=$(__llm_registry_row_for_file "$file")
+    if [[ -z "$num" ]]
+    then
+        __tac_info "Duplicate" "[${file} is no longer in the registry — skipped]" "$C_Warning"
+        return 1
+    fi
+    local _def_file=""
+    # swallow-ok: no default configured reads as empty, which is the "not the default" answer
+    _def_file=$(__llm_default_file 2>/dev/null || true)
+    if [[ -n "$_def_file" && "$file" == "$_def_file" ]]
+    then
+        __tac_info "Duplicate" "[#${num} is the default model — kept]" "$C_Warning"
+        return 1
+    fi
+    local _active_file=""
+    # swallow-ok: no active pointer means no model is recorded as serving
+    _active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null || true)
+    if [[ -n "$_active_file" && "$file" == "$_active_file" ]]
+    then
+        __tac_info "Duplicate" "[#${num} is the active model — kept]" "$C_Warning"
+        return 1
+    fi
+    if __model_duplicate_file_in_lane "$file"
+    then
+        __tac_info "Duplicate" "[#${num} is named by a serving lane — kept]" "$C_Warning"
+        return 1
+    fi
+    if [[ ! -t 0 ]]
+    then
+        __tac_info "Duplicate" "[no terminal to ask on — kept; run: model delete ${num}]" "$C_Warning"
+        return 1
+    fi
+    local confirm
+    read -r -p "${C_Warning}Delete the older copy #${num} (${file})? [y/N]: ${C_Reset}" confirm
+    if [[ "${confirm,,}" != "y" ]]
+    then
+        __tac_info "Duplicate" "[kept — run: model delete ${num}]" "$C_Dim"
+        return 1
+    fi
+    local -a _files=()
+    mapfile -t _files < <(__model_row_files "$LLAMA_MODEL_DIR" "$file")
+    if (( ${#_files[@]} == 0 ))
+    then
+        __tac_info "Duplicate" "[no file on disk for #${num} — the next scan drops the row]" "$C_Warning"
+        return 1
+    fi
+    if ! rm -f "${_files[@]}"
+    then
+        __tac_info "Duplicate" "[DELETE FAILED — permission denied]" "$C_Error"
+        return 1
+    fi
+    local remaining
+    remaining=$(__renumber_registry "$num")
+    __tac_info "Duplicate" "[#${num} deleted — ${remaining} models remain]" "$C_Success"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# __model_scan_duplicates
+# @description Offer to remove a second copy of the same weights after a scan.
+# @returns 0 always — a duplicate is a finding, never a scan failure.
+#
+# The scan keys a row on the file PATH, so a model downloaded twice into the same
+# directory (`X.gguf` and `X (1).gguf`) becomes two rows with the same display name,
+# two independent autotune records and two full copies on disk.  Measured 2026-11-16:
+# rows 9/10 (29.8 GB each) and 15/16 (2.8 GB each) were byte-identical pairs, ~30 GB of
+# duplicate storage, and in both pairs the certified tuning sat on the older `(1)` copy.
+# The newest copy by mtime is kept; each older copy is offered for deletion.
+# ---------------------------------------------------------------------------
+function __model_scan_duplicates() {
+    [[ -f "$LLM_REGISTRY" ]] || return 0
+
+    # Prefilter on the registry's rounded size column: only a size shared by two rows can
+    # be a duplicate, and the witness below settles it.  A curated name is NOT part of the
+    # key — two copies share the GGUF's `general.name`, which is exactly what makes them
+    # look alike, and a renamed row would otherwise escape the check.
+    local _cands
+    _cands=$(awk -F'|' '
+        $1 ~ /^[0-9]+$/ && $4 != "" { count[$4]++; rows[$4] = rows[$4] $1 "|" $3 "\n" }
+        END { for (s in count) if (count[s] > 1) printf "%s", rows[s] }
+    ' "$LLM_REGISTRY")
+    [[ -n "$_cands" ]] || return 0
+
+    local _work
+    _work=$(mktemp "${LLM_REGISTRY}.dup.XXXXXX") || return 0
+    local _num _file _witness _mtime
+    while IFS='|' read -r _num _file
+    do
+        [[ -n "$_file" ]] || continue
+        _witness=$(__model_duplicate_witness "$LLAMA_MODEL_DIR/$_file")
+        [[ -n "$_witness" ]] || continue
+        # swallow-ok: an unstattable candidate is skipped rather than ordered by a guess
+        _mtime=$(stat --format=%Y -- "$LLAMA_MODEL_DIR/$_file" 2>/dev/null) || continue
+        printf '%s|%s|%s|%s\n' "$_witness" "$_mtime" "$_num" "$_file" >> "$_work"
+    done <<< "$_cands"
+
+    local _groups
+    _groups=$(cut -d'|' -f1 "$_work" | sort | uniq -d)
+    if [[ -z "$_groups" ]]
+    then
+        rm -f "$_work"
+        return 0
+    fi
+
+    # The loops read from their OWN descriptors (4 and 5), not stdin.  A `<<<` on the
+    # loop would repoint fd 0 at the here-string, so the prompt inside
+    # __model_duplicate_delete would see a redirected stdin and never ask — measured
+    # 2026-11-16: the pty harness printed "no terminal to ask on" for that exact reason.
+    local _removed=0 _w _rows _r _r_mtime _r_num _r_file _first
+    while IFS= read -r _w <&4
+    do
+        [[ -n "$_w" ]] || continue
+        _rows=$(awk -F'|' -v w="$_w" '$1 == w' "$_work" | sort -t'|' -k2,2nr)
+        _first=1
+        while IFS='|' read -r _r _r_mtime _r_num _r_file <&5
+        do
+            [[ -n "$_r_file" ]] || continue
+            if (( _first ))
+            then
+                _first=0
+                __tac_info "Duplicate" "[#${_r_num} ${_r_file} — keeping this copy (newest)]" "$C_Warning"
+                __tac_info "File" "$(date -d "@${_r_mtime}" '+%Y-%m-%d %H:%M')" "$C_Dim"
+                continue
+            fi
+            __tac_info "Duplicate" "[#${_r_num} ${_r_file} — older copy]" "$C_Warning"
+            __tac_info "File" "$(date -d "@${_r_mtime}" '+%Y-%m-%d %H:%M')" "$C_Dim"
+            if __model_duplicate_delete "$_r_file"
+            then
+                ((++_removed))
+            else
+                __tac_info "Duplicate" \
+                    "[kept — resolve by hand: model delete $(__llm_registry_row_for_file "$_r_file")]" \
+                    "$C_Warning"
+            fi
+        done 5<<< "$_rows"
+    done 4<<< "$_groups"
+    rm -f "$_work"
+
+    if (( _removed > 0 ))
+    then
+        __tac_info "Duplicate" "[${_removed} older copy/copies removed]" "$C_Success"
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -3746,6 +3977,7 @@ function __bench_autotune_failure_why() {
     case "$_stage" in
         preflight) printf 'refused BEFORE any launch: %s%s' "$_reason" "$_suffix" ;;
         launch)    printf '%s — no working configuration%s' "$_reason" "$_suffix" ;;
+        collapse)  printf 'tps collapsed mid-row — %s%s' "$_reason" "$_suffix" ;;
         *)         printf '%s%s' "$_reason" "$_suffix" ;;
     esac
     return 0

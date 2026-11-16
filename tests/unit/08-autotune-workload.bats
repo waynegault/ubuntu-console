@@ -1029,6 +1029,57 @@ STUB
     [[ "$status" -ne 0 ]] || { echo "an absent recorded tps must not fabricate a collapse"; return 1; }
 }
 
+@test "3c: a within-row >=2x drop collapses a FRESH row (registry tps=0)" {
+    # Catches the 2026-11-16 incident: the registry baseline is empty for a first-time
+    # model, so the collapse guard had nothing to compare and recorded a degraded
+    # adapter as a slow model (7.84 -> 2.19 tps mid-row, saved autotuned=slow).
+    eval "$(sed -n '/^__autotune_collapse_verdict()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^record_best()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    declare -f __autotune_collapse_verdict >/dev/null
+    declare -f record_best >/dev/null
+
+    MIN_TPS=10
+    BEST_TPS=0; BEST_COMBO=""; BEST_CTX=0; ANY_OK=false
+    P2_TPS=0; P2_CTX=0; P2_B=""; P2_U=""
+    _ROW_BEST_QUICK_TPS=0; _meas_collapse=0
+    TAC_HOST_PROFILE_SHARED_MEMORY=1
+
+    record_best 4096 7.84 1024 256
+    [[ "$_meas_collapse" -eq 0 ]] || { echo "the first probe is the baseline, not a collapse"; return 1; }
+
+    record_best 4096 2.19 1024 256
+    [[ "$_meas_collapse" -eq 1 ]] || { echo "7.84 -> 2.19 is a 3.6x within-row drop and must collapse"; return 1; }
+
+    # CONTROL: on a discrete card the ngl ladder probes partial offload on purpose, so
+    # the same drop is not evidence of degradation and must not collapse.
+    BEST_TPS=0; BEST_COMBO=""; BEST_CTX=0
+    _ROW_BEST_QUICK_TPS=0; _meas_collapse=0
+    TAC_HOST_PROFILE_SHARED_MEMORY=0
+    record_best 4096 7.84 1024 256
+    record_best 4096 2.19 1024 256
+    [[ "$_meas_collapse" -eq 0 ]] || { echo "a discrete-card ngl drop must not be read as a collapse"; return 1; }
+}
+
+@test "3c: a collapsed row exits 3 BEFORE the profile save" {
+    # Catches the shape that let the 2026-11-16 rows be written: the guard warned and
+    # the row was saved anyway.  The exit must sit between the guard and the save, and
+    # it must be 3 — the adapter backstop the bench turns into a wsl-restart.sh call.
+    local src joined guard_line save_line
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    # The condition is wrapped across lines, so match a copy whose continuations are
+    # joined: that pins the RULE (which flag reaches the guard), not the line's shape.
+    joined=$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$REPO_ROOT/scripts/autotune-model.sh" \
+        | tr -s '[:space:]' ' ')
+    [[ "$joined" == *'[[ "${_meas_collapse:-0}" == "1" ]] || __autotune_collapse_verdict'* ]]
+    [[ "$src" == *'NOT SAVING this row'* ]]
+    guard_line=$(grep -nF 'NOT SAVING this row' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    save_line=$(grep -nF '__llm_autotune_profile_save "$MODEL_FILE"' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    [[ -n "$guard_line" && -n "$save_line" && "$guard_line" -lt "$save_line" ]] \
+        || { echo "the collapse guard must run before the profile save (guard=$guard_line save=$save_line)"; return 1; }
+    sed -n "${guard_line},$((guard_line + 4))p" "$REPO_ROOT/scripts/autotune-model.sh" | grep -qF 'exit 3' \
+        || { echo "the collapse guard must exit 3, the adapter backstop"; return 1; }
+}
+
 @test "3c: the certification parses --allow-contended and refuses BEFORE the save" {
     # Catches the helper-only blind spot: the verdict function existing while the CALL
     # SITE ignores it.  The gate must sit between the load/cores read and the profile
@@ -1262,6 +1313,31 @@ STUB
     # used to span one line, and a §18.3 wrap split it across a continuation (2026-11-02).
     [[ "$gate" == *'_preflight_refuse resource_exhausted 1'* ]]
     [[ "$gate" == *'"VRAM baseline not cleared'* ]]
+}
+
+@test "def-024: a mid-row tps collapse is reported as a collapse, not a preflight refusal" {
+    # The 2026-11-16 rows exited 3 after the adapter collapsed mid-row.  Without this
+    # arm the bench printed the generic "unclassified failure", so a degraded adapter
+    # read the same as a model that would not load.
+    eval "$(sed -n '/^__autotune_failure_label()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^__autotune_write_result()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^function __bench_autotune_failure_why()/,/^}/p' "$REPO_ROOT/scripts/11e-llm-model.sh")"
+    local out="$BATS_TEST_TMPDIR/collapse.result"
+    (
+        _COLLAPSE_DETAIL="certified 2.19 tps vs 7.84 tps earlier (>=2x drop)"
+        MODEL_FILE=stub.gguf
+        MODEL=1
+        LLM_AUTOTUNE_RESULT_FILE="$out"
+        __autotune_write_result 3
+    )
+    grep -qx 'stage=collapse' "$out"
+    grep -qx 'classification=adapter_degraded' "$out"
+    grep -qx 'exit_rc=3' "$out"
+    grep -qF 'detail=certified 2.19 tps vs 7.84 tps earlier' "$out"
+    local why
+    why=$(__bench_autotune_failure_why "$out" 3)
+    [[ "$why" == *"tps collapsed mid-row"* ]]
+    [[ "$why" == *"7.84 tps"* ]]
 }
 
 @test "def-024: an unrecognised failure is 'unclassified' and does not pretend to know why" {

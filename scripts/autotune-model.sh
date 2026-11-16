@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 143
+# Module Version: 144
+#   v144 (2026-11-16): the tps-collapse guard can see a FRESH row and now HALTS instead
+#     of saving.  It compared the certification only to the registry baseline (`_tps`),
+#     which is 0 for a first-time model, so three 27B rows were recorded `autotuned=slow`
+#     at ~2 tps while the adapter was collapsing mid-row (measured: 7.84 -> 2.19 tps at
+#     the KV-quant sweep, then 2.0 for every later row).  `record_best` now keeps the
+#     row's own best quick probe as a baseline, so a >=2x drop between two quick probes
+#     is a collapse even with no recorded figure; the guard exits 3 before the profile
+#     save, which is the adapter backstop the bench turns into a wsl-restart.sh call.
 #   v143 (2026-11-14): OOM is a DIAGNOSIS, so only the `oom` token may print it.  The
 #     failure-label mapper ended in a `*) printf 'OOM'` catch-all, so every token it did
 #     not recognise - including the EMPTY string an unread /tmp/at-metrics-$$ yields -
@@ -207,7 +215,7 @@ ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not 
         window_timeout)     printf "the readiness window expired with no error signature \
 (a slow load or a degraded adapter, NOT an OOM)" ;;
         adapter_degraded)   printf '%s%s\n' "WSL2 GPU adapter degraded (CUDA cycle budget, " \
-            "stalls, or kernel dxgkrnl errors; restart WSL)" ;;
+            "stalls, a tps collapse, or kernel dxgkrnl errors; restart WSL)" ;;
         missing_dependency) printf "missing required autotune components or shell functions" ;;
         certified)          printf 'certified' ;;
         *)                  printf 'unclassified (the launch output matched no known signature)' ;;
@@ -233,6 +241,10 @@ __autotune_write_result() {
     [[ -n "$_out" ]] || return 0
     if (( _rc == 0 )); then
         _outcome="certified"; _stage="certified"; _cls="certified"
+    elif [[ -n "${_COLLAPSE_DETAIL:-}" ]]; then
+        # A mid-row tps collapse is not a preflight refusal and not a launch failure: it
+        # is the adapter degrading under load, and the bench must say so (v144).
+        _stage="collapse"; _cls="adapter_degraded"
     elif [[ -n "${_PREFLIGHT_CLASS:-}" ]]; then
         _stage="preflight"; _cls="$_PREFLIGHT_CLASS"
     elif [[ -r "/tmp/at-fail-$$" ]]; then
@@ -247,6 +259,8 @@ __autotune_write_result() {
         printf 'reason=%s\n' "$(__autotune_failure_label "$_cls")"
         if [[ -n "${_PREFLIGHT_DETAIL:-}" ]]; then
             printf 'detail=%s\n' "$_PREFLIGHT_DETAIL"
+        elif [[ -n "${_COLLAPSE_DETAIL:-}" ]]; then
+            printf 'detail=%s\n' "$_COLLAPSE_DETAIL"
         fi
         printf 'exit_rc=%s\n' "$_rc"
         printf 'model=%s\n' "${MODEL_FILE:-}"
@@ -1668,6 +1682,9 @@ fi
 # Probe
 
 BEST_TPS="0"; BEST_COMBO=""; BEST_CTX=0; ANY_OK=false
+# Within-row collapse baseline (v144): the best quick probe this row has seen.  A fresh
+# row has registry tps=0, so this is the only baseline the collapse guard can use there.
+_ROW_BEST_QUICK_TPS="0"; _meas_collapse=0
 # Profile 1's prefill tok/s (filled-cache certification) and profile 2.
 BEST_PREFILL="0"
 # Profile 2 (interactive): config with the highest decode TPS anywhere in the
@@ -1678,6 +1695,27 @@ MMAP_FALLBACK_USED=0
 # Writes to BEST_TPS/BEST_COMBO/BEST_CTX/ANY_OK globals.
 record_best() {
     local c=$1 tps=$2 b=$3 u=$4
+
+    # Within-row collapse detector (v144).  The registry baseline is empty for a
+    # first-time model, so the collapse guard had nothing to compare and a degraded
+    # adapter was recorded as a slow model.  The row's OWN best quick probe is a
+    # baseline that exists after the first probe: a >=2x drop between two quick probes
+    # is the dxgkrnl signature (measured 2026-11-16: 7.84 -> 2.19 tps mid-row), not a
+    # model property.  The flag is read by the guard before the profile save.
+    # Shared-memory hosts only: the ngl ladder (discrete cards) deliberately probes
+    # partial offload, which is legitimately slower, so a within-row drop there is not
+    # evidence of degradation.  On a unified-memory box the ladder is skipped and the
+    # KV sweep is the like-for-like comparison that caught the 2026-11-16 collapse.
+    if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] \
+        && __autotune_collapse_verdict "${_ROW_BEST_QUICK_TPS:-0}" "$tps"; then
+        _meas_collapse=1
+        warn "  ⚠ tps collapse within this row — ${tps} tps vs" \
+             "${_ROW_BEST_QUICK_TPS} tps earlier (>=2x drop)."
+    fi
+    # swallow-ok: an unusable bc leaves the baseline unchanged, which is the no-improvement answer
+    if [[ $(echo "$tps > ${_ROW_BEST_QUICK_TPS:-0}" | bc 2>/dev/null || echo "0") == 1 ]]; then
+        _ROW_BEST_QUICK_TPS=$tps
+    fi
 
     # Profile 2 (interactive): highest decode TPS across every probed config,
     if [[ $(echo "$tps > $P2_TPS" | bc 2>/dev/null || echo "0") == 1 ]] ||
@@ -2374,14 +2412,29 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         echo "  thermal at certification: GPU ${_gpu_thermal:-n/a} (temp °C, SM MHz)"
     fi
 
-    # tps-collapse guard (WSL2 dxgkrnl degradation): the dmesg EOVERFLOW proxy
-    if __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
+    # tps-collapse guard (WSL2 dxgkrnl degradation).  Two baselines: the row's own best
+    # quick probe (v144, works on a fresh row) and the registry's recorded figure (a
+    # re-tune).  A collapse is NOT a measurement, so the row is not saved: exit 3 is the
+    # adapter backstop the bench turns into a wsl-restart.sh call, and the batch halts.
+    if [[ "${_meas_collapse:-0}" == "1" ]] \
+        || __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
         _meas_collapse=1
         echo ""
-        echo "  ⚠ WARN: tps collapse — certified ${BEST_TPS} tps vs recorded ${_tps} tps (>=2x drop)."
+        if [[ "${_ROW_BEST_QUICK_TPS:-0}" != "0" ]]; then
+            echo "  ⚠ WARN: tps collapse — certified ${BEST_TPS} tps vs" \
+                 "${_ROW_BEST_QUICK_TPS} tps earlier in this row (>=2x drop)."
+        else
+            echo "  ⚠ WARN: tps collapse — certified ${BEST_TPS} tps vs" \
+                 "recorded ${_tps} tps (>=2x drop)."
+        fi
         echo "           GPU may be degraded (WSL2 dxgkrnl leak); the re-certified numbers are untrustworthy."
-        echo "           Restart WSL (wsl --shutdown) before trusting this re-tune."
+        echo "           Restart WSL (bin/wsl-restart.sh --restart --now) before trusting this re-tune."
         echo ""
+        echo "  ⚠ NOT SAVING this row: a collapsed measurement is not a measurement."
+        _COLLAPSE_DETAIL="certified ${BEST_TPS} tps vs"
+        _COLLAPSE_DETAIL+=" ${_ROW_BEST_QUICK_TPS:-${_tps:-?}} tps earlier (>=2x drop)"
+        # 3 = the adapter backstop: the bench restarts WSL, the batch halts for a restart.
+        exit 3
     fi
 fi
 
@@ -2848,11 +2901,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             echo "  Re-run on a quiet box, or pass --allow-contended to save it as meas_state=indicative."
             exit 1
         fi
-        # The verdict is the WEAKEST of the three terms, not the load alone.  A collapse is a
-        if [[ "${_meas_collapse:-0}" == "1" && "$_meas_state" == "certified" ]]; then
-            echo "  stamping this row INDICATIVE: the collapse above makes this a re-tune owed, not a certification"
-            _meas_state="indicative"
-        fi
+        # A collapse never reaches here: the guard above exits 3 before the save, so a
+        # collapsed row is not written at all (v144).  The verdict is the WEAKEST of the
+        # remaining terms, not the load alone.
         # 1a — the POSITION term.  The winner above is a median of 5 taken at ONE point in
         _meas_drift_pct=""
         _meas_pos2=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" \

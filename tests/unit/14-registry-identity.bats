@@ -668,3 +668,99 @@ STUB
     [ -f "$LLAMA_MODEL_DIR/Split-New-00002-of-00002.gguf" ]
     [ "$(awk -F'|' '$3 == "Split-New-00001-of-00002.gguf" {print $4}' "$LLM_REGISTRY")" = "0.8G" ]
 }
+
+# ---------------------------------------------------------------------------
+# Duplicate copies (v140)
+#
+# The scan keys a row on the file PATH, so a model downloaded twice (`X.gguf` and
+# `X (1).gguf`) becomes two rows.  Measured 2026-11-16: two such pairs held 30.3 GB of
+# duplicate storage, and in both the older `(1)` copy carried the certified tuning.
+# What these cases must catch: a pair that is silently registered twice, and a prompt
+# that never fires because the group loop redirected the terminal away from stdin.
+# ---------------------------------------------------------------------------
+
+# Two byte-identical rows of one size, with the `(1)` copy written first (older).
+__dup_fixture() {
+    printf 'SAME-BYTES-%.0s' {1..2000} > "$LLAMA_MODEL_DIR/dup (1).gguf"
+    printf 'SAME-BYTES-%.0s' {1..2000} > "$LLAMA_MODEL_DIR/dup.gguf"
+    touch -d '2026-11-12 12:04' "$LLAMA_MODEL_DIR/dup (1).gguf"
+    touch -d '2026-11-12 12:09' "$LLAMA_MODEL_DIR/dup.gguf"
+    printf '%s\n' \
+        '4|Dup|dup (1).gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|256|llama_server|auto|on|11.0|yes|no|no' \
+        '5|Dup|dup.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|256|llama_server|auto|on|11.0|yes|no|no' \
+        >> "$LLM_REGISTRY"
+    export ACTIVE_LLM_FILE="$TMPDIR_BATS/active_llm"
+    export LLM_DEFAULT_FILE="$TMPDIR_BATS/default_llm"
+    export LLAMA_ARCHIVE_DIR="$TMPDIR_BATS/archived"
+    mkdir -p "$LLAMA_ARCHIVE_DIR"
+}
+
+@test "model scan: a byte-identical pair is reported, and nothing is deleted off a terminal" {
+    __dup_fixture
+
+    run __model_scan_duplicates
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"older copy"* ]]
+    [[ "$output" == *"no terminal to ask on"* ]]
+    # The refusal is the point: a scan from a script must not delete a model.
+    [ -f "$LLAMA_MODEL_DIR/dup (1).gguf" ]
+    [ -f "$LLAMA_MODEL_DIR/dup.gguf" ]
+    [ "$(awk -F'|' '$1 == 4 {print $3}' "$LLM_REGISTRY")" = "dup (1).gguf" ]
+}
+
+@test "model scan: two files of one size with different bytes are not a duplicate" {
+    printf 'AAAA-%.0s' {1..2000} > "$LLAMA_MODEL_DIR/same-size-a.gguf"
+    printf 'BBBB-%.0s' {1..2000} > "$LLAMA_MODEL_DIR/same-size-b.gguf"
+    printf '%s\n' \
+        '4|Same Size A|same-size-a.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|256|llama_server|auto|on|11.0|yes|no|no' \
+        '5|Same Size B|same-size-b.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|256|llama_server|auto|on|11.0|yes|no|no' \
+        >> "$LLM_REGISTRY"
+    export ACTIVE_LLM_FILE="$TMPDIR_BATS/active_llm"
+    export LLM_DEFAULT_FILE="$TMPDIR_BATS/default_llm"
+
+    run __model_scan_duplicates
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"older copy"* ]]
+    [ -f "$LLAMA_MODEL_DIR/same-size-a.gguf" ]
+    [ -f "$LLAMA_MODEL_DIR/same-size-b.gguf" ]
+}
+
+@test "model scan: the duplicate prompt reaches a terminal, and y deletes the older copy" {
+    __dup_fixture
+    # A here-string on the group loop used to repoint fd 0, so the prompt saw a redirected
+    # stdin and declined even on a terminal.  `script` supplies the pty this needs.
+    local harness="$TMPDIR_BATS/dup-pty.sh"
+    cat > "$harness" <<'HARNESS'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$REPO_ROOT/scripts/01-constants.sh"
+source "$REPO_ROOT/scripts/11a-llm-registry.sh"
+source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
+source "$REPO_ROOT/scripts/03-design-tokens.sh"
+source "$REPO_ROOT/scripts/05-ui-engine.sh"
+source "$REPO_ROOT/scripts/_startup-env.sh"
+source "$REPO_ROOT/scripts/prompt-sets.sh"
+source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+source "$REPO_ROOT/scripts/11e-llm-model.sh"
+# AFTER the sources: tac_host_profile_apply unsets the profile-owned paths, so a value
+# exported before 01-constants is discarded and the fixture would read the LIVE registry.
+LLM_REGISTRY="$DUP_REGISTRY"
+LLAMA_MODEL_DIR="$DUP_MODEL_DIR"
+ACTIVE_LLM_FILE="$DUP_ACTIVE"
+LLM_DEFAULT_FILE="$DUP_DEFAULT"
+export LLM_REGISTRY LLAMA_MODEL_DIR ACTIVE_LLM_FILE LLM_DEFAULT_FILE
+__model_scan_duplicates
+HARNESS
+    export REPO_ROOT
+    export DUP_REGISTRY="$LLM_REGISTRY" DUP_MODEL_DIR="$LLAMA_MODEL_DIR"
+    export DUP_ACTIVE="$ACTIVE_LLM_FILE" DUP_DEFAULT="$LLM_DEFAULT_FILE"
+
+    run bash -c "printf 'y\n' | script -qec 'bash \"$harness\"' /dev/null"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Delete the older copy"* ]]
+    [ ! -f "$LLAMA_MODEL_DIR/dup (1).gguf" ]
+    [ -f "$LLAMA_MODEL_DIR/dup.gguf" ]
+    # The surviving row takes the deleted row's number, and the untouched fixture rows keep theirs.
+    [ "$(awk -F'|' '$3 == "dup.gguf" {print $1}' "$LLM_REGISTRY")" = "4" ]
+    [ "$(awk -F'|' '$3 == "gamma.gguf" {print $1}' "$LLM_REGISTRY")" = "3" ]
+}
