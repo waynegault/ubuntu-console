@@ -99,9 +99,17 @@ BINLIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
 
 @test "census: a declared tenant resident is a CONTENDED pass" {
     # Catches: a census that refuses the very lane its own profile says to keep.
+    #
+    # LLAMA_LANE_KEEP_UNITS is PINNED EMPTY here, and that is the fix for a host-dependent
+    # case (measured 2026-11-16): the host profile keeps the embedding lane, so leaving the
+    # variable to the environment made this holder a KEEP unit as well as a census tenant,
+    # and v33 excludes keep units from tenant_count — the case read tenant_count=0 on this
+    # box and 1 on a box with no keep list.  The keep-unit exclusion has its own three cases
+    # below; this one pins the COUNT for a genuine census tenant.
     printf '4242|llama-cuda-qwen3embedding-embed.service|llama-server\n' > "$BATS_TEST_TMPDIR/holders"
     run env LLM_AUTOTUNE_VRAM_HOLDERS_FILE="$BATS_TEST_TMPDIR/holders" \
         LLM_AUTOTUNE_CENSUS=llama-cuda-qwen3embedding-embed.service \
+        LLAMA_LANE_KEEP_UNITS="" \
         LLM_AUTOTUNE_CENSUS_MAX_MIB=6144 \
         bash -c 'source "$1"; _tac_vram_baseline_verdict 77826 81920' _ "$BINLIB"
     [ "$status" -eq 0 ]
