@@ -107,7 +107,12 @@ resolved_exes() {
     run env LLAMA_CUDA_SERVER_BIN="$explicit" HOME="$FAKE_HOME" \
         bash -c 'source "$1"; _sanctioned_exes' _ "$TAC_TEST_TMPDIR/probe.sh"
     [ "$status" -eq 0 ]
-    [ "$output" = "$explicit" ]
+    # PRESENT, not SOLE.  _sanctioned_exes also names the Xe tree, and on a box that
+    # builds it (build-opencl/bin/llama-server exists) that is a second line.  Equality
+    # therefore held only where the Xe tree is absent — measured 2026-11-16 on the
+    # intel-xe-cuda box, which printed both paths and went red.  The property under test
+    # is that the explicit override is USED; presence proves it, exclusivity does not.
+    grep -qxF "$explicit" <<< "$output"
 }
 
 # ---- The tree a rebuild MOVED ASIDE is still ours (2026-11-14) -------------------------------

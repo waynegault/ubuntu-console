@@ -329,28 +329,45 @@ EOF
 
     [ "$status" -eq 0 ] || { echo "status=$status output=$output"; return 1; }
     # Tenant, watchdogs, runner, and primary lane stopped BEFORE burn; restored AFTER burn.
-    # The tenant named is the one the host profile declares: the embedding lane is a KEEP
-    # unit and must NOT be in this list (see config/hosts.d/asus-n1n-rtx-spark.conf:215).
-    local burn_line
+    # The expected set is read from the HOST PROFILE, not named here.  This case used to
+    # hardcode the arm64 box's {chat, measure}, which made it pass only where
+    # LLM_AUTOTUNE_CENSUS names those units — measured 2026-11-16 on intel-xe-cuda, whose
+    # census is empty and whose lane is llama-cuda-llama32-3b-chat.  What this case proves
+    # is the ORDER and that nothing undeclared is stopped; census membership is pinned
+    # independently by tests/unit/74-host-profiles.bats case 29.
+    local burn_line _unit _line
     burn_line=$(grep -n "^BURN_MARKER$" "$sys_log" | cut -d: -f1)
     [ -n "$burn_line" ]
-    head -n "$burn_line" "$sys_log" | grep -q "stop llama-cuda-qwen25-3b-measure.service"
+
+    for _unit in ${LLM_AUTOTUNE_CENSUS:-}; do
+        head -n "$burn_line" "$sys_log" | grep -q "stop $_unit" \
+            || { echo "census tenant $_unit NOT stopped before burn"; return 1; }
+        tail -n +"$burn_line" "$sys_log" | grep -q "start $_unit" \
+            || { echo "census tenant $_unit NOT restored after burn"; return 1; }
+    done
+
     head -n "$burn_line" "$sys_log" | grep -q "stop llama-watchdog-guard.timer"
     head -n "$burn_line" "$sys_log" | grep -q "stop actions.runner.test.service"
-    head -n "$burn_line" "$sys_log" | grep -q "stop llama-cuda-qwen3coder-30b-chat.service"
-    tail -n +"$burn_line" "$sys_log" | grep -q "start llama-cuda-qwen25-3b-measure.service"
+    head -n "$burn_line" "$sys_log" | grep -q "stop $LLAMA_CUDA_LANE_UNIT"
     tail -n +"$burn_line" "$sys_log" | grep -q "start llama-watchdog-guard.timer"
     tail -n +"$burn_line" "$sys_log" | grep -q "start actions.runner.test.service"
-    # The KEEP lane must never be stopped, even though it is a resident lane the clean-room
-    # would otherwise evict.  This asserts the corrected census holds at runtime, not just
-    # in the profile comment.  Three outcomes, not two: rc 2 is a read error, and `! grep`
-    # would read it as "no match" and pass this case for the wrong reason.
-    local keep_rc=0
-    grep -q "stop llama-cuda-qwen3embedding-embed.service" "$sys_log" || keep_rc=$?
-    [ "$keep_rc" -eq 1 ] || {
-        echo "KEEP lane handling wrong (grep rc=$keep_rc; expected 1 = no stop recorded)"
-        return 1
-    }
+
+    # Nothing outside the declared sets may be stopped.  This is what keeps a KEEP lane —
+    # and any undeclared neighbour — safe, and it stays a real assertion on a box whose
+    # census is empty, unlike a check written as "this ASUS lane was not stopped".
+    local _allowed=" ${LLM_AUTOTUNE_CENSUS:-} $LLAMA_CUDA_LANE_UNIT"
+    _allowed+=" llama-watchdog.timer llama-watchdog-guard.timer llama-watchdog.service"
+    # This case's own bench watchdog timer (LLM_BENCH_WATCHDOG_TIMER above, deliberately a
+    # unit that does not exist) is stopped by the bench teardown.  It is a declared stop,
+    # not a lane — the first run of this check caught it, which is why it is named here.
+    _allowed+=" nonexistent-bench-test.timer actions.runner.test.service "
+    while IFS= read -r _line; do
+        _unit="${_line##* }"
+        case "$_allowed" in
+            *" $_unit "*) ;;
+            *) echo "unexpected stop recorded: $_line"; return 1 ;;
+        esac
+    done < <(grep " stop " "$sys_log")
 }
 
 # end of file
