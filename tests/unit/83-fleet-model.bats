@@ -40,12 +40,19 @@ SRC="$REPO_ROOT/bin/fleet-model.sh"
 SWEEP_MODEL="cheaper-inference/deepseek-v4.1-flash-1017"
 # The ruled baseline (workspace/policies/heartbeat-policy.md:32, Wayne 2026-11-07): the
 # model a human is told to set when the slot cannot answer.  Pinned from that ruling.
+# It is now a HOST PROFILE fact (TAC_HOST_BASELINE_MODEL) because the two boxes serve
+# different CUDA rows, so the fixture STATES it instead of reading whatever this box
+# happens to declare — and the last case proves the script follows the profile.
 BASELINE_MODEL="cuda-qwen3coder-30b/qwen3-coder-30b-gpu"
 
 setup() {
     TMP="$(mktemp -d)"
     export TAC_STATE_DIR="$TMP/state"
     export OPENCLAW_CONFIG="$TMP/openclaw.json"
+    # The profile applier is what fleet-model.sh resolves the baseline through.  This
+    # suite narrows PATH to a stub bin, so the real profile must not be read here: state
+    # the fact in the sandbox, exactly as a profile would.
+    export TAC_HOST_BASELINE_MODEL="$BASELINE_MODEL"
     mkdir -p "$TMP/bin"
     cat > "$OPENCLAW_CONFIG" <<'JSON'
 {"agents":{"defaults":{"model":{"primary":"cuda-qwen3coder-30b/qwen3-coder-30b-gpu","fallbacks":["cheaper-inference/deepseek-v4.1-flash-1017"]}}}}
@@ -235,4 +242,18 @@ primary() {
     [ "$status" -eq 64 ]
     [[ "$output" == *"usage: fleet-model.sh sweep|restore|status"* ]]
     [ "$(wc -l < "$STUB_LOG" 2>/dev/null || echo 0)" -eq 0 ]
+}
+
+@test "the recovery message names THIS host's baseline, not a hardcoded one" {
+    # Measured 2026-11-16 on the x64 box: status read RED and told the operator to set
+    # cuda-qwen3coder-30b/..., the arm64 box's CUDA row, which does not exist here.
+    # Catches: any future narrowing back to one literal for both boxes.
+    local x64_baseline="cuda-llama32-3b/llama32"
+    # RED needs the fleet to BE on the sweep lane with an empty slot — reproduce that.
+    bash "$SRC" sweep
+    : > "$TAC_STATE_DIR/fleet-model.saved"
+    run env TAC_HOST_BASELINE_MODEL="$x64_baseline" bash "$SRC" status
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"openclaw models set $x64_baseline"* ]]
+    [[ "$output" != *"cuda-qwen3coder-30b"* ]]
 }

@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-11-16): the baseline the recovery message names is PER HOST, not one literal.
+#       BASELINE_PRIMARY was `cuda-qwen3coder-30b/qwen3-coder-30b-gpu`, the arm64 box's CUDA
+#       row.  Measured 2026-11-16 on the x64 box: `status` read RED and told the operator to
+#       `openclaw models set cuda-qwen3coder-30b/...` — a provider that does not exist
+#       there, where the CUDA row is cuda-llama32-3b/llama32.  The fact now lives in the
+#       host profile as TAC_HOST_BASELINE_MODEL, declared by every profile and resolved
+#       through tac_host_profile_apply.  The v7 literal stays as the fallback used only when
+#       the profile cannot be read, so the message never prints an empty model name.
 #   v7 (2026-11-10, card FLEET-MODEL-SAVED-SLOT-EMPTY-001): the saved slot is written with
 #       tools.fsutil.atomic_write_text (fsync + os.replace) and READ BACK before the
 #       switch, so a lost write can no longer leave a 0-byte slot that makes the return
@@ -47,10 +55,27 @@ FLEET_PYTHON="$(_tac_python_path "$_FLEET_REPO_ROOT")"
 STATE_DIR="${TAC_STATE_DIR:-$HOME/.local/state/tactical-console}"
 STATE="$STATE_DIR/fleet-model.saved"
 SWEEP_PRIMARY="${TAC_SWEEP_PRIMARY:-cheaper-inference/deepseek-v4.1-flash-1017}"
-# The ruled baseline the fleet must return to (Wayne's policy, heartbeat-policy.md:32;
-# pinned by tests/unit/83-fleet-model.bats).  Named HERE so the recovery message a broken
-# slot prints cannot drift from the model an operator is told to set.
-BASELINE_PRIMARY="cuda-qwen3coder-30b/qwen3-coder-30b-gpu"
+# The baseline the fleet must RETURN to (Wayne's policy, heartbeat-policy.md:32): the model
+# a human is told to set when a sweep's slot cannot answer.
+#
+# PER HOST, not one literal (v8, measured 2026-11-16).  This was
+# `cuda-qwen3coder-30b/qwen3-coder-30b-gpu`, the arm64 box's CUDA row, and on the x64 box
+# (which has no such provider) `status` told the operator to set a model it had never
+# served.  The fact is now owned by the host profile — `TAC_HOST_BASELINE_MODEL`, declared
+# by every profile — and resolved below through the same applier the rest of the console
+# uses.
+#
+# NOT pre-set with `:=` before the applier runs: tac_host_profile_apply deliberately keeps
+# a caller's explicit value, so seeding it here would win over the profile every time and
+# the literal would silently become the answer on BOTH boxes.  Measured while wiring this:
+# with the `:=` in place the traced value stayed at the arm64 name.
+# shellcheck source=tools/host-profile.sh
+if source "$_FLEET_REPO_ROOT/tools/host-profile.sh" >/dev/null 2>&1; then
+    tac_host_profile_apply >/dev/null 2>&1
+fi
+# The arm64 value answers only when the profile could not: the message this feeds must
+# print something actionable rather than an empty name.
+BASELINE_PRIMARY="${TAC_HOST_BASELINE_MODEL:-cuda-qwen3coder-30b/qwen3-coder-30b-gpu}"
 CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
 
 # warn - the tool's ONE stderr path, so every refusal has the same shape (10.7).

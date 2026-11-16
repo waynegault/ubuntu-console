@@ -28,6 +28,11 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 14
+#   v14 (2026-11-16): TAC_HOST_BASELINE_MODEL joins the cleared and exported profile-owned
+#   set — the model the fleet must RETURN to, which bin/fleet-model.sh prints when a sweep's
+#   restore slot cannot answer.  It was one hardcoded literal (the arm64 box's CUDA row), so
+#   on the x64 box the recovery message named a provider that does not exist there.
 # Module Version: 13
 #   v13 (2026-11-10): tac_host_profile_ids skips `*-quant-guide.conf` files in config/hosts.d
 #   so host-specific quantization guides can reside alongside host profiles without being
@@ -508,6 +513,7 @@ tac_host_profile_apply() {
            LLM_REGISTRY LLM_STATE_DIR \
            HF_HOME HF_HUB_CACHE \
            TAC_HOST_PRIMARY_LANE VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL \
+           TAC_HOST_BASELINE_MODEL \
            TAC_HOST_IGPU_LABEL TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
            TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT
     # The quant guide is a PATH, and `""` is meaningful (this host has no guide),
