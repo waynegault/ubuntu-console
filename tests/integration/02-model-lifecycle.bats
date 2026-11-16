@@ -266,21 +266,50 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     [[ "$fn_src" != *"rm -f /tmp/llm-bench.lock"* ]]
 }
 
+# THE BOUND IS 15s, NOT 3s, AND A TIMEOUT IS NAMED (2026-11-16, card CI-RED-001).
+#
+# Measured: the valid-path cost of each of these three refusals is ~0.18s on an idle box
+# (3/3 runs, `timeout 20`), so 3s was a 17x margin at idle and an UNKNOWN margin on a loaded
+# runner. On 2026-11-15T17:40Z `not ok 40` failed here with `[[ "$status" -ne 124 ]]` — a
+# TIMEOUT, not a wrong output — and the same tip passed the same case seven hours later with
+# no commit between. That is a flake at the bound, and the bound was the only thing wrong.
+#
+# Two changes, and the second is the one that matters. A wider bound makes the flake rarer;
+# an assertion that NAMES a timeout makes the next occurrence legible. Before this, a 124
+# printed as a bare `[[ 124 -ne 124 ]]` failure, which reads exactly like a wrong-output
+# failure and sent the reader looking for a defect in the script that was not there.
+#
+# The behaviour under test is unchanged: the script must REFUSE these inputs rather than
+# queue a heavy job. `e2e-bench-autotune.bats` [D6] guards the production half (refused
+# BEFORE the heavy-job lock, never queued); these cases guard the exit path and its speed.
+
 @test "integration: autotune missing model number exits quickly" {
-    run timeout 3 bash "$REPO_ROOT/scripts/autotune-model.sh"
-    [[ "$status" -ne 124 ]]
+    run timeout 15 bash "$REPO_ROOT/scripts/autotune-model.sh"
+    if [[ "$status" -eq 124 ]]; then
+        echo "TIMEOUT: the script did not refuse within 15s — this is a HANG, not a wrong output" >&2
+        echo "output so far: $output" >&2
+        return 1
+    fi
     [[ "$output" == *"Usage"* || "$output" == *"MODEL_NUM"* ]]
 }
 
 @test "integration: autotune invalid model reference exits quickly" {
-    run timeout 3 bash "$REPO_ROOT/scripts/autotune-model.sh" notanumber
-    [[ "$status" -ne 124 ]]
+    run timeout 15 bash "$REPO_ROOT/scripts/autotune-model.sh" notanumber
+    if [[ "$status" -eq 124 ]]; then
+        echo "TIMEOUT: the script did not refuse within 15s — this is a HANG, not a wrong output" >&2
+        echo "output so far: $output" >&2
+        return 1
+    fi
     [[ "$output" == *"not a model file in the registry"* ]]
 }
 
 @test "integration: autotune nonexistent model exits quickly" {
-    run timeout 5 bash "$REPO_ROOT/scripts/autotune-model.sh" 99999
-    [[ "$status" -ne 124 ]]
+    run timeout 15 bash "$REPO_ROOT/scripts/autotune-model.sh" 99999
+    if [[ "$status" -eq 124 ]]; then
+        echo "TIMEOUT: the script did not refuse within 15s — this is a HANG, not a wrong output" >&2
+        echo "output so far: $output" >&2
+        return 1
+    fi
     [[ "$output" == *"not found"* || "$output" == *"Error"* ]]
 }
 
