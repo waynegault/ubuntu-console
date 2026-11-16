@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.15.0 (2026-11-16, card LLAMA-LANE-PARK-001): the ownership arm's REASON now says
+#          what was measured.  cuda_owner_busy() asked ONE question — is gpu.lock flocked — and
+#          answered `cuda-owned-by-another-run`, which asserts the holder is a CUDA consumer.  It
+#          never checked.  Measured 2026-11-15T19:18Z: the holder was `pipeline.cli assess` under
+#          an --api-only sweep, `nvidia-smi --query-compute-apps=pid` was EMPTY, and the card drew
+#          2.43 W at 7% — it never touched the card, and the coder lane was killed twice for it.
+#          A locked file lock is evidence about the LOCK, not about the card.
+#          The VERDICT is unchanged and still fail-closed (BUSY), because the lock does mean a run
+#          wants the card to itself; only the CLAIM is corrected.  Three reason shapes now:
+#            cuda-owned-by-another-run pid=N        the holder IS in the compute-apps table
+#            gpu-lock-held-by-another-run pid=N cuda-consumer=no      table read, holder not in it
+#            gpu-lock-held-by-another-run pid=N cuda-consumer=unknown table EMPTY/unreadable
+#          The empty-table case gets its own word because an unreadable process table is not the
+#          same observation as an idle card — the sweep's own log said so every step ("GPU process
+#          table is empty while the card reads 7186 MiB in use — the table is unreadable, not idle").
 # Version: 1.14.0 (2026-11-14: a rebuild's MOVED tree is still ours.  A fresh-tree rebuild
 #          renames build-cuda -> build-cuda.prev-<commit> while the lanes keep running from it,
 #          so their /proc/PID/exe reads the moved path.  _is_sanctioned_exe compared by exact
@@ -133,7 +148,12 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 23
+# Module Version: 24
+#   v24 (2026-11-16): the ownership reason names what was MEASURED - see the 1.15.0 entry at the
+#     top of this file.  cuda_owner_busy() answered `cuda-owned-by-another-run` for any flock
+#     holder without checking whether the holder is a CUDA consumer; measured 2026-11-15T19:18Z an
+#     --api-only sweep owned the lock, the compute-apps table was EMPTY, and the coder lane was
+#     killed twice.  The verdict stays BUSY (fail-closed); only the claim is corrected.
 #   v23 (2026-11-14): a rebuild's MOVED tree is sanctioned - see the 1.14.0 entry at the top of
 #     this file.  `_is_sanctioned_exe` accepted only an exact path, so lanes still running from
 #     build-cuda.prev-<commit> read foreign and the watchdog stopped both mid-compile.
@@ -833,13 +853,37 @@ cuda_owner_busy() {
     # existence-gated — `flock -n` also fails on a MISSING path, so reading a
     # failed probe as "held" would report busy forever on a box that never took
     # the lock.
+    #
+    # THE REASON NAMES WHAT WAS MEASURED (v1.15.0, card LLAMA-LANE-PARK-001).  This arm
+    # used to answer `cuda-owned-by-another-run` for any flock holder, which asserts a
+    # fact it never checked: measured 2026-11-15T19:18Z, the holder was an --api-only
+    # sweep with an EMPTY compute-apps table and 2.43 W of draw.  The verdict stays BUSY
+    # (a lock does mean a run wants the card to itself, and this gate fails closed); only
+    # the claim is corrected, so a reader can tell "a CUDA consumer holds it" from "a lock
+    # holder does, and the card looks idle".
     ARMS_RUN+=("cuda-owner")
     local _lock="${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
     [[ -e "$_lock" ]] || return 1
     if flock -n "$_lock" -c true 2>/dev/null; then
         return 1   # we took it, so nobody else holds it
     fi
-    REASONS+=("cuda-owned-by-another-run pid=$(tr -dc '0-9' < "$_lock" 2>/dev/null || true)")
+    local _pid _apps _consumer
+    _pid=$(tr -dc '0-9' < "$_lock" 2>/dev/null || true)
+    # swallow-ok: an unreadable table is answered by the `unknown` branch below, not by an error
+    _apps=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null)
+    if [[ -z "${_apps//[[:space:]]/}" ]]; then
+        # EMPTY is its own observation: the table is unreadable, not the card idle.
+        _consumer="unknown"
+    elif [[ -n "$_pid" ]] && grep -qw -- "$_pid" <<< "$_apps"; then
+        _consumer="yes"
+    else
+        _consumer="no"
+    fi
+    if [[ "$_consumer" == "yes" ]]; then
+        REASONS+=("cuda-owned-by-another-run pid=$_pid")
+    else
+        REASONS+=("gpu-lock-held-by-another-run pid=$_pid cuda-consumer=$_consumer")
+    fi
     ARM="cuda-owner"
     return 0
 }

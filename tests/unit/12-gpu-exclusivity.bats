@@ -516,10 +516,28 @@ EOS
     run bash "$TAC_TEST_TMPDIR/owner-probe.sh" "$TAC_TEST_TMPDIR/owner.sh"
     [[ "$output" == "FREE" ]]
 
-    # Lock held by another process: busy, with the card named in the reason.
+    # Lock held by another process: busy, and the reason names the LOCK rather than
+    # asserting a CUDA consumer.  Changed 2026-11-16 (card LLAMA-LANE-PARK-001): the old
+    # reason `cuda-owned-by-another-run` asserted a fact this arm never checked — measured
+    # 2026-11-15T19:18Z the holder was an --api-only sweep with an EMPTY compute-apps
+    # table and 2.43 W of draw, and the coder lane was killed twice for it.  The VERDICT
+    # is unchanged (still BUSY, still fail-closed); only the claim is corrected.
+    #
+    # Which of the two new shapes appears depends on the BOX (whether nvidia-smi answers
+    # and whether the holder is listed), so this asserts the shape both share: the lock,
+    # the pid, and the consumer verdict — never the unqualified ownership claim.
     _hold_lock
     run bash "$TAC_TEST_TMPDIR/owner-probe.sh" "$TAC_TEST_TMPDIR/owner.sh"
-    [[ "$output" == BUSY*cuda-owned-by-another-run* ]]
+    [[ "$output" == BUSY*pid=* ]]
+    [[ "$output" == *"cuda-consumer="* || "$output" == *"cuda-owned-by-another-run"* ]]
+    # The claim may only be the unqualified one when the holder IS in the compute table.
+    if [[ "$output" == *"cuda-owned-by-another-run"* ]]; then
+        [[ "$output" == *"pid=$LOCK_HOLDER_PID"* ]] \
+            || { echo "claimed CUDA ownership for a pid it did not measure: $output"; return 1; }
+    else
+        [[ "$output" == *"cuda-consumer=no"* || "$output" == *"cuda-consumer=unknown"* ]] \
+            || { echo "a lock-held answer must say what was measured: $output"; return 1; }
+    fi
 
     # And the signal is actually part of the busy chain, not dead code.
     grep -q 'lock_busy || cuda_owner_busy' "$REPO_ROOT/bin/gpu-busy.sh"

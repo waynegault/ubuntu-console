@@ -241,3 +241,102 @@ EOS
     [[ "$output" != *"declared:autotune"* ]] \
         || { echo "a suppressed harness is not a declared workload: $output"; return 1; }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLAMA-LANE-PARK-001 — the ownership reason must say what was MEASURED
+# ─────────────────────────────────────────────────────────────────────────────
+# Measured 2026-11-15T19:18Z: gpu.lock was flocked by an `--api-only` sweep,
+# `nvidia-smi --query-compute-apps=pid` was EMPTY, the card drew 2.43 W at 7%, and the
+# coder lane was killed twice for it.  The arm asked one question (is the lock held) and
+# answered a different one (a CUDA consumer owns the card).  The verdict stays BUSY and
+# fail-closed — a lock does mean a run wants the card to itself — but the reason may no
+# longer assert a consumer it did not find.
+#
+# These drive the WHOLE probe through _build_probe_with_arms, so the answer comes from
+# the real busy() chain rather than from a stubbed call to the arm.
+
+# _stub_compute_table <output> — replace the setup's empty-table stub with this output.
+_stub_compute_table() {
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<EOS
+#!/usr/bin/env bash
+case "\$*" in
+    *--query-compute-apps=pid*) printf '%s\n' "$1" ;;
+    *--query-gpu=utilization.gpu*) printf '0\n' ;;
+    *--query-gpu=memory.used*)   printf '0\n' ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+}
+
+# _hold_gpu_lock — a live holder on the investigator's lock path, waited for.
+_hold_gpu_lock() {
+    export INVESTIGATOR_GPU_LOCK="$TAC_TEST_TMPDIR/gpu.lock"
+    printf '4242\n' > "$INVESTIGATOR_GPU_LOCK"
+    setsid flock "$INVESTIGATOR_GPU_LOCK" -c "sleep 30" &
+    HARNESS_PIDS+=("$!")
+    local _i
+    for _i in $(seq 1 40); do
+        flock -n "$INVESTIGATOR_GPU_LOCK" -c true 2>/dev/null || return 0
+        sleep 0.1
+    done
+    echo "the lock was never taken — every assertion below would be vacuous" >&2
+    return 1
+}
+
+@test "attribution: a lock holder NOT in the compute table is named as a lock, not a CUDA owner" {
+    # Would catch: the pre-1.15.0 string — the exact claim that killed the coder lane twice
+    # for a workload that never touched the card.
+    command -v flock >/dev/null || skip "flock unavailable"
+    _build_probe_with_arms
+    _stub_compute_table "9999"
+    _hold_gpu_lock
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [[ "$output" == busy*"gpu-lock-held-by-another-run"* ]]
+    [[ "$output" == *"cuda-consumer=no"* ]]
+    [[ "$output" != *"cuda-owned-by-another-run"* ]] \
+        || { echo "claimed CUDA ownership for a pid absent from the table: $output"; return 1; }
+}
+
+@test "attribution: an EMPTY compute table reads cuda-consumer=unknown, never idle and never owner" {
+    # Would catch: collapsing "the table is unreadable" into either verdict.  The sweep's own
+    # log said "the table is unreadable, not idle" every step; this pins the same distinction.
+    command -v flock >/dev/null || skip "flock unavailable"
+    _build_probe_with_arms
+    _stub_compute_table ""
+    _hold_gpu_lock
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [[ "$output" == busy*"cuda-consumer=unknown"* ]]
+    [[ "$output" != *"cuda-owned-by-another-run"* ]]
+}
+
+@test "attribution: the unqualified ownership claim survives for a holder that IS in the table" {
+    # The correction must not delete a true statement: when the holder is listed, the arm
+    # may still say so.  A fix that removed this would lose the one case that IS evidence.
+    command -v flock >/dev/null || skip "flock unavailable"
+    _build_probe_with_arms
+    _stub_compute_table "4242"
+    _hold_gpu_lock
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [[ "$output" == busy*"cuda-owned-by-another-run pid=4242"* ]]
+}
+
+@test "attribution: the arm names itself on both new shapes, so --json stays readable" {
+    # arms/checked are the record a reader uses to tell WHICH arm answered; the two new
+    # reason shapes must still be produced by arm=cuda-owner or the change would have
+    # moved the verdict to a nameless arm.
+    command -v flock >/dev/null || skip "flock unavailable"
+    _build_probe_with_arms
+    _stub_compute_table "9999"
+    _hold_gpu_lock
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [[ "$output" == *"arm=cuda-owner"* ]]
+    [[ "$output" == *"cuda-owner"* ]]
+}
+
+@test "attribution: no lock file at all is still FREE (existence gate intact)" {
+    _build_probe_with_arms
+    run bash "$TAC_TEST_TMPDIR/probe-arms.sh"
+    [[ "$output" == free* ]]
+    [[ "$output" != *"gpu-lock-held-by-another-run"* ]]
+}
