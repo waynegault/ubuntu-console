@@ -203,8 +203,26 @@ jobs:
         run: tools/docs-sync-check.sh
 
   behavioral:
-    name: Behavioral BATS (unit + integration)
-    runs-on: [self-hosted, wsl-console]
+    name: Behavioral BATS (unit + integration) (${{ matrix.box }})
+    # PER-BOX MATRIX (2026-11-16).  Two runners answer the `wsl-console` label — 21
+    # wsl-console-1 (X64, on the XPS 15) and 22 wsl-console-arm64 (this box) — and a bare
+    # label lets GitHub give this job to either.  Measured: run 43907073203 on 6bd3ad12
+    # reported `box=XPS15-9520 arch=x86_64 profile=intel-xe-cuda`, so an ASUS-lane
+    # expectation ran against the Intel profile's empty census and case 85 failed there.
+    # The job therefore states its box: ARM64 is the box that SERVES, X64 is the second
+    # box the repo supports.  Only the per-box jobs get the matrix — running the
+    # architecture-neutral gates twice would double the wall clock on a serial runner.
+    # A BLOCK sequence, not [a, b, ${{ … }}]: an expression inside a flow sequence is a
+    # YAML parse error ("expected ',' or ']', but got '{'"), measured on this edit.
+    runs-on:
+      - self-hosted
+      - wsl-console
+      - ${{ matrix.box }}
+    strategy:
+      # One box's red must not cancel the other's arm, or the verdict names neither.
+      fail-fast: false
+      matrix:
+        box: [ARM64, X64]
     # Measured 735 s (12.3 min) on 2026-09-26 — the longest job on the push path, so this cap
     # is also the longest a hang can hold the single runner.
     timeout-minutes: 45
@@ -556,7 +574,17 @@ jobs:
     # `-m "not host_coupled"` but still collects every other suite.  There is
     # deliberately no `-x`: stopping at the first failure would hide every later one.
     if: github.event_name != 'push'
-    runs-on: [self-hosted, wsl-console]
+    # PER-BOX, same reason as `behavioral`: this job runs the HOST-COUPLED cases, whose
+    # expectations are the running box's profile.  It fires only on PRs and dispatch, so
+    # a second arm costs nothing on the push lane.
+    runs-on:
+      - self-hosted
+      - wsl-console
+      - ${{ matrix.box }}
+    strategy:
+      fail-fast: false
+      matrix:
+        box: [ARM64, X64]
     timeout-minutes: 120
     steps:
       - name: Checkout
