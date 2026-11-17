@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-11-17): keep_lane_down refuses to stop the lane under TAC_TEST_TMPDIR.  The
+#       wrapper's clean-room already refused every production stop in a test, but this
+#       function stops the lane on its own and had no such predicate — so a unit test
+#       drove the batch, the guard fired in the wrapper, and the lane went down here
+#       anyway (measured 2026-11-17: llama-cuda-qwen3coder-30b-chat down 10:00:58 ->
+#       10:42:32, 41 minutes, from a green suite).  Same predicate as
+#       _tac_cleanroom_stops_allowed so the two cannot drift apart.
 #   v30 (2026-11-11): wsl_gpu_health_suspect routes through _tac_dxg_health_check to detect
 #       critical kernel dxgkrnl failures (-12, -75, wait timeouts) without missing scripts.
 #   v29 (2026-11-06): the nvidia-smi timeout wrappers are split (18.3 8.1.8).
@@ -213,6 +220,15 @@ _lane_unit="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
 keep_lane_down() {
     declare -f _tac_suspend_held &>/dev/null || return 0
     _tac_suspend_held "$_lane_suspend" || return 0
+    # A TEST MUST NOT STOP THE PRODUCTION LANE (measured 2026-11-17: a unit test drove
+    # this batch through the wrapper, the wrapper's own clean-room refused under
+    # TAC_TEST_TMPDIR, and THIS call stopped the chat lane anyway — 41 minutes down,
+    # because the guard lived only in the wrapper's clean-room and not here).  Same
+    # predicate as _tac_cleanroom_stops_allowed, so the two cannot drift apart.
+    if declare -f _tac_cleanroom_stops_allowed &>/dev/null \
+        && ! _tac_cleanroom_stops_allowed; then
+        return 0
+    fi
     systemctl --user stop "$_lane_unit" >/dev/null
 }
 
