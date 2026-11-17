@@ -53,7 +53,9 @@
 #   Those are not the same thing, so they are not the same mode.  The default mode
 #   prints the alarm on every run and lets the exit code carry the verdict.  With
 #   --announce the message is printed only on a TRANSITION — the state is compared with
-#   the last one announced, recorded in the state file below.  The exit code keeps the SAME
+#   the last one announced, recorded in the state file below — plus a BOUNDED re-statement
+#   of a non-ok state that has stood past GPU_WATCH_SELFCHECK_REANNOUNCE_S (v9: error is
+#   not a resting state; see announce()).  The exit code keeps the SAME
 #   mapping in both modes — 0 healthy, 1 alarming, 2 unreadable — because the run's STATUS
 #   has to say whether the WATCHER is healthy, not merely that the command ran; Wayne's
 #   call, 2026-09-24.  Consequence, stated: a standing alarm can also reach OpenClaw's own
@@ -64,7 +66,8 @@
 #
 # USAGE
 #   gpu-watch-selfcheck.sh            silent when healthy; the alarm text when not
-#   gpu-watch-selfcheck.sh --announce message on a state transition only; exit = verdict
+#   gpu-watch-selfcheck.sh --announce message on a state transition, and a bounded
+#                                     re-statement while a non-ok state persists; exit = verdict
 #   gpu-watch-selfcheck.sh --json     one JSON object (machine consumers)
 #   gpu-watch-selfcheck.sh --version
 # EXIT  0 = healthy   1 = alarming (text on stdout)   2 = the automation is unreadable
@@ -79,9 +82,18 @@
 #      GPU_WATCH_SELFCHECK_READY_INTERVAL_S  seconds between readiness retries (default 20)
 #      GPU_WATCH_SELFCHECK_STATE_FILE what --announce announced last
 #                                     (default ~/.cache/gpu-watch-selfcheck.state)
+#      GPU_WATCH_SELFCHECK_REANNOUNCE_S  how long a non-ok state may stand before it is
+#                                     re-announced (default 3600; <1 or non-integer = 3600)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-17): `error` is not a resting state.  The state record now carries the
+#     epoch the current state was FIRST seen ("<state> <epoch>"); a non-ok state that
+#     persists past GPU_WATCH_SELFCHECK_REANNOUNCE_S (default 3600) is re-announced and
+#     the clock restarts, so the repeat is bounded per interval rather than per tick.
+#     The old bare-state record is still read (as "seen now"), so an upgrade does not
+#     open the channel with a spurious repeat.  Measured 2026-11-16: transition-only
+#     delivery announced a missing-probe error once and then said nothing for 5.7 days.
 #   v8 (2026-11-10): the alarm names bin/gpu-passthrough-check.sh, the checker that
 #     actually exists.  It named bin/gpu-passthrough-watch.sh, which is tracked
 #     nowhere and installed nowhere; the one test that read the text SKIPPED when
@@ -116,6 +128,24 @@ OPENCLAW="${GPU_WATCH_SELFCHECK_OPENCLAW:-openclaw}"
 AUTOMATION_ID="${GPU_WATCH_SELFCHECK_ID:-6a1b0ada-eae2-48e9-905a-78a74ba98549}"
 MODE="${1:-}"
 STATE_FILE="${GPU_WATCH_SELFCHECK_STATE_FILE:-${XDG_CACHE_HOME:-$HOME/.cache}/gpu-watch-selfcheck.state}"
+
+# RE-ANNOUNCE BOUND — how long a NON-OK state may stand before it speaks again.
+#
+# A transition-only channel has a hole that cost 5.7 days of blindness (2026-11-16):
+# both GPU watchers announce on state CHANGE, so error -> error is silent, and a fault
+# that never clears is announced exactly once and then never again.  The OpenClaw cron
+# recorded 'command ok with no output' every 15 minutes across a real GPU outage.
+#
+# So `error` is not a resting state: once the SAME non-ok state has persisted past this
+# bound, it is re-announced and the clock restarts.  One hour, because that is the
+# cadence the systemd timer already asks this area for a verdict, so a struck fault is
+# re-stated at a rate a reader of this channel already expects — and a full day of one
+# outage is 24 messages, not the 96 a per-tick repeat would produce.  A recovery still
+# announces immediately, and a healthy first run still says nothing.
+REANNOUNCE_S="${GPU_WATCH_SELFCHECK_REANNOUNCE_S:-3600}"
+if ! [[ "$REANNOUNCE_S" =~ ^[0-9]+$ ]] || (( REANNOUNCE_S < 1 )); then
+    REANNOUNCE_S=3600
+fi
 
 # Readiness retry (see the ENV block).  Validated here so a bad value cannot reach `sleep`:
 # 0 (or a non-integer) means no wait — the default, and the automation's behaviour.
@@ -278,7 +308,7 @@ emit() {
     esac
 }
 
-# read_state — the state --announce delivered last, or empty when none is recorded.
+# read_state — what --announce delivered last, or empty when none is recorded.
 # `[[ -r ]]` rather than a redirect through 2>/dev/null: a first run has no state file,
 # and that is an ordinary starting state, not a failure to suppress.
 read_state() {
@@ -286,11 +316,32 @@ read_state() {
     printf '%s' "$(<"$STATE_FILE")"
 }
 
-# write_state <state> — record what was announced.  A failed write is REPORTED on
-# stdout rather than swallowed: without the record the next tick repeats the message,
-# and an unexplained repeat is what teaches a reader to ignore this channel.
+# The record is "<state> <first-seen-epoch>".  A record written before the re-announce
+# bound existed is the bare state; both helpers tolerate that shape rather than
+# mis-reading it, so an upgrade does not open the channel with a spurious repeat.
+state_of() {
+    local _s _e
+    read -r _s _e <<<"$1"
+    printf '%s' "$_s"
+}
+
+# since_of <record> — the epoch the current state was first seen, else empty (a record
+# written before v9 carries no timestamp).
+since_of() {
+    local _s _e
+    read -r _s _e <<<"$1"
+    printf '%s' "${_e:-}"
+}
+
+# write_state <state> [first-seen-epoch] — record what was announced.  A failed write is
+# REPORTED on stdout rather than swallowed: without the record the next tick repeats the
+# message, and an unexplained repeat is what teaches a reader to ignore this channel.
 write_state() {
-    printf '%s\n' "$1" > "$STATE_FILE" || printf '%s\n' \
+    if [[ -n "${2:-}" ]]; then
+        printf '%s %s\n' "$1" "$2" > "$STATE_FILE"
+    else
+        printf '%s\n' "$1" > "$STATE_FILE"
+    fi || printf '%s\n' \
         "note: could not record the self-check state in ${STATE_FILE}; the next transition will repeat this message"
 }
 
@@ -309,26 +360,53 @@ alarm_text() {
 }
 
 # announce <state> <detail> <name> <status> — the --announce text: a TRANSITION is the
-# message.  A standing alarm is not repeated (recording the state is what makes the
-# comparison possible), and a recovery IS a transition — otherwise the channel that
-# reported the fault never reports that it cleared.  A healthy first run says nothing
+# message.  A standing alarm is not repeated on every TICK (recording the state is what
+# makes the comparison possible), and a recovery IS a transition — otherwise the channel
+# that reported the fault never reports that it cleared.  A healthy first run says nothing
 # at all, so a fresh box does not open the channel with a routine "fine" line; a first
 # run that finds a fault does announce, because a fault must never be the quiet case.
+#
+# ERROR IS NOT A RESTING STATE (2026-11-17).  Transition-only delivery made error ->
+# error silent, so both GPU watchers announced once and then reported ok for 5.7 days
+# while the probe link was missing.  A non-ok state that persists past REANNOUNCE_S is
+# now re-stated, and the clock restarts from that re-announcement — so the repeat is
+# bounded (one per REANNOUNCE_S), not per tick.
 announce() {
     local _state="$1" _detail="$2" _name="$3" _status="$4"
-    local _previous
+    local _previous _prev_state _prev_since _now _age
     _previous=$(read_state)
-    write_state "$_state"
-    if [[ "$_previous" == "$_state" ]]; then
-        return 0                                   # unchanged: nothing to deliver
-    fi
-    if [[ "$_state" != "ok" ]]; then
-        alarm_text "$_state" "$_detail" "$_name" "$_status"
+    _prev_state=$(state_of "$_previous")
+    _prev_since=$(since_of "$_previous")
+    _now=$(date +%s)
+
+    if [[ "$_prev_state" != "$_state" ]]; then          # a transition
+        write_state "$_state" "$_now"
+        if [[ "$_state" != "ok" ]]; then
+            alarm_text "$_state" "$_detail" "$_name" "$_status"
+            return 0
+        fi
+        [[ -n "$_previous" ]] || return 0              # first run, healthy: nothing to say
+        printf '%s\n' "RECOVERED: the GPU Passthrough Watch automation self-check is healthy again"
+        printf '%s\n' "$_detail"
         return 0
     fi
-    [[ -n "$_previous" ]] || return 0              # first run, healthy: nothing to say
-    printf '%s\n' "RECOVERED: the GPU Passthrough Watch automation self-check is healthy again"
-    printf '%s\n' "$_detail"
+
+    [[ "$_state" == "ok" ]] && return 0               # unchanged and healthy: nothing
+
+    if ! [[ "$_prev_since" =~ ^[0-9]+$ ]]; then
+        # A record from before this rule carried no timestamp: start the clock now.
+        # Re-announcing on the first tick after an upgrade would be a repeat for a state
+        # the channel already carried.
+        write_state "$_state" "$_now"
+        return 0
+    fi
+
+    _age=$(( _now - _prev_since ))
+    (( _age >= REANNOUNCE_S )) || return 0
+    write_state "$_state" "$_now"
+    alarm_text "$_state" "$_detail" "$_name" "$_status"
+    printf '%s\n' "STILL: this state has stood for $(( _age / 60 )) minutes and is re-announced"
+    printf '%s\n' "bounded to once per ${REANNOUNCE_S}s while it persists, not on every tick."
 }
 
 # exit_code_for <state> — the verdict as an exit code: 0 healthy, 1 alarming, 2 the

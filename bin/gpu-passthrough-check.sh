@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-17): the sibling probe is resolved through a SYMLINK.  `_here` was
+#     `cd "$(dirname "${BASH_SOURCE[0]}")" && pwd`, which for the installed
+#     ~/.local/bin/gpu-passthrough-check.sh names ~/.local/bin — so the sibling
+#     bin/cuda-context-probe was never found there, and the check answered
+#     check-error/'context probe not installed' for 5.7 days while the card was fine.
+#     The comment above it claimed the sibling path survived the symlink; it did not.
+#     Now `readlink -f` (python3 realpath fallback) resolves the real file first.
 # TRACKED HERE since 2026-10-01: this script lived only as a loose ~/.local/bin copy, so a
 # change to it was unversioned and unreviewable — while bin/llama-watchdog.sh depends on it
 # by name.  Code that is exclusively supportive of ubuntu-console belongs in this repo;
@@ -81,11 +88,31 @@ ARM_DEFAULT_RC=-1
 ARM_WSL_RC=-1
 PROBE_KIND="context"
 
-# Locate the mint next to this script first: install.sh links every bin/ file into
-# ~/.local/bin, so the sibling path survives the symlink. Fall back to PATH.
+# Locate the mint next to this script first, then fall back to PATH.
+#
+# The REAL file's directory, not the invoked path's: install.sh links every bin/ file
+# into ~/.local/bin, so the invoked path is a symlink and its directory is ~/.local/bin.
+# Resolving the link is what makes the sibling probe reachable — and it is also the
+# correct answer when the install is STALE (a link added to bin/ after the last
+# install.sh run exists in the repo and nowhere else).  Measured 2026-11-16: without
+# this, the installed check reported check-error/'context probe not installed' for
+# 5.7 days.  `readlink -f` is coreutils and present here; the python3 realpath is the
+# fallback for a host without it, and it is a fallback rather than a silent skip.
 PROBE="${GPU_CONTEXT_PROBE:-}"
 if [[ -z "$PROBE" ]]; then
-    _here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    _self="${BASH_SOURCE[0]}"
+    # A capability probe: readlink absent or without -f IS the answer the elif exists
+    # for, and its stderr is not evidence about the card.
+    if command -v readlink >/dev/null 2>&1 && readlink -f -- "$_self" >/dev/null 2>&1; then
+        _self=$(readlink -f -- "$_self")
+    elif command -v python3 >/dev/null 2>&1; then
+        # A python3 that cannot realpath is the fallback's own failure; the `|| printf`
+        # keeps the invoked path (the pre-v4 behaviour) rather than going silent.
+        _realpath='import os,sys; print(os.path.realpath(sys.argv[1]))'
+        # swallow-ok: realpath stderr is the fallback's own diagnostic, not the verdict
+        _self=$(python3 -c "$_realpath" "$_self" 2>/dev/null || printf '%s' "$_self")
+    fi
+    _here=$(cd "$(dirname "$_self")" && pwd)
     if [[ -x "$_here/cuda-context-probe" ]]; then
         PROBE="$_here/cuda-context-probe"
     elif command -v cuda-context-probe >/dev/null 2>&1; then

@@ -1095,6 +1095,9 @@ setup_selfcheck() {
     # Same reason as the state file: a case that set the readiness wait must not leak it into
     # the next one (the automation and a human run leave it unset, so that is the default here).
     unset GPU_WATCH_SELFCHECK_READY_WAIT_S GPU_WATCH_SELFCHECK_READY_INTERVAL_S SELFCHECK_COUNTER
+    # The re-announce bound is a per-case decision: a case that shortens it must not
+    # leak into the next one, where "silent on the second tick" is the assertion.
+    unset GPU_WATCH_SELFCHECK_REANNOUNCE_S
 }
 
 @test "gpu-watch-selfcheck: a healthy automation is silent and exits 0" {
@@ -1367,4 +1370,86 @@ MOCK
     [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]] \
         || { echo "a genuine BUSY answer no longer stops the lane: $output"; return 1; }
     grep -q 'stop llama-cuda-llama32-3b-chat.service' "$MOCK_STATE/systemctl.log"
+}
+
+@test "gpu-watch-selfcheck --announce: a struck error PAST the bound is re-announced, then bounded" {
+    # THE DEFECT THIS PINS (2026-11-16): transition-only delivery made error -> error
+    # silent, so a missing probe link was announced once and then the channel said
+    # nothing for 5.7 days.  A non-ok state that has stood past the bound must speak
+    # again — and only once per bound, not once per tick.
+    setup_selfcheck
+    local now_ms now
+    now_ms=$(( $(date +%s) * 1000 ))
+    now=$(date +%s)
+    _selfcheck_json error true "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+
+    # First sight of the error is a transition: delivered, and the clock starts.
+    run "$SELFCHECK" --announce
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"lastRunStatus=error"* ]]
+    [[ "$output" != *"STILL:"* ]]
+
+    # Same error 90 s later, with the bound at 3600 s: silent.  This is the old
+    # behaviour, preserved — a standing alarm is not repeated every tick.
+    run "$SELFCHECK" --announce
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+
+    # Age the record past the bound: the state has now STOOD, so it speaks again.
+    printf 'failed %s\n' "$(( now - 3700 ))" > "$GPU_WATCH_SELFCHECK_STATE_FILE"
+    run "$SELFCHECK" --announce
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"lastRunStatus=error"* ]]
+    [[ "$output" == *"STILL:"* ]]
+
+    # ...and the clock restarted, so the very next tick is silent again.
+    run "$SELFCHECK" --announce
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "gpu-watch-selfcheck --announce: the re-announce bound is env-overridable, and a recovery still speaks" {
+    setup_selfcheck
+    local now_ms now
+    now_ms=$(( $(date +%s) * 1000 ))
+    now=$(date +%s)
+    _selfcheck_json error true "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+
+    # A 60 s bound with the state aged 120 s: a test can reach the repeat without waiting.
+    printf 'failed %s\n' "$(( now - 120 ))" > "$GPU_WATCH_SELFCHECK_STATE_FILE"
+    run env GPU_WATCH_SELFCHECK_REANNOUNCE_S=60 "$SELFCHECK" --announce
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"STILL:"* ]]
+    [[ "$output" == *"once per 60s"* ]]
+
+    # The same aged record under the DEFAULT bound (3600 s) is silent: the override is
+    # what decided it, not an unconditional repeat.
+    printf 'failed %s\n' "$(( now - 120 ))" > "$GPU_WATCH_SELFCHECK_STATE_FILE"
+    run "$SELFCHECK" --announce
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+
+    # A recovery is a transition and is delivered whatever the age — the channel that
+    # reported the fault must report that it cleared.
+    _selfcheck_json ok true "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+    run "$SELFCHECK" --announce
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RECOVERED"* ]]
+}
+
+@test "gpu-watch-selfcheck --announce: a pre-v9 bare-state record does not repeat on upgrade" {
+    # The old record was the bare state with no timestamp.  Reading it as "first seen
+    # now" is the only answer that neither silently drops the state nor opens the
+    # channel with a repeat for a fault the channel already carried.
+    setup_selfcheck
+    local now_ms
+    now_ms=$(( $(date +%s) * 1000 ))
+    _selfcheck_json error true "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+    printf 'failed\n' > "$GPU_WATCH_SELFCHECK_STATE_FILE"
+
+    run "$SELFCHECK" --announce
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+    # The clock is now recorded, so the bound can fire later.
+    [[ "$(<"$GPU_WATCH_SELFCHECK_STATE_FILE")" == failed\ [0-9]* ]]
 }

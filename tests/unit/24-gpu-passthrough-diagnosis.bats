@@ -329,3 +329,34 @@ PY
     [ "$status" -eq 1 ]
     [ "$(grep -c '^x$' "$STUB/mint-calls")" -eq 2 ]
 }
+
+@test "resolution: the sibling probe is found through a SYMLINK to the check" {
+    # The installed path is ~/.local/bin/gpu-passthrough-check.sh, a symlink into the
+    # repo's bin/.  `_here` used to be the INVOKED path's directory, so the sibling
+    # bin/cuda-context-probe was never found there and the check answered
+    # check-error/'context probe not installed' for 5.7 days (measured 2026-11-16).
+    # The probe is deliberately NOT on PATH here: only resolving the link can find it.
+    local linkdir="$BATS_TEST_TMPDIR/linkdir"
+    mkdir -p "$linkdir"
+    ln -s "$CHECK" "$linkdir/gpu-passthrough-check.sh"
+
+    run env -u GPU_CONTEXT_PROBE PATH=/usr/bin:/bin "$linkdir/gpu-passthrough-check.sh" --json
+    [ "$status" -eq 0 ]
+    [ "$(field "$output" state)" = "ok" ]
+    [ "$(field "$output" verdict)" = "ok" ]
+    [[ "$output" != *"context probe not installed"* ]]
+}
+
+@test "resolution: a symlink whose target has no sibling probe still reports check-error" {
+    # The fix must not turn a genuinely missing instrument into a green: a copy of the
+    # check in a directory with no probe, invoked directly, is still check-error.
+    local lonely="$BATS_TEST_TMPDIR/lonely"
+    mkdir -p "$lonely"
+    cp "$CHECK" "$lonely/gpu-passthrough-check.sh"
+    chmod +x "$lonely/gpu-passthrough-check.sh"
+
+    run env -u GPU_CONTEXT_PROBE PATH=/usr/bin:/bin "$lonely/gpu-passthrough-check.sh" --json
+    [ "$status" -eq 2 ]
+    [ "$(field "$output" verdict)" = "check-error" ]
+    [[ "$output" == *"context probe not installed"* ]]
+}
