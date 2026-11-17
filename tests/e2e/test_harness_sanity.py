@@ -46,6 +46,54 @@ def test_hermetic_sandbox_redirects_all_state_paths(hermetic_sandbox: Path, tmp_
     assert not Path("/home/wayne/canary.txt").exists()
 
 
+def test_a_child_interpreter_still_sees_the_user_site(hermetic_sandbox: Path) -> None:
+    """Catches: sandboxing HOME and thereby hiding the user site from every child process.
+
+    THE DEFECT THIS EXISTS FOR (run 43991753373, 2026-11-17): ``hermetic_sandbox`` moved HOME
+    into tmp_path, the user site moved with it, and ``test_tier2_f4_05_strict_config_validation``
+    then started a CHILD interpreter that could not ``import pluggy`` even though the job's own
+    ``pip install`` had reported it satisfied in ``/home/wayne/.local``.  The child failed a
+    capability its parent had, and the failure was reported against the repo's pytest config.
+
+    The assertion is deliberately about the CHILD, not about this process: a test on a variable
+    proves the assignment; only a process started from it proves the delivery.
+
+    The load-bearing arm is the SECOND one.  The first ("pytest and pluggy are importable")
+    is vacuous under the repo's own ``.venv``, which carries both in its own site-packages —
+    it only bites on the CI shape, where pytest lives in the tool python and pluggy in the
+    user site.  The second arm is what fails on any box when the fix is absent: measured
+    before the fix, the child reported
+    ``/tmp/pytest-of-wayne/pytest-67/test_a_child_interpreter_still0/home/.local/...``,
+    i.e. the sandbox's empty copy, and this case failed.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import site, sys; "
+        "print(site.getusersitepackages()); "
+        "print('ENABLED' if site.ENABLE_USER_SITE else 'DISABLED'); "
+        "print('ONPATH' if site.getusersitepackages() in sys.path else 'OFFPATH'); "
+        "import importlib.util as u; "
+        "missing = [m for m in ('pytest', 'pluggy') if u.find_spec(m) is None]; "
+        "sys.exit(1 if missing else 0)"
+    )
+    res = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
+    lines = res.stdout.split()
+    assert res.returncode == 0, (
+        "a child interpreter cannot import pytest and pluggy; "
+        f"its user site is {lines[0] if lines else '<none>'!r} and stderr is {res.stderr.strip()!r}"
+    )
+    # …and the user site it reports is the REAL one, not the sandbox's empty copy.
+    assert not Path(lines[0]).is_relative_to(hermetic_sandbox), res.stdout
+    # …and it is actually SEARCHED, not merely named.  Conditional on the child's own
+    # ENABLE_USER_SITE: a venv disables the user site for itself (this repo's .venv does,
+    # measured), so requiring ONPATH unconditionally would fail on the developer box while
+    # proving nothing — the CI shape is the one where the child enables it and the arm bites.
+    enabled, onpath = lines[1], lines[2]
+    assert (enabled == "ENABLED") == (onpath == "ONPATH"), res.stdout
+
+
 # --- VirtualProcfs Tests ---
 
 

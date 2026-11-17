@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import site
 from pathlib import Path
 from typing import Any, Generator
 import pytest
@@ -12,6 +13,36 @@ from .helpers.mock_hardware import (
 )
 from .helpers.mock_procfs import VirtualProcfs
 from .helpers.mock_server import HermeticHTTPServer
+
+
+def _real_user_base() -> str | None:
+    """The user-site BASE this suite was started with, captured before HOME moves.
+
+    ``hermetic_sandbox`` below repoints HOME at ``tmp_path``, and the user site is derived
+    from HOME — so a CHILD interpreter started inside the sandbox looks for packages under
+    ``tmp_path/home/.local/...`` and finds none.  On a CI runner that is not a corner case:
+    ``pip install -r .github/ci-requirements.txt`` satisfies some requirements from the
+    USER site (run 43991753373 logged ``Requirement already satisfied: pluggy ... in
+    /home/wayne/.local/lib/python3.14/site-packages``) while ``pytest`` itself sits in the
+    tool python.  The child then fails ``import pluggy``, ``pytest_interpreter()``'s probe
+    fails correctly, and its documented fallback returns the one interpreter that is broken
+    — so ``test_tier2_f4_05_strict_config_validation`` failed for a sandbox artefact and
+    reported it as a broken pytest configuration.
+
+    The answer is to keep the sandbox's HOME and tell children where the user site really
+    is, via PYTHONUSERBASE.  This is read at import time, i.e. before any fixture runs.
+
+    Deliberately NOT gated on ``site.ENABLE_USER_SITE``: that flag is False inside a venv
+    (measured here, ``site.ENABLE_USER_SITE is False`` for the repo's own ``.venv``), yet
+    ``getusersitepackages()`` still resolves from HOME and a CHILD built by a tool python —
+    the CI shape — does enable it.  Gating on this process's flag would therefore disable
+    the fix in exactly the suite that needs it, which the first version of this helper did.
+    """
+    base = Path(site.getusersitepackages()).parents[2]
+    return str(base) if base.is_dir() else None
+
+
+REAL_USER_BASE = _real_user_base()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -39,6 +70,12 @@ def hermetic_sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generat
     for env_var, dir_path in sandbox_dirs.items():
         dir_path.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(env_var, str(dir_path))
+
+    # Keep the REAL user site reachable from here (see _real_user_base above): HOME is now
+    # the sandbox, and without this a child interpreter silently loses every user-site
+    # package — which on this repo's CI runner is where pluggy lives.
+    if REAL_USER_BASE:
+        monkeypatch.setenv("PYTHONUSERBASE", REAL_USER_BASE)
 
     # Set non-directory sandbox paths
     monkeypatch.setenv("SECRETS_FILE", str(tmp_path / "secrets.json"))

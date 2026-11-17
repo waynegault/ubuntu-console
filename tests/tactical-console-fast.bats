@@ -916,18 +916,64 @@ YAML
     # (and tests/scripts/) no longer exists and NOTHING else referenced `runs-on:` —
     # so a hosted runner could be added silently. It lives here, beside the other
     # workflow gate, because this is where the repo checks its workflows.
-    run bash -c "grep -rh 'runs-on:' '$REPO_ROOT'/.github/workflows/*.yml | grep -v self-hosted"
+    # THE CHECK IS PER-JOB, NOT PER-LINE (measured 2026-11-17, run 43991753373).
+    # It used to be `grep -h 'runs-on:' | grep -v self-hosted`, which reads a BLOCK
+    # sequence as a hosted runner: ci.yml:217 and :580 are
+    #     runs-on:
+    #       - self-hosted
+    #       - wsl-console
+    #       - ${{ matrix.box }}
+    # so the `runs-on:` line carries no label and the filter flagged it.  The gate
+    # then failed on the very shape it exists to encourage, and the only way to keep
+    # it green was to write the labels on one line — a formatting rule masquerading
+    # as a billing rule.  A line-oriented grep cannot answer a per-job question, so
+    # this parses the job block: the value after `runs-on:` when it is inline, or the
+    # `- ` items that follow it when it is a block sequence.
+    run bash -c "awk '
+        function flush() { if (val !~ /self-hosted/) print FILENAME \": \" val; inb=0; val=\"\" }
+        /^    runs-on:/ { if (inb) flush(); inb=1; val=\$0; sub(/^    runs-on:[[:space:]]*/, \"\", val); next }
+        inb && /^[[:space:]]+-[[:space:]]/ { val = val \" \" \$0; next }
+        inb { flush() }
+        END { if (inb) flush() }
+    ' '$REPO_ROOT'/.github/workflows/*.yml"
     [ "$output" = "" ]
 
-    # Teeth: the same filter must catch a hosted runner if one appears, or this
-    # check is vacuous.
-    run bash -c "printf '%s\n' '    runs-on: ubuntu-latest' | grep -v self-hosted"
+    # Teeth, one per shape: an inline hosted runner and a BLOCK hosted runner must
+    # both be caught, or the parse above is vacuous for the form it was written for.
+    run bash -c "printf '%s\n' '    runs-on: ubuntu-latest' | awk '
+        function flush() { if (val !~ /self-hosted/) print FILENAME \": \" val; inb=0; val=\"\" }
+        /^    runs-on:/ { if (inb) flush(); inb=1; val=\$0; sub(/^    runs-on:[[:space:]]*/, \"\", val); next }
+        inb && /^[[:space:]]+-[[:space:]]/ { val = val \" \" \$0; next }
+        inb { flush() }
+        END { if (inb) flush() }
+    '"
     [ "$status" -eq 0 ]
     [[ "$output" == *"ubuntu-latest"* ]]
 
+    run bash -c "printf '%s\n' '    runs-on:' '      - ubuntu-latest' '      - wsl-console' | awk '
+        function flush() { if (val !~ /self-hosted/) print FILENAME \": \" val; inb=0; val=\"\" }
+        /^    runs-on:/ { if (inb) flush(); inb=1; val=\$0; sub(/^    runs-on:[[:space:]]*/, \"\", val); next }
+        inb && /^[[:space:]]+-[[:space:]]/ { val = val \" \" \$0; next }
+        inb { flush() }
+        END { if (inb) flush() }
+    '"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ubuntu-latest"* ]]
+
+    # ...and a block sequence that IS self-hosted must pass, which is the case the
+    # old line-grep got wrong.  Without this arm the fix could be "flag everything".
+    run bash -c "printf '%s\n' '    runs-on:' '      - self-hosted' '      - wsl-console' | awk '
+        function flush() { if (val !~ /self-hosted/) print FILENAME \": \" val; inb=0; val=\"\" }
+        /^    runs-on:/ { if (inb) flush(); inb=1; val=\$0; sub(/^    runs-on:[[:space:]]*/, \"\", val); next }
+        inb && /^[[:space:]]+-[[:space:]]/ { val = val \" \" \$0; next }
+        inb { flush() }
+        END { if (inb) flush() }
+    '"
+    [ "$output" = "" ]
+
     # ...and the workflows really do carry self-hosted jobs, so a rename that made
     # the filter match nothing could not pass this by accident.
-    grep -rq 'runs-on: \[self-hosted' "$REPO_ROOT"/.github/workflows/*.yml
+    grep -rq 'self-hosted' "$REPO_ROOT"/.github/workflows/*.yml
 }
 
 @test "ci: the Python tool pins live in ONE requirements file both workflows install" {

@@ -66,6 +66,26 @@ REGISTRY
     # The fix is the TAC_TEST_TMPDIR predicate in _tac_cleanroom_enter, which refuses
     # the stops outright; TAC_TEST_TMPDIR is set by every sandboxing suite and by
     # nothing in production.
+    # THE ADAPTER BUDGET IS HOST STATE, AND THIS SUITE READ IT (measured 2026-11-17).
+    # `__model_bench`'s first act is `_tac_adapter_health_check`, which reads
+    # /dev/shm/autotune-cuda-cycles-<boot> and /dev/shm/autotune-degrade-stalls-<boot>.
+    # On a runner whose budget is spent the gate returns before the code under test:
+    # [E1] then failed on "already active" (the lock was never consulted) and [F3] on
+    # "the bench never addressed LLM_BENCH_WATCHDOG_TIMER" (the stubbed systemctl was
+    # never called). Both are the gate pre-empting the test, not the behaviour being
+    # wrong — the suite passed on a fresh boot and failed on a spent one. Point both
+    # counters at the sandbox so the case measures the bench, not this box's boot.
+    export CUDA_CYCLE_FILE="$TAC_TEST_TMPDIR/cuda-cycles"
+    export CUDA_STALL_FILE="$TAC_TEST_TMPDIR/cuda-stalls"
+    # ...and the third gate inside the same check reads dmesg, which is why the X64 runner
+    # reddened for a DIFFERENT reason than ARM64 with the identical symptom (measured on run
+    # 43991753373: ARM64 said "CUDA context-cycle budget reached (63 >= 60)", X64 said
+    # "critical dxgkrnl GPU errors in dmesg (-12/-75/wait timeout)").  Both are that box's
+    # boot, not this bench.  _tac_dxg_health_check (bin/_tac-bin-lib.sh:1062) takes its
+    # command from TAC_DMESG_BIN, so a stub that prints nothing and exits 0 is a clean log.
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$TAC_TEST_TMPDIR/stub-dmesg"
+    chmod +x "$TAC_TEST_TMPDIR/stub-dmesg"
+    export TAC_DMESG_BIN="$TAC_TEST_TMPDIR/stub-dmesg"
     export LLM_KEEPER_DIR="$TAC_TEST_TMPDIR"
     export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR"
     export LLM_BENCH_MODEL_TIMEOUT=10
