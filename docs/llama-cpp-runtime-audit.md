@@ -321,9 +321,10 @@ probe currently reports `degraded` on a healthy box.
 apart: `dmesg` said **2**, the journal said **30**. The ring buffer evicts entries.
 
 **Status of the NO_VMM hypothesis: MECHANISM NOT OPERATING AT THIS SIZE (measured
-2026-11-15).** The earlier status was `UNPROVEN · MECHANISM-JUSTIFIED · CHEAP`, resting on the
-claim that the VMM pool's 32 GiB per-process VA reservation (`ggml-cuda.cu:586`,
-`CUDA_POOL_VMM_MAX_SIZE = 1ull << 35`) is what produces `dxgkio_reserve_gpu_va: -75`. The
+2026-11-15).** An earlier revision graded the hypothesis unproven but mechanism-justified and
+cheap, resting on the claim that the VMM pool's 32 GiB per-process VA reservation
+(`ggml-cuda.cu:586`, `CUDA_POOL_VMM_MAX_SIZE = 1ull << 35`) is what produces
+`dxgkio_reserve_gpu_va: -75`. The
 decisive probe has been run and the claim does not hold: a standalone program calling
 `cuMemAddressReserve(32 GiB)` / `cuMemAddressFree` against the same driver llama.cpp loads
 (`/usr/lib/wsl/lib/libcuda.so.1`) produced **zero** `-75` lines over 400 cycles (two runs of
