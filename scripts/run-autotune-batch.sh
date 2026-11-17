@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-11-17): the CUDA cycle COUNT is a canary, not a halt.  docs/llm.md already
+#     states it is an odometer of inference volume rather than a spawn counter or leak
+#     meter, and that the threshold "has no measured baseline behind it" — but the batch
+#     halted (exit 4) on it, so two runs on 2026-11-16 (20:46 and 00:55) exited before
+#     row 1 with the ledger at 63/60 and measured nothing.  The gates that ARE evidence
+#     stay: the consecutive-stall ceiling, the dmesg -12/-75 check, and the per-row tps
+#     collapse guard.  Exit 3's reason also distinguishes a collapse from a stall now.
 #   v30 (2026-11-11): wsl_gpu_health_suspect routes through _tac_dxg_health_check to detect
 #       critical kernel dxgkrnl failures (-12, -75, wait timeouts) without missing scripts.
 #   v29 (2026-11-06): the nvidia-smi timeout wrappers are split (18.3 8.1.8).
@@ -172,8 +179,13 @@ _GPU_HEALTH_WARNED=0
 # (bin/autotune-resume.sh, which resumes only on 4) took the refusal for a completed
 # chunk.  5 is deliberately not 4 — the tenant is not something this box's restart
 # fixes, so the re-arm must not call it "carry on".
+# v31: EXIT_BUDGET is GONE.  The cycle count no longer halts the batch (see the
+# canary note in the row loop), so no path assigns 4 and shellcheck was right that
+# the constant had no reader.  The VALUE still matters to consumers: bin/autotune-rows.sh
+# keeps its `4)` case for a batch run from an older tree, and bin/autotune-resume.sh
+# records it.  A constant with no writer is the stale-pin shape that made the LOOP's
+# half of this pin go stale in 2026-10 — so it is removed, not kept for company.
 EXIT_ADAPTER=3   # the adapter stalled, refused, or launched-unhealthy
-EXIT_BUDGET=4    # this boot's measuring is done: restart, then resume
 EXIT_TENANT=5    # the card is another tenant's: not ours to take, and not a restart's to fix
 HALT_EXIT=0
 
@@ -317,13 +329,22 @@ fi
 for ((i = 0; i < TOTAL; i++)); do
     m="${MODEL_ARRAY[$i]}"
 
-    # Halt gate BEFORE the next model: cycle budget + chunk size.
+    # CANARY, NOT A HALT (v1.1, 2026-11-17).  The count is an odometer of inference
+    # volume, not a spawn counter and not a leak meter — docs/llm.md states that and
+    # records that "the count threshold has no measured baseline behind it", with the
+    # 2026-11-15 probe showing -75 tracks REFUSALS rather than the pool's reservation.
+    # Halting on it cost two real measurements tonight (20:46 and 00:55 both exited 4
+    # before row 1, ledger 63/60, registry unmoved).  The gates that ARE evidence stay:
+    # the consecutive-stall ceiling, the dmesg -12/-75 check, and the per-row tps
+    # collapse guard.  This line only reports.
     _cyc=$(cuda_cycles)
     if [[ "$_cyc" =~ ^[0-9]+$ ]] && [[ "$_cyc" -ge "$CUDA_CYCLE_BUDGET" ]]; then
-        HALT_REASON="the CUDA cycle budget is spent (${_cyc} >= ${CUDA_CYCLE_BUDGET}) — one boot's measuring is done"
-        HALT_EXIT="$EXIT_BUDGET"
-        HALT_NEEDS_WSL_RESTART=1
-        break
+        if [[ "${_CYCLE_CANARY_WARNED:-0}" != "1" ]]; then
+            echo "WARN: the CUDA cycle count reads ${_cyc} (past the ${CUDA_CYCLE_BUDGET} canary)."
+            echo "      That count tracks inference volume, not adapter health, so this is NOT a halt —"
+            echo "      a wedge still shows up as stalled launches, dmesg -12/-75, or a tps collapse."
+            _CYCLE_CANARY_WARNED=1
+        fi
     fi
     if [[ "$MAX_MODELS_PER_CHUNK" -gt 0 && "$COUNT" -ge "$MAX_MODELS_PER_CHUNK" ]]; then
         HALT_REASON="chunk size reached (${MAX_MODELS_PER_CHUNK} models this WSL session)"
@@ -377,27 +398,26 @@ for ((i = 0; i < TOTAL; i++)); do
         printf 'failed (exit %s)\n' "$_row_rc"
         FAILED_ROWS+=("$m")
         CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
-        # autotune-model.sh exits 3 for the ADAPTER backstops (the cycle budget, or
-        # CUDA_DEGRADE_CONSECUTIVE_STALLS launches alive but never healthy).  One row
-        # carrying that signature is enough to stop — it names the adapter, not the
-        # model, and a WSL restart is the only fix.  docs/llm.md states this as a
-        # contract ("both ... halt (exit 3)"); the batch used to swallow the code and
-        # count the row as an ordinary failure.
+        # autotune-model.sh exits 3 for the ADAPTER backstops.  Since v1.1 the cycle
+        # count is NO LONGER one of them (it is an odometer, not a health reading), so
+        # exit 3 now means a launch stalled CUDA_DEGRADE_CONSECUTIVE_STALLS times, a
+        # dmesg -12/-75, or a per-row tps collapse — all of which want a person to look
+        # at the adapter.  The ledger is still READ here, only to report the state.
         if (( _row_rc == 3 )); then
-            # WHICH adapter backstop?  Ask the LEDGER rather than guess: a row that
-            # spent the budget and a row that stalled both exit 3, and the two want
-            # opposite handling — the first resumes after a restart, the second
-            # needs a person to look at the adapter.
             _cyc_now=$(cuda_cycles)
-            if [[ "$_cyc_now" =~ ^[0-9]+$ ]] && (( _cyc_now >= CUDA_CYCLE_BUDGET )); then
-                HALT_REASON="model #${m} exited 3 with the cycle budget spent"
-                HALT_REASON+=" (${_cyc_now} >= ${CUDA_CYCLE_BUDGET}) — one boot's measuring is done"
-                HALT_EXIT="$EXIT_BUDGET"
-            else
-                HALT_REASON="model #${m} exited 3 with the budget UNSPENT"
-                HALT_REASON+=" (${_cyc_now:-?}/${CUDA_CYCLE_BUDGET}) — the adapter stalled"
-                HALT_EXIT="$EXIT_ADAPTER"
+            _collapse_row=""
+            if [[ -r "${LLM_AUTOTUNE_RESULT_FILE:-/nonexistent}" ]]; then
+                # swallow-ok: the readability guard is the line above; a failed read means "not a collapse"
+                grep -qx 'stage=collapse' "$LLM_AUTOTUNE_RESULT_FILE" 2>/dev/null \
+                    && _collapse_row=1
             fi
+            if [[ -n "$_collapse_row" ]]; then
+                HALT_REASON="model #${m} exited 3 on a tps COLLAPSE — the row was not saved"
+            else
+                HALT_REASON="model #${m} exited 3 — the adapter stalled or the driver reported errors"
+            fi
+            HALT_REASON+=" (cycle count ${_cyc_now:-?}, a canary only)"
+            HALT_EXIT="$EXIT_ADAPTER"
             HALT_NEEDS_WSL_RESTART=1
             break
         fi

@@ -630,15 +630,22 @@ _selftest_run() {
 # the guard is testable without a GPU — which is the point: the bug was that the
 # counter was written and never read.
 
-@test "autotune-dxg: an exhausted cycle ledger refuses before any spawn" {
+@test "autotune-dxg: an exhausted cycle ledger WARNS and certifies (a canary, not a halt)" {
     local sb="$BATS_TEST_TMPDIR/exhausted"
     mkdir -p "$sb"
     printf '60\n' > "$sb/cycles"
     : > "$sb/stalls"
     run _selftest_run "$sb" CUDA_CYCLE_FILE="$sb/cycles" CUDA_STALL_FILE="$sb/stalls"
-    [[ "$status" -eq 3 ]]
-    [[ "$output" == *"CUDA context-cycle budget reached"* ]]
-    [[ "$output" == *"wsl --shutdown"* ]]
+    # CRITERION CHANGE (2026-11-17, v146).  This case used to require status 3 and
+    # "CUDA context-cycle budget reached" — that a spent count REFUSES the run.
+    # docs/llm.md records the count as an odometer of inference volume rather than a
+    # spawn counter or leak meter, with no measured baseline behind the threshold, yet
+    # the refusal stopped rows 8/9/11 twice on 2026-11-16 before any probe ran (ledger
+    # 63/60, registry unmoved).  The count now reports; the stall ceiling, the dmesg
+    # -12/-75 check and the collapse guard remain the halts.
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"past the 60 canary"* ]]
+    [[ "$output" == *"winner:"* ]]
 }
 
 @test "autotune-dxg: consecutive launch stalls halt as the degradation signature" {

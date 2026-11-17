@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 145
+# Module Version: 146
+#   v146 (2026-11-17): the CUDA cycle COUNT is a canary, not a halt.  docs/llm.md records
+#     that it is an odometer of inference volume rather than a spawn counter or leak
+#     meter, that the threshold "has no measured baseline behind it", and that the
+#     2026-11-15 probe showed -75 tracks REFUSALS — yet _cuda_guard_or_exit refused at 3
+#     on it, which on 2026-11-16 stopped rows 8/9/11 twice before any probe ran.  The
+#     evidence-backed backstops stay: the consecutive-stall ceiling, the dmesg -12/-75
+#     check, and the per-row tps collapse guard.  The count is reported once, as a WARN.
 #   v145 (2026-11-16): the dxgkrnl pre-flight gate is skipped under AUTOTUNE_SELFTEST.
 #     The gate reads the REAL dmesg, so a box whose kernel log still carried dxgkrnl
 #     errors from an earlier run refused every def-024 case before the classifier was
@@ -345,13 +352,18 @@ _bump_cuda_cycle() {
 # _cuda_guard_or_exit — halt BEFORE the next spawn when the ledger says the
 _cuda_guard_or_exit() {
     local c s
+    # THE CYCLE COUNT IS A CANARY, NOT A HALT (v145, 2026-11-17).  It is an odometer
+    # of inference volume — docs/llm.md says so, records that the threshold "has no
+    # measured baseline behind it", and the 2026-11-15 probe showed -75 tracks
+    # REFUSALS rather than the pool's reservation.  Halting on it cost two real
+    # measurements on 2026-11-16 (rows 8/9/11 refused before row 1, twice).  The
+    # evidence-backed backstops below STAY: the stall ceiling, the dmesg -12/-75
+    # check, and the per-row tps collapse guard.  This line only reports, once.
     c=$(_cuda_cycles)
-    if (( c >= CUDA_CYCLE_BUDGET )); then
-        echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
-        echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
-        # DEF-024: a refused pre-flight is not a failed configuration list.  The class is
-        _preflight_refuse adapter_degraded 3 \
-            "CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}); restart WSL"
+    if (( c >= CUDA_CYCLE_BUDGET )) && [[ "${_CYCLE_CANARY_WARNED:-0}" != "1" ]]; then
+        warn "WARN: the CUDA cycle count reads ${c} (past the ${CUDA_CYCLE_BUDGET} canary)."
+        warn "      That count tracks inference volume, not adapter health — NOT a halt."
+        _CYCLE_CANARY_WARNED=1
     fi
     if (( CUDA_DEGRADE_CONSECUTIVE_STALLS > 0 )); then
         s=$(_cuda_stalls)
