@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 28
+#   v28 (2026-11-17): the heartbeat STOPPED DISPLACING THE HOLD RELEASE.  v27 gave it its own
+#     `trap 'kill $_HEARTBEAT_PID' EXIT`, and a second EXIT trap REPLACES the first rather than
+#     chaining: measured with `bash -c 'trap "echo A" EXIT; trap "echo B" EXIT'` -> prints only
+#     B.  So v27 dropped `_tac_suspend_release` and `_tac_cleanroom_restore` on every exit path
+#     inside that block — the CUDA card stayed marked held and every census tenant the
+#     clean-room stopped stayed stopped (the embedding KEEP lane among them).  `bash -n` is
+#     clean and no suite drove the caller, so nothing caught it.  There is now exactly ONE EXIT
+#     handler, and it chains all three duties; the trailing `trap - EXIT` that cleared the
+#     release for the rest of the run is gone with it.  Guarded by two cases in
+#     tests/unit/68-autotune-rows-quiet-gate.bats.
+#   v27 (2026-11-17): the batch's output reaches the TERMINAL, not only the log.  Line 374
+#     was `>> "$LOG" 2>&1` where every other line in this wrapper tees, so after "baseline
+#     cleared" the operator saw a frozen screen for 30-50 minutes across three rows and
+#     reasonably asked whether it was stuck — measured this evening, twice.  It is now
+#     `| tee -a "$LOG"` (same log, live output) plus a once-a-minute heartbeat to /dev/tty
+#     naming elapsed time, the ledger and the running row's pid, because the batch prints in
+#     bursts and a gap between two of its lines is still silence.
 #   v26 (2026-11-17): the ledger is READ AT THE START, and a spent one RESTARTS the box.
 #     Three runs measured nothing tonight (20:46, 00:55, the 13:21 batch) because the
 #     batch halts on exit 4 and NOTHING did the one thing that fixes it: the restart
@@ -338,7 +355,16 @@ if [[ "${_autotune_preflight_ok:-0}" == "1" ]]; then
 # Every declared tenant, watchdog, CI runner, and unsupervised CUDA server is stopped
 # for the sweep and restored on exit, however it ends.  AUTOTUNE_CLEAN_ROOM=0 opts out.
 AUTOTUNE_CLEAN_ROOM="${AUTOTUNE_CLEAN_ROOM:-1}"
-trap '_tac_suspend_release "$SUSPEND"; _tac_cleanroom_restore' EXIT
+# The ONE EXIT handler in this file.  Everything that must happen however the script ends goes
+# here, chained through _autotune_exit_prologue — never as a second `trap ... EXIT` further
+# down, which would replace this one (see the heartbeat below, measured 2026-11-17).
+_autotune_exit_prologue() {
+    _tac_suspend_release "$SUSPEND"
+    _tac_cleanroom_restore
+    # swallow-ok: no heartbeat yet on the exits above its start, and one already gone is the state sought
+    [[ -z "${_HEARTBEAT_PID:-}" ]] || kill "$_HEARTBEAT_PID" 2>/dev/null
+}
+trap '_autotune_exit_prologue' EXIT
 # ...and when the WRAPPER is the thing signalled, the case block below never runs at all
 # (measured 2026-11-03: `pkill -TERM` on this script left the log ending on a probe result,
 # with no verdict).  Say it, then exit through the EXIT trap so the hold is still released.
@@ -369,10 +395,55 @@ if (( _baseline_rc != 0 )); then
     fi
     exit 1
 fi
-echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"
+echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" | tee -a "$LOG"
 
-bash scripts/run-autotune-batch.sh "${ROWS[@]}" >> "$LOG" 2>&1
-rc=$?
+# LIVE OUTPUT, not log-only (v27).  This line used `>> "$LOG" 2>&1`, so the terminal showed
+# nothing at all from here until the batch ended — measured 2026-11-17: after "baseline
+# cleared" the operator saw a frozen screen for 30-50 minutes across three rows and
+# reasonably asked whether it was stuck.  Every other line in this wrapper tees; this one
+# did not.  `tee -a` keeps the log identical (the append-across-runs behaviour the log NAME
+# is built for) while showing the row headers, probes and winners as they happen.
+#
+# _heartbeat — one line a minute on the CONTROLLING TERMINAL while the batch runs.
+# It is the answer to a measured complaint: after "baseline cleared" the screen was frozen
+# for 30-50 minutes across three rows, and the run looked stuck.  It writes to fd 3, never
+# to stdout, so the log keeps its verdict and gains no noise.
+# A run with no controlling terminal must simply have no heartbeat: `exec 3<>/dev/tty`
+# FAILS without one, and a `2>/dev/null` on `done` cannot swallow that because the redirect
+# is evaluated before the command runs (measured 2026-11-17: the loop died with
+# "/dev/tty: No such device or address" and rc=1 under a no-tty run).  The guard is here,
+# INSIDE the function, so the definition stays top-level and the comment-above rule holds.
+_heartbeat() {
+    # swallow-ok: no controlling terminal (cron, CI) is the "no heartbeat" answer, not a failure
+    exec 3<>/dev/tty 2>/dev/null || return 0
+    local _start _now _ledger _pid
+    _start=$(date +%s)
+    while :; do
+        sleep 60
+        _now=$(date +%s)
+        # swallow-ok: no row in flight yet is an empty pid, which the message simply omits
+        _pid=$(pgrep -f 'scripts/autotune-model\.sh' | head -1)
+        # swallow-ok: an absent ledger before the first probe reads as 0, its true value
+        _ledger=$(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null || echo 0)
+        printf '    … still running: %dm%02ds elapsed, ledger %s, %s\n' \
+            "$(( (${_now} - ${_start}) / 60 ))" "$(( (${_now} - ${_start}) % 60 ))" \
+            "${_ledger}" "${_pid:+autotune-model pid $_pid}" >&3
+    done
+}
+_heartbeat &
+_HEARTBEAT_PID=$!
+# The heartbeat must never outlive the batch, however the batch ends.  It CANNOT have its own
+# `trap ... EXIT`: that REPLACES the release trap installed above rather than chaining to it,
+# so the suspend hold and the clean-room restore would both be silently dropped and the CUDA
+# card would stay marked held with every census tenant stopped (measured 2026-11-17; `bash -n`
+# is clean and no case saw it).  There is exactly ONE EXIT handler in this file and it owns
+# both — see `tests/unit/68-autotune-rows-quiet-gate.bats`, which asserts the count AND that
+# the release functions actually run.
+
+bash scripts/run-autotune-batch.sh "${ROWS[@]}" 2>&1 | tee -a "$LOG"
+rc=${PIPESTATUS[0]}
+# swallow-ok: a heartbeat already gone is the state sought, and the EXIT trap stops it again
+kill "$_HEARTBEAT_PID" 2>/dev/null || :
 fi   # end: _autotune_preflight_ok (a pre-flight refusal skips the batch, not the arm)
 
 {
