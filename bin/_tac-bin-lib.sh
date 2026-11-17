@@ -16,7 +16,16 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-11-17): the CUDA cycle COUNT is not part of the adapter-health verdict.
+#     _tac_adapter_health_check refused on a spent ledger, which made `model autotune`
+#     exit before probing anything even after scripts/autotune-model.sh and
+#     scripts/run-autotune-batch.sh stopped halting — a THIRD copy of one threshold, and
+#     a green suite over the other two said nothing about it.  The count is now printed
+#     as a note and the verdict rests on the two signals that name an event: the
+#     consecutive-stall ceiling and dxgkrnl errors in the kernel log.  A spent ledger is
+#     answered where it belongs — bin/autotune-rows.sh reads it at the start and arms
+#     bin/wsl-restart.sh, because it is a boot-scoped budget.
 #   v33 (2026-11-15): _tac_vram_baseline_verdict matches holders against the census UNION
 #     LLAMA_LANE_KEEP_UNITS, and excludes keep units from tenant_count.  The old match was
 #     census-only, which read as correct only while the census wrongly NAMED the kept
@@ -1071,8 +1080,17 @@ _tac_dxg_health_check() {
     return 0
 }
 
-# _tac_cuda_cycle_check [budget] — check if the WSL2 CUDA context cycle budget is exhausted.
-# @returns 0 when within budget, 1 when budget is spent (and prints reason on stdout).
+# _tac_cuda_cycle_check [budget] — is the WSL2 CUDA context cycle ledger past its budget?
+# @returns 0 when within budget, 1 when spent (and prints reason on stdout).
+#
+# RETAINED AS A READING, NOT A GATE (2026-11-17).  bin/autotune-rows.sh now READS the
+# ledger at the start and arms bin/wsl-restart.sh when it is spent, so the response to a
+# spent ledger is a reboot rather than a refusal from here.  Keeping this copy as a gate
+# meant THREE independent thresholds (this one, scripts/autotune-model.sh and
+# scripts/run-autotune-batch.sh) and a green suite over two of them said nothing about
+# the third — measured: `model autotune 8 9 11` still refused at 63/60 after the other
+# two were changed.  The function and its answer stay, because callers and tests read
+# them; _tac_adapter_health_check no longer treats a spent count as a failure.
 _tac_cuda_cycle_check() {
     local _boot_id _cycle_file _cycles=0 _budget="${1:-${CUDA_CYCLE_BUDGET:-60}}"
     # swallow-ok: unreadable boot_id falls back to unknown
@@ -1111,13 +1129,25 @@ _tac_cuda_stall_check() {
     return 0
 }
 
-# _tac_adapter_health_check — unified pre-check for WSL2 GPU adapter health & cycle budget.
-# @returns 0 when healthy, 1 when adapter is degraded or budget exhausted (reason on stdout).
+# _tac_adapter_health_check — unified pre-check for WSL2 GPU adapter health.
+# @returns 0 when healthy, 1 when the adapter is degraded (reason on stdout).
+#
+# THE CYCLE COUNT IS NOT PART OF THIS VERDICT (2026-11-17).  It used to refuse here on
+# a spent ledger, which made `model autotune` exit before probing anything even after
+# the batch and the row guard were changed — a third copy of one threshold.  A spent
+# ledger is a boot-budget question with a boot-budget answer, and bin/autotune-rows.sh
+# now arms bin/wsl-restart.sh for it at the START of a run.  What remains HERE is the
+# evidence that the adapter itself is degraded: consecutive launch stalls, and dxgkrnl
+# errors in the kernel log.  The count is still readable via _tac_cuda_cycle_check.
 _tac_adapter_health_check() {
     local _msg=""
-    if ! _msg=$(_tac_cuda_cycle_check); then
-        printf '%s\n' "$_msg"
-        return 1
+    # swallow-ok: a spent count prints a note; its rc is the REPORT here, never a refusal
+    _msg=$(_tac_cuda_cycle_check 2>/dev/null) || true
+    if [[ -n "$_msg" ]]; then
+        # NOT a failure: the rc this line explains is 0.  Block form keeps one >&2 in this file.
+        {
+            printf 'note: %s (informational; the ledger is reset by a restart, not a refusal)\n' "$_msg"
+        } >&2
     fi
     if ! _msg=$(_tac_cuda_stall_check); then
         printf '%s\n' "$_msg"

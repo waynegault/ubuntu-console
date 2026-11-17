@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-11-17): the ledger is READ AT THE START, and a spent one RESTARTS the box.
+#     Three runs measured nothing tonight (20:46, 00:55, the 13:21 batch) because the
+#     batch halts on exit 4 and NOTHING did the one thing that fixes it: the restart
+#     lived only in autotune-resume.service, which a direct `model autotune` never
+#     tells.  Two halves, both here:
+#       (a) a PRE-FLIGHT refusal: before the clean-room stops a single lane, a spent
+#           ledger arms the restart and exits 4 — so a doomed run no longer tears the
+#           lanes down first.
+#       (b) the same arm on the batch's own exit 4, for a ledger that filled mid-run.
+#     Both reuse bin/wsl-restart.sh (a bare `wsl --shutdown` deadlocks in-guest), both
+#     refuse when a CI job is executing, and AUTOTUNE_AUTO_RESTART=0 opts out.
+#     The suspend hold and the clean-room are released BEFORE the arm: a restart ends
+#     this process, so the box must be handed back first.
 #   v25 (2026-11-12): delegate clean-room enter/restore to shared _tac_cleanroom_enter /
 #       _tac_cleanroom_restore in bin/_tac-bin-lib.sh so autotune-rows, bench-rows, and
 #       `model bench` share one implementation.
@@ -134,6 +147,9 @@ if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
 fi
 
 REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
+# The restart method this repo owns (bin/wsl-restart.sh), overridable so a test can
+# substitute a recorder — the same seam autotune-resume.sh uses for its own arming.
+RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
 # Resolve the host profile so the registry, store and lane are THIS box's (a box
 # whose store moved off ~/.llm, or whose CUDA lane is not the old box's, names its
 # own).  01-constants exports LLM_REGISTRY / LLM_STATE_DIR / LLAMA_MODEL_DIR /
@@ -282,6 +298,42 @@ if ! _tac_suspend_acquire "$SUSPEND"; then
     warn "autotune-rows: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown})"
     exit 1
 fi
+
+# ── PRE-FLIGHT: a spent ledger is not somebody else's problem (v26) ────────
+# The batch refuses on exit 4 anyway, but it does so AFTER the clean-room has stood
+# down every tenant, watchdog and CI runner — so three runs tonight each tore the box
+# down, discovered the same spent ledger, and put it back, measuring nothing.  Reading
+# it here means a doomed run costs nothing and the restart it needs is armed at once.
+# `CUDA_CYCLE_BUDGET` must match scripts/run-autotune-batch.sh's default (60); the
+# ledger file is boot-scoped, named the same way by both.
+_boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id)"
+# swallow-ok: an unreadable boot_id names an "unknown" ledger, which reads 0 and only reports
+# The override is HONOURED: scripts/autotune-model.sh and run-autotune-batch.sh both read
+# CUDA_CYCLE_FILE, so a wrapper that computed its own path would report a different ledger
+# from the one the batch it launches halts on — and no test could seed one.
+_ledger_file="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_boot_id:-unknown}}"
+_ledger_now=0
+# swallow-ok: an absent ledger means zero cycles, its true value before the first run
+if [[ -r "$_ledger_file" ]]; then
+    _ledger_now=$(< "$_ledger_file")
+fi
+[[ "$_ledger_now" =~ ^[0-9]+$ ]] || _ledger_now=0
+if (( _ledger_now >= ${CUDA_CYCLE_BUDGET:-60} )); then
+    {
+        echo "=== PRE-FLIGHT: the CUDA cycle ledger reads ${_ledger_now} (budget ${CUDA_CYCLE_BUDGET:-60}) —"
+        echo "    this boot's measuring is done.  Nothing was stood down and nothing was measured."
+    } | tee -a "$LOG"
+    _tac_suspend_release "$SUSPEND"
+    # NOT `exit 4` here: the arm at the foot of this file is the one place that decides
+    # whether a restart is safe (CI workers, the tool's presence, the opt-out), and a
+    # second copy of that decision is how the two would drift apart.
+    rc=4
+else
+    _autotune_preflight_ok=1
+fi
+
+if [[ "${_autotune_preflight_ok:-0}" == "1" ]]; then
+
 # ── Clean-room tenants (shared in bin/_tac-bin-lib.sh) ─────────────────────
 # Every declared tenant, watchdog, CI runner, and unsupervised CUDA server is stopped
 # for the sweep and restored on exit, however it ends.  AUTOTUNE_CLEAN_ROOM=0 opts out.
@@ -321,6 +373,8 @@ echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"
 
 bash scripts/run-autotune-batch.sh "${ROWS[@]}" >> "$LOG" 2>&1
 rc=$?
+fi   # end: _autotune_preflight_ok (a pre-flight refusal skips the batch, not the arm)
+
 {
     case "$rc" in
         4) echo "=== batch exited 4 (cycle budget spent — one boot's measuring is done)" ;;
@@ -338,6 +392,49 @@ rc=$?
     echo "=== ledger after: $(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null || echo 0)"
     echo "=== log: $LOG"
 } | tee -a "$LOG"
+
+# ── A SPENT LEDGER RESTARTS THE BOX (v26, 2026-11-17) ─────────────────────
+# The ledger is boot-scoped, so "this boot's measuring is done" has exactly one
+# remedy: the next boot.  Until now nothing did it.  The restart lived only in
+# autotune-resume.service, which arms after a halt it can SEE — and a direct
+# `model autotune 8 9 11` never tells it, so the box sat at 63/60 and refused three
+# runs tonight (20:46, 00:55, and the 13:21 batch) having measured nothing.
+#
+# It reuses the method this repo already owns rather than a bare `wsl --shutdown`,
+# which deadlocks when run inside the distro (bin/wsl-restart.sh's own header).
+# THREE gates, and each refuses rather than guesses:
+#   * AUTOTUNE_AUTO_RESTART=0 opts out (an operator watching a row run);
+#   * a CI job on this box refuses — the restart would kill it, and a killed run is
+#     not a cancelled one (the same bound autotune-resume's arm_restart uses);
+#   * the tool must be executable.
+# The EXIT trap releases the suspend hold and restores the clean-room BEFORE the arm,
+# because a restart is a reboot: it ends this process, so the box must be handed back
+# first or the lanes would come up under a stale hold.
+if (( rc == 4 )); then
+    if [[ "${AUTOTUNE_AUTO_RESTART:-1}" != "1" ]]; then
+        echo "=== restart NOT armed: AUTOTUNE_AUTO_RESTART=0 (spent ledger; restart by hand)" | tee -a "$LOG"
+    # -x is the right test for an absolute path; `command -v` only finds things on PATH,
+    # and this is a full path by default — requiring BOTH failed the arm even when the
+    # tool was present (measured 2026-11-17: "restart FAILED to arm" with wsl-restart.sh
+    # executable at the default path).
+    elif [[ ! -x "$RESTART_TOOL" ]]; then
+        echo "=== restart NOT armed: $RESTART_TOOL is not executable — restart WSL by hand" | tee -a "$LOG"
+    elif _ci=$(pgrep -cf '[R]unner.Worker') && [[ "${_ci:-0}" =~ ^[0-9]+$ ]] && (( _ci > 0 )); then
+        echo "=== restart NOT armed: ${_ci} CI job(s) executing on this box — a restart would kill them" | tee -a "$LOG"
+        echo "    re-arm by hand when the queue is empty:" | tee -a "$LOG"
+        echo "      $RESTART_TOOL --restart --delay ${AUTOTUNE_RESTART_DELAY:-3}" | tee -a "$LOG"
+    else
+        # swallow-ok: a failed release must not block the reboot; the EXIT trap releases again
+        _tac_suspend_release "$SUSPEND" 2>/dev/null || true
+        _tac_cleanroom_restore
+        echo "=== spent ledger: arming a WSL restart (the next boot resumes the remainder)" | tee -a "$LOG"
+        if "$RESTART_TOOL" --restart --delay "${AUTOTUNE_RESTART_DELAY:-3}" >> "$LOG" 2>&1; then
+            echo "=== restart ARMED via $RESTART_TOOL" | tee -a "$LOG"
+        else
+            echo "=== restart FAILED to arm (see log) — restart WSL by hand" | tee -a "$LOG"
+        fi
+    fi
+fi
 exit "$rc"
 
 # end of file
