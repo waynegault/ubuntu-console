@@ -1,7 +1,19 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 55
+# Module Version: 56
+#   v56 (2026-11-17): gpu-check speaks UNIFIED MEMORY and sees every CUDA lane.
+#     On a shared-memory host it printed "VRAM 7665 MiB / 8192 MiB" and "Server Not
+#     running" while three llama-server lanes served from that card.  Two defects:
+#     (a) the 8192 MiB is the CARD's figure, not the model pool — this file's own
+#         _llm_gpu_status already prints "GPU Buffer used/total" plus a separate
+#         "Model Memory free/budget" for TAC_HOST_PROFILE_SHARED_MEMORY=1, and
+#         gpu-check did not consult it, so the dashboard and `model info` disagreed
+#         about the same box; (b) the server line asked __llm_server_running, which
+#         looks at the default lane only, so a box serving from named lanes read idle.
+#     Now: the pool line follows the host profile, and the lane line enumerates the
+#     residents through __llm_cuda_server_pids (compute-apps, then the shared /proc
+#     fallback that this box's empty table needs).
 #   v55 (2026-11-12): use intuitive "GPU Buffer" terminology in place of "GPU Carve" / "GPU VRAM".
 #   v54 (2026-11-12): wake() reports unified-memory Model Memory budget (MemTotal -
 #     LLAMA_FIT_KEEP_RESERVE_MB) alongside GPU Carve (NVML) when
@@ -1124,6 +1136,66 @@ function gpu-status() {
 }
 
 # ---------------------------------------------------------------------------
+# __gpu_check_pool <used MiB> <total MiB> — the memory lines for gpu-check.
+# On a SHARED-MEMORY host the card's total is a CARVE of the system's memory, so the
+# card's own figure is not the pool a model is sized against: a single "VRAM used/total"
+# line reads as "the card is full" when it is one of several lanes' budgets, and it
+# contradicted `_llm_gpu_status`, which already separates GPU Buffer from Model Memory on
+# the same box (measured 2026-11-17: gpu-check said 7665/8192 while the model pool was
+# 88 GiB).  A discrete card keeps the single VRAM line, which is accurate there.
+function __gpu_check_pool() {
+    local used="$1" total="$2"
+    if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" != "1" ]]
+    then
+        __tac_info "VRAM" "${used} MiB / ${total} MiB" "$C_Text"
+        return 0
+    fi
+    __tac_info "GPU Buffer" "${used} MiB / ${total} MiB carved" "$C_Text"
+    local _mt _ma _reserve _budget _avail
+    _reserve="${LLAMA_FIT_KEEP_RESERVE_MB:-12288}"
+    [[ "$_reserve" =~ ^[0-9]+$ ]] || _reserve=12288
+    # swallow-ok: an unreadable /proc/meminfo leaves the budget unsaid, never guessed
+    _mt=$(awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null) || _mt=0
+    # swallow-ok: same file, same reason — a zero skips the line rather than printing a wrong pool
+    _ma=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null) || _ma=0
+    (( _mt > _reserve )) || return 0
+    _budget=$(( _mt - _reserve ))
+    (( _ma > _reserve )) && _avail=$(( _ma - _reserve )) || _avail=0
+    local _avail_gib _budget_gib _unified
+    _avail_gib=$(awk -v m="$_avail" 'BEGIN{printf "%.1f", m/1024}')
+    _budget_gib=$(awk -v m="$_budget" 'BEGIN{printf "%.1f", m/1024}')
+    __tac_info "Model Memory" "${_avail_gib} GiB available / ${_budget_gib} GiB budget" "$C_Text"
+    _unified="UNIFIED - the card's memory IS the system pool; a model is sized"
+    _unified+=" against MemTotal - reserve (${_reserve} MiB)"
+    __tac_info "Memory model" "$_unified" "$C_Dim"
+}
+
+# ---------------------------------------------------------------------------
+# __gpu_check_lanes — every llama-server RESIDENT on the card, named.
+# `__llm_server_running` asks about the DEFAULT lane, so a box serving from named lanes
+# printed "Server Not running" while three servers held the card (measured 2026-11-17).
+# The attribution is `__llm_cuda_server_pids` — the same one the VRAM census trusts:
+# compute-apps first, then the shared /proc walk, because a WSL unified-memory box has an
+# EMPTY compute-apps table.  Port and model come from each process's own argv, so a lane
+# added or renumbered is covered without a list kept here.
+function __gpu_check_lanes() {
+    local -a _pids=()
+    mapfile -t _pids < <(__llm_cuda_server_pids)
+    (( ${#_pids[@]} > 0 )) || return 0
+    local _pid _port _model _n=0
+    for _pid in "${_pids[@]}"
+    do
+        # swallow-ok: a resident that exits mid-scan has no cmdline; it is not a lane to report
+        _port=$(tr '\0' '\n' < "/proc/$_pid/cmdline" 2>/dev/null | awk '/^--port$/{getline; print; exit}')
+        # swallow-ok: same read, same reason — an absent model name reports the pid and port alone
+        _model=$(tr '\0' '\n' < "/proc/$_pid/cmdline" 2>/dev/null | awk '/^-m$|^--model$/{getline; print; exit}')
+        __tac_info "CUDA lane" "pid $_pid${_port:+, :$_port}${_model:+, $(basename "$_model")}" "$C_Success"
+        _n=$((_n + 1))
+    done
+    __tac_info "Resident lanes" "${_n} llama-server(s) holding the card" "$C_Text"
+}
+
+# ---------------------------------------------------------------------------
 # gpu-check — Quick 5-second CUDA verification.
 # Confirms nvidia-smi is reachable, the GPU is visible, and (if a model is
 # running) that llama-server is actually offloading layers to the GPU.
@@ -1153,7 +1225,11 @@ function gpu-check() {
     fi
     __tac_info "CUDA Device" "$gpu_name" "$C_Success"
 
-    # 3. VRAM status
+    # 3. Memory pool.  On a SHARED-MEMORY host the card's total is a CARVE of the
+    # system's memory, not the pool a model is sized against, and calling it "VRAM x/y"
+    # reads as "the card is full" when it is one of several lanes' budgets.  This is the
+    # same split _llm_gpu_status makes above; two surfaces disagreeing about one box was
+    # the defect (v56).
     local vram
     vram=$("$smi" --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
     if [[ -n "$vram" ]]
@@ -1161,7 +1237,7 @@ function gpu-check() {
         local used total
         IFS=',' read -r used total <<< "$vram"
         used="${used// /}"; total="${total// /}"
-        __tac_info "VRAM" "${used} MiB / ${total} MiB" "$C_Text"
+        __gpu_check_pool "$used" "$total"
     fi
 
     # 4. llama-server CUDA offload (check the runtime log)
@@ -1188,8 +1264,14 @@ function gpu-check() {
             __tac_info "Offload" "No CUDA references in log - may be CPU-only build" "$C_Error"
         fi
     else
-        __tac_info "Server" "Not running - start a model to verify offloading" "$C_Dim"
+        # NOT "Server Not running" any more: that assertion is about the DEFAULT lane, and
+        # step 5 below reports every resident.  Measured 2026-11-17 — the two lines sat on
+        # one screen saying the opposite of each other on a box serving from three lanes.
+        __tac_info "Default lane" "not the one serving (see the resident lanes below)" "$C_Dim"
     fi
+
+    # 5. THE RESIDENTS (v56) — every lane on the card, not the default one.
+    __gpu_check_lanes
 
     __tac_footer
 }
