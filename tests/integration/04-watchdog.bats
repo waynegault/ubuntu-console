@@ -58,6 +58,28 @@ MOCK
     chmod +x "$WATCHDOG_MOCK_BIN/heavy-job"
     export HEAVY_JOB_BIN="$WATCHDOG_MOCK_BIN/heavy-job"
 
+    # MOCK nvidia-smi.  `provably_idle` (v34, card LLAMA-LANE-PARK-001 item 3) reads the
+    # card's POWER DRAW as its fourth reading, and until this stub existed the suite read
+    # the REAL card: on ARM64 that is 1.7 W, on the X64 XPS 15 it is not — so the same
+    # case took two different branches on the two CI boxes.  One assertion, two verdicts,
+    # decided by whose desk it ran on; the case is not about the power reading at all.
+    #
+    # The stub answers IDLE by default, which is the state every other case in this file
+    # already assumes ("the card is free"), through the same file-driven seam as the other
+    # mocks: `touch "$SYSTEMCTL_MOCK_STATE/gpu_power_busy"` makes it draw 64.5 W.  An
+    # unreadable figure is deliberately NOT reachable here — provably_idle fails CLOSED on
+    # it, and that direction has its own coverage.
+    cat > "$WATCHDOG_MOCK_BIN/nvidia-smi" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -f "$SYSTEMCTL_MOCK_STATE/gpu_power_busy" ]]; then
+    printf '64.5\n'
+else
+    printf '1.7\n'
+fi
+exit 0
+MOCK
+    chmod +x "$WATCHDOG_MOCK_BIN/nvidia-smi"
+
     # v3.0 resolves gpu-busy.sh as $HOME/.local/bin/gpu-busy.sh (GPU_BUSY_SH is
     # no longer honoured), so point HOME at the sandbox and drop the mock there.
     export HOME="$WATCHDOG_MOCK_HOME"
@@ -896,10 +918,36 @@ setup() {
     echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
     printf '%s\n' "$(( $(date +%s) - 5 ))" > "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE"
 
+    # ARGUMENT A: the card really IS idle (the mocked power draw answers 1.7 W), so v34's
+    # provably-idle arm applies and the expired marker is explained — restart, no flap.
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
     [[ "$output" != *"the stop was ours"* ]]
+    [[ "$output" == *"provably idle"* ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" ]]
+
+    # ARGUMENT B: the marker has expired and the card is DRAWING CURRENT, so the stop is
+    # NOT explained and this tick does not know why the lane is down.  That is the one
+    # case where an expired marker must suppress nothing: it is a death, and this case's
+    # title asks for the stamped flap.
+    #
+    # BOTH ARMS ARE NEEDED BECAUSE THE CASE WAS TWO DIFFERENT TESTS ON TWO BOXES.
+    # Measured 2026-11-17, run 43997020441: v34 landed 2026-11-16T16:24Z and this case
+    # still asserted the flap unconditionally, while v34's whole point is that a free card
+    # DOES explain an expired marker.  It passed on ARM64 only because provably_idle read
+    # the REAL card at 1.7 W; the X64 box's card draws more, the arm fell through, and the
+    # flap appeared.  With the draw mocked, both arms are stated here and both are measured
+    # on every box.
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$(( $(date +%s) - 5 ))" > "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE"
+    touch "$WATCHDOG_MOCK_STATE/gpu_power_busy"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"the stop was ours"* ]]
+    [[ "$output" != *"provably idle"* ]]
     [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
 }
 
