@@ -1077,10 +1077,20 @@ EOS
     # (43c8c55c), so it has to travel with the extract; missing it made the extract
     # report every resident as foreign ("_is_non_gpu_resident: command not found").
     awk '/^_is_non_gpu_resident\(\)/,/^}/'  "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
+    # ...and the residency FACT that helper now consults (775caef9, 2026-11-16), which
+    # made the "no device memory" answer a measured one: the extract died with
+    # "_reports_no_device_memory: command not found" — the same defect this block
+    # already records for _is_non_gpu_resident.  A helper the copied text CALLS has to
+    # travel with it, so the extract is checked for completeness below.
+    awk '/^_reports_no_device_memory\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
     awk '/^foreign_apps_busy\(\)/,/^}/'     "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
     grep -q 'foreign_apps_busy' "$TAC_TEST_TMPDIR/fab.sh"
     grep -q '_is_sanctioned_exe' "$TAC_TEST_TMPDIR/fab.sh"
     grep -q '_is_non_gpu_resident' "$TAC_TEST_TMPDIR/fab.sh"
+    if grep -q '_reports_no_device_memory' "$TAC_TEST_TMPDIR/fab.sh"; then
+        grep -q '^_reports_no_device_memory()' "$TAC_TEST_TMPDIR/fab.sh" \
+            || { echo "the extract CALLS _reports_no_device_memory but does not define it"; return 1; }
+    fi
 
     cat > "$TAC_TEST_TMPDIR/fab-probe.sh" <<'EOS'
 set -uo pipefail
