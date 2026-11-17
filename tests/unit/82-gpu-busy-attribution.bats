@@ -33,6 +33,13 @@ setup() {
     export INVESTIGATOR_GPU_LOCK="$TAC_TEST_TMPDIR/nonexistent-gpu.lock"
     unset INVESTIGATOR_PRODUCTION_OUTPUT
     unset LLAMA_XE_SERVER_BIN
+    # The host profile exports this in a real session, and since gpu-busy v25 a
+    # shared-memory host answers an EMPTY compute-apps table with a /proc scan instead of
+    # reading it as "no residents".  These cases model a DISCRETE card, whose semantics
+    # are "an empty table + high util is BUSY", so the ambient flag must not decide them —
+    # measured 2026-11-17: the 03:23:27 case read `free ... arm=none` with the flag set
+    # and passed with it cleared.  suite 58's setup clears it for the same reason.
+    unset TAC_HOST_PROFILE_SHARED_MEMORY
     HARNESS_PIDS=()
     DETACHED_PID=""
     mkdir -p "$TAC_TEST_TMPDIR/bin"
