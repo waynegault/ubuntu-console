@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-18): add the trailing `# end of file` marker required by the hygiene gate.
 #   v3 (2026-11-18): the cross-arm verdict the header promised is now produced —
 #   per prompt and repetition, both arms' generation rate and whether the two arms
 #   emitted the SAME text.  Rows are collected in one TSV so the comparison is a
@@ -354,3 +355,5 @@ fi
 
 echo "=== done $(date -Iseconds) — the lane is restored by the EXIT trap" | tee -a "$LOG"
 exit 0
+
+# end of file
