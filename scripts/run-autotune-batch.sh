@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
+#   v33 (2026-11-18): classify all remaining swallow sites so run-autotune-batch.sh has zero
+#       unclassified swallows in tools/contracts-swallows-baseline.tsv.
 #   v32 (2026-11-18): the lane comes from this box's profile (_tac_cuda_lane_unit) and
 #       keep_lane_down REFUSES an empty lane instead of falling back to the Dell's unit name
 #       in code shared with the ASUS box.
@@ -114,6 +116,7 @@ fi
 
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
+# swallow-ok: env.sh failure is handled by the explicit exit 1 and TAC_LOAD_DEGRADED check below
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 # A degraded paravirtualization is a halt-for-a-person, not a row failure (v85).  The row
 # script already checks this; the batch used to discard env.sh's report and run anyway.
@@ -196,6 +199,7 @@ HALT_EXIT=0
 # persists (2026-09-14). autotune-model.sh reads the same file and enforces the
 # same budget, so a batch and a directly-driven row share one ledger. Override
 # via env to tune for a different GPU / WSL build.
+# swallow-ok: an unreadable boot_id falls back to the 'unknown' suffix on the next line
 _AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
 CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
 CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"        # CUDA context create/destroy cycles before halt
@@ -208,6 +212,7 @@ MAX_MODELS_PER_CHUNK="${MAX_MODELS_PER_CHUNK:-0}"   # 0 = unlimited; else halt a
 export CUDA_CYCLE_FILE
 
 cuda_cycles() {
+    # swallow-ok: an unreadable or absent cycle file defaults to 0 cycles
     [[ -f "$CUDA_CYCLE_FILE" ]] && cat "$CUDA_CYCLE_FILE" 2>/dev/null || echo 0
 }
 
@@ -264,9 +269,11 @@ echo ""
 # (WSL2's nvidia-smi process listing doesn't expose process names)
 #------------------------------------------------------------------------------
 drain_vram() {
-    local before="" after=""
-    before=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
-        nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
+    local before="" after="" _smi_raw=""
+    local -a _smi_cmd=(nvidia-smi "--query-gpu=memory.used" "--format=csv,noheader")
+    # swallow-ok: an unreadable nvidia-smi leaves _smi_raw empty, which triggers the WARN and full wait below
+    _smi_raw=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" "${_smi_cmd[@]}" 2>/dev/null)
+    before=$(awk '{print $1}' <<< "$_smi_raw")
     if ! [[ "$before" =~ ^[0-9]+$ ]]; then
         # Empty operands compare equal in bash, which would look like a
         # completed drain after a single sleep — wait the full window instead.
@@ -275,6 +282,7 @@ drain_vram() {
     fi
     # CUDA-scoped llama kill — never the Xe fleet / persistent units.
     if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
+        # swallow-ok: best-effort kill of stray CUDA servers before polling memory drop below
         __llm_kill_cuda_llama_servers || true
     else
         echo "WARN: __llm_kill_cuda_llama_servers not loaded — skipping llama cleanup" >&2
@@ -283,8 +291,9 @@ drain_vram() {
     while [[ $waited -lt 15 ]]; do
         sleep 1
         waited=$((waited + 1))
-        after=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
-            nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
+        # swallow-ok: an unreadable reading stays empty so the loop keeps waiting the full window
+        _smi_raw=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" "${_smi_cmd[@]}" 2>/dev/null)
+        after=$(awk '{print $1}' <<< "$_smi_raw")
         # Break only on a strict drop; "unchanged" means the server is not
         # actually gone; an unreadable value means keep waiting.
         if [[ "$after" =~ ^[0-9]+$ ]] && [[ -n "$before" ]] && (( after < before )); then
@@ -293,6 +302,7 @@ drain_vram() {
     done
     waited=0
     while [ "$waited" -lt 10 ]; do
+        # swallow-ok: ss stderr is noise; port 8081 absence exits the wait loop
         if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)8081$'; then
             break
         fi
@@ -383,6 +393,7 @@ for ((i = 0; i < TOTAL; i++)); do
         break
     fi
     if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
+        # swallow-ok: holder pid is diagnostic detail for HALT_REASON; HALT_EXIT is set unconditionally
         HALT_REASON="GPU owned by another agent's run (investigator GPU lock, pid $(__llm_gpu_lock_holder 2>/dev/null || true))"
         HALT_EXIT="$EXIT_TENANT"
         break
@@ -393,8 +404,10 @@ for ((i = 0; i < TOTAL; i++)); do
     COUNT=$((COUNT + 1))
     # Identity is the file name; the row number is resolved for DISPLAY only, so the
     # line stays useful to a human reading the log without carrying a stale identity.
+    # swallow-ok: display-only row number lookup falls back to '?' when absent
+    _disp_row=$(__llm_registry_row_for_file "$m" 2>/dev/null || echo '?')
     printf '\n[%d/%d] model %s (row %s, cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" \
-        "$(__llm_registry_row_for_file "$m" 2>/dev/null || echo '?')" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
+        "$_disp_row" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
     _row_rc=0
     # TAC_CONTENDED=1 means the CI gate was BYPASSED for this run (bin/autotune-resume.sh
     # exports it).  Without this the row would be written as if the box had been quiet:

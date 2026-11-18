@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-11-18): classify all remaining swallow sites so retune-band-chunk.sh has zero
+#   unclassified swallows in tools/contracts-swallows-baseline.tsv.
 #   v9 (2026-11-18): the lane this chunk needs down is resolved from THIS box's profile
 #   (_tac_cuda_lane_unit), and an empty answer REFUSES the chunk — the old fallback named the
 #   XPS's unit in code shared with the ASUS box, so a profile-less shell would have retuned
@@ -100,8 +102,10 @@ fi
 # Cycle ledger, boot-scoped exactly as run-autotune-batch.sh names it (a WSL
 # restart is the only leak reset and it changes the boot ID), so this reports the
 # same counter the batch enforces.
+# swallow-ok: an unreadable boot_id falls back to the 'unknown' suffix on the next line
 _autotune_boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
 _cycle_file="/dev/shm/autotune-cuda-cycles-${_autotune_boot_id:-unknown}"
+# swallow-ok: an unreadable or absent cycle ledger defaults to 0 cycles
 cycle_now() { [[ -f "$_cycle_file" ]] && cat "$_cycle_file" 2>/dev/null || echo 0; }
 
 if ! _tac_suspend_acquire "$SUSPEND"; then
@@ -139,8 +143,10 @@ release_lane() {
     fi
 }
 
+# swallow-ok: systemctl is-active exit status is the condition being tested
 if systemctl --user is-active --quiet "$CUDA_LANE_UNIT" 2>/dev/null; then
     echo "[retune] stopping $CUDA_LANE_UNIT (the suspension file alone leaves it up until the watchdog's next tick)"
+    # swallow-ok: stop is verified by the polling loop and active check immediately below
     systemctl --user stop "$CUDA_LANE_UNIT" 2>/dev/null || true
 fi
 
@@ -150,17 +156,20 @@ fi
 _waited=0
 while (( _waited < 60 ))
 do
+    # swallow-ok: non-zero exit from is-active means the unit is down, which exits the wait loop
     systemctl --user is-active --quiet "$CUDA_LANE_UNIT" 2>/dev/null || break
     sleep 5
     _waited=$((_waited + 5))
 done
 
+# swallow-ok: post-stop verification check; if still active, the block below refuses and exits 1
 if systemctl --user is-active --quiet "$CUDA_LANE_UNIT" 2>/dev/null; then
     echo "[retune] REFUSING: $CUDA_LANE_UNIT is still active after ${_waited}s, so the bench would refuse its VRAM baseline and measure nothing." >&2
     release_lane
     exit 1
 fi
 
+# swallow-ok: diagnostic free-VRAM readout for the log; the batch runs its own strict baseline gate
 _free_mib="$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | tr -dc '0-9' || true)"
 echo "[retune] CUDA lane down (${_waited}s); card free: ${_free_mib:-unknown} MiB"
 echo "[retune] cycle budget before: $(cycle_now)/60"

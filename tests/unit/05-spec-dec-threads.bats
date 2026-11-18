@@ -104,6 +104,17 @@ EOF
     local stored_threads
     stored_threads=$(awk -F'|' '$1 == "1" {print $9; exit}' "$LLM_REGISTRY")
     [[ "$stored_threads" == "6" ]]
+
+    # On an uncapped homogeneous box (LLAMA_THREAD_CAP=0, asus-n1n-rtx-spark), passing
+    # a float meas_drift_pct at slot 29 and threads_override at slot 34 persists both.
+    LLAMA_THREAD_CAP=0 __llm_autotune_profile_save "1" "native" "4096" "1024" "256" "1" "256" "12.3" \
+        "" "" "" "" "" "" "" "" "" \
+        "" "" "" "" "" "" \
+        "chat" "150" \
+        "1.2" "5" "3.4" "1.32" "certified" "profile-missing" \
+        "build-1" "8192" "16"
+    stored_threads=$(awk -F'|' '$1 == "1" {print $9 "|" $43; exit}' "$LLM_REGISTRY")
+    [[ "$stored_threads" == "16|1.32" ]]
 }
 
 @test "spec-dec-002: registry remap clamps carried thread field to 6" {

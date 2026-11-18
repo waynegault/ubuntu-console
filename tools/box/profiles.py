@@ -1,10 +1,13 @@
 """Target hardware profile definitions for the repository.
 
-Module Version: 3 (2026-11-18)
+Module Version: 4 (2026-11-18)
 Declares profile definitions for:
 - Asus ProArt P16 / RTX Spark N1X (128GB unified memory)
 - Dell XPS 15 (Intel i9 / 4GB discrete CUDA)
 
+v4 (2026-11-18): add IQ4_XS and Q4_0 to ASUS_RTX_SPARK_PROFILE.quant_policy acceptable
+    quants (matching config/hosts.d/asus-rtx-spark-quant-guide.conf for NVIDIA RTX Spark
+    recipes and sidecar MTP draft models).
 v3 (2026-11-18): the facts a box's own conf declares are READ FROM IT, not restated here.
     v2 had to re-sync the ASUS census and its :18089 measure lane BY HAND because this file
     held a second copy, and nothing compared the two.  Every scalar below that the conf
@@ -126,6 +129,8 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
         acceptable=[
             "Q4_K_M",
             "Q4_K_S",
+            "IQ4_XS",
+            "Q4_0",
             "Q3_K_M",
             "Q3_K_L",
             "IQ3_M",
@@ -159,6 +164,16 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
                 pattern="Q4_K_M",
                 rating=QuantRating.ACCEPTABLE,
                 description="4-bit: Usable when conserving memory for massive contexts or 70B+ models",
+            ),
+            QuantRule(
+                pattern="IQ4_XS",
+                rating=QuantRating.ACCEPTABLE,
+                description="iQuant Q4 extra-small: Balanced 4-bit quantization used in NVIDIA RTX Spark recipes",
+            ),
+            QuantRule(
+                pattern="Q4_0",
+                rating=QuantRating.ACCEPTABLE,
+                description="4-bit legacy: Used for sidecar MTP draft models and fast 4-bit inference",
             ),
             QuantRule(
                 pattern="NVFP4",

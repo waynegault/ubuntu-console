@@ -257,4 +257,13 @@ EOF
         printf "[%s]" "${LLM_SPEC_DRAFT_NGL:-}"
     ' _ "$REPO_ROOT"
     [[ "$output" == "[24]" ]]
+
+    # In-file draft-mtp (no spec_draft_model) still emits --spec-type draft-mtp and --spec-draft-n-max.
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        row_spec_type=draft-mtp row_spec_n_max=3 __spec_launch_flags
+    ' _ "$REPO_ROOT"
+    [[ "$output" == *"--spec-type"* ]] && [[ "$output" == *"draft-mtp"* ]]
+    [[ "$output" == *"--spec-draft-n-max"* ]] && [[ "$output" == *"3"* ]]
+    [[ "$output" != *"--spec-draft-model"* ]]
 }

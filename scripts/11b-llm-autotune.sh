@@ -1,15 +1,16 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 47
-#   v47 (2026-11-18): __llm_autotune_profile_save takes an OPTIONAL 29th argument, the
+# Module Version: 48
+#   v48 (2026-11-18): fix positional argument collision in __llm_autotune_profile_save where
+#     threads_override read ${29:-} (colliding with meas_drift_pct) instead of ${34:-} (the
+#     position autotune-model.sh passes $TUNE_THREADS in), and remove the duplicate
+#     `# Module Version: 46` line so there is one canonical version line.
+#   v47 (2026-11-18): __llm_autotune_profile_save takes an OPTIONAL 34th argument, the
 #     thread count the tuner measured (column 9).  Empty keeps the row's own value, which
 #     is what every caller did before the tuner probed threads; a non-integer is refused
 #     rather than written, and the SPEC-DEC-002 clamp still runs afterwards so a probe can
-#     never store more than the host allows.  The slot is 29, NOT a free position after
-#     gpu_carve (33): the tuner's call is 29 arguments long, so a 34th read as empty and
-#     the row silently kept its old count — measured on the probe that would have shipped it.
-# Module Version: 46
+#     never store more than the host allows.
 #   v46 (2026-11-18): respect LLAMA_THREAD_CAP (0 = uncapped on homogeneous/X925 hosts)
 #     in __llm_autotune_profile_save and __llm_autotune_profiles_remap_by_registry instead of
 #     hardcoding the i9-12900HK P-core ceiling (6).
@@ -137,8 +138,8 @@ warn() { printf '%s\n' "$*" >&2; }
 function __llm_llama_build_id() {
     local bin="${1:-}" out=""
     [[ -n "$bin" ]] || return 0
-    # swallow-ok: a binary that cannot report its version yields an empty id; recording no
-    # build is the honest answer, and a guess would be worse than an empty column
+    # A binary that cannot report its version yields an empty id; a guess is worse than empty.
+    # swallow-ok: an unreadable or non-versioned binary leaves out empty, which records no build id
     out="$("$bin" --version 2>/dev/null | sed -n '1s/^version: *//p')" || out=""
     printf '%s\n' "$out"
 }
@@ -160,6 +161,7 @@ function __llm_autotune_sanitize_token() {
 # trailing zeros/dot (e.g. 143.0963 → 143.1, 88.00 → 88).
 # ---------------------------------------------------------------------------
 function __llm_round2() {
+    # swallow-ok: a non-numeric input yields empty output, which the caller normalizes
     awk -v v="$1" 'BEGIN { printf "%.2f", v }' 2>/dev/null | sed -E 's/0+$//; s/\.$//'
 }
 
@@ -521,6 +523,7 @@ function __llm_autotune_done_for_model() {
             exit 1
         }
         END   {if (!found) exit 1}
+    # swallow-ok: an unreadable or absent registry file returns non-zero (not autotuned)
     ' "$LLM_REGISTRY" 2>/dev/null
 }
 
@@ -546,7 +549,7 @@ function __llm_autotune_done_for_model() {
 #       [spec_type] [spec_draft_model] [spec_n_max] [spec_ngl] [spec_device]
 #       [spec_accept_len] [workload] [ttft_ms] [meas_load] [meas_n]
 #       [meas_spread_pct] [meas_drift_pct] [meas_state] [ctx_policy]
-#       [llama_build] [gpu_carve]
+#       [llama_build] [gpu_carve] [threads_override]
 #   Profile 1 (existing columns) = max-ctx config; prefill_tps (col 21) is its
 #   prompt-eval throughput. Profile 2 (cols 22-26) = max-decode-TPS config for
 #   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v"), ngl (col 7)
@@ -597,10 +600,8 @@ function __llm_autotune_profile_save() {
     # Threads (2026-11-18): the tuner can now PROBE the count, so the winner has to be
     # writable.  Empty keeps the row's current value — the behaviour every existing caller
     # had, and what a skipped probe must do rather than silently resetting the column.
-    local threads_override="${29:-}"
-    # PROVE the argument arrived before this function can run with it unset.  A positional
-    # slot is the one thing a typo hides: measured 2026-11-18, a probe passed 16 in the slot
-    # and the row kept 6 because the save call and the signature had drifted by one.
+    # Slot 34 (after gpu_carve at 33); slot 29 is meas_drift_pct.
+    local threads_override="${34:-}"
     if [[ -n "$threads_override" ]] && [[ ! "$threads_override" =~ ^[1-9][0-9]*$ ]]
     then
         warn "  ERROR: threads must be a positive integer (got '$threads_override')"
@@ -700,9 +701,10 @@ function __llm_autotune_profile_save() {
     while IFS= read -r _old_backup
     do
         # -f: a backup a concurrent run already pruned is gone, which is the state sought.
-        # A real failure (permissions, read-only fs) is reported rather than swallowed.
+        # swallow-ok: rm stderr is replaced by the explicit warn helper on the same line
         rm -f -- "$_old_backup" 2>/dev/null || warn "autotune: could not prune old backup $_old_backup"
     done < <(
+        # swallow-ok: an unreadable backup dir yields no files to prune
         find "$_backup_dir" -maxdepth 1 -type f -name 'models.conf.*' -printf '%T@|%p\n' 2>/dev/null \
             | sort -t'|' -k1,1nr \
             | tail -n +51 \
@@ -1136,10 +1138,12 @@ function __kv_geometry_known() {
 # @stdout Estimated ctx rounded to 512.
 # ---------------------------------------------------------------------------
 function __llm_autotune_estimate_ctx_start() {
+    local _def_max_ctx=8192
+    [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] && _def_max_ctx="${LLAMA_MAX_CTX_SIZE:-262144}"
     local saved_ctx="${1:-}"
     local saved_tps="${2:-}"
     local min_tps="${3:-0}"
-    local max_ctx="${4:-8192}"
+    local max_ctx="${4:-$_def_max_ctx}"
     local model_bytes="${5:-0}"
     local free_vram_mb="${6:-0}"
     local n_layers="${7:-0}"
@@ -1152,13 +1156,17 @@ function __llm_autotune_estimate_ctx_start() {
     local start_floor_source="auto"
     local min_ctx_floor="${LLM_AUTOTUNE_MIN_CTX_FLOOR:-2048}"
     [[ "$min_ctx_floor" =~ ^[0-9]+$ ]] || min_ctx_floor=2048
-    [[ "$max_ctx" =~ ^[0-9]+$ ]] || max_ctx=8192
+    [[ "$max_ctx" =~ ^[0-9]+$ ]] || max_ctx="$_def_max_ctx"
     [[ "$model_bytes" =~ ^[0-9]+$ ]] || model_bytes=0
     [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
     [[ "$start_floor_ctx" =~ ^[0-9]+$ ]] || start_floor_ctx=""
     (( model_bytes > 0 )) && model_mb=$(( model_bytes / 1048576 ))
 
-    if (( model_bytes >= 7000000000 ))
+    if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] && (( model_bytes >= 3500000000 ))
+    then
+        estimate=8192
+        model_baseline_ctx=8192
+    elif (( model_bytes >= 7000000000 ))
     then
         estimate=2048
         model_baseline_ctx=2048

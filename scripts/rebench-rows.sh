@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-18): when --rows is not passed and LLM_REGISTRY points to an existing
+#   registry with certified rows ($18 == "yes"), derive the default row list dynamically
+#   from the registry rather than using the hardcoded Dell XPS row numbers (26,10,14,24,25).
 #   v1 (2026-10-12): created at Wayne's instruction ("write the re-bench as a tracked
 #   script with fail-fast").  The re-bench had been driven from a hand-rolled wrapper
 #   that failed in three ways the same day, and this script exists to make each one
@@ -78,7 +81,7 @@ PROBE="$SELF_DIR/cache-ram-probe.sh"
 HEAVY="$REPO/bin/heavy-job"
 
 ROWS_DEFAULT="26,10,14,24,25"
-OPT_ROWS="$ROWS_DEFAULT"
+OPT_ROWS=""
 OPT_ORDER="BABA"
 OPT_OUT="logs/benchmarks/selection"
 MAX_CONSECUTIVE_FAILURES=1
@@ -142,9 +145,15 @@ parse_args() {
 # parse_rows — split the list into ROW_LIST and REFUSE anything that is not a bare
 # row number, so a typo cannot silently run the wrong row (or none at all).
 parse_rows() {
-    local _r
+    local _r _derived=""
     local -a _raw=()
     ROW_LIST=()
+    if [[ -z "$OPT_ROWS" ]]; then
+        if [[ -n "${LLM_REGISTRY:-}" && -f "$LLM_REGISTRY" ]]; then
+            _derived="$(awk -F'|' '$1 ~ /^[0-9]+$/ && $18 == "yes" {print $1}' "$LLM_REGISTRY" | paste -sd, -)"
+        fi
+        OPT_ROWS="${_derived:-$ROWS_DEFAULT}"
+    fi
     IFS=',' read -ra _raw <<< "$OPT_ROWS"
     for _r in "${_raw[@]}"; do
         if [[ ! "$_r" =~ ^[0-9]+$ ]]; then

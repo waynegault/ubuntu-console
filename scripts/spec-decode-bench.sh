@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-11-18): classify all remaining swallow sites so spec-decode-bench.sh has zero
+#   unclassified swallows in tools/contracts-swallows-baseline.tsv.
 #   v13 (2026-10-02): the profile modules are loaded through the shared sub-module loader,
 #   which reports a missing/failing module instead of swallowing it (card f5bf87bc).
 #   v12 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
@@ -61,6 +63,7 @@ fi
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 
+# swallow-ok: env.sh failure is handled by the explicit error message and exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 # These are (re)loaded through the shared helper, which REPORTS a missing or failing
 # file instead of swallowing it (card f5bf87bc): `source ... 2>/dev/null || true` used to
@@ -109,6 +112,7 @@ local_url="http://127.0.0.1:${LLM_PORT:-8081}/v1/chat/completions"
 # attribution only sees this run's requests.  grep -c prints "0" AND exits
 # non-zero on no match, and prints nothing when the log is unreadable — both
 # must collapse to a single integer or the later arithmetic fails.
+# swallow-ok: an absent or empty log file yields 0 prior acceptance lines
 before_count=$(grep -c 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null) || before_count=0
 
 block_size=$(__spec_block_size)
@@ -133,6 +137,7 @@ for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do
 
     start_ns=$(date +%s%N)
     curl_rc=0
+    # swallow-ok: curl exit code is captured in curl_rc and classified immediately below
     resp=$(curl -sS --max-time 300 "$local_url" -H "Content-Type: application/json" -d "$payload" 2>/dev/null) || curl_rc=$?
     end_ns=$(date +%s%N)
     elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
@@ -145,6 +150,7 @@ for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do
     elif [[ -z "$resp" ]]; then
         _err="empty response body"
     else
+        # swallow-ok: malformed JSON yields empty tokens_usage, which the numeric check below flags as an error
         tokens_usage=$(printf '%s' "$resp" | jq -r '.usage.completion_tokens // empty' 2>/dev/null)
         if ! [[ "$tokens_usage" =~ ^[0-9]+$ ]]; then
             _err="no numeric usage.completion_tokens in the response (not a completion?)"
@@ -188,6 +194,7 @@ for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do
 done
 
 # ── Acceptance stats: pair new stats lines with prompts by request order ─────
+# swallow-ok: an absent or unmatched log yields 0 lines, which triggers the mismatch note below
 after_count=$(grep -c 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null) || after_count=0
 new_count=$(( after_count - before_count ))
 if (( new_count != ${#PROMPTS[@]} )); then
@@ -199,6 +206,7 @@ fi
 
 # Re-run the table with acceptance data — only when every prompt has a line.
 if (( new_count > 0 )) && (( new_count == ${#PROMPTS[@]} )); then
+    # swallow-ok: new_count > 0 already verified that the log exists and contains matching lines
     mapfile -t stat_lines < <(grep 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null | tail -n "$new_count")
     printf '\n%-44s %10s %8s %6s %8s %8s\n' "prompt" "accept_len" "rate" "block" "tps" "tok(del/use)"
     for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do

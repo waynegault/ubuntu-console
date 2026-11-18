@@ -56,7 +56,7 @@ check_untyped_defs = true
 # ARE installed and ship py.typed, so this override only changes their CI
 # resolution — it does not stop checking them where they exist.
 [[tool.mypy.overrides]]
-module = ["torch", "transformers", "yaml.*"]
+module = ["torch", "transformers", "yaml"]
 ignore_missing_imports = true
 
 # NOTE (2026-10-09): pyright has no per-module import override, so the deps genuinely

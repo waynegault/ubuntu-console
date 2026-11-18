@@ -1,21 +1,23 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 143
+# Module Version: 144
+#   v144 (2026-11-18): in __model_bench, size _bench_free_vram_mb on unified-memory hosts
+#   (TAC_HOST_PROFILE_SHARED_MEMORY=1) against max(free_vram, MemAvailable - LLAMA_FIT_KEEP_RESERVE_MB)
+#   so a small Windows dedicated GPU carve (e.g. 8 GiB with ~7 GiB held) does not trigger the
+#   <1200 MiB low-VRAM fallback (LLAMA_GPU_LAYERS=0) when 70+ GiB of unified memory is free.
 #   v143 (2026-11-18): the first real Xe build found two defects, both fixed here.  The
 #   configure passed -B without -S, so cmake took the CALLER's cwd as the source (it
 #   configured ubuntu-console and died on a missing CMakeLists.txt); and a tree moved
 #   aside was not put back when the build failed, which left build-opencl/ empty and took
 #   all three Xe lanes down.  -S "$root" is passed now, and one failure tail restores the
 #   aside tree unless the new one produced a binary.
-# Module Version: 142
 #   v142 (2026-11-18): llm-build owns the OpenCL (Xe) tree.  __llm_build_opencl runs AFTER
 #   the CUDA build, switched by the host profile (LLAMA_OPENCL_ENABLE/_DIR/_ADRENO/_TARGET),
 #   so a CUDA-only box grows no OpenCL step and the XPS's Xe lanes stop running a tarball
 #   build that no forward ever refreshed.  It refuses to reuse a cache configured from
 #   another source (the tarball trap) and configures at the tree's FINAL name, because the
 #   RPATH pins the configure path.
-# Module Version: 141
 #   v141 (2026-11-18): with no host profile, `model use` displaces NO lane and says so.  It
 #   fell back to a hardcoded pair of the x86 box's units, which do not exist on the ASUS, so
 #   it displaced nothing while printing "[CUDA lanes displaced]" — the operator believed the
@@ -30,7 +32,6 @@
 #   every scan; the newest mtime is kept and the older copy is offered for deletion under
 #   the same default/active guards `model delete` applies, plus a serving-lane check.  With
 #   no terminal to ask on it reports the pair and deletes nothing.
-# Module Version: 139
 #   v139 (2026-11-16): a mid-row tps collapse is rendered as its own stage.  The autotuner
 #   now exits 3 before saving a collapsed row (v144 there), and its result file says
 #   `stage=collapse`; without this arm the bench printed the generic "unclassified failure"
@@ -4391,6 +4392,18 @@ function __model_bench() {
         fi
         [[ "$_bench_min_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_min_free_vram_mb=256
         [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_free_vram_mb=0
+        if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
+        then
+            local _bench_host_avail_mb _bench_keep_mb="${LLAMA_FIT_KEEP_RESERVE_MB:-12288}"
+            # swallow-ok: an unreadable /proc/meminfo leaves _bench_host_avail_mb empty and keeps the card figure
+            _bench_host_avail_mb=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || true)
+            [[ "$_bench_keep_mb" =~ ^[0-9]+$ ]] || _bench_keep_mb=12288
+            if [[ "$_bench_host_avail_mb" =~ ^[0-9]+$ ]] && (( _bench_host_avail_mb > _bench_keep_mb ))
+            then
+                local _bench_eff_mb=$(( _bench_host_avail_mb - _bench_keep_mb ))
+                (( _bench_eff_mb > _bench_free_vram_mb )) && _bench_free_vram_mb=$_bench_eff_mb
+            fi
+        fi
 
         # Compact VRAM line
         if [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] && (( _bench_free_vram_mb > 0 )); then

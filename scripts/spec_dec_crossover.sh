@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-11-18): respect the host profile's thread ceiling via __llm_thread_cap
+#   instead of hardcoding the i9-12900HK 6-thread cap on homogeneous arm64 hosts.
 #   v10 (2026-11-18): the default port is THIS box's (LLM_SERVICE_PORT from the profile),
 #   not 18083 — the XPS's CUDA 3B lane, which names nothing on the ASUS.  8081 is
 #   llama.cpp's own default and is box-neutral when no profile is loaded.
@@ -68,14 +70,16 @@ done
 
 [[ -n "$MODEL" ]] || { echo "Error: --model NUM required" >&2; exit 2; }
 
+# swallow-ok: env.sh failure is handled by the explicit error message and exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh" >&2; exit 1; }
 # Load the prompt sets through the shared helper, which REPORTS a missing or failing
 # file instead of swallowing it (card f5bf87bc): `source ... 2>/dev/null || true` used
 # to discard both the error and the status.  A failure here leaves PROMPTS_LEGAL empty,
 # which the named warning below turns into the built-in fallback — the helper's report
 # is what makes that fallback visible rather than silent.
-__tac_source_submodules "$PWD/scripts" "spec_dec_crossover" prompt-sets
+__tac_source_submodules "$PWD/scripts" "spec_dec_crossover" 11d-llm-gpu prompt-sets
 
+# swallow-ok: missing registry or unmatched row is handled by the explicit error and exit 1
 ENTRY=$(grep "^${MODEL}|" "$LLM_REGISTRY" 2>/dev/null) || {
     echo "Error: Model #${MODEL} not found in registry" >&2; exit 1; }
 
@@ -84,10 +88,14 @@ IFS='|' read -r _num name file size _qc _arch gpu_layers _ctx _thr _ba _ub _pa _
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH" >&2; exit 1; }
 
-# Registry params (thread cap 6 = SPEC-DEC-002 P-core ceiling).
+# Registry params (clamped to the host profile's LLAMA_THREAD_CAP via __llm_thread_cap).
 TUNE_THREADS=$_thr
 [[ "$TUNE_THREADS" =~ ^[0-9]+$ ]] || TUNE_THREADS=4
-(( TUNE_THREADS > 6 )) && TUNE_THREADS=6
+if declare -f __llm_thread_cap >/dev/null 2>&1; then
+    TUNE_THREADS=$(__llm_thread_cap "$TUNE_THREADS")
+else
+    (( TUNE_THREADS > 6 )) && TUNE_THREADS=6
+fi
 BATCH=$_ba; U_BATCH=$_ub
 [[ "$BATCH" =~ ^[0-9]+$ ]] || BATCH=1024
 [[ "$U_BATCH" =~ ^[0-9]+$ ]] || U_BATCH=512
@@ -147,28 +155,36 @@ aggregate_throughput() {
     local _hw=0
     while [[ $_hw -lt 90 ]]; do
         sleep 1; _hw=$((_hw + 1))
+        # swallow-ok: kill -0 tests process liveness; death is reported and returns 1
         kill -0 "$_pid" 2>/dev/null || { echo "server died at launch" >&2; return 1; }
+        # swallow-ok: transient connection errors during startup polling are expected until healthy
         curl -sS --max-time 2 "http://127.0.0.1:$_port/health" 2>/dev/null | grep -q '"status":"ok"' && break
     done
     if [[ $_hw -ge 90 ]]; then
         echo "server failed to become healthy (parallel=$_parallel spec=$_spec_on)" >&2
+        # swallow-ok: best-effort cleanup of timed-out child process
         kill -9 "$_pid" 2>/dev/null
         return 1
     fi
     # Pre-flight: one real completion (load may outlast /health).
-    local _pf=0 _w=0
+    local _pf=0 _w=0 _pf_raw="" _pf_url="http://127.0.0.1:$_port/v1/chat/completions"
+    local _pf_body='{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}'
+    local _pf_py='import sys,json;print(json.load(sys.stdin).get("usage",{}).get("completion_tokens",0))'
+    local -a _pf_hdr=(-H "Content-Type: application/json")
     while [[ $_w -lt 60 ]]; do
-        if curl -sS --max-time 5 "http://127.0.0.1:$_port/v1/chat/completions" \
-            -H "Content-Type: application/json" \
-            -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
-            2>/dev/null | "$TAC_PYTHON" -c "import sys,json;print(json.load(sys.stdin).get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
+        # swallow-ok: transient curl errors while slot initializes are retried up to 60s
+        _pf_raw=$(curl -sS --max-time 5 "$_pf_url" "${_pf_hdr[@]}" -d "$_pf_body" 2>/dev/null || true)
+        # swallow-ok: malformed or empty response during warm-up is retried until completion_tokens >= 1
+        if printf '%s' "$_pf_raw" | "$TAC_PYTHON" -c "$_pf_py" 2>/dev/null | grep -q '[1-9]'; then
             _pf=1; break
         fi
+        # swallow-ok: kill -0 checks liveness; if server died, break to the failure handler below
         kill -0 "$_pid" 2>/dev/null || break
         sleep 1; _w=$((_w + 1))
     done
     if [[ $_pf -ne 1 ]]; then
         echo "server pre-flight failed (parallel=$_parallel spec=$_spec_on)" >&2
+        # swallow-ok: best-effort cleanup of failed pre-flight server process
         kill -9 "$_pid" 2>/dev/null
         return 1
     fi
@@ -218,6 +234,7 @@ PYEOF
     done
     _end_ns=$(date +%s%N)
 
+    # swallow-ok: best-effort teardown of the benchmark server after all requests completed
     kill "$_pid" 2>/dev/null; sleep 1; kill -9 "$_pid" 2>/dev/null
 
     # ── aggregate ────────────────────────────────────────────────────────────

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-11-18): build row-based BASE spec-decode flags through __spec_launch_flags
+#   (with a draft-mtp / sidecar fallback when __spec_launch_flags is absent) so rows
+#   certified with draft-mtp or model-based speculative decoding reproduce their certified
+#   argv in Arm A instead of silently dropping spec-decode.
 #   v20 (2026-11-18): the lane is resolved from this box's profile (_tac_cuda_lane_unit)
 #   instead of a hardcoded unit name, so the probe cannot stop or wait on another machine's
 #   lane when the profile is absent.
@@ -380,7 +384,8 @@ ROW_BEFORE="$(awk -F'|' -v r="$ROW" '$1==r{print; exit}' "$LLM_REGISTRY")"
 IFS='|' read -ra F <<< "$ROW_BEFORE"
 name="${F[1]:-}"; file="${F[2]:-}"; qc="${F[4]:-}"; ngl="${F[6]:-}"; ctx="${F[7]:-}"
 thr="${F[8]:-}"; ba="${F[9]:-}"; ub="${F[10]:-}"; pa="${F[11]:-}"; fa="${F[15]:-}"
-stype="${F[26]:-}"; snmax="${F[28]:-}"; rp="${F[37]:-}"; rln="${F[38]:-}"
+stype="${F[26]:-}"; sdmodel="${F[27]:-}"; snmax="${F[28]:-}"; sngl="${F[29]:-}"; sdev="${F[30]:-}"
+rp="${F[37]:-}"; rln="${F[38]:-}"
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { warn "FATAL: model file not found: $MODEL_PATH"; exit 1; }
 KVK="${qc##*/}"; _kvpre="${qc%/*}"; KVV="${_kvpre##*/}"   # Q4_K_M/q8_0/q8_0 -> q8_0 / q8_0
@@ -483,8 +488,28 @@ BASE=("$LLAMA_BIN" --model "$MODEL_PATH" --port "$PORT" --host 127.0.0.1
       --cache-type-k "$KVK" --cache-type-v "$KVV")
 [[ -n "$rp" ]]  && BASE+=(--repeat-penalty "$rp")
 [[ -n "$rln" ]] && BASE+=(--repeat-last-n "$rln")
-if [[ "$stype" == "ngram" ]]; then
+if declare -f __spec_launch_flags &>/dev/null; then
+    _spec_flags=()
+    mapfile -t _spec_flags < <(
+        row_spec_type="$stype" row_spec_draft_model="$sdmodel" \
+        row_spec_n_max="$snmax" row_spec_ngl="$sngl" row_spec_device="$sdev" \
+        __spec_launch_flags
+    )
+    (( ${#_spec_flags[@]} > 0 )) && BASE+=("${_spec_flags[@]}")
+elif [[ "$stype" == "ngram" ]]; then
     BASE+=(--spec-type ngram-mod --spec-ngram-mod-n-max "$BLOCK" --spec-ngram-mod-n-min "$BLOCK")
+elif [[ "$stype" == "draft-mtp" ]]; then
+    BASE+=(--spec-type draft-mtp --spec-draft-n-max "${snmax:-3}")
+    if [[ -n "$sdmodel" ]]; then
+        _sd_path="$sdmodel"
+        [[ "$_sd_path" != /* && -f "$LLAMA_MODEL_DIR/$_sd_path" ]] && _sd_path="$LLAMA_MODEL_DIR/$_sd_path"
+        BASE+=(--spec-draft-model "$_sd_path" --spec-draft-backend-sampling)
+        if [[ "${sngl:-0}" =~ ^[0-9]+$ ]] && (( sngl > 0 )); then
+            BASE+=(--spec-draft-ngl "$sngl")
+        else
+            BASE+=(--spec-draft-device none)
+        fi
+    fi
 fi
 
 # --from-unit replaces the ROW-derived argv with the lane's own (see the function's

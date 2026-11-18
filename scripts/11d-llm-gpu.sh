@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 56
+# Module Version: 57
+#   v57 (2026-11-18): __spec_launch_flags honours in-file `draft-mtp` rows where
+#     `spec_draft_model` is empty (drafting from the model's own `nextn` head), in
+#     addition to sidecar `mtp-*.gguf` draft files.
 #   v56 (2026-11-17): gpu-check speaks UNIFIED MEMORY and sees every CUDA lane.
 #     On a shared-memory host it printed "VRAM 7665 MiB / 8192 MiB" and "Server Not
 #     running" while three llama-server lanes served from that card.  Two defects:
@@ -1890,7 +1893,7 @@ function __spec_launch_flags() {
     local _ngram="${LLM_SPECULATIVE_NGRAM:-0}"
     [[ "$_ngram" =~ ^[0-9]+$ ]] || _ngram=0
 
-    [[ -n "$_draft" || "$_type" == "ngram" || $_ngram -gt 0 ]] || return 0
+    [[ -n "$_draft" || "$_type" == "ngram" || "$_type" == "draft-mtp" || $_ngram -gt 0 ]] || return 0
 
     if [[ -n "$_draft" ]]
     then

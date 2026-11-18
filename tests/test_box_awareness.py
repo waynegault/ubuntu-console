@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from tools.box import (
     ASUS_RTX_SPARK_PROFILE,
     DELL_XPS_PROFILE,
     PROFILES,
+    HardwareProfile,
     LaneSpec,
     MemoryArchitecture,
     PortAllocation,
@@ -75,6 +77,8 @@ def test_quant_policy_evaluates_filename_patterns() -> None:
     policy = ASUS_RTX_SPARK_PROFILE.quant_policy
     assert policy.evaluate_quant("Qwen3-30B-A3B-Q8_0.gguf") == QuantRating.RECOMMENDED
     assert policy.evaluate_quant("Qwen2.5-Coder-32B-Q4_K_M.gguf") == QuantRating.ACCEPTABLE
+    assert policy.evaluate_quant("Qwen3.8-27B-IQ4_XS.gguf") == QuantRating.ACCEPTABLE
+    assert policy.evaluate_quant("mtp-qwen35-27b-Q4_0.gguf") == QuantRating.ACCEPTABLE
     # Q2_K is ACCEPTABLE on this host by Wayne's ruling of 2026-11-18: the only Q2_K row is
     # the 74B Nemotron, no larger quant fits, and `discouraged` would auto-archive it.
     assert policy.evaluate_quant("TinyModel-Q2_K.gguf") == QuantRating.ACCEPTABLE
@@ -101,6 +105,8 @@ def test_asus_quant_guide_conf_exists_and_matches_rules() -> None:
     # in the file (patterns match as substrings in file order).
     assert dynamic_policy.evaluate_quant("model-Q2_K.gguf") == QuantRating.ACCEPTABLE
     assert dynamic_policy.evaluate_quant("model-NVFP4.gguf") == QuantRating.ACCEPTABLE
+    assert dynamic_policy.evaluate_quant("model-IQ4_XS.gguf") == QuantRating.ACCEPTABLE
+    assert dynamic_policy.evaluate_quant("mtp-model-Q4_0.gguf") == QuantRating.ACCEPTABLE
     assert dynamic_policy.evaluate_quant("model-BF16.gguf") == QuantRating.DISCOURAGED
     assert dynamic_policy.evaluate_quant("model-F16.gguf") == QuantRating.RECOMMENDED
 
@@ -190,7 +196,7 @@ def _conf_facts(conf: Path, keys: tuple[str, ...]) -> dict[str, str]:
 
 
 # conf fact -> the Python value it must equal.
-SHARED_FACTS: dict[str, object] = {
+SHARED_FACTS: dict[str, Callable[[HardwareProfile], object]] = {
     "LLM_SERVICE_PORT": lambda p: p.serving.primary_port,
     "LLAMA_THREAD_CAP": lambda p: p.serving.thread_cap,
     "LLAMA_GPU_LAYERS": lambda p: p.serving.gpu_layers,

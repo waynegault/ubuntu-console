@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 147
+# Module Version: 148
+#   v148 (2026-11-18): box-aware RTX Spark / unified-memory autotune improvements:
+#   (1) Unified-memory pool sizing (TAC_HOST_PROFILE_SHARED_MEMORY=1): size BUDGET and
+#       BAND_MIN_MB against the effective pool (max of FREE_VRAM and guest MemAvailable minus
+#       LLAMA_FIT_KEEP_RESERVE_MB) so an 8 GiB Windows GPU carve does not clamp >8 GB models
+#       to START_CTX=4096 / MAX_CTX=8192 while discrete cards keep strict FREE_VRAM bounds.
+#   (2) Sidecar MTP draft model (`mtp-*.gguf`) and `n_max=3` support: __autotune_file_capabilities
+#       detects sidecar MTP files in addition to in-file `nextn` heads, adds `3` (NVIDIA's
+#       RTX Spark recipe default) to MTP_N_MAX_LIST, passes `--spec-draft-model` /
+#       `--spec-draft-ngl` on launch, and preserves `WIN_SPEC_DRAFT_MODEL` / `WIN_SPEC_NGL` on save.
+#   (3) Smarter thread-count probing on 10x Cortex-X925 + 10x Cortex-A725: probes
+#       LLAMA_CPU_THREADS (10 P-cores) and the host ceiling (20 cores), and reuses BEST_TPS as
+#       the initial reference to save one redundant CUDA server launch per row.
+#   (4) MoE expert offload (`--cpu-moe`) parity with `model use` when an MoE model's weight
+#       footprint exceeds EFFECTIVE_POOL_MB (or when LLM_AUTOTUNE_CPU_MOE=1).
 #   v147 (2026-11-18): THREADS are measured, not assumed.  Every row here certified at
 #   threads=6 of 20 because that is what the registry column said — and the count is a
 #   bandwidth multiplier on this box (20-core memcpy ~145 GB/s against ~51 at one).  After
@@ -113,6 +127,7 @@ esac
 
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
+# swallow-ok: env.sh failure is handled by the explicit exit 1 and TAC_LOAD_DEGRADED check below
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 # env.sh's degraded-load report goes to stderr, which the line above discards —
 if [[ "${TAC_LOAD_DEGRADED:-0}" == "1" ]]; then
@@ -130,12 +145,14 @@ MODEL=""
 MODEL_FILE=""
 # Startup-validation messages go to STDERR: they report a refusal to start, which is an
 if [[ "$MODEL_REF" =~ ^[0-9]+$ ]]; then
+    # swallow-ok: an unmatched row returns empty MODEL_FILE, which the next line refuses with exit 1
     MODEL_FILE="$(__llm_registry_file_for_row "$MODEL_REF" 2>/dev/null || true)"
     [[ -n "$MODEL_FILE" ]] || { echo "Error: registry row $MODEL_REF does not exist" >&2; exit 1; }
 else
     MODEL_FILE="$MODEL_REF"
 fi
 
+# swallow-ok: an absent registry or unmatched file leaves ENTRY empty, which the next line refuses with exit 1
 ENTRY=$(awk -F'|' -v f="$MODEL_FILE" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null) || true
 [[ -n "$ENTRY" ]] || {
     echo "Error: '$MODEL_REF' is not a model file in the registry — pass a row number or the .gguf file name" >&2
@@ -161,6 +178,7 @@ PREV_CERT_CTX="${_ctx:-0}"
 SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
 [[ "$SIZE_INT" =~ ^[0-9]+$ ]] || SIZE_INT=1
 
+# swallow-ok: a missing nproc falls back to the conservative 6-thread default
 CPU_COUNT=$(nproc 2>/dev/null || echo 6)
 # SPEC-DEC-002: the thread count is hard-capped at the i9-12900HK P-core
 if [[ "$_thr" =~ ^[0-9]+$ ]] && [[ $_thr -gt 0 ]] && [[ $_thr -le $CPU_COUNT ]]; then
@@ -183,9 +201,11 @@ BENCH_NGL="${gpu_layers:-999}"
 # `$( ... )` is how `${1:-0}` ends up being evaluated by the CALLER's shell (measured on the
 # first cut of this probe: "bad substitution").  bench_ctx is defined by the time this runs.
 __autotune_thread_probe() {
-    local cap="$1" reference wide gain
-    reference=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" \
-        "filled" "$WIN_KVK" "$WIN_KVV")
+    local cap="$1" reference="${2:-}" wide gain
+    if [[ -z "$reference" || "$reference" == "0" ]]; then
+        reference=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" \
+            "filled" "$WIN_KVK" "$WIN_KVV")
+    fi
     [[ -n "$reference" ]] || reference=0
     TUNE_THREADS="$cap"
     wide=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" \
@@ -638,14 +658,40 @@ MODEL_MB=$(( MODEL_BYTES / 1048576 ))
 __autotune_file_capabilities() {
     HAS_MTP=0
     HAS_MOE=0
+    MTP_DRAFT_FILE=""
+    MTP_DRAFT_PATH=""
+    MTP_DRAFT_NGL=""
+    local _cand="${LLM_AUTOTUNE_MTP_DRAFT_MODEL:-${_sdmodel:-}}"
+    if [[ -z "$_cand" && -n "${LLAMA_MODEL_DIR:-}" && -f "$LLAMA_MODEL_DIR/mtp-${file}" ]]; then
+        _cand="mtp-${file}"
+    fi
+    if [[ "${LLM_AUTOTUNE_MTP:-1}" != "0" && -n "$_cand" ]]; then
+        if [[ "$_cand" != /* && -n "${LLAMA_MODEL_DIR:-}" && -f "$LLAMA_MODEL_DIR/$_cand" ]]; then
+            MTP_DRAFT_FILE="$_cand"
+            MTP_DRAFT_PATH="$LLAMA_MODEL_DIR/$_cand"
+            HAS_MTP=1
+        elif [[ -f "$_cand" ]]; then
+            MTP_DRAFT_FILE="$_cand"
+            MTP_DRAFT_PATH="$_cand"
+            HAS_MTP=1
+        fi
+        if (( HAS_MTP == 1 )); then
+            if [[ "${_sngl:-}" =~ ^[0-9]+$ ]] && (( _sngl > 0 )); then
+                MTP_DRAFT_NGL="$_sngl"
+            elif [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]; then
+                MTP_DRAFT_NGL="999"
+            else
+                MTP_DRAFT_NGL="0"
+            fi
+        fi
+    fi
     local _probe="$_SELF_DIR/gguf_metadata_add.py"
     if [[ ! -f "$_probe" ]]
     then
-        # swallow-ok: without the probe neither feature is claimed; the sweep falls back
-        # to its pre-2026-11-18 behaviour (ngram only) and says nothing.
+        # swallow-ok: without the probe neither header feature is claimed; sidecar MTP still stands.
         return 0
     fi
-    if [[ "${LLM_AUTOTUNE_MTP:-1}" != "0" ]] \
+    if [[ "${LLM_AUTOTUNE_MTP:-1}" != "0" ]] && (( HAS_MTP == 0 )) \
         && "$TAC_PYTHON" "$_probe" --src "$MODEL_PATH" --has-tensor-prefix nextn >/dev/null 2>&1
     then
         HAS_MTP=1
@@ -680,15 +726,39 @@ else
     COMBOS=("1024:256")
 fi
 
-BUDGET=$(( FREE_VRAM - MODEL_MB - 200 ))
-
-# NAME BOTH POOLS (2026-11-03).  This script sizes against FREE_VRAM, which is the GPU
+# NAME BOTH POOLS (2026-11-03).  On a discrete card (TAC_HOST_PROFILE_SHARED_MEMORY=0)
+# FREE_VRAM is the allocation bound.  On a unified-memory WSL2 host
+# (TAC_HOST_PROFILE_SHARED_MEMORY=1), CUDA allocations draw from the guest RAM pool
+# (MemAvailable minus LLAMA_FIT_KEEP_RESERVE_MB) even when the Windows dedicated carve
+# reported by nvidia-smi is small (e.g. 8192 MiB).
 if [[ "${TAC_HOST_RAM_AVAIL_BYTES:-}" =~ ^[0-9]+$ ]] && (( TAC_HOST_RAM_AVAIL_BYTES > 0 ))
 then
     _HOST_AVAIL_MB=$(( TAC_HOST_RAM_AVAIL_BYTES / 1048576 ))
 else
     # swallow-ok: an unreadable /proc/meminfo is reported by the UNREADABLE branch below
     _HOST_AVAIL_MB=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)
+fi
+EFFECTIVE_POOL_MB=$FREE_VRAM
+if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] && [[ "$_HOST_AVAIL_MB" =~ ^[0-9]+$ ]]
+then
+    _keep_reserve_mb="${LLAMA_FIT_KEEP_RESERVE_MB:-12288}"
+    [[ "$_keep_reserve_mb" =~ ^[0-9]+$ ]] || _keep_reserve_mb=12288
+    if (( _HOST_AVAIL_MB > _keep_reserve_mb ))
+    then
+        _guest_pool_mb=$(( _HOST_AVAIL_MB - _keep_reserve_mb ))
+        (( _guest_pool_mb > EFFECTIVE_POOL_MB )) && EFFECTIVE_POOL_MB=$_guest_pool_mb
+    fi
+fi
+BUDGET=$(( EFFECTIVE_POOL_MB - MODEL_MB - 200 ))
+BENCH_MOE_FLAG=()
+if [[ "${LLM_AUTOTUNE_CPU_MOE:-0}" == "1" ]]; then
+    BENCH_MOE_FLAG=(--cpu-moe)
+elif (( HAS_MOE == 1 )) || [[ "${_arch,,}" == *moe* ]]; then
+    if (( MODEL_MB + 200 > EFFECTIVE_POOL_MB )) \
+        && (( ${_HOST_AVAIL_MB:-0} == 0 || MODEL_MB <= _HOST_AVAIL_MB )); then
+        BENCH_MOE_FLAG=(--cpu-moe)
+        echo "  placement: ${MODEL_MB} MiB MoE exceeds ${EFFECTIVE_POOL_MB} MiB pool — using --cpu-moe"
+    fi
 fi
 if [[ "$_HOST_AVAIL_MB" =~ ^[0-9]+$ ]]
 then
@@ -1206,10 +1276,17 @@ _bench_spawn() {
                 --spec-ngram-mod-n-max "$_block" \
                 --spec-ngram-mod-n-min "$_block")
         elif [[ "${BENCH_SPEC_TYPE:-off}" == "draft-mtp" ]]; then
-            # MTP drafts from the model's OWN nextn head: no draft file, no device flag.
-            # The head's presence was established before the sweep (HAS_MTP), so a launch
-            # here is not a guess.
-            spec_args=(--spec-type draft-mtp --spec-draft-n-max "${BENCH_SPEC_N_MAX:-4}")
+            # MTP drafts from the model's OWN nextn head or a sidecar mtp-*.gguf file.
+            # Presence was established before the sweep (HAS_MTP), so a launch is not a guess.
+            spec_args=(--spec-type draft-mtp --spec-draft-n-max "${BENCH_SPEC_N_MAX:-3}")
+            if [[ -n "${BENCH_SPEC_DRAFT_MODEL:-}" ]]; then
+                spec_args+=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-backend-sampling)
+                if [[ "${BENCH_SPEC_NGL:-0}" =~ ^[0-9]+$ ]] && (( BENCH_SPEC_NGL > 0 )); then
+                    spec_args+=(--spec-draft-ngl "$BENCH_SPEC_NGL")
+                else
+                    spec_args+=(--spec-draft-device none)
+                fi
+            fi
         elif [[ -n "${BENCH_SPEC_DRAFT_MODEL:-}" ]]; then
             spec_args=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-device none)
             [[ -n "${BENCH_SPEC_N_MAX:-}" ]] && spec_args+=(--spec-draft-n-max "$BENCH_SPEC_N_MAX")
@@ -1217,6 +1294,7 @@ _bench_spawn() {
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
+            "${BENCH_MOE_FLAG[@]}" \
             --parallel "${BENCH_PARALLEL:-1}" --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
             "${spec_args[@]}" "${sampler_args[@]}" \
@@ -1542,15 +1620,18 @@ __autotune_task_quality_check() {
     local _saved_spec_type="${BENCH_SPEC_TYPE:-off}"
     local _saved_spec_n_max="${BENCH_SPEC_N_MAX:-}"
     local _saved_draft_model="${BENCH_SPEC_DRAFT_MODEL:-}"
+    local _saved_spec_ngl="${BENCH_SPEC_NGL:-}"
     BENCH_SPEC_TYPE="${WIN_SPEC_TYPE:-off}"
     BENCH_SPEC_N_MAX="${WIN_SPEC_N_MAX:-}"
-    BENCH_SPEC_DRAFT_MODEL="${WIN_SPEC_DRAFT_MODEL:-}"
+    BENCH_SPEC_DRAFT_MODEL="${WIN_SPEC_DRAFT_PATH:-${WIN_SPEC_DRAFT_MODEL:-}}"
+    BENCH_SPEC_NGL="${WIN_SPEC_NGL:-}"
     if ! _bench_spawn "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP" \
         "$WIN_NGL" "$WIN_KVK" "$WIN_KVV"; then
         _bench_stop "$_BENCH_PID"
         BENCH_SPEC_TYPE="$_saved_spec_type"
         BENCH_SPEC_N_MAX="$_saved_spec_n_max"
         BENCH_SPEC_DRAFT_MODEL="$_saved_draft_model"
+        BENCH_SPEC_NGL="$_saved_spec_ngl"
         __autotune_quality_error "task-quality probe could not start the winner configuration"
         return 1
     fi
@@ -1597,6 +1678,7 @@ PYEOF
     BENCH_SPEC_TYPE="$_saved_spec_type"
     BENCH_SPEC_N_MAX="$_saved_spec_n_max"
     BENCH_SPEC_DRAFT_MODEL="$_saved_draft_model"
+    BENCH_SPEC_NGL="$_saved_spec_ngl"
     return "$(( _quality_failed == 0 ? 0 : 1 ))"
 }
 
@@ -2351,7 +2433,7 @@ _cuda_guard_or_exit
 
 # --- n_gpu_layers / KV-quant sweep (the "almost fits" band) ---
 WIN_NGL="$BENCH_NGL"; WIN_KVK="q8_0"; WIN_KVV="q8_0"
-BAND_MIN_MB=$(awk -v f="$FREE_VRAM" -v fr="$NGL_BAND_FRAC" 'BEGIN{printf "%d", f*fr}')
+BAND_MIN_MB=$(awk -v f="$EFFECTIVE_POOL_MB" -v fr="$NGL_BAND_FRAC" 'BEGIN{printf "%d", f*fr}')
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
@@ -2615,18 +2697,19 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
 fi
 
 # ── SPEC-DEC-004: speculative-decoding sweep (type x block) ─────────────────
-WIN_SPEC_TYPE=""; WIN_SPEC_N_MAX=""; WIN_SPEC_ACCEPT_LEN=""
+WIN_SPEC_TYPE=""; WIN_SPEC_DRAFT_MODEL=""; WIN_SPEC_DRAFT_PATH=""
+WIN_SPEC_N_MAX=""; WIN_SPEC_NGL=""; WIN_SPEC_ACCEPT_LEN=""
 SPEC_N_MAX_LIST=${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-"4 8 16 32"}
-# MTP's ladder is 2/4/8, not 4/8/16/32: the head proposes a few tokens ahead, and its
-# default is 3 — a block of 32 is not what it was trained for.
-MTP_N_MAX_LIST=${LLM_AUTOTUNE_MTP_N_MAX_LIST:-"2 4 8"}
+# MTP's ladder is 2/3/4/8, not 4/8/16/32: the head proposes a few tokens ahead, and its
+# default in llama.cpp and NVIDIA's RTX Spark recipe is 3.
+MTP_N_MAX_LIST=${LLM_AUTOTUNE_MTP_N_MAX_LIST:-"2 3 4 8"}
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r _sb_b _sb_u <<< "$BEST_COMBO"
     echo ""
     _cuda_guard_or_exit
     # Candidate TYPES, not only block sizes (2026-11-18).  ngram needs no model and stays
-    # first; draft-mtp is offered only when the file carries the nextn head (HAS_MTP), so
-    # a launch is never a guess about what the file contains.
+    # first; draft-mtp is offered only when the file carries the nextn head or a sidecar
+    # mtp-*.gguf draft file (HAS_MTP), so a launch is never a guess.
     _sb_types="ngram"
     [[ "${HAS_MTP:-0}" == "1" ]] && _sb_types="ngram draft-mtp"
     echo "  spec-decode sweep (${_sb_types// /, })"
@@ -2654,6 +2737,13 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 continue
             fi
             BENCH_SPEC_TYPE="$_sb_type"; BENCH_SPEC_N_MAX="$_sb_block"
+            if [[ "$_sb_type" == "draft-mtp" && -n "${MTP_DRAFT_PATH:-}" ]]; then
+                BENCH_SPEC_DRAFT_MODEL="$MTP_DRAFT_PATH"
+                BENCH_SPEC_NGL="${MTP_DRAFT_NGL:-}"
+            else
+                BENCH_SPEC_DRAFT_MODEL=""
+                BENCH_SPEC_NGL=""
+            fi
             # samples=1 (not 3): the block sweep is a *selection*, not a recorded
             _sb_t=$(bench_ctx "$BEST_CTX" "$_sb_b" "$_sb_u" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _sb_t=""
             _sb_t=$(echo "$_sb_t" | bc 2>/dev/null || echo "0"); [ -z "$_sb_t" ] && _sb_t=0
@@ -2678,6 +2768,15 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 then
                     _sb_best_tps="$_sb_t"
                     WIN_SPEC_TYPE="$_sb_type"; WIN_SPEC_N_MAX="$_sb_block"; WIN_SPEC_ACCEPT_LEN="$_sb_al"
+                    if [[ "$_sb_type" == "draft-mtp" && -n "${MTP_DRAFT_FILE:-}" ]]; then
+                        WIN_SPEC_DRAFT_MODEL="$MTP_DRAFT_FILE"
+                        WIN_SPEC_DRAFT_PATH="$MTP_DRAFT_PATH"
+                        WIN_SPEC_NGL="${MTP_DRAFT_NGL:-}"
+                    else
+                        WIN_SPEC_DRAFT_MODEL=""
+                        WIN_SPEC_DRAFT_PATH=""
+                        WIN_SPEC_NGL=""
+                    fi
                 else
                     echo "  ${_sb_type} block ${_sb_block}: faster but accepted ${_sb_al:-0} tokens —" \
                          "NOT recorded (a draft that never hits is pure overhead)"
@@ -2685,7 +2784,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             fi
         done
     done
-    BENCH_SPEC_TYPE="off"; BENCH_SPEC_N_MAX=""; BENCH_SPEC_DRAFT_MODEL=""
+    BENCH_SPEC_TYPE="off"; BENCH_SPEC_N_MAX=""; BENCH_SPEC_DRAFT_MODEL=""; BENCH_SPEC_NGL=""
     if [[ -n "$WIN_SPEC_N_MAX" ]]; then
         echo "  spec-decode winner: ${WIN_SPEC_TYPE} block ${WIN_SPEC_N_MAX}" \
              "(${_sb_best_tps} tps, accept len ${WIN_SPEC_ACCEPT_LEN:-0})"
@@ -2708,26 +2807,43 @@ fi
 # persisted without a schema change — a probe whose result is discarded would be a success
 # message with no write behind it.
 #
-# THREADS first: it needs no model knowledge, and the expected gain is the one measurable
-# on this box (20-core memcpy reaches ~145 GB/s against ~51 at one thread).  Only the cap is
-# probed against the current count — a third point costs a cycle for a knob that saturates.
+# THREADS first: on a 10x Cortex-X925 + 10x Cortex-A725 box (LLAMA_CPU_THREADS=10,
+# ceiling=20), probe both the 10-P-core base and the 20-core ceiling when above the
+# recorded count, reusing BEST_TPS as the initial reference to save a redundant launch.
 if [[ $ANY_OK == true && -n $BEST_COMBO && "${AUTOTUNE_THREAD_SWEEP:-1}" != "0" ]]; then
     IFS=':' read -r _th_b _th_u <<< "$BEST_COMBO"
     _th_cap=$(__llm_thread_cap "$CPU_COUNT")
+    _th_base=$(__llm_thread_cap "${LLAMA_CPU_THREADS:-$_th_cap}")
+    _th_candidates=()
+    if [[ "$_th_base" =~ ^[0-9]+$ ]] && (( _th_base > TUNE_THREADS && _th_base < _th_cap )); then
+        _th_candidates+=("$_th_base")
+    fi
     if [[ "$_th_cap" =~ ^[0-9]+$ ]] && (( _th_cap > TUNE_THREADS )); then
+        _th_candidates+=("$_th_cap")
+    fi
+    if (( ${#_th_candidates[@]} > 0 )); then
         echo ""
         _cuda_guard_or_exit
-        echo "  threads probe: ${TUNE_THREADS} (recorded) vs ${_th_cap} (ceiling)"
+        echo "  threads probe: ${TUNE_THREADS} (recorded) vs ${_th_candidates[*]} (ceiling)"
         echo "  -------------------------------------"
-        _th_wide=$(__autotune_thread_probe "$_th_cap")
-        if [[ "$_th_wide" =~ ^[0-9] ]] && (( ${_th_wide%%.*} > 0 ))
+        _th_best_threads="$RECORDED_THREADS"
+        _th_best_tps="${BEST_TPS:-0}"
+        for _th_cand in "${_th_candidates[@]}"; do
+            _th_wide=$(__autotune_thread_probe "$_th_cand" "$_th_best_tps")
+            if [[ "$_th_wide" =~ ^[0-9] ]] && (( ${_th_wide%%.*} > 0 ))
+            then
+                _th_best_threads="$_th_cand"
+                _th_best_tps="$_th_wide"
+            fi
+        done
+        TUNE_THREADS="$_th_best_threads"
+        if (( TUNE_THREADS != RECORDED_THREADS ))
         then
-            echo "  threads winner: ${_th_cap} (${_th_wide} tps — a material gain over the"
+            echo "  threads winner: ${TUNE_THREADS} (${_th_best_tps} tps — a material gain over the"
             echo "                  recorded count, so column 9 is rewritten below)"
         else
             echo "  threads: ${_th_cap} gave no material gain (${_th_wide:-0} tps)"
             echo "           keeping ${RECORDED_THREADS}"
-            TUNE_THREADS="$RECORDED_THREADS"
         fi
     else
         echo "  threads probe: skipped — the ceiling (${_th_cap:-?}) is not above ${TUNE_THREADS}"
@@ -2767,12 +2883,28 @@ ttft_probe() {
         # The sampler fragment is built in BOTH launch helpers (the bench spawn and the
         local -a sampler_args=()
         mapfile -t sampler_args < <(_sampler_args "$MODEL_PATH")
+        local -a spec_args=()
+        if [[ "${WIN_SPEC_TYPE:-}" == "ngram" ]]; then
+            local _block="${WIN_SPEC_N_MAX:-16}"
+            spec_args=(--spec-type ngram-mod --spec-ngram-mod-n-max "$_block" --spec-ngram-mod-n-min "$_block")
+        elif [[ "${WIN_SPEC_TYPE:-}" == "draft-mtp" ]]; then
+            spec_args=(--spec-type draft-mtp --spec-draft-n-max "${WIN_SPEC_N_MAX:-3}")
+            if [[ -n "${WIN_SPEC_DRAFT_PATH:-}" ]]; then
+                spec_args+=(--spec-draft-model "$WIN_SPEC_DRAFT_PATH" --spec-draft-backend-sampling)
+                if [[ "${WIN_SPEC_NGL:-0}" =~ ^[0-9]+$ ]] && (( WIN_SPEC_NGL > 0 )); then
+                    spec_args+=(--spec-draft-ngl "$WIN_SPEC_NGL")
+                else
+                    spec_args+=(--spec-draft-device none)
+                fi
+            fi
+        fi
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
+            "${BENCH_MOE_FLAG[@]}" \
             --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
-            "${sampler_args[@]}" \
+            "${spec_args[@]}" "${sampler_args[@]}" \
             > "/tmp/at-ttft-${MODEL}-c${c}.log" 2>&1 &
         pid=$!
         _bump_cuda_cycle
@@ -3193,12 +3325,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             AUTOTUNE_SAVE_STATE=slow
         fi
         export AUTOTUNE_SAVE_STATE
+        _save_carve="$VRAM_TOTAL"
+        if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] \
+            && [[ "${EFFECTIVE_POOL_MB:-0}" =~ ^[0-9]+$ ]] \
+            && (( EFFECTIVE_POOL_MB > _save_carve )); then
+            _save_carve="$EFFECTIVE_POOL_MB"
+        fi
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
-            "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
+            "$WIN_SPEC_TYPE" "$WIN_SPEC_DRAFT_MODEL" "$WIN_SPEC_N_MAX" "$WIN_SPEC_NGL" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
             "$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
-            "$LLAMA_BUILD_ID" "$VRAM_TOTAL" \
+            "$LLAMA_BUILD_ID" "$_save_carve" \
             "$TUNE_THREADS" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
