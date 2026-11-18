@@ -22,6 +22,7 @@ setup() {
     source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
     source "$REPO_ROOT/scripts/prompt-sets.sh"
     export LLM_REGISTRY="$TMPDIR_BATS/models.conf"
+    export LLAMA_MODEL_DIR="$TMPDIR_BATS/active"
 }
 
 teardown() {
@@ -1396,6 +1397,8 @@ STUB
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
     source "$REPO_ROOT/scripts/_startup-env.sh"
     source "$REPO_ROOT/scripts/11e-llm-model.sh"
+    export LLM_REGISTRY="$BATS_TEST_TMPDIR/models.conf"
+    export LLAMA_MODEL_DIR="$BATS_TEST_TMPDIR/active"
     mkdir -p "$LLAMA_MODEL_DIR"
     : > "$LLAMA_MODEL_DIR/beta.gguf"
     {
