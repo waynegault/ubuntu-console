@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-11-18): the lane is resolved from this box's profile (_tac_cuda_lane_unit)
+#   instead of a hardcoded unit name, so the probe cannot stop or wait on another machine's
+#   lane when the profile is absent.
 #   v19 (2026-11-01): the LLAMA_SERVER_BIN fallback names build-cuda/, not build/ —
 #   this box has no build/ tree, so an unset environment resolved to nothing and the
 #   probe exited FATAL before measuring.  Same defect as bin/llama-cuda-server.
@@ -345,7 +348,13 @@ source env.sh || { warn 'FATAL: failed to source env.sh'; exit 1; }
 source "$REPO/bin/_tac-bin-lib.sh"
 
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
-LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+# THIS box's lane, from its profile — never the Dell's unit name (2026-11-18).  The
+# fallback here used to be llama-cuda-llama32-3b-chat.service, which is the XPS box's lane
+# (intel-xe-cuda.conf:80); the profile always wins, so it never fired here, but it would
+# have probed the wrong machine's unit on any shell where the profile did not load.
+# _tac_cuda_lane_unit answers the profile's lane, then its PRIMARY lane, then EMPTY — and
+# an empty lane is refused below rather than guessed.
+LANE="$(_tac_cuda_lane_unit)"
 # Only a CUDA-backed lane needs the card.  Set from the unit's argv by
 # __base_from_unit; the default keeps the row-based runs unchanged.
 NEEDS_CUDA_CARD=1

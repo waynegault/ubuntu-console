@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-18): the lane this chunk needs down is resolved from THIS box's profile
+#   (_tac_cuda_lane_unit), and an empty answer REFUSES the chunk — the old fallback named the
+#   XPS's unit in code shared with the ASUS box, so a profile-less shell would have retuned
+#   against the wrong machine's lane and reported success.
 #   v8 (2026-10-11): the release removes only the marker (the "<file>.owner"
 #   companion is gone — bin/_tac-bin-lib.sh v5 records the pid IN the marker) and
 #   uses the renamed _tac_suspend_pid.
@@ -77,7 +81,15 @@ SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspen
 
 # The CUDA lane this chunk needs down.  The same unit bin/llama-watchdog.sh owns
 # as CUDA_UNIT — a test asserts the two agree, so the name cannot drift apart.
-CUDA_LANE_UNIT="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+# THIS box's lane, from its profile — never the Dell's unit name (2026-11-18).  The
+# fallback was llama-cuda-llama32-3b-chat.service (the XPS box's lane, intel-xe-cuda.conf:80);
+# the profile always wins, so it never fired here, but a shell without the profile would have
+# retuned against the wrong machine's lane and reported success.
+CUDA_LANE_UNIT="$(_tac_cuda_lane_unit)"
+if [[ -z "$CUDA_LANE_UNIT" ]]; then
+    warn "RETUNE REFUSING: no CUDA lane resolved (profile not loaded) — nothing was measured"
+    exit 1
+fi
 
 if [[ $# -eq 0 ]]
 then

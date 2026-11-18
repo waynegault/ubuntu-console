@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 140
+# Module Version: 141
+#   v141 (2026-11-18): with no host profile, `model use` displaces NO lane and says so.  It
+#   fell back to a hardcoded pair of the x86 box's units, which do not exist on the ASUS, so
+#   it displaced nothing while printing "[CUDA lanes displaced]" — the operator believed the
+#   card had been cleared.
 #   v140 (2026-11-16): a scan that finds two identical copies of the same model offers to
 #   drop the older one.  The registry keys a row on the file PATH, so a model downloaded
 #   twice into the store (`X.gguf` and `X (1).gguf`) became two rows sharing one display
@@ -1978,12 +1982,11 @@ not stopping a lane an autotune or bench run owns; stop that run first, or wait 
     done <<< "${LLAMA_LANE_SPECS:-}"
     if (( ${#_cuda_lanes[@]} == 0 ))
     then
-        # NO PROFILE: fall back to the lanes this repo shipped before the profile existed.
-        # They are the x86 box's, so on any other box they simply are not active — the
-        # point is that an unresolved shell behaves as it always did rather than silently
-        # displacing nothing.  Never an Xe unit.
-        _cuda_lanes=(llama-cuda-llama32-3b-chat.service llama-cuda-qwen35-4b-pipeline.service)
-        __tac_info "CUDA" "[no host profile — displacing the default CUDA lanes]" "$C_Dim"
+        # NO PROFILE: name NO lane.  This used to displace a hardcoded pair of the x86 box's
+        # lanes, and on this box those units do not exist — so it displaced nothing while the
+        # operator read "CUDA lanes displaced" and believed the card was cleared.
+        _cuda_lanes=()
+        __tac_info "CUDA" "[no host profile — no CUDA lane known, nothing displaced]" "$C_Warning"
     fi
     # An INERT keep entry is worse than none: the operator reads "always-on" and believes
     # memory search is protected while the loop below stops it.  Measured 2026-11-05

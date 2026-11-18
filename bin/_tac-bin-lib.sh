@@ -16,7 +16,13 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-11-18): _tac_cuda_lane_unit / _tac_cuda_lane_units — ONE definition of this
+#     box's CUDA lane(s): LLAMA_CUDA_LANE_UNIT, else TAC_HOST_PRIMARY_LANE, then the
+#     llama-cuda-* entries of LLAMA_LANE_SPECS.  Six callers each carried the XPS box's
+#     unit name (llama-cuda-llama32-3b-chat.service) as a fallback in code shared with the
+#     ASUS box; with the profile absent they would have held down another machine's lane
+#     and reported success.  Every consumer now refuses an empty answer instead.
 #   v34 (2026-11-17): the CUDA cycle COUNT is not part of the adapter-health verdict.
 #     _tac_adapter_health_check refused on a spent ledger, which made `model autotune`
 #     exit before probing anything even after scripts/autotune-model.sh and
@@ -794,6 +800,44 @@ _tac_cgroup_unit() {
 # embed lane built under build-opencl, while 11d's excluded it — so the same Xe
 # process was a card holder for one consumer and not for the other.
 #
+# _tac_cuda_lane_unit — THIS box's CUDA lane, from its host profile; empty when unresolved.
+#
+# One question, one definition, because the same answer had been hardcoded as the DELL
+# XPS's lane in five shared call sites (bin/autotune-rows.sh, bin/bench-rows.sh,
+# scripts/run-autotune-batch.sh, scripts/retune-band-chunk.sh, scripts/cache-ram-probe.sh):
+# `${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}`.  The profile always won, so
+# none of them had fired on this box — but on any shell where the profile did not load they
+# would have stopped, restored, or reported the WRONG machine's unit and called it success.
+#
+# Order: the profile's own lane, then the profile's PRIMARY lane (every profile declares
+# one — asus: the coder lane, intel: the Xe lane), then EMPTY.  Empty is a real answer: a
+# caller must refuse rather than guess, because acting on an unjustified unit name is worse
+# than acting on none.
+# @stdout the unit name, or nothing.
+_tac_cuda_lane_unit() {
+    local _u="${LLAMA_CUDA_LANE_UNIT:-${TAC_HOST_PRIMARY_LANE:-}}"
+    printf '%s\n' "$_u"
+}
+
+# _tac_cuda_lane_units — every CUDA lane THIS box declares, one per line.
+#
+# From the profile's LLAMA_LANE_SPECS (`<unit>|<port>` per line), filtered to the CUDA tier,
+# with the primary lane first and de-duplicated.  Empty when the profile is absent: a caller
+# that needs a list must then say so, not fall back to another box's names.
+# @stdout one unit per line.
+_tac_cuda_lane_units() {
+    local _primary _lane _port
+    _primary="$(_tac_cuda_lane_unit)"
+    [[ -n "$_primary" ]] && printf '%s\n' "$_primary"
+    while IFS='|' read -r _lane _port
+    do
+        [[ -n "$_lane" ]] || continue
+        [[ "$_lane" == llama-cuda-* ]] || continue
+        [[ "$_lane" == "$_primary" ]] && continue
+        printf '%s\n' "$_lane"
+    done <<< "${LLAMA_LANE_SPECS:-}"
+}
+
 # The Xe fleet is excluded BY BUILD PATH: a server built under build-opencl belongs
 # to the Intel iGPU.  A foreign server from another tree is still seen and can be
 # refused.  Identity is the exe, never argv: `exec -a` can forge a command line and

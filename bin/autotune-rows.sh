@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-11-18): the lane is THIS box's, from its profile, and an empty answer REFUSES.
+#     `${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}` named the Dell's unit in
+#     code shared with the ASUS box; it never fired while the profile loaded, but a shell
+#     without one would have held down a lane that does not exist here and then measured
+#     beside the serving lane.  The fallback is TAC_HOST_PRIMARY_LANE and an empty lane stops
+#     the run BEFORE the clean-room tears anything down.
 #   v28 (2026-11-17): the heartbeat STOPPED DISPLACING THE HOLD RELEASE.  v27 gave it its own
 #     `trap 'kill $_HEARTBEAT_PID' EXIT`, and a second EXIT trap REPLACES the first rather than
 #     chaining: measured with `bash -c 'trap "echo A" EXIT; trap "echo B" EXIT'` -> prints only
@@ -175,7 +181,24 @@ RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
 source "$REPO/scripts/01-constants.sh"
 REGISTRY="${LLM_REGISTRY:-$HOME/.llm/models.conf}"
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
-LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+# THE LANE IS THE PROFILE'S, never a hardcoded unit name (v28).  This read
+# `${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}`, and that fallback is the
+# DELL XPS's lane (intel-xe-cuda.conf:80) sitting in code shared with the ASUS box.  It
+# never fired while the profile loaded — but it names the wrong machine's lane on any shell
+# where it did not (env.sh failing, a bare `bash bin/autotune-rows.sh`, a CI runner with no
+# profile), which is the per-box leak the profile layer exists to prevent.
+# The fallback is now TAC_HOST_PRIMARY_LANE, which EVERY profile declares (asus: the coder
+# lane, intel: the Xe lane), and an empty answer REFUSES rather than guesses: stopping the
+# wrong unit is worse than stopping none, because the sweep would then run beside a serving
+# lane and the next row would fail its VRAM baseline for a reason nobody can read.
+LANE="${LLAMA_CUDA_LANE_UNIT:-${TAC_HOST_PRIMARY_LANE:-}}"
+if [[ -z "$LANE" ]]; then
+    warn "autotune-rows: REFUSING — no CUDA lane resolved (LLAMA_CUDA_LANE_UNIT and"
+    warn "  TAC_HOST_PRIMARY_LANE are both empty)."
+    warn "  The host profile did not load, so this shell cannot say which lane to hold down."
+    warn "  Source env.sh (or tools/host-profile.sh) and re-run; guessing a lane is not an option."
+    exit 1
+fi
 LOGDIR="${LLM_STATE_DIR:-$HOME/.llm}/autotune-logs"
 mkdir -p "$LOGDIR"
 
