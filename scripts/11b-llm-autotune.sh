@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 47
+#   v47 (2026-11-18): __llm_autotune_profile_save takes an OPTIONAL 29th argument, the
+#     thread count the tuner measured (column 9).  Empty keeps the row's own value, which
+#     is what every caller did before the tuner probed threads; a non-integer is refused
+#     rather than written, and the SPEC-DEC-002 clamp still runs afterwards so a probe can
+#     never store more than the host allows.  The slot is 29, NOT a free position after
+#     gpu_carve (33): the tuner's call is 29 arguments long, so a 34th read as empty and
+#     the row silently kept its old count — measured on the probe that would have shipped it.
 # Module Version: 46
 #   v46 (2026-11-18): respect LLAMA_THREAD_CAP (0 = uncapped on homogeneous/X925 hosts)
 #     in __llm_autotune_profile_save and __llm_autotune_profiles_remap_by_registry instead of
@@ -586,6 +594,18 @@ function __llm_autotune_profile_save() {
     local ctx_policy="${31:-}"
     local llama_build="${32:-}"
     local gpu_carve="${33:-}"
+    # Threads (2026-11-18): the tuner can now PROBE the count, so the winner has to be
+    # writable.  Empty keeps the row's current value — the behaviour every existing caller
+    # had, and what a skipped probe must do rather than silently resetting the column.
+    local threads_override="${29:-}"
+    # PROVE the argument arrived before this function can run with it unset.  A positional
+    # slot is the one thing a typo hides: measured 2026-11-18, a probe passed 16 in the slot
+    # and the row kept 6 because the save call and the signature had drifted by one.
+    if [[ -n "$threads_override" ]] && [[ ! "$threads_override" =~ ^[1-9][0-9]*$ ]]
+    then
+        warn "  ERROR: threads must be a positive integer (got '$threads_override')"
+        return 1
+    fi
     local profile_file="$LLM_REGISTRY"
 
     # $1 is a row NUMBER or a model FILE name; both are accepted so existing callers
@@ -691,6 +711,9 @@ function __llm_autotune_profile_save() {
 
     local _thread_cap="${LLAMA_THREAD_CAP:-6}"
     [[ "$_thread_cap" =~ ^[0-9]+$ ]] || _thread_cap=6
+    # An EMPTY override means "keep the row's own count" — the behaviour every caller had
+    # before the tuner probed threads.  0 is the sentinel the awk below reads as "none".
+    local _threads_override="${threads_override:-0}"
 
     awk -F'|' -v f="$model_file" \
         -v ctx="$ctx_size" \
@@ -725,6 +748,7 @@ function __llm_autotune_profile_save() {
         -v llama_build_val="$llama_build" \
         -v gpu_carve_val="$gpu_carve" \
         -v thread_cap="$_thread_cap" \
+        -v threads_override="$_threads_override" \
         -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
@@ -793,6 +817,10 @@ function __llm_autotune_profile_save() {
                 # left over from the previous run would name a pool the new figure was not
                 # measured in.
                 if (gpu_carve_val != "") $48 = gpu_carve_val
+                # THREADS (9): the tuner measured this count, so it is written where every
+                # launch reads it.  The CLAMP below still applies afterwards, so a probe
+                # can never store more than the host allows.
+                if (threads_override > 0) $9 = threads_override
             }
             # SPEC-DEC-002: clamp the stored thread count to the host
             # LLAMA_THREAD_CAP (0 = uncapped, 6 on i9-12900HK P-cores).

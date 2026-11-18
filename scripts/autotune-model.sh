@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 146
+# Module Version: 147
+#   v147 (2026-11-18): THREADS are measured, not assumed.  Every row here certified at
+#   threads=6 of 20 because that is what the registry column said — and the count is a
+#   bandwidth multiplier on this box (20-core memcpy ~145 GB/s against ~51 at one).  After
+#   the beam settles, one extra launch at the ceiling is compared against the recorded count
+#   and a >5% gain is kept; otherwise the recorded count stands (a tie is not evidence).
+#   The winner travels to the registry through __llm_autotune_profile_save's new 34th
+#   argument, so the measurement is persisted, not printed and dropped.  AUTOTUNE_THREAD_SWEEP=0
+#   skips it.
+#   FLASH ATTENTION is NOT probed, deliberately: a quantised V cache will not load with
+#   flash off (measured 2026-11-11, both paths), and rows certify at k/v q8_0 — the arm is
+#   only meaningful once the KV sweep has chosen f16.
 #   v146 (2026-11-18): the sweep can now draft with MTP, and says when a file cannot.
 #     The speculative sweep only ever tried `ngram-mod`, whose n_min suits repeated text
 #     and accepted 0 tokens on chat, so every row was certified with spec off.  MTP
@@ -159,6 +170,41 @@ else
 fi
 BENCH_NGL="${gpu_layers:-999}"
 [[ ${gpu_layers:-999} -eq 0 ]] && TUNE_THREADS=$(__llm_thread_cap "$CPU_COUNT")
+
+# __autotune_thread_probe <cap> — two launches that differ ONLY in the thread count.
+#
+# Prints the tps at <cap> when it beats the recorded count by more than 5%, and "0"
+# otherwise; the caller keeps RECORDED_THREADS on a 0.  A tie is not evidence — the bench
+# carries a few percent of error — and the narrower count leaves the box's cores for the
+# gateway and the embed lane.
+#
+# It is a FUNCTION, not inline, for two reasons: the 10.4 counter attributes top-level code
+# to the definition above it, and a probe that hides a launch failure inside an unquoted
+# `$( ... )` is how `${1:-0}` ends up being evaluated by the CALLER's shell (measured on the
+# first cut of this probe: "bad substitution").  bench_ctx is defined by the time this runs.
+__autotune_thread_probe() {
+    local cap="$1" reference wide gain
+    reference=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" \
+        "filled" "$WIN_KVK" "$WIN_KVV")
+    [[ -n "$reference" ]] || reference=0
+    TUNE_THREADS="$cap"
+    wide=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" \
+        "filled" "$WIN_KVK" "$WIN_KVV")
+    [[ -n "$wide" ]] || wide=0
+    gain=$(awk -v w="$wide" -v r="$reference" 'BEGIN{print (w>0 && r>0 && w>r*1.05) ? 1 : 0}')
+    warn "  threads ${cap}: ${wide} tps (recorded ${reference}, keep=${gain})"
+    if [[ "$gain" == "1" ]]; then
+        printf '%s\n' "$wide"
+    else
+        printf '0\n'
+    fi
+}
+
+# WHERE THIS SKILL'S DEFAULT CAME FROM, captured before any probe replaces TUNE_THREADS.
+# The row is read by FILE (field 3), never by the number the caller typed — adding a model
+# renumbers the registry, and a number captured here could name another model at save time
+# (measured 2026-09-16).
+RECORDED_THREADS="$TUNE_THREADS"
 
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo "  Bench NGL: ${BENCH_NGL}  — max envelope: 999"
@@ -1685,6 +1731,22 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
     bench_ctx() {
         local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
         local mode="${7:-quick}"
+        # THREADS-AWARE SELFTEST (2026-11-18): the thread probe compares two launches whose
+        # ONLY difference is TUNE_THREADS, so a canned bench_ctx that ignores it would make
+        # every selftest row "tie" and never prove the probe works.  _SELFTEST_THREAD_TPS
+        # maps a thread count to the tps it should report; unset keeps the old behaviour.
+        if [[ -n "${_SELFTEST_THREAD_TPS:-}" ]]
+        then
+            local _tp=""
+            for _pair in $_SELFTEST_THREAD_TPS; do
+                [[ "${_pair%%:*}" == "$TUNE_THREADS" ]] && _tp="${_pair##*:}"
+            done
+            if [[ -n "$_tp" ]]
+            then
+                echo "0|0|0|0|0|0" > "/tmp/at-metrics-$$"
+                echo "$_tp"; return 0
+            fi
+        fi
         _BENCH_FAIL_TYPE=""
         # Optional OOM ceiling: _SELFTEST_OOM_ABOVE makes ctx beyond the
         if [[ -n "${_SELFTEST_OOM_ABOVE:-}" ]] && [[ $c -gt ${_SELFTEST_OOM_ABOVE} ]]; then
@@ -2639,8 +2701,51 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 fi
 
 
+# ── Where the other two knobs stand (2026-11-18) ────────────────────────────
+# threads and flash attention were ASSUMED, never measured: every row here certified at
+# threads=6 of 20 (the registry's column, not the core count), and flash was pinned on at
+# every launch.  Both already have a registry column (9 and 16), so a winner can be
+# persisted without a schema change — a probe whose result is discarded would be a success
+# message with no write behind it.
+#
+# THREADS first: it needs no model knowledge, and the expected gain is the one measurable
+# on this box (20-core memcpy reaches ~145 GB/s against ~51 at one thread).  Only the cap is
+# probed against the current count — a third point costs a cycle for a knob that saturates.
+if [[ $ANY_OK == true && -n $BEST_COMBO && "${AUTOTUNE_THREAD_SWEEP:-1}" != "0" ]]; then
+    IFS=':' read -r _th_b _th_u <<< "$BEST_COMBO"
+    _th_cap=$(__llm_thread_cap "$CPU_COUNT")
+    if [[ "$_th_cap" =~ ^[0-9]+$ ]] && (( _th_cap > TUNE_THREADS )); then
+        echo ""
+        _cuda_guard_or_exit
+        echo "  threads probe: ${TUNE_THREADS} (recorded) vs ${_th_cap} (ceiling)"
+        echo "  -------------------------------------"
+        _th_wide=$(__autotune_thread_probe "$_th_cap")
+        if [[ "$_th_wide" =~ ^[0-9] ]] && (( ${_th_wide%%.*} > 0 ))
+        then
+            echo "  threads winner: ${_th_cap} (${_th_wide} tps — a material gain over the"
+            echo "                  recorded count, so column 9 is rewritten below)"
+        else
+            echo "  threads: ${_th_cap} gave no material gain (${_th_wide:-0} tps)"
+            echo "           keeping ${RECORDED_THREADS}"
+            TUNE_THREADS="$RECORDED_THREADS"
+        fi
+    else
+        echo "  threads probe: skipped — the ceiling (${_th_cap:-?}) is not above ${TUNE_THREADS}"
+    fi
+fi
+
+# FLASH is deliberately NOT probed here, and the reason is a measured refusal rather than a
+# missing column: a QUANTISED V cache will not load with flash attention off (llama.cpp:
+# "quantized V cache requires flash_attn to be enabled", then "failed to create context",
+# measured 2026-11-11 on both the CUDA and CPU paths).  Rows certify at k/v q8_0, so an
+# FA-off arm would fail its launch on nearly every row and spend a cycle proving a fact we
+# already know.  The arm becomes meaningful only when the KV sweep has chosen f16 — then
+# flash-off is loadable, and f16/f16 measured recall 1.00 at every depth.
+
+
+
+
 # ttft_probe — time-to-first-token at a config (AUTOTUNE-003).
-if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]]; then
 ttft_probe() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
     local kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
@@ -2822,7 +2927,6 @@ PYEOF
     fi
     echo "${ttft_ms}|${per_step}"
 }
-fi  # AUTOTUNE_SELFTEST guard — the stub defined in the selftest block wins.
 
 # ── AUTOTUNE-003: time-to-first-token at the winning config ─────────────────
 TTFT_MS=0; TTFT_PER_STEP=0
@@ -3095,6 +3199,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             "$WORKLOAD" "$TTFT_MS" \
             "$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
             "$LLAMA_BUILD_ID" "$VRAM_TOTAL" \
+            "$TUNE_THREADS" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the
