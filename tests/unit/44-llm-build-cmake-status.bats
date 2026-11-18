@@ -182,6 +182,90 @@ _run_build() {
     printf '%s\n%s\n' "$rc" "$out"
 }
 
+# ── __llm_build_opencl: the Xe lane is a SECOND build, switched by the profile ──
+# The function is called at the end of a CUDA build, so these cases drive it directly
+# with a stub cmake that records argv and a stub heavy_job that just runs the command.
+
+# _ocl_harness — a stub cmake + heavy_job in a temp bin, and a root/dir for the call.
+_ocl_harness() {
+    OCL_BIN="$BATS_TEST_TMPDIR/ocl-bin"
+    OCL_ROOT="$BATS_TEST_TMPDIR/ocl-root"
+    OCL_DIR="$BATS_TEST_TMPDIR/ocl-root/build-opencl"
+    OCL_ARGV="$BATS_TEST_TMPDIR/ocl-argv.log"
+    mkdir -p "$OCL_BIN" "$OCL_ROOT"
+    : > "$OCL_ARGV"
+    # cmake: record every call; materialise the binary when asked to build it.
+    cat > "$OCL_BIN/cmake" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >> "$OCL_ARGV"
+for a in "\$@"; do
+    if [ "\$a" = "--build" ]; then
+        mkdir -p "\$2/bin" && : > "\$2/bin/llama-server" && chmod +x "\$2/bin/llama-server"
+    fi
+done
+exit 0
+EOF
+    # heavy_job: swallow `--timeout N` and run the rest.
+    cat > "$OCL_BIN/heavy_job" <<'EOF'
+#!/bin/sh
+[ "$1" = "--timeout" ] && shift 2
+exec "$@"
+EOF
+    chmod +x "$OCL_BIN/cmake" "$OCL_BIN/heavy_job"
+}
+
+@test "OpenCL: a CUDA-only box issues no cmake call at all" {
+    # Catches the switch being decorative: this box's profile declares ENABLE=0, and a
+    # build here must not configure or compile an OpenCL tree.
+    _ocl_harness
+    run env -u LLAMA_OPENCL_ENABLE -u LLAMA_OPENCL_DIR PATH="$OCL_BIN:$PATH" \
+        bash -c 'source "$1"; __llm_build_opencl "$2" 2 60 "$3" false' _ \
+        "$REPO_ROOT/scripts/11e-llm-model.sh" "$OCL_ROOT" "$OCL_BIN/heavy_job"
+    [ "$status" -eq 0 ]
+    [ ! -s "$OCL_ARGV" ]
+}
+
+@test "OpenCL: an enabled box configures with CUDA off and the profile's target" {
+    # Catches a build that carries the CUDA flags over: -DGGML_CUDA=ON in an OpenCL tree
+    # means the Xe lanes get a tree built for the wrong backend.
+    _ocl_harness
+    run env LLAMA_OPENCL_ENABLE=1 LLAMA_OPENCL_DIR="$OCL_DIR" LLAMA_OPENCL_ADRENO=0 \
+        LLAMA_OPENCL_TARGET=300 PATH="$OCL_BIN:$PATH" \
+        bash -c 'source "$1"; __llm_build_opencl "$2" 2 60 "$3" false; echo "rc=$?"' _ \
+        "$REPO_ROOT/scripts/11e-llm-model.sh" "$OCL_ROOT" "$OCL_BIN/heavy_job"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rc=0"* ]]
+    local _configure
+    _configure="$(head -1 "$OCL_ARGV")"
+    [[ "$_configure" == *"-DGGML_OPENCL=ON"* ]]
+    [[ "$_configure" == *"-DGGML_CUDA=OFF"* ]]
+    [[ "$_configure" == *"-DGGML_OPENCL_TARGET_VERSION=300"* ]]
+    [[ "$_configure" == *"-DGGML_OPENCL_USE_ADRENO_KERNELS=OFF"* ]]
+    [[ "$_configure" == *"-B $OCL_DIR"* ]]
+    # and the separate build call happened, for the server target only
+    [[ "$(sed -n 2p "$OCL_ARGV")" == *"--target llama-server"* ]]
+}
+
+@test "OpenCL: a tree configured from ANOTHER source is moved aside, not reused" {
+    # Catches the tarball trap this box actually had: build-opencl/ was configured from
+    # ~/llama-src/b6b003d2..., and cmake would happily keep compiling THAT source while
+    # reporting a successful build of the checkout.
+    _ocl_harness
+    mkdir -p "$OCL_DIR"
+    printf 'CMAKE_HOME_DIRECTORY:INTERNAL=/home/wayne/llama-src/b6b003d2cb29647d968302eb2db8da6f66303b3e\n' \
+        > "$OCL_DIR/CMakeCache.txt"
+    run env LLAMA_OPENCL_ENABLE=1 LLAMA_OPENCL_DIR="$OCL_DIR" PATH="$OCL_BIN:$PATH" \
+        bash -c 'source "$1"; __llm_build_opencl "$2" 2 60 "$3" false; echo "rc=$?"' _ \
+        "$REPO_ROOT/scripts/11e-llm-model.sh" "$OCL_ROOT" "$OCL_BIN/heavy_job"
+    [ "$status" -eq 0 ]
+    # the foreign tree is gone from its name, and a sibling keeps it
+    [ ! -f "$OCL_DIR/CMakeCache.txt" ]
+    compgen -G "$OCL_DIR.foreign-*" >/dev/null || false
+    # and the configure that followed names THIS checkout
+    [[ "$(head -1 "$OCL_ARGV")" == *"-B $OCL_DIR"* ]]
+}
+
+
 @test "llm-build: a failed CONFIGURE is named and fails, not reported as done (card 50ab5c38)" {
     # Catches: the configure pipeline reading tail's 0, so a failed cmake is
     # invisible and the stale binary is reported as a fresh build.

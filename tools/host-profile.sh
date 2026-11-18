@@ -28,6 +28,10 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 18
+#   v18 (2026-11-18): the OpenCL (Xe) build lane joins the cleared+exported set —
+#   LLAMA_OPENCL_ENABLE / _DIR / _ADRENO / _TARGET.  llm-build now builds that tree after
+#   the CUDA one, and the switch is what keeps a CUDA-only box from growing the step.
 # Module Version: 17
 #   v17 (2026-11-18): the GPU INVENTORY is declared, and the pool probe stops guessing.
 #   TAC_HOST_GPU_COUNT / TAC_HOST_CUDA_GPU_INDEX join the cleared+exported set; the XPS
@@ -493,6 +497,7 @@ tac_host_profile_apply() {
     local _id _file _facts _arch _cuda _render _pool _ram
     unset LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT LLAMA_CUDA_LANE_PORT \
           TAC_HOST_GPU_COUNT TAC_HOST_CUDA_GPU_INDEX \
+          LLAMA_OPENCL_ENABLE LLAMA_OPENCL_DIR LLAMA_OPENCL_ADRENO LLAMA_OPENCL_TARGET \
           LLAMA_GPU_FREE_THRESHOLD_MIB \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
           LLAMA_THREAD_CAP LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
@@ -569,6 +574,7 @@ tac_host_profile_apply() {
            LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT \
            LLAMA_CUDA_LANE_PORT \
            TAC_HOST_GPU_COUNT TAC_HOST_CUDA_GPU_INDEX \
+           LLAMA_OPENCL_ENABLE LLAMA_OPENCL_DIR LLAMA_OPENCL_ADRENO LLAMA_OPENCL_TARGET \
            LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
            LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB LLAMA_THREAD_CAP \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \

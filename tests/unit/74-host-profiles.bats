@@ -505,6 +505,39 @@ install_stub_env() {
     done
 }
 
+@test "OpenCL lane: every profile states the switch, and only an Xe box turns it on" {
+    # Catches: a profile that serves an iGPU but leaves llm-build no way to build its tree,
+    # or a CUDA-only box silently growing an OpenCL step.  The XPS declares enable=1 with
+    # dir/target/adreno; the ASUS declares 0 and no dir at all.
+    local _conf _out _id _xe _en _dir _adreno _target
+    for _conf in "$REPO_ROOT"/config/hosts.d/*.conf; do
+        grep -q 'TAC_HOST_PROFILE_ID=' "$_conf" || continue
+        _out="$(env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c \
+            '. "$1"; printf "%s|%s|%s|%s|%s|%s\n" "${TAC_HOST_PROFILE_ID:-}" "${TAC_HOST_PROFILE_XE:-0}" \
+                 "${LLAMA_OPENCL_ENABLE:-}" "${LLAMA_OPENCL_DIR:-}" "${LLAMA_OPENCL_ADRENO:-}" \
+                 "${LLAMA_OPENCL_TARGET:-}"' \
+            _ "$_conf")" || { echo "FAIL: $_conf did not source cleanly"; return 1; }
+        IFS='|' read -r _id _xe _en _dir _adreno _target <<< "$_out"
+
+        [ "$_en" = "0" ] || [ "$_en" = "1" ] \
+            || { echo "FAIL: $_id declares no LLAMA_OPENCL_ENABLE (found '${_en}')"; return 1; }
+        # The switch must agree with the hardware the profile declares.
+        [ "$_en" = "$_xe" ] \
+            || { echo "FAIL: $_id says XE=$_xe but LLAMA_OPENCL_ENABLE=$_en"; return 1; }
+        if [ "$_en" = "1" ]; then
+            [ -n "$_dir" ] || { echo "FAIL: $_id enables OpenCL with no LLAMA_OPENCL_DIR"; return 1; }
+            [ "$_adreno" = "0" ] || [ "$_adreno" = "1" ] \
+                || { echo "FAIL: $_id has no valid LLAMA_OPENCL_ADRENO ('${_adreno}')"; return 1; }
+            [[ "$_target" =~ ^[0-9]+$ ]] \
+                || { echo "FAIL: $_id has no numeric LLAMA_OPENCL_TARGET ('${_target}')"; return 1; }
+            # The RPATH pins the configure path, so the tree name must be stable, not a
+            # scratch name the next build would have to guess.
+            [[ "$_dir" == */build-opencl ]] \
+                || { echo "FAIL: $_id's OpenCL dir '${_dir}' is not a build-opencl tree"; return 1; }
+        fi
+    done
+}
+
 @test "GPU pool: two NVIDIA devices with no declared index REFUSES instead of taking the first" {
     # Catches the `head -1` this replaced: on a two-card box the pool sized against
     # whichever nvidia-smi happened to list first, and nothing said so.  TAC_STATE_DIR is

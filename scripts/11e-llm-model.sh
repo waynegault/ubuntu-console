@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 142
+#   v142 (2026-11-18): llm-build owns the OpenCL (Xe) tree.  __llm_build_opencl runs AFTER
+#   the CUDA build, switched by the host profile (LLAMA_OPENCL_ENABLE/_DIR/_ADRENO/_TARGET),
+#   so a CUDA-only box grows no OpenCL step and the XPS's Xe lanes stop running a tarball
+#   build that no forward ever refreshed.  It refuses to reuse a cache configured from
+#   another source (the tarball trap) and configures at the tree's FINAL name, because the
+#   RPATH pins the configure path.
 # Module Version: 141
 #   v141 (2026-11-18): with no host profile, `model use` displaces NO lane and says so.  It
 #   fell back to a hardcoded pair of the x86 box's units, which do not exist on the ASUS, so
@@ -6079,6 +6086,134 @@ function model() {
 # lane impact) is printed first and confirmed; with no terminal to confirm on,
 # it FAILS CLOSED rather than pulling — pass --yes or --no-pull.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# __llm_build_opencl — build the OpenCL (Intel Xe) server, when THIS box serves one.
+#
+# WHY IT LIVES HERE (2026-11-18).  build-opencl/ was a hand configure from a ~/llama-src
+# tarball, so the tree the Xe lanes execute could never report a commit and drifted the
+# moment the checkout moved; llm-build passed no OpenCL flag at all.  Wayne's order was
+# "add a capability to llm-build for build-opencl for xe gpus", with the Xe rebuild AFTER
+# the CUDA one — so this is called at the END of a CUDA build, never instead of it.
+#
+# A CUDA-only box is untouched: with LLAMA_OPENCL_ENABLE unset or 0 this returns at once.
+# The XPS declares 1 with its dir/target/adreno, the ASUS declares 0, and no code here
+# names a box.
+#
+# TWO CONSTRAINTS, both measured on the XPS:
+#   * The RPATH pins the CONFIGURE path, so the tree must be configured at its FINAL name
+#     (build-opencl), never configured elsewhere and moved into place.
+#   * A cache configured from ANOTHER source keeps compiling that source.  Measured: this
+#     box's build-opencl/ was configured from ~/llama-src/b6b003d2..., so configuring into
+#     it would have rebuilt the tarball and reported success.
+#
+# Arguments: <root> <jobs> <lock_wait> <heavy_job> <quick:true|false>
+# Returns: 0 built or nothing to do; 1 refused or failed.  Non-fatal to its caller.
+# ---------------------------------------------------------------------------
+function __llm_build_opencl() {
+    local root="${1:?root}" jobs="${2:?jobs}" lock_wait="${3:?}" heavy_job="${4:?heavy_job}"
+    local quick="${5:-false}"
+    # 0 = this box serves no Xe device; a CUDA-only box must not grow an OpenCL step.
+    [[ "${LLAMA_OPENCL_ENABLE:-0}" == "1" ]] || return 0
+
+    local odir="${LLAMA_OPENCL_DIR:-}"
+    if [[ -z "$odir" ]]; then
+        __tac_info "Error" "LLAMA_OPENCL_ENABLE=1 but LLAMA_OPENCL_DIR is unset - refusing to guess a tree" \
+            "$C_Error"
+        return 1
+    fi
+    local adreno="${LLAMA_OPENCL_ADRENO:-0}"
+    local target="${LLAMA_OPENCL_TARGET:-300}"
+    if [[ "$adreno" != "0" && "$adreno" != "1" ]]; then
+        __tac_info "Error" "LLAMA_OPENCL_ADRENO must be 0 or 1 (got '${adreno}')" "$C_Error"
+        return 1
+    fi
+    if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+        __tac_info "Error" "LLAMA_OPENCL_TARGET must be numeric (got '${target}')" "$C_Error"
+        return 1
+    fi
+
+    # A cache configured from another source keeps compiling THAT source (see the header).
+    if [[ -f "$odir/CMakeCache.txt" ]]; then
+        local home_dir=""
+        home_dir="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$odir/CMakeCache.txt" | head -1)"
+        if [[ -n "$home_dir" && "$home_dir" != "$root" ]]; then
+            local aside
+            aside="${odir}.foreign-$(date -u +%Y%m%dT%H%M%SZ)"
+            __tac_info "OpenCL" "tree was configured from ${home_dir} - moving it aside and configuring fresh" \
+                "$C_Warning"
+            if ! mv "$odir" "$aside"; then
+                __tac_info "Error" "could not move ${odir} aside; refusing to build into a foreign cache" \
+                    "$C_Error"
+                return 1
+            fi
+        fi
+    fi
+
+    local adreno_flag="OFF"
+    [[ "$adreno" == "1" ]] && adreno_flag="ON"
+
+    if [[ "$quick" != "true" || ! -f "$odir/CMakeCache.txt" ]]; then
+        # No libOpenCL.so dev symlink exists on this box (only libOpenCL.so.1), so the
+        # library is pinned by path rather than left to find_package.
+        local ocl_lib="${LLAMA_OPENCL_LIBRARY:-/usr/lib/x86_64-linux-gnu/libOpenCL.so.1}"
+        __tac_info "OpenCL" "configuring ${odir} from ${root} (target ${target}, adreno ${adreno_flag})" \
+            "$C_Info"
+        "$heavy_job" --timeout "$lock_wait" cmake -B "$odir" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_CUDA=OFF \
+            -DGGML_OPENCL=ON \
+            -DGGML_OPENCL_USE_ADRENO_KERNELS="${adreno_flag}" \
+            -DGGML_OPENCL_TARGET_VERSION="${target}" \
+            -DGGML_OPENCL_EMBED_KERNELS=ON \
+            -DOpenCL_LIBRARY="${ocl_lib}" \
+            -DGGML_NATIVE=ON \
+            -DGGML_OPENMP=ON \
+            -DGGML_CCACHE=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            2>&1 | tail -5
+        local configure_rc=${PIPESTATUS[0]}
+        # 3 is bin/heavy-job's lock-timeout status, as at the CUDA configure above.
+        if (( configure_rc == 3 )); then
+            __tac_info "Refused" "heavy-job lock not acquired for the OpenCL configure" "$C_Error"
+            return 1
+        fi
+        if (( configure_rc != 0 )); then
+            __tac_info "Error" "OpenCL configuration failed (exit=${configure_rc})" "$C_Error"
+            return 1
+        fi
+    else
+        __tac_info "OpenCL" "using the existing cache (--quick)" "$C_Dim"
+    fi
+
+    __tac_info "OpenCL" "compiling llama-server (${jobs} threads) ..." "$C_Info"
+    "$heavy_job" --timeout "$lock_wait" cmake --build "$odir" --target llama-server -j"$jobs" 2>&1 | tail -5
+    local rc=${PIPESTATUS[0]}
+    if (( rc == 3 )); then
+        __tac_info "Refused" "heavy-job lock not acquired for the OpenCL build" "$C_Error"
+        return 1
+    fi
+    if (( rc != 0 )); then
+        __tac_info "Error" "OpenCL build failed (exit=${rc})" "$C_Error"
+        return "$rc"
+    fi
+
+    local obin="$odir/bin/llama-server"
+    if [[ ! -x "$obin" ]]; then
+        __tac_info "Error" "OpenCL binary not found at ${obin}" "$C_Error"
+        return 1
+    fi
+    local ocommit
+    # swallow-ok: an unreadable commit prints "?"; the build already succeeded
+    ocommit="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo "?")"
+    __tac_info "Done" "OpenCL llama-server built: commit ${ocommit} (${obin})" "$C_Success"
+    # The running Xe lanes keep the OLD inode until restarted, and three of them do not fit
+    # at once (two of three by ctx, measured), so name the restart rather than doing it.
+    __tac_info "OpenCL" "running Xe lanes still execute the old inode - restart them individually" "$C_Dim"
+    return 0
+}
+
+# llm-build — the entry point; its options and the pull/rebuild reasoning are in the block above.
 function llm-build() {
     local quick=false no_pull=false yes=false fresh=false
     while [[ $# -gt 0 ]]; do
@@ -6540,6 +6675,14 @@ function llm-build() {
     else
         __tac_info "Error" "Built binary not found at ${bin}" "$C_Error"
         return 1
+    fi
+
+    # Xe/OpenCL SECOND, never instead (Wayne, 2026-11-17: "add the Xe rebuild to the plan
+    # after the CUDA one").  Non-fatal on purpose: the CUDA lane is the primary reader of
+    # this function, and a Xe failure must not undo a build that just succeeded.
+    if ! __llm_build_opencl "$root" "$jobs" "$lock_wait" "$heavy_job" "$quick"; then
+        __tac_info "Warning" "the OpenCL (Xe) tree did not build - the CUDA build above is unaffected" \
+            "$C_Warning"
     fi
 }
 
