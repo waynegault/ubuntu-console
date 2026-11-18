@@ -353,11 +353,36 @@ def _main(argv: list[str]) -> int:
     """CLI: add/replace metadata keys and report what was written and verified."""
     parser = argparse.ArgumentParser(description="add or replace GGUF metadata keys (never in place)")
     parser.add_argument("--src", required=True, type=Path)
-    parser.add_argument("--dst", required=True, type=Path)
+    parser.add_argument("--dst", type=Path)
     parser.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=TYPE:VALUE")
     parser.add_argument("--replace", action="store_true", help="overwrite a key that already exists")
     parser.add_argument("--force", action="store_true", help="overwrite an existing --dst")
+    # QUERY MODE (2026-11-18): the same parser answers "does this file carry tensor X?".
+    # The autotuner needs it for MTP: `--spec-type draft-mtp` drafts from the model's own
+    # nextn head, and a conversion that dropped those tensors cannot use it at all — the
+    # two richardyoung Q8 files here have no `blk.N.nextn.*` while the Unsloth Q4 and the
+    # Q6 abliterated do.  Asking the tensor table is the only way to know before spending
+    # a CUDA cycle on a launch that would fail or accept nothing.
+    parser.add_argument(
+        "--has-tensor-prefix",
+        metavar="SUBSTR",
+        help="print tensor names containing SUBSTR (case-insensitive); exit 0 if any, 3 if none",
+    )
     args = parser.parse_args(argv)
+    if args.has_tensor_prefix:
+        try:
+            layout = read_layout(args.src)
+        except (GgufError, OSError) as exc:
+            print(f"gguf_metadata_add: refused: {exc}", file=sys.stderr)
+            return 2
+        needle = args.has_tensor_prefix.lower()
+        hits = [name for name, _dims, _ttype, _off in layout.tensors if needle in name.lower()]
+        for name in hits:
+            print(name)
+        return 0 if hits else 3
+    if args.dst is None:
+        print("gguf_metadata_add: --dst is required unless --has-tensor-prefix is used", file=sys.stderr)
+        return 64
     if not args.sets:
         print("gguf_metadata_add: nothing to do (--set is required)", file=sys.stderr)
         return 64
