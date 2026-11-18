@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.18.0 (2026-11-18, box awareness): SANCTIONED_LANE_PORT no longer defaults to a
+#          literal 18087 — the value is a machine fact, declared by each host profile as
+#          LLAMA_CUDA_LANE_PORT (v16 of tools/host-profile.sh) and empty when no profile is
+#          loaded, which the consumer already skips.  18087 was the ASUS chat lane, so on
+#          the XPS this probe asked a port that box does not serve; its real CUDA lane was
+#          still found by the unit-derived set, so the literal was inert there — which is
+#          exactly why it survived a sweep that removed five of its neighbours.
 # Version: 1.17.0 (2026-11-16, card FOREIGN-APP-001): the "a resident holding no device
 #          memory is not a tenant" rule is now READ, not guessed from two names.  The
 #          watchdog stopped llama-cuda-llama32-3b-chat TWICE in one evening —
@@ -174,6 +181,9 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
+# Module Version: 27
+#   v27 (2026-11-18): SANCTIONED_LANE_PORT comes from the host profile, not a literal 18087
+#     - see the 1.18.0 entry at the top of this file.
 # Module Version: 26
 #   v26 (2026-11-16): the no-device-memory exemption is READ, not enumerated by name - see the
 #     1.17.0 entry at the top of this file.  Measured 17:39:49 and 18:04:50: two deliberate
@@ -326,7 +336,10 @@ LANE_SERVING_PORT=""  # WHICH lane answered — the audit line names it, not jus
 # design: "no arm fired" is a reading, and an empty string says so without inventing one.
 ARM=""
 ARMS_RUN=()
-SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
+# No literal default: the port is a machine fact, declared by this box's host profile
+# (LLAMA_CUDA_LANE_PORT).  An unloaded profile leaves it empty, and the consumers skip a
+# non-numeric entry — asking a port from another box is what 124476a0 removed elsewhere.
+SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-}"
 
 # _sanctioned_lane_ports -- echo the port of every RUNNING CUDA lane on this card,
 # derived from the units rather than listed here.
@@ -346,7 +359,7 @@ SANCTIONED_LANE_PORT="${LLAMA_CUDA_LANE_PORT:-18087}"
 # single-port behaviour this replaces — the fail-closed direction is unchanged.
 _sanctioned_lane_ports() {
     local _u _p _units
-    printf '%s\n' "$SANCTIONED_LANE_PORT"
+    [[ -n "$SANCTIONED_LANE_PORT" ]] && printf '%s\n' "$SANCTIONED_LANE_PORT"
     # swallow-ok: no user manager -> no derived ports, never an abort
     _units=$(systemctl --user list-units --type=service --state=running 'llama-cuda-*' \
                  --no-legend 2>/dev/null | awk '{print $1}')
