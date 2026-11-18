@@ -224,3 +224,56 @@ def test_cli_writes_and_verifies(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert "verified: tensor infos identical, data section hash matches" in out
     assert dst.is_file()
     assert KPOOL in {key for key, _, _ in mod.read_layout(dst).kv}
+
+
+# ── Query mode: "does this file carry tensor X?" (2026-11-18) ────────────────
+# The autotuner asks this before offering `--spec-type draft-mtp`, which drafts from the
+# model's own nextn head: a conversion that dropped those tensors cannot use MTP at all,
+# and the two richardyoung Q8 files here have none while the Unsloth Q4 and the Q6
+# abliterated carry four.  A launch is a CUDA cycle, so the question is asked of the
+# tensor table first.
+
+
+def test_query_mode_finds_a_tensor_and_prints_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Catches: a query that answers "present" without naming what it found."""
+    src = tmp_path / "in.gguf"
+    build_fixture(src)
+    rc = mod._main(["--src", str(src), "--has-tensor-prefix", "kpool"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "blk.0.indexer.kpool_ape.weight" in out
+
+
+def test_query_mode_is_case_insensitive(tmp_path: Path) -> None:
+    """Catches: a matcher that misses `NEXTN` because the file spells it lower-case."""
+    src = tmp_path / "in.gguf"
+    build_fixture(src)
+    assert mod._main(["--src", str(src), "--has-tensor-prefix", "TOKEN_EMBD"]) == 0
+
+
+def test_query_mode_answers_absent_with_3_and_no_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Catches: an absent tensor reported as success — the shape that would spend a cycle
+    launching draft-mtp against a file that has no head."""
+    src = tmp_path / "in.gguf"
+    build_fixture(src)
+    rc = mod._main(["--src", str(src), "--has-tensor-prefix", "nextn"])
+    out = capsys.readouterr().out
+    assert rc == 3
+    assert out == ""
+
+
+def test_query_mode_needs_no_destination(tmp_path: Path) -> None:
+    """Catches: a query that still demands --dst, which would make the autotuner write a
+    file just to ask a question."""
+    src = tmp_path / "in.gguf"
+    build_fixture(src)
+    assert mod._main(["--src", str(src), "--has-tensor-prefix", "token_embd"]) == 0
+
+
+def test_query_mode_refuses_a_truncated_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Catches: a truncated file read as "no such tensor" (rc 3) instead of as unreadable."""
+    src = tmp_path / "in.gguf"
+    build_fixture(src, truncate=40)
+    rc = mod._main(["--src", str(src), "--has-tensor-prefix", "kpool"])
+    assert rc == 2
+    assert "refused" in capsys.readouterr().err

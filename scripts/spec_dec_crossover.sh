@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-11-18): the default port is THIS box's (LLM_SERVICE_PORT from the profile),
+#   not 18083 — the XPS's CUDA 3B lane, which names nothing on the ASUS.  8081 is
+#   llama.cpp's own default and is box-neutral when no profile is loaded.
 #   v9 (2026-11-01): the LLAMA_SERVER_BIN fallback names build-cuda/, not build/ — this
 #   box has no build/ tree, so an unset environment pointed the measurement at a
 #   nonexistent binary.  Same defect as bin/llama-cuda-server.
@@ -43,7 +46,10 @@ CTX=""
 PARALLEL_LIST="1 2 4"
 REQUESTS=8
 MAX_TOKENS=256
-PORT=18083
+# THIS box's serving port, from the profile (LLM_SERVICE_PORT is exported by
+# tools/host-profile.sh).  The old default was 18083 — the XPS's CUDA 3B lane — which
+# names nothing on the ASUS.  8081 is llama.cpp's own default, box-neutral.
+PORT="${LLM_SERVICE_PORT:-8081}"
 OUT=""
 
 while [[ $# -gt 0 ]]; do

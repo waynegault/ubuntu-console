@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
+#   v32 (2026-11-18): the lane comes from this box's profile (_tac_cuda_lane_unit) and
+#       keep_lane_down REFUSES an empty lane instead of falling back to the Dell's unit name
+#       in code shared with the ASUS box.
 #   v31 (2026-11-17): keep_lane_down refuses to stop the lane under TAC_TEST_TMPDIR.  The
 #       wrapper's clean-room already refused every production stop in a test, but this
 #       function stops the lane on its own and had no such predicate — so a unit test
@@ -210,7 +213,14 @@ cuda_cycles() {
 
 # The CUDA chat lane and the hold that names it — the same defaults the wrapper uses.
 _lane_suspend="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
-_lane_unit="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+# THE PROFILE'S LANE, never a hardcoded unit name (v32).  This read
+# `${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}`, and that is the DELL XPS's
+# lane (intel-xe-cuda.conf:80) hardcoded in code the ASUS box runs too.  The profile always
+# wins, so it never fired here — but a shell where the profile did not load would have held
+# down, or restored, the WRONG machine's unit and reported success.  TAC_HOST_PRIMARY_LANE
+# is declared by every profile; when neither is set this is EMPTY on purpose, and
+# keep_lane_down refuses rather than acting on a name it cannot justify.
+_lane_unit="${LLAMA_CUDA_LANE_UNIT:-${TAC_HOST_PRIMARY_LANE:-}}"
 
 # keep_lane_down — re-assert the lane's DOWN state, but ONLY while our own suspend hold is
 # live.  A cross-lane hand-off restores the lane as well as releasing the bench flock, and
@@ -227,6 +237,17 @@ keep_lane_down() {
     # predicate as _tac_cleanroom_stops_allowed, so the two cannot drift apart.
     if declare -f _tac_cleanroom_stops_allowed &>/dev/null \
         && ! _tac_cleanroom_stops_allowed; then
+        return 0
+    fi
+    # AN UNRESOLVED LANE IS A REFUSAL, not a `systemctl stop ""`.  The name now comes from
+    # the profile (see _lane_unit above), so an empty one means the profile did not load —
+    # and stopping nothing while reporting success is how a sweep ends up measuring beside
+    # a serving lane.  Say it once and leave the unit alone.
+    if [[ -z "$_lane_unit" ]]; then
+        if [[ "${_LANE_UNRESOLVED_SAID:-0}" != "1" ]]; then
+            warn "  keep_lane_down: no CUDA lane resolved (profile not loaded) — NOT stopping any unit"
+            _LANE_UNRESOLVED_SAID=1
+        fi
         return 0
     fi
     systemctl --user stop "$_lane_unit" >/dev/null

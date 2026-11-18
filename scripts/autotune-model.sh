@@ -1,6 +1,35 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 145
+# Module Version: 147
+#   v147 (2026-11-18): THREADS are measured, not assumed.  Every row here certified at
+#   threads=6 of 20 because that is what the registry column said — and the count is a
+#   bandwidth multiplier on this box (20-core memcpy ~145 GB/s against ~51 at one).  After
+#   the beam settles, one extra launch at the ceiling is compared against the recorded count
+#   and a >5% gain is kept; otherwise the recorded count stands (a tie is not evidence).
+#   The winner travels to the registry through __llm_autotune_profile_save's new 34th
+#   argument, so the measurement is persisted, not printed and dropped.  AUTOTUNE_THREAD_SWEEP=0
+#   skips it.
+#   FLASH ATTENTION is NOT probed, deliberately: a quantised V cache will not load with
+#   flash off (measured 2026-11-11, both paths), and rows certify at k/v q8_0 — the arm is
+#   only meaningful once the KV sweep has chosen f16.
+#   v146 (2026-11-18): the sweep can now draft with MTP, and says when a file cannot.
+#     The speculative sweep only ever tried `ngram-mod`, whose n_min suits repeated text
+#     and accepted 0 tokens on chat, so every row was certified with spec off.  MTP
+#     (`--spec-type draft-mtp`, which drafts from the model's OWN nextn head) is the
+#     method the published Qwen3.8-27B tuning for this memory class uses, and our
+#     llama-server supports it — but a conversion can drop those tensors, so the head is
+#     probed from the tensor table BEFORE a cycle is spent (gguf_metadata_add.py
+#     --has-tensor-prefix nextn).  Measured here: the two richardyoung Q8 files carry NO
+#     nextn tensors; the Unsloth UD-Q4_K_M and the Q6 abliterated carry four.  The same
+#     probe answers MoE (`_exps.`), which (a) keeps the new ceiling arithmetic off MoE
+#     rows, whose bandwidth is their ACTIVE experts, and (b) is the gate a later expert-
+#     placement probe will use.
+#     Also: the below-floor verdict now names the ceiling the file size implies
+#     (MiB x tps against ~273 GB/s), because rows 8/9 spent ~44 minutes each proving that
+#     a dense 27 GB file cannot clear 10 tps on this bus — "slow" is the hardware, and the
+#     lever is a smaller quant, not another flag.  And on unified memory the beam gains a
+#     4096:1024 anchor: the 2048:512 ceiling exists to avoid OOM on a 4 GB card, which is
+#     not what this box is.
 #   v145 (2026-11-16): the dxgkrnl pre-flight gate is skipped under AUTOTUNE_SELFTEST.
 #     The gate reads the REAL dmesg, so a box whose kernel log still carried dxgkrnl
 #     errors from an earlier run refused every def-024 case before the classifier was
@@ -141,6 +170,41 @@ else
 fi
 BENCH_NGL="${gpu_layers:-999}"
 [[ ${gpu_layers:-999} -eq 0 ]] && TUNE_THREADS=$(__llm_thread_cap "$CPU_COUNT")
+
+# __autotune_thread_probe <cap> — two launches that differ ONLY in the thread count.
+#
+# Prints the tps at <cap> when it beats the recorded count by more than 5%, and "0"
+# otherwise; the caller keeps RECORDED_THREADS on a 0.  A tie is not evidence — the bench
+# carries a few percent of error — and the narrower count leaves the box's cores for the
+# gateway and the embed lane.
+#
+# It is a FUNCTION, not inline, for two reasons: the 10.4 counter attributes top-level code
+# to the definition above it, and a probe that hides a launch failure inside an unquoted
+# `$( ... )` is how `${1:-0}` ends up being evaluated by the CALLER's shell (measured on the
+# first cut of this probe: "bad substitution").  bench_ctx is defined by the time this runs.
+__autotune_thread_probe() {
+    local cap="$1" reference wide gain
+    reference=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" \
+        "filled" "$WIN_KVK" "$WIN_KVV")
+    [[ -n "$reference" ]] || reference=0
+    TUNE_THREADS="$cap"
+    wide=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" \
+        "filled" "$WIN_KVK" "$WIN_KVV")
+    [[ -n "$wide" ]] || wide=0
+    gain=$(awk -v w="$wide" -v r="$reference" 'BEGIN{print (w>0 && r>0 && w>r*1.05) ? 1 : 0}')
+    warn "  threads ${cap}: ${wide} tps (recorded ${reference}, keep=${gain})"
+    if [[ "$gain" == "1" ]]; then
+        printf '%s\n' "$wide"
+    else
+        printf '0\n'
+    fi
+}
+
+# WHERE THIS SKILL'S DEFAULT CAME FROM, captured before any probe replaces TUNE_THREADS.
+# The row is read by FILE (field 3), never by the number the caller typed — adding a model
+# renumbers the registry, and a number captured here could name another model at save time
+# (measured 2026-09-16).
+RECORDED_THREADS="$TUNE_THREADS"
 
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo "  Bench NGL: ${BENCH_NGL}  — max envelope: 999"
@@ -557,6 +621,48 @@ else
 fi
 [[ "$MODEL_BYTES" =~ ^[0-9]+$ ]] || MODEL_BYTES=0
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
+
+# ── What this FILE can do, before a single CUDA cycle is spent (2026-11-18) ──
+# A FUNCTION, not a bare block: top-level code between two definitions is attributed to
+# the preceding one by the 10.4 counter, and inlining this pushed a 100-line neighbour to
+# 103 — a rise about placement, not about a long function.
+# (1) MTP.  `--spec-type draft-mtp` drafts from the model's OWN nextn head, so a
+#     conversion that dropped those tensors cannot use it at all.  This sweep only ever
+#     tried ngram, whose n_min suits repeated text and accepted 0 tokens on chat — while
+#     the Qwen3.8 conversions that KEPT the head were never offered it.  Measured here
+#     through this tool: the two richardyoung Q8 files carry NO `blk.N.nextn.*`; the
+#     Unsloth UD-Q4_K_M and the Q6 abliterated carry four.  Header-only read.
+# (2) MoE.  The same probe answers whether expert tensors exist, which keeps the ceiling
+#     arithmetic off rows whose bandwidth is their ACTIVE experts, and is the gate a
+#     later expert-placement probe will use.
+__autotune_file_capabilities() {
+    HAS_MTP=0
+    HAS_MOE=0
+    local _probe="$_SELF_DIR/gguf_metadata_add.py"
+    if [[ ! -f "$_probe" ]]
+    then
+        # swallow-ok: without the probe neither feature is claimed; the sweep falls back
+        # to its pre-2026-11-18 behaviour (ngram only) and says nothing.
+        return 0
+    fi
+    if [[ "${LLM_AUTOTUNE_MTP:-1}" != "0" ]] \
+        && "$TAC_PYTHON" "$_probe" --src "$MODEL_PATH" --has-tensor-prefix nextn >/dev/null 2>&1
+    then
+        HAS_MTP=1
+    fi
+    if "$TAC_PYTHON" "$_probe" --src "$MODEL_PATH" --has-tensor-prefix _exps. >/dev/null 2>&1
+    then
+        HAS_MOE=1
+    fi
+    return 0
+}
+# The decode ceiling implied by the file size on this bus.  A dense model streams every
+# weight per token, so its tps cannot exceed bandwidth / size however the flags are set:
+# rows 8/9 (27 GB) measured 8.3-8.7 tps = ~230 GB/s, against ~273 GB/s of LPDDR5X.  Named
+# where the floor verdict is made, so "slow" reads as the hardware, not as a search that
+# gave up.  Only meaningful for a DENSE file — see HAS_MOE above.
+MEM_BW_GB_S=${LLM_MEM_BW_GB_S:-273}
+__autotune_file_capabilities
 
 # Scale readiness window for large multi-shard models (>40 GiB) when AT_WINDOW_S wasn't pinned.
 if [[ -z "${_AT_WINDOW_USER_SET:-}" ]] && (( MODEL_MB >= 40960 )); then
@@ -1099,6 +1205,11 @@ _bench_spawn() {
             spec_args=(--spec-type ngram-mod \
                 --spec-ngram-mod-n-max "$_block" \
                 --spec-ngram-mod-n-min "$_block")
+        elif [[ "${BENCH_SPEC_TYPE:-off}" == "draft-mtp" ]]; then
+            # MTP drafts from the model's OWN nextn head: no draft file, no device flag.
+            # The head's presence was established before the sweep (HAS_MTP), so a launch
+            # here is not a guess.
+            spec_args=(--spec-type draft-mtp --spec-draft-n-max "${BENCH_SPEC_N_MAX:-4}")
         elif [[ -n "${BENCH_SPEC_DRAFT_MODEL:-}" ]]; then
             spec_args=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-device none)
             [[ -n "${BENCH_SPEC_N_MAX:-}" ]] && spec_args+=(--spec-draft-n-max "$BENCH_SPEC_N_MAX")
@@ -1620,6 +1731,22 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
     bench_ctx() {
         local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
         local mode="${7:-quick}"
+        # THREADS-AWARE SELFTEST (2026-11-18): the thread probe compares two launches whose
+        # ONLY difference is TUNE_THREADS, so a canned bench_ctx that ignores it would make
+        # every selftest row "tie" and never prove the probe works.  _SELFTEST_THREAD_TPS
+        # maps a thread count to the tps it should report; unset keeps the old behaviour.
+        if [[ -n "${_SELFTEST_THREAD_TPS:-}" ]]
+        then
+            local _tp=""
+            for _pair in $_SELFTEST_THREAD_TPS; do
+                [[ "${_pair%%:*}" == "$TUNE_THREADS" ]] && _tp="${_pair##*:}"
+            done
+            if [[ -n "$_tp" ]]
+            then
+                echo "0|0|0|0|0|0" > "/tmp/at-metrics-$$"
+                echo "$_tp"; return 0
+            fi
+        fi
         _BENCH_FAIL_TYPE=""
         # Optional OOM ceiling: _SELFTEST_OOM_ABOVE makes ctx beyond the
         if [[ -n "${_SELFTEST_OOM_ABOVE:-}" ]] && [[ $c -gt ${_SELFTEST_OOM_ABOVE} ]]; then
@@ -2089,6 +2216,15 @@ elif [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
     else
         BATCHES=(512 1024 2048); UBATCHES=(128 256 512)
         ANCHORS=(512:128 1024:256 1024:512 2048:512)
+        # On UNIFIED memory the batch buffer is host RAM, not a 4 GB card's VRAM, so the
+        # "guaranteed OOM" ceiling this list encodes does not apply here: the published
+        # tuning for this exact model family on this memory class runs -b 16384 -ub 4096,
+        # and every 27B row here certified at ubatch 128-512 because this branch stopped
+        # at 2048:512.  One bigger anchor, added only where the host actually has room.
+        if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] \
+            && (( ${_HOST_AVAIL_MB:-0} > 65536 )); then
+            BATCHES+=(4096); UBATCHES+=(1024); ANCHORS+=(4096:1024)
+        fi
     fi
 
     # Candidate space, gated by ctx (big batches need big compute buffers).
@@ -2478,72 +2614,138 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     fi
 fi
 
-# ── SPEC-DEC-004: speculative-decoding block-size sweep ─────────────────────
+# ── SPEC-DEC-004: speculative-decoding sweep (type x block) ─────────────────
 WIN_SPEC_TYPE=""; WIN_SPEC_N_MAX=""; WIN_SPEC_ACCEPT_LEN=""
 SPEC_N_MAX_LIST=${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-"4 8 16 32"}
+# MTP's ladder is 2/4/8, not 4/8/16/32: the head proposes a few tokens ahead, and its
+# default is 3 — a block of 32 is not what it was trained for.
+MTP_N_MAX_LIST=${LLM_AUTOTUNE_MTP_N_MAX_LIST:-"2 4 8"}
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r _sb_b _sb_u <<< "$BEST_COMBO"
     echo ""
     _cuda_guard_or_exit
-    echo "  spec-decode block-size sweep (ngram, VRAM-free)  [${SPEC_N_MAX_LIST}]"
+    # Candidate TYPES, not only block sizes (2026-11-18).  ngram needs no model and stays
+    # first; draft-mtp is offered only when the file carries the nextn head (HAS_MTP), so
+    # a launch is never a guess about what the file contains.
+    _sb_types="ngram"
+    [[ "${HAS_MTP:-0}" == "1" ]] && _sb_types="ngram draft-mtp"
+    echo "  spec-decode sweep (${_sb_types// /, })"
     echo "  -------------------------------------"
     _sb_best_tps="0"
-    # AUTOTUNE_SPEC_SWEEP=0 skips the sweep: it is FOUR launches per row and its
-    _sb_list="$SPEC_N_MAX_LIST"
+    # AUTOTUNE_SPEC_SWEEP=0 skips the sweep: it is SEVERAL launches per row and its
+    _sb_skip=0
     if [[ "${AUTOTUNE_SPEC_SWEEP:-1}" == "0" ]]; then
-        _sb_list=""
+        _sb_skip=1
         echo "  (AUTOTUNE_SPEC_SWEEP=0 — skipping the sweep to conserve CUDA cycles)"
     fi
-    _sb_zero=0
-    for _sb_block in $_sb_list
+    for _sb_type in $_sb_types
     do
-        if [[ ! "$_sb_block" =~ ^[0-9]+$ ]] || (( _sb_block <= 0 )); then
-            continue
-        fi
-        BENCH_SPEC_TYPE="ngram"; BENCH_SPEC_N_MAX="$_sb_block"
-        # samples=1 (not 3): the block sweep is a *selection*, not a recorded
-        _sb_t=$(bench_ctx "$BEST_CTX" "$_sb_b" "$_sb_u" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _sb_t=""
-        _sb_t=$(echo "$_sb_t" | bc 2>/dev/null || echo "0"); [ -z "$_sb_t" ] && _sb_t=0
-        _sb_al="0"; _sb_ar="0"
-        IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
-        echo "  block ${_sb_block}: ${_sb_t} tps (accept len ${_sb_al:-0}, rate ${_sb_ar:-0})"
-        # ECONOMY (2026-11-03): two consecutive blocks that accepted nothing is enough
-        if [[ "${_sb_al:-0}" =~ ^[0-9]+$ ]] && (( _sb_al == 0 ))
-        then
-            _sb_zero=$((_sb_zero + 1))
+        (( _sb_skip == 0 )) || break
+        if [[ "$_sb_type" == "draft-mtp" ]]; then
+            _sb_list="$MTP_N_MAX_LIST"
         else
-            _sb_zero=0
+            _sb_list="$SPEC_N_MAX_LIST"
         fi
-        if __autotune_spec_sweep_stop "$_sb_zero"
-        then
-            echo "  spec-decode: ${_sb_zero} consecutive blocks accepted nothing — stopping the sweep"
-            break
-        fi
-        if [[ $(echo "$_sb_t > $_sb_best_tps" | bc 2>/dev/null || echo "0") == 1 ]]; then
-            # Faster is not enough: the block must actually PLACE draft tokens, or every
-            if __autotune_spec_worth_keeping "${_sb_al:-0}" "${_sb_ar:-0}"
-            then
-                _sb_best_tps="$_sb_t"
-                WIN_SPEC_TYPE="ngram"; WIN_SPEC_N_MAX="$_sb_block"; WIN_SPEC_ACCEPT_LEN="$_sb_al"
-            else
-                echo "  block ${_sb_block}: faster but accepted ${_sb_al:-0} tokens —" \
-                     "NOT recorded (a draft that never hits is pure overhead)"
+        echo "  ${_sb_type} blocks: [${_sb_list}]"
+        _sb_zero=0
+        for _sb_block in $_sb_list
+        do
+            if [[ ! "$_sb_block" =~ ^[0-9]+$ ]] || (( _sb_block <= 0 )); then
+                continue
             fi
-        fi
+            BENCH_SPEC_TYPE="$_sb_type"; BENCH_SPEC_N_MAX="$_sb_block"
+            # samples=1 (not 3): the block sweep is a *selection*, not a recorded
+            _sb_t=$(bench_ctx "$BEST_CTX" "$_sb_b" "$_sb_u" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _sb_t=""
+            _sb_t=$(echo "$_sb_t" | bc 2>/dev/null || echo "0"); [ -z "$_sb_t" ] && _sb_t=0
+            _sb_al="0"; _sb_ar="0"
+            IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
+            echo "  ${_sb_type} block ${_sb_block}: ${_sb_t} tps (accept len ${_sb_al:-0}, rate ${_sb_ar:-0})"
+            # ECONOMY (2026-11-03): two consecutive blocks that accepted nothing is enough
+            if [[ "${_sb_al:-0}" =~ ^[0-9]+$ ]] && (( _sb_al == 0 ))
+            then
+                _sb_zero=$((_sb_zero + 1))
+            else
+                _sb_zero=0
+            fi
+            if __autotune_spec_sweep_stop "$_sb_zero"
+            then
+                echo "  ${_sb_type}: ${_sb_zero} consecutive blocks accepted nothing — moving on"
+                break
+            fi
+            if [[ $(echo "$_sb_t > $_sb_best_tps" | bc 2>/dev/null || echo "0") == 1 ]]; then
+                # Faster is not enough: the block must actually PLACE draft tokens, or every
+                if __autotune_spec_worth_keeping "${_sb_al:-0}" "${_sb_ar:-0}"
+                then
+                    _sb_best_tps="$_sb_t"
+                    WIN_SPEC_TYPE="$_sb_type"; WIN_SPEC_N_MAX="$_sb_block"; WIN_SPEC_ACCEPT_LEN="$_sb_al"
+                else
+                    echo "  ${_sb_type} block ${_sb_block}: faster but accepted ${_sb_al:-0} tokens —" \
+                         "NOT recorded (a draft that never hits is pure overhead)"
+                fi
+            fi
+        done
     done
     BENCH_SPEC_TYPE="off"; BENCH_SPEC_N_MAX=""; BENCH_SPEC_DRAFT_MODEL=""
     if [[ -n "$WIN_SPEC_N_MAX" ]]; then
-        echo "  spec-decode winner: block ${WIN_SPEC_N_MAX} (${_sb_best_tps} tps, accept len ${WIN_SPEC_ACCEPT_LEN:-0})"
+        echo "  spec-decode winner: ${WIN_SPEC_TYPE} block ${WIN_SPEC_N_MAX}" \
+             "(${_sb_best_tps} tps, accept len ${WIN_SPEC_ACCEPT_LEN:-0})"
         echo "  spec-decode is LOSSLESS (rejects preserve the target distribution) — preferred over"
         echo "  lossy quantization for quality-critical paths; ngram needs no extra model on 4 GB."
     else
         echo "  spec-decode: no block beat the no-spec baseline — leaving spec-decode off"
+        if [[ ${HAS_MTP:-0} != 1 ]]; then
+            echo "  (this file carries no nextn head, so draft-mtp was not offered — a"
+            echo "   conversion that dropped it cannot use MTP at all; re-convert to gain it)"
+        fi
     fi
 fi
 
 
+# ── Where the other two knobs stand (2026-11-18) ────────────────────────────
+# threads and flash attention were ASSUMED, never measured: every row here certified at
+# threads=6 of 20 (the registry's column, not the core count), and flash was pinned on at
+# every launch.  Both already have a registry column (9 and 16), so a winner can be
+# persisted without a schema change — a probe whose result is discarded would be a success
+# message with no write behind it.
+#
+# THREADS first: it needs no model knowledge, and the expected gain is the one measurable
+# on this box (20-core memcpy reaches ~145 GB/s against ~51 at one thread).  Only the cap is
+# probed against the current count — a third point costs a cycle for a knob that saturates.
+if [[ $ANY_OK == true && -n $BEST_COMBO && "${AUTOTUNE_THREAD_SWEEP:-1}" != "0" ]]; then
+    IFS=':' read -r _th_b _th_u <<< "$BEST_COMBO"
+    _th_cap=$(__llm_thread_cap "$CPU_COUNT")
+    if [[ "$_th_cap" =~ ^[0-9]+$ ]] && (( _th_cap > TUNE_THREADS )); then
+        echo ""
+        _cuda_guard_or_exit
+        echo "  threads probe: ${TUNE_THREADS} (recorded) vs ${_th_cap} (ceiling)"
+        echo "  -------------------------------------"
+        _th_wide=$(__autotune_thread_probe "$_th_cap")
+        if [[ "$_th_wide" =~ ^[0-9] ]] && (( ${_th_wide%%.*} > 0 ))
+        then
+            echo "  threads winner: ${_th_cap} (${_th_wide} tps — a material gain over the"
+            echo "                  recorded count, so column 9 is rewritten below)"
+        else
+            echo "  threads: ${_th_cap} gave no material gain (${_th_wide:-0} tps)"
+            echo "           keeping ${RECORDED_THREADS}"
+            TUNE_THREADS="$RECORDED_THREADS"
+        fi
+    else
+        echo "  threads probe: skipped — the ceiling (${_th_cap:-?}) is not above ${TUNE_THREADS}"
+    fi
+fi
+
+# FLASH is deliberately NOT probed here, and the reason is a measured refusal rather than a
+# missing column: a QUANTISED V cache will not load with flash attention off (llama.cpp:
+# "quantized V cache requires flash_attn to be enabled", then "failed to create context",
+# measured 2026-11-11 on both the CUDA and CPU paths).  Rows certify at k/v q8_0, so an
+# FA-off arm would fail its launch on nearly every row and spend a cycle proving a fact we
+# already know.  The arm becomes meaningful only when the KV sweep has chosen f16 — then
+# flash-off is loadable, and f16/f16 measured recall 1.00 at every depth.
+
+
+
+
 # ttft_probe — time-to-first-token at a config (AUTOTUNE-003).
-if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]]; then
 ttft_probe() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
     local kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
@@ -2725,7 +2927,6 @@ PYEOF
     fi
     echo "${ttft_ms}|${per_step}"
 }
-fi  # AUTOTUNE_SELFTEST guard — the stub defined in the selftest block wins.
 
 # ── AUTOTUNE-003: time-to-first-token at the winning config ─────────────────
 TTFT_MS=0; TTFT_PER_STEP=0
@@ -2844,6 +3045,17 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     else
         echo "  ⚠ below floor: ${BEST_TPS} tps < ${MIN_TPS} even at min ctx — too slow for our purposes"
         echo "    recording best-effort config (max TPS) for capability profiling"
+        # Name the ceiling the file size implies, so "slow" is read as the hardware rather
+        # than as a search that gave up.  Dense only: a MoE streams its ACTIVE experts, so
+        # size x tps is not its bandwidth and the arithmetic would be a lie there.
+        if [[ ${HAS_MOE:-0} != 1 ]] && (( MODEL_MB > 0 )); then
+            _ceil=$(awk -v mb="$MODEL_MB" -v bw="$MEM_BW_GB_S" 'BEGIN{printf "%.1f", bw*1000/mb}')
+            _stream=$(awk -v mb="$MODEL_MB" -v tps="$BEST_TPS" 'BEGIN{printf "%.0f", mb*tps/1000}')
+            echo "    hardware ceiling: ${MODEL_MB} MiB streamed per token at ~${MEM_BW_GB_S} GB/s" \
+                 "≈ ${_ceil} tps; this row measured ${_stream} GB/s of it"
+            echo "    (a dense model cannot beat bandwidth/size — the lever is a smaller quant,"
+            echo "     not another flag; LLM_MEM_BW_GB_S overrides the bus figure)"
+        fi
         echo "    NOTE: below-floor can also be WSL2 GPU degradation (dxgkrnl tps collapse,"
         echo "          not just model slowness) — if the tps is implausibly low for this"
         echo "          model, restart WSL (wsl --shutdown) and re-tune to disambiguate."
@@ -2987,6 +3199,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             "$WORKLOAD" "$TTFT_MS" \
             "$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
             "$LLAMA_BUILD_ID" "$VRAM_TOTAL" \
+            "$TUNE_THREADS" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the

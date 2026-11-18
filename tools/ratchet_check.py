@@ -205,8 +205,50 @@ def c_scopeless_systemctl_openclaw(text):
     return n
 
 
+def _definition_owns_one_line(line):
+    """Does a definition's opening line also close its body?
+
+    `warn() { printf '%s\\n' "$*" >&2; }` is a one-line function, but the span ran from
+    it to the NEXT definition, so script-scope code between the two was counted as its
+    body: measured 2026-11-18 in bin/autotune-rows.sh, where 17 added lines of a refusal
+    message pushed the phantom body past 100 and reddened 10.4 (41 -> 42) for a file that
+    contains no long function at all.  Brace BALANCE rather than a `} ` suffix test, so a
+    one-liner carrying braces in a quoted awk program still reads as one line.
+    """
+    return line.count("{") > 0 and line.count("{") == line.count("}")
+
+
+HEREDOC_OPEN = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+
+
+def _own_close_line(lines, start):
+    """Index just past the definition's own closing `}`, or None when it has none.
+
+    A shell function ends where its brace closes, and this repo's functions close with a
+    line that is exactly `}` at column 0.  Bounding by the NEXT definition instead counted
+    every line of script-scope code that follows a function as part of it: measured
+    2026-11-18, `probe_no_mmap` is 48 real lines but read 103 because ~55 lines of
+    top-level flow follow its `}`, and adding a 35-line capability probe elsewhere in the
+    file reddened 10.4 with no function having grown.  A `}` inside a heredoc body is not
+    the close, so heredocs are skipped while scanning.
+    """
+    heredoc = None
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if heredoc is not None:
+            if line.strip() == heredoc:
+                heredoc = None
+            continue
+        if line == "}":
+            return i + 1
+        m = HEREDOC_OPEN.search(line)
+        if m and not COMMENT.match(line):
+            heredoc = m.group(1)
+    return None
+
+
 def c_funcs_over_100(text):
-    """10.4 — functions longer than 100 lines (bounded by the next definition).
+    """10.4 — functions longer than 100 lines (bounded by their own closing brace).
 
     COMMENT-ONLY LINES DO NOT COUNT (2026-09-24).  They did, and that made this counter
     fight the swallow guard: `# swallow-ok: <reason>` is a comment the guard REQUIRES, so
@@ -220,19 +262,20 @@ def c_funcs_over_100(text):
     total = len(lines)
     n = 0
     for k, (start, _name) in enumerate(defs):
-        if k + 1 < len(defs):
-            end = defs[k + 1][0]
+        if _definition_owns_one_line(lines[start]):
+            end = start + 1
         else:
-            # The LAST definition has no successor to bound it, so a script's trailing
-            # top-level code was counted as part of its body — measured 2026-11-02:
-            # _autotune_failure_report is 55 lines, but 253 lines of script-scope main
-            # flow follow it and the counter read 308 (>100).  Bound it by its own
-            # closing brace instead; earlier definitions keep the def-to-def rule.
-            end = total
-            for _k in range(start, total):
-                if lines[_k] == "}":
-                    end = _k + 1
-                    break
+            # The definition's OWN close, but never past the next definition: a missing
+            # or late `}` must not let one function swallow the next.  The def-to-def
+            # rule was the whole story until 2026-11-18 and it attributed every following
+            # top-level line to the function above it (probe_no_mmap: 48 real lines, 103).
+            candidates = []
+            own = _own_close_line(lines, start)
+            if own is not None:
+                candidates.append(own)
+            if k + 1 < len(defs):
+                candidates.append(defs[k + 1][0])
+            end = min(candidates) if candidates else total
         if len([line for line in lines[start:end] if not COMMENT.match(line)]) > FUNC_LONG_LINES:
             n += 1
     return n
@@ -307,6 +350,18 @@ FIXTURES: dict[str, tuple[str, int] | list[tuple[str, int]]] = {
         # ...and the exemption that keeps this counter compatible with the swallow
         # guard: 60 code lines + 60 comment lines is 60, not 120.
         ("g() {\n" + "\n".join(["  :", "  # why"] * 60) + "\n}\n", 0),
+        # ...and a ONE-LINE definition owns only its own line: the 150 script-scope
+        # lines after it are not its body (measured 2026-11-18, bin/autotune-rows.sh).
+        ("h() { :; }\n" + "\n".join(["  :"] * 150) + "\n", 0),
+        # ...and a SHORT function does not own the script after its `}` either — the
+        # defect that made probe_no_mmap (48 real lines) read 103.
+        ("j() {\n" + "\n".join(["  :"] * 10) + "\n}\n" + "\n".join(["  :"] * 150) + "\n", 0),
+        # ...and a `}` at column 0 INSIDE a heredoc is not the close: this body is 105
+        # code lines and must still read 1.
+        (
+            "k() {\n" + "  cat <<'PYEOF'\n}\nPYEOF\n" + "\n".join(["  :"] * 100) + "\n}\n",
+            1,
+        ),
     ],
     "10.7": ("echo bad >&2\nhelper warn\n", 1),
     "10.8": (

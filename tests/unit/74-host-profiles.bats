@@ -169,9 +169,15 @@ selected_with() {
     [ "$output" = "intel-xe-cuda|5|4294967296|quant-guide.conf" ]
 }
 
-@test "applying the arm64 profile claims its own CUDA lanes and no quant ratings" {
-    # Catches: the 4 GB quant guide (which auto-archives on `model scan`) or this
-    # box's lanes being applied on a machine they do not describe.
+@test "applying the arm64 profile claims its own CUDA lanes and its OWN quant guide" {
+    # Catches: the 4 GB quant guide (which auto-archives quants that fit here) being
+    # applied on this box, or this box's lanes arriving on a machine they do not describe.
+    #
+    # The guide assertion CHANGED on 2026-11-18.  It used to require an EMPTY guide
+    # ("and no quant ratings"), which was right while this box had none: the shared
+    # config/quant-guide.conf describes a 4 GB card.  The box's own guide now exists
+    # (config/hosts.d/asus-rtx-spark-quant-guide.conf), so the criterion is WHICH guide
+    # arrives — its own, never the shared one.
     #
     # The lane check NAMES the lanes instead of counting them.  It asserted exactly 2,
     # which is a census: llama-cuda-qwen25-3b-measure.service (2026-11-13) is this box's
@@ -180,9 +186,10 @@ selected_with() {
     run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
         bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s|%s|%s\n" \
             "$TAC_HOST_PROFILE" "$LLAMA_LANE_SPECS" \
-            "${QUANT_GUIDE:-}" "$VRAM_TOTAL_BYTES_FALLBACK"' _ "$LIB"
+            "${QUANT_GUIDE##*/}" "$VRAM_TOTAL_BYTES_FALLBACK"' _ "$LIB"
     [ "$status" -eq 0 ]
-    [[ "$output" == "asus-n1n-rtx-spark|"*"||0" ]]
+    [[ "$output" == "asus-n1n-rtx-spark|"*"|asus-rtx-spark-quant-guide.conf|0" ]]
+    [[ "$output" != *"|quant-guide.conf|"* ]]
     [[ "$output" == *"llama-cuda-qwen3coder-30b-chat.service|18087"* ]]
     [[ "$output" == *"llama-cuda-qwen3embedding-embed.service|18080"* ]]
     [[ "$output" != *"llama-xe-"* ]]
@@ -376,6 +383,34 @@ install_stub_env() {
         _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
     [ "$output" = "/home/wayne/.llm/models.conf|/home/wayne/.llm/default_model.conf|/home/wayne/.llm" ]
+}
+
+@test "an exported LLM_REGISTRY and LLM_STATE_DIR survive the profile apply" {
+    # Catches: the apply CLEARING the paths before 01-constants:407-409 can honour them.
+    # Measured 2026-11-18 — every hermetic case that exported LLM_REGISTRY to sandbox the
+    # registry wrote the live store instead (fixture backups accumulated in
+    # ~/models/.llm/backups), and a one-row probe overwrote ~/models/active/models.conf.
+    # A fixture that cannot redirect the registry cannot be hermetic (AGENTS.md §4).
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
+        TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        LLM_REGISTRY="$BATS_TEST_TMPDIR/sandbox.conf" \
+        LLM_STATE_DIR="$BATS_TEST_TMPDIR/state" \
+        bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s\n" \
+            "$LLM_REGISTRY" "$LLM_STATE_DIR"' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BATS_TEST_TMPDIR/sandbox.conf|$BATS_TEST_TMPDIR/state" ]
+}
+
+@test "a sandboxed LLM_STATE_DIR carries the derived registry and default pointer" {
+    # Catches: the derivation ignoring the caller's state dir, so a test that redirects
+    # the state dir still writes the box's own registry and default pointer.
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" \
+        TAC_HOST_PROFILE_FILE="$BATS_TEST_TMPDIR/none" \
+        LLM_STATE_DIR="$BATS_TEST_TMPDIR/state" \
+        bash -c 'source "$1" >/dev/null 2>&1; printf "%s|%s\n" \
+            "$LLM_REGISTRY" "$LLM_DEFAULT_FILE"' _ "$REPO_ROOT/scripts/01-constants.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BATS_TEST_TMPDIR/state/models.conf|$BATS_TEST_TMPDIR/state/default_model.conf" ]
 }
 
 @test "the intel profile keeps the derived dirs, the mount test and private VRAM" {

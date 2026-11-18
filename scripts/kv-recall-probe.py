@@ -45,6 +45,7 @@ import argparse
 import importlib
 import json
 import logging
+import os
 import random
 import re
 import sys
@@ -334,7 +335,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # that ever lost its docstring would crash here rather than print help.
     parser = argparse.ArgumentParser(description="Measure long-context retrieval recall per KV-cache precision")
     parser.add_argument(
-        "--base-url", default="http://127.0.0.1:18083", help="a llama.cpp server ALREADY running at --kv-type"
+        # THIS box's serving port, from the profile (LLM_SERVICE_PORT is exported by
+        # tools/host-profile.sh).  The old default was 18083 — the XPS's CUDA 3B lane —
+        # which names nothing on the ASUS.  8081 is llama.cpp's own default, box-neutral.
+        "--base-url",
+        default=f"http://127.0.0.1:{os.environ.get('LLM_SERVICE_PORT') or 8081}",
+        help="a llama.cpp server ALREADY running at --kv-type",
     )
     parser.add_argument(
         "--model",

@@ -379,6 +379,7 @@ jobs:
                tests/unit/92-lane-arbiter.bats \
                tests/unit/93-suspend-hold-liveness.bats \
                tests/unit/94-git-commit.bats \
+               tests/unit/95-bench-spec-ab.bats \
             2>&1 | tee "$RUNNER_TEMP/unit-tests.tap"
 
       - name: Upload the unit suite's output

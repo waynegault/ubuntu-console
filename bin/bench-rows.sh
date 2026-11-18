@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-11-18): the CUDA lane is THIS box's, from its profile, and an empty answer
+#   REFUSES rather than falling back to the Dell's unit name.  01-constants does NOT provide
+#   _tac_cuda_lane_unit (measured), so the shared library is sourced here explicitly — one
+#   definition of "this box's lane" instead of a second copy in this file.
 #   v12 (2026-11-12): enter shared clean-room (_tac_cleanroom_enter / _tac_cleanroom_restore)
 #   before the baseline wait so declared tenants, watchdogs, CI runners, and unsupervised
 #   CUDA servers do not contend validation benches.
@@ -74,8 +78,22 @@ REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
 # LLAMA_CUDA_LANE_UNIT from the profile).
 # shellcheck source=01-constants.sh
 source "$REPO/scripts/01-constants.sh"
+# The lane resolver lives in the shared library, which 01-constants does NOT pull in —
+# measured: `declare -f _tac_cuda_lane_unit` after sourcing 01-constants alone answers
+# "not found".  Loading it here keeps ONE definition of "this box's lane" rather than a
+# second copy in this file.
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
-LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+# THIS box's lane, from its profile — never the Dell's unit name (2026-11-18).  The
+# fallback was llama-cuda-llama32-3b-chat.service (the XPS box's lane, intel-xe-cuda.conf:80);
+# the profile always wins, so it never fired here, but a shell without the profile would have
+# held down the wrong machine's lane for the duration of a sweep.
+LANE="$(_tac_cuda_lane_unit)"
+if [[ -z "$LANE" ]]; then
+    warn "bench-rows: REFUSING — no CUDA lane resolved (profile not loaded); nothing was measured"
+    exit 1
+fi
 LOGDIR="${LLM_STATE_DIR:-$HOME/.llm}/autotune-logs"
 mkdir -p "$LOGDIR"
 

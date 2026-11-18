@@ -75,7 +75,11 @@ def test_quant_policy_evaluates_filename_patterns() -> None:
     policy = ASUS_RTX_SPARK_PROFILE.quant_policy
     assert policy.evaluate_quant("Qwen3-30B-A3B-Q8_0.gguf") == QuantRating.RECOMMENDED
     assert policy.evaluate_quant("Qwen2.5-Coder-32B-Q4_K_M.gguf") == QuantRating.ACCEPTABLE
-    assert policy.evaluate_quant("TinyModel-Q2_K.gguf") == QuantRating.DISCOURAGED
+    # Q2_K is ACCEPTABLE on this host by Wayne's ruling of 2026-11-18: the only Q2_K row is
+    # the 74B Nemotron, no larger quant fits, and `discouraged` would auto-archive it.
+    assert policy.evaluate_quant("TinyModel-Q2_K.gguf") == QuantRating.ACCEPTABLE
+    # NVFP4 had no pattern at all, so it rated `unknown` — not a verdict.
+    assert policy.evaluate_quant("NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4.gguf") == QuantRating.ACCEPTABLE
 
 
 def test_asus_quant_guide_conf_exists_and_matches_rules() -> None:
@@ -92,7 +96,13 @@ def test_asus_quant_guide_conf_exists_and_matches_rules() -> None:
     assert len(rules) >= 5
     dynamic_policy = QuantPolicy(guide_rel_path=str(conf_path), rules=rules)
     assert dynamic_policy.evaluate_quant("model-Q8_0.gguf") == QuantRating.RECOMMENDED
-    assert dynamic_policy.evaluate_quant("model-Q2_K.gguf") == QuantRating.DISCOURAGED
+    # The guide is the policy now: Q2_K acceptable (Wayne, 2026-11-18), NVFP4 scored with
+    # the 4-bit class, and BF16 discouraged — which only works because BF16 precedes F16
+    # in the file (patterns match as substrings in file order).
+    assert dynamic_policy.evaluate_quant("model-Q2_K.gguf") == QuantRating.ACCEPTABLE
+    assert dynamic_policy.evaluate_quant("model-NVFP4.gguf") == QuantRating.ACCEPTABLE
+    assert dynamic_policy.evaluate_quant("model-BF16.gguf") == QuantRating.DISCOURAGED
+    assert dynamic_policy.evaluate_quant("model-F16.gguf") == QuantRating.RECOMMENDED
 
 
 def test_detect_hardware_profile_respects_overrides_and_cpu_markers(
@@ -137,3 +147,103 @@ def test_cli_export_query_and_detect(capsys: pytest.CaptureFixture[str]) -> None
     assert main(["--profile", "asus-n1n-rtx-spark", "detect", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["id"] == "asus-n1n-rtx-spark"
+
+
+# --- the conf and the Python profile must state the SAME facts --------------
+# tools/box/profiles.py and config/hosts.d/<id>.conf both describe one machine.  Until
+# 2026-11-18 nothing compared them: the ASUS profile's autotune_census and its measure lane
+# were re-synced BY HAND in v2, and the shell is what the box actually runs on.  A fact the
+# conf declares is the operative one, so Python holding a different value is silent drift —
+# the Python layer would size a sweep against a census the launcher does not honour.
+
+CONF_DIR = Path(__file__).resolve().parents[1] / "config" / "hosts.d"
+
+
+def _conf_facts(conf: Path, keys: tuple[str, ...]) -> dict[str, str]:
+    """Source the conf exactly as tools/host-profile.sh does and read the named facts.
+
+    Sourced, not grepped: the confs are declarative shell, and a regex that re-implements
+    `${VAR:=value}` would be a second reading of the same file — the drift this guards.
+    """
+    # A BLOCK per fact: LLAMA_LANE_SPECS is a multi-line value, and a `key=value` line
+    # parser silently kept only its first lane (measured 2026-11-18).
+    script = 'source "$1" >/dev/null 2>&1; '
+    script += "; ".join(f'printf "<<<{k}\\n%s\\n>>>{k}\\n" "${{{k}:-}}"' for k in keys)
+    # env -i: the confs use `${VAR:=value}`, so an INHERITED value wins — and a pytest
+    # process started from a shell that sourced env.sh carries this box's facts, which made
+    # the XPS conf report the ASUS's port and lanes (measured 2026-11-18: intel read 18087).
+    import re
+    import subprocess
+
+    out = subprocess.run(
+        ["env", "-i", f"HOME={Path.home()}", "PATH=/usr/bin:/bin", "bash", "-c", script, "_", str(conf)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    facts: dict[str, str] = {}
+    for key in keys:
+        m = re.search(rf"<<<{re.escape(key)}\n(.*?)\n>>>{re.escape(key)}", out, re.S)
+        if m and m.group(1).strip():
+            facts[key] = m.group(1)
+    return facts
+
+
+# conf fact -> the Python value it must equal.
+SHARED_FACTS: dict[str, object] = {
+    "LLM_SERVICE_PORT": lambda p: p.serving.primary_port,
+    "LLAMA_THREAD_CAP": lambda p: p.serving.thread_cap,
+    "LLAMA_GPU_LAYERS": lambda p: p.serving.gpu_layers,
+    "LLAMA_FIT_TARGET_MB": lambda p: p.serving.fit_target_mb,
+    "LLAMA_CACHE_RAM_MB": lambda p: p.serving.cache_ram_mb,
+    "VRAM_TOTAL_BYTES_FALLBACK": lambda p: p.gpu_pool_bytes_fallback,
+    "TAC_HOST_GPU_LABEL": lambda p: p.gpu_label,
+    "LLAMA_QUANT_GUIDE_REL": lambda p: p.quant_policy.guide_rel_path,
+    "TAC_HOST_PRIMARY_LANE": lambda p: p.lanes[0].unit_name,
+    "LLM_AUTOTUNE_CENSUS": lambda p: p.autotune_census,
+    "LLM_AUTOTUNE_CENSUS_MAX_MIB": lambda p: p.autotune_census_max_mib,
+}
+
+# Facts a conf deliberately does not declare.  The XPS derives its store from
+# LLAMA_DRIVE_ROOT=/mnt/m and runs no autotune census, so it states none of these.  Every
+# OTHER shared fact must be declared: since v3 of profiles.py reads them from the conf, a
+# conf that quietly stopped stating one would let the Python fallback literal take over —
+# the duplication that version removed.
+UNDERIVED: dict[str, set[str]] = {
+    "intel-xe-cuda": {
+        "LLM_AUTOTUNE_CENSUS",
+        "LLM_AUTOTUNE_CENSUS_MAX_MIB",
+        "LLM_AUTOTUNE_BASELINE_GAP_MAX",
+        "LLAMA_GPU_FREE_THRESHOLD_MIB",
+    },
+}
+
+
+@pytest.mark.parametrize("profile_id", sorted(PROFILES))
+def test_python_profile_matches_the_conf_it_describes(profile_id: str) -> None:
+    """Catches: Python holding a fact the box's own conf contradicts, and a conf that
+    stopped declaring a fact the Python layer would then silently default."""
+    profile = get_hardware_profile(profile_id)
+    facts = _conf_facts(CONF_DIR / f"{profile_id}.conf", tuple(SHARED_FACTS))
+    assert facts, f"{profile_id}.conf declared none of the shared facts — wrong path?"
+    undeclared = [key for key in SHARED_FACTS if key not in facts and key not in UNDERIVED.get(profile_id, set())]
+    assert not undeclared, f"{profile_id}.conf no longer declares: {undeclared}"
+    mismatches = []
+    for key, getter in SHARED_FACTS.items():
+        if key not in facts:
+            continue
+        expected = str(getter(profile))
+        if facts[key].strip() != expected:
+            mismatches.append(f"{key}: conf={facts[key].strip()!r} profiles.py={expected!r}")
+    assert not mismatches, f"{profile_id}: " + "; ".join(mismatches)
+
+
+@pytest.mark.parametrize("profile_id", sorted(PROFILES))
+def test_lane_sets_match_between_conf_and_python(profile_id: str) -> None:
+    """Catches: a lane renamed or renumbered in one layer only — the drift that left the
+    ASUS Python profile without its :18089 measure lane."""
+    profile = get_hardware_profile(profile_id)
+    raw = _conf_facts(CONF_DIR / f"{profile_id}.conf", ("LLAMA_LANE_SPECS",))["LLAMA_LANE_SPECS"]
+    from_conf = sorted((line.split("|")[0], int(line.split("|")[1])) for line in raw.splitlines() if "|" in line)
+    from_python = sorted((lane.unit_name, lane.port) for lane in profile.lanes)
+    assert from_conf == from_python, f"{profile_id}: conf={from_conf} profiles.py={from_python}"

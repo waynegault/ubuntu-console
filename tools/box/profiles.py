@@ -1,9 +1,22 @@
 """Target hardware profile definitions for the repository.
 
-Module Version: 1 (2026-11-10)
-Declares static profile definitions for:
+Module Version: 3 (2026-11-18)
+Declares profile definitions for:
 - Asus ProArt P16 / RTX Spark N1X (128GB unified memory)
 - Dell XPS 15 (Intel i9 / 4GB discrete CUDA)
+
+v3 (2026-11-18): the facts a box's own conf declares are READ FROM IT, not restated here.
+    v2 had to re-sync the ASUS census and its :18089 measure lane BY HAND because this file
+    held a second copy, and nothing compared the two.  Every scalar below that the conf
+    declares (ports, thread cap, layers, thresholds, census, archive/registry/state paths,
+    GPU label, CUDA arch/flavour, baseline model) and the whole lane table now come from
+    `tools.box.conf_facts`, which sources `config/hosts.d/<id>.conf` with a clean
+    environment.  What stays literal is what a conf does not declare: architecture,
+    memory model, context windows, batch sizes, min host reserve and the linguistic
+    descriptions of each lane.  `tests/test_box_awareness.py` keeps a parity case so a future
+    conf edit that this file cannot follow is a failing test, not silent drift.
+v2 (2026-11-18): sync ASUS_RTX_SPARK_PROFILE autotune_census, measure lane (18089),
+and baseline_model (both boxes) with config/hosts.d/*.conf.
 """
 
 from __future__ import annotations
@@ -11,6 +24,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from tools.box.conf_facts import facts as _conf_facts
+from tools.box.conf_facts import lane_specs as _conf_lane_specs
 from tools.box.models import (
     Architecture,
     HardwareProfile,
@@ -22,6 +37,60 @@ from tools.box.models import (
     QuantRule,
     ServingParameters,
 )
+
+_ASUS = _conf_facts("asus-n1n-rtx-spark")
+_XPS = _conf_facts("intel-xe-cuda")
+
+
+def _num(f: dict[str, str], key: str, default: int) -> int:
+    """A declared integer, or `default` when the conf does not state the fact."""
+    raw = f.get(key, "").strip()
+    return int(raw) if raw.lstrip("-").isdigit() else default
+
+
+def _txt(f: dict[str, str], key: str, default: str | None = None) -> str | None:
+    """A declared string, or `default` (an empty conf value counts as undeclared)."""
+    value = f.get(key, "").strip()
+    return value or default
+
+
+# Prose only: a lane's meaning for a reader.  The conf owns the fact (unit, port, whether
+# it is primary/gated/protected); this map owns the English.
+_LANE_DESCRIPTIONS = {
+    "llama-cuda-qwen3coder-30b-chat.service": "Primary chat lane (Qwen3-Coder-30B)",
+    "llama-cuda-qwen3embedding-embed.service": "Always-on embeddings lane (Qwen3-Embedding-0.6B)",
+    "llama-cuda-qwen25-3b-measure.service": "Measurement lane (Qwen2.5 3B)",
+    "llama-xe-minicpm5-1b-chat.service": "Xe MiniCPM production chat lane",
+    "llama-xe-embeddinggemma-embed.service": "Xe embedding lane",
+    "llama-xe-llama32-3b-chat.service": "Xe Llama 3.2 3B chat lane",
+    "llama-cuda-llama32-3b-chat.service": "CUDA Llama 3.2 3B chat lane (gated/suspendable)",
+    "llama-cpu-qwen25-3b-chat.service": "CPU Qwen 2.5 3B chat lane",
+}
+
+
+def _lanes(profile_id: str, f: dict[str, str]) -> list[LaneSpec]:
+    """The conf's lane table, with the three flags derived from the same conf.
+
+    A lane is GATED when it is a CUDA lane that is not protected: the CUDA family is what a
+    sweep suspends, and the always-on embedding lane sits in that family but is protected
+    from a VRAM drain (measured shape on both boxes, 2026-11-18).
+    """
+    primary = f.get("TAC_HOST_PRIMARY_LANE", "").strip()
+    protected = set(f.get("LLAMA_LANE_KEEP_UNITS", "").split())
+    out: list[LaneSpec] = []
+    for unit, port in _conf_lane_specs(profile_id):
+        out.append(
+            LaneSpec(
+                unit_name=unit,
+                port=port,
+                is_primary=unit == primary,
+                is_protected=unit in protected,
+                is_gated=unit.startswith("llama-cuda-") and unit not in protected,
+                description=_LANE_DESCRIPTIONS.get(unit, ""),
+            )
+        )
+    return out
+
 
 # ── Asus ProArt P16 / RTX Spark N1X Profile (128GB Unified) ───────────────────
 ASUS_RTX_SPARK_PROFILE = HardwareProfile(
@@ -37,18 +106,18 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
     model_store_path="$HOME/models",
     model_store_is_mount=False,
     serving=ServingParameters(
-        gpu_layers=999,
+        gpu_layers=_num(_ASUS, "LLAMA_GPU_LAYERS", 999),
         context_window=131072,
         max_context_window=262144,
         parallel_slots=4,
         batch_size=2048,
         ubatch_size=512,
-        thread_cap=0,  # Homogeneous ARM cores; no ceiling
+        thread_cap=_num(_ASUS, "LLAMA_THREAD_CAP", 0),  # 0 = no ceiling (homogeneous X925)
         threads_base=10,  # Matches the 10 Cortex-X925 performance cores
-        primary_port=18087,
+        primary_port=_num(_ASUS, "LLM_SERVICE_PORT", 18087),
         min_host_reserve_mb=12288,  # 12 GB reserve to protect WSL VM stability
-        fit_target_mb=1024,
-        cache_ram_mb=0,
+        fit_target_mb=_num(_ASUS, "LLAMA_FIT_TARGET_MB", 1024),
+        cache_ram_mb=_num(_ASUS, "LLAMA_CACHE_RAM_MB", 0),
         ngl_strategy="full_only",
     ),
     quant_policy=QuantPolicy(
@@ -61,8 +130,10 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
             "Q3_K_L",
             "IQ3_M",
             "IQ3_XXS",
+            "NVFP4",
+            "Q2_K",
         ],
-        discouraged=["Q2_K", "Q3_K_S", "F32", "BF16"],
+        discouraged=["Q3_K_S", "F32", "BF16"],
         rules=[
             QuantRule(
                 pattern="Q8_0",
@@ -90,9 +161,14 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
                 description="4-bit: Usable when conserving memory for massive contexts or 70B+ models",
             ),
             QuantRule(
+                pattern="NVFP4",
+                rating=QuantRating.ACCEPTABLE,
+                description="4-bit float (ModelOpt): 4-bit-class size, scored with the other 4-bit quants",
+            ),
+            QuantRule(
                 pattern="Q2_K",
-                rating=QuantRating.DISCOURAGED,
-                description="2-bit: Unnecessary quality degradation on 128GB unified memory",
+                rating=QuantRating.ACCEPTABLE,
+                description="2-bit: accepted for the 74B row, where no larger quant fits",
             ),
             QuantRule(
                 pattern="Q3_K_S",
@@ -112,42 +188,26 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
         ],
     ),
     ports=PortAllocation(
-        primary_port=18087,
-        lanes=[
-            LaneSpec(
-                unit_name="llama-cuda-qwen3coder-30b-chat.service",
-                port=18087,
-                is_primary=True,
-                is_protected=False,
-                is_gated=True,
-                description="Primary chat lane (Qwen3-Coder-30B)",
-            ),
-            LaneSpec(
-                unit_name="llama-cuda-qwen3embedding-embed.service",
-                port=18080,
-                is_primary=False,
-                is_protected=True,
-                is_gated=False,
-                description="Always-on embeddings lane (Qwen3-Embedding-0.6B)",
-            ),
-        ],
+        primary_port=_num(_ASUS, "LLM_SERVICE_PORT", 18087),
+        lanes=_lanes("asus-n1n-rtx-spark", _ASUS),
     ),
-    gpu_label="RTX Spark N1X",
+    gpu_label=_txt(_ASUS, "TAC_HOST_GPU_LABEL") or "RTX Spark N1X",
     igpu_label=None,
-    cuda_arch="121a-real",
-    cuda_fa_quants="all",
-    build_dir="$HOME/llama.cpp/build-cuda",
-    server_bin="$HOME/llama.cpp/build-cuda/bin/llama-server",
-    autotune_census="llama-cuda-qwen3embedding-embed.service",
-    autotune_census_max_mib=6144,
-    autotune_baseline_gap_max=3500,
-    gpu_free_threshold_mib=3500,
-    model_dir="$HOME/models/active",
-    archive_dir="$HOME/models/archived",
-    hf_home="$HOME/models/active",
-    hf_hub_cache="$HOME/models/active",
-    registry_path="$HOME/models/active/models.conf",
-    state_dir="$HOME/models/.llm",
+    cuda_arch=_txt(_ASUS, "LLAMA_CUDA_ARCH", "121a-real"),
+    cuda_fa_quants=_txt(_ASUS, "LLAMA_CUDA_FA_QUANTS", "all"),
+    build_dir=_txt(_ASUS, "LLAMA_BUILD_DIR", "$HOME/llama.cpp/build-cuda"),
+    server_bin=_txt(_ASUS, "LLAMA_CUDA_SERVER_BIN", "$HOME/llama.cpp/build-cuda/bin/llama-server"),
+    autotune_census=_txt(_ASUS, "LLM_AUTOTUNE_CENSUS", ""),
+    autotune_census_max_mib=_num(_ASUS, "LLM_AUTOTUNE_CENSUS_MAX_MIB", 6144),
+    autotune_baseline_gap_max=_num(_ASUS, "LLM_AUTOTUNE_BASELINE_GAP_MAX", 3500),
+    gpu_free_threshold_mib=_num(_ASUS, "LLAMA_GPU_FREE_THRESHOLD_MIB", 3500),
+    model_dir=_txt(_ASUS, "LLAMA_MODEL_DIR", "$HOME/models/active"),
+    archive_dir=_txt(_ASUS, "LLAMA_ARCHIVE_DIR", "$HOME/models/archived"),
+    hf_home=_txt(_ASUS, "HF_HOME", "$HOME/models/active"),
+    hf_hub_cache=_txt(_ASUS, "HF_HUB_CACHE", "$HOME/models/active"),
+    registry_path=_txt(_ASUS, "LLM_REGISTRY", "$HOME/models/active/models.conf"),
+    state_dir=_txt(_ASUS, "LLM_STATE_DIR", "$HOME/models/.llm"),
+    baseline_model=_txt(_ASUS, "TAC_HOST_BASELINE_MODEL", "cuda-qwen3coder-30b/qwen3-coder-30b-gpu"),
 )
 
 
@@ -161,22 +221,22 @@ DELL_XPS_PROFILE = HardwareProfile(
     has_xe_igpu=True,
     memory_arch=MemoryArchitecture.DISCRETE,
     total_memory_mb=4096,  # 4 GB Discrete VRAM
-    gpu_pool_bytes_fallback=4294967296,
+    gpu_pool_bytes_fallback=_num(_XPS, "VRAM_TOTAL_BYTES_FALLBACK", 4294967296),
     model_store_path="/mnt/m",
     model_store_is_mount=True,
     serving=ServingParameters(
-        gpu_layers=24,
+        gpu_layers=_num(_XPS, "LLAMA_GPU_LAYERS", 24),
         context_window=20480,
         max_context_window=21504,
         parallel_slots=1,
         batch_size=512,
         ubatch_size=256,
-        thread_cap=6,  # Hybrid core ceiling: stops spillover onto E-cores
-        threads_base=6,  # 6 Intel P-cores
-        primary_port=18081,
+        thread_cap=_num(_XPS, "LLAMA_THREAD_CAP", 6),  # hybrid ceiling: no spill onto E-cores
+        threads_base=_num(_XPS, "LLAMA_CPU_THREADS_BASE", 6),  # 6 Intel P-cores
+        primary_port=_num(_XPS, "LLM_SERVICE_PORT", 18081),
         min_host_reserve_mb=1024,
-        fit_target_mb=1024,
-        cache_ram_mb=0,
+        fit_target_mb=_num(_XPS, "LLAMA_FIT_TARGET_MB", 1024),
+        cache_ram_mb=_num(_XPS, "LLAMA_CACHE_RAM_MB", 0),
         ngl_strategy="ladder",
     ),
     quant_policy=QuantPolicy(
@@ -226,54 +286,14 @@ DELL_XPS_PROFILE = HardwareProfile(
         ],
     ),
     ports=PortAllocation(
-        primary_port=18081,
-        lanes=[
-            LaneSpec(
-                unit_name="llama-xe-minicpm5-1b-chat.service",
-                port=18081,
-                is_primary=True,
-                is_protected=False,
-                is_gated=False,
-                description="Xe MiniCPM production chat lane",
-            ),
-            LaneSpec(
-                unit_name="llama-xe-embeddinggemma-embed.service",
-                port=18080,
-                is_primary=False,
-                is_protected=False,
-                is_gated=False,
-                description="Xe embedding lane",
-            ),
-            LaneSpec(
-                unit_name="llama-xe-llama32-3b-chat.service",
-                port=18085,
-                is_primary=False,
-                is_protected=False,
-                is_gated=False,
-                description="Xe Llama 3.2 3B chat lane",
-            ),
-            LaneSpec(
-                unit_name="llama-cuda-llama32-3b-chat.service",
-                port=18083,
-                is_primary=False,
-                is_protected=False,
-                is_gated=True,
-                description="CUDA Llama 3.2 3B chat lane (gated/suspendable)",
-            ),
-            LaneSpec(
-                unit_name="llama-cpu-qwen25-3b-chat.service",
-                port=18084,
-                is_primary=False,
-                is_protected=False,
-                is_gated=False,
-                description="CPU Qwen 2.5 3B chat lane",
-            ),
-        ],
+        primary_port=_num(_XPS, "LLM_SERVICE_PORT", 18081),
+        lanes=_lanes("intel-xe-cuda", _XPS),
     ),
-    gpu_label="RTX 3050 Ti",
-    igpu_label="Intel Xe",
-    cuda_arch="86",
-    autotune_baseline_gap_max=3500,
+    gpu_label=_txt(_XPS, "TAC_HOST_GPU_LABEL") or "RTX 3050 Ti",
+    igpu_label=_txt(_XPS, "TAC_HOST_IGPU_LABEL", "Intel Xe"),
+    cuda_arch=_txt(_XPS, "LLAMA_CUDA_ARCH", "86"),
+    autotune_baseline_gap_max=_num(_XPS, "LLM_AUTOTUNE_BASELINE_GAP_MAX", 3500),
+    baseline_model=_txt(_XPS, "TAC_HOST_BASELINE_MODEL", "cuda-llama32-3b/llama32"),
 )
 
 # Registry of all shipped profiles keyed by profile id
