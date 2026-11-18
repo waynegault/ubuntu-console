@@ -35,6 +35,16 @@ setup() {
     # assembleIndex split.  Kept in its OWN dir so each --check sees exactly one copy.
     FIXTURE_0251="$REPO_ROOT/tests/fixtures/memory-index-v0251-chunk.js"
     WORK="$BATS_TEST_TMPDIR"
+    # node decides a .js file's module type from the NEAREST package.json, walking UP from
+    # the file, and every fixture here is CJS by design — `module.exports` is how the case
+    # calls it.  With no declaration an ancestor package.json carrying "type": "module"
+    # makes `require()` return an EMPTY namespace instead of throwing anything obvious:
+    # measured 2026-11-18 on the CI runner, where six require()-based cases failed with
+    # "TypeError: m.scanEntries is not a function" on the same commit that passes 26/26 in a
+    # shell here, and reproduced exactly by dropping {"type":"module"} beside the chunk (both
+    # node 24 and node 26, so the runner's node version was never the cause).  Declaring the
+    # type at the scratch root makes the cases independent of whatever sits above $TMPDIR.
+    printf '{"type":"commonjs"}\n' > "$WORK/package.json"
     CHUNKS="$WORK/chunks"
     mkdir -p "$CHUNKS"
     cp "$FIXTURE" "$CHUNKS/"
