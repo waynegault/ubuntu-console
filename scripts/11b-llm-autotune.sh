@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 45
+# Module Version: 46
+#   v46 (2026-11-18): respect LLAMA_THREAD_CAP (0 = uncapped on homogeneous/X925 hosts)
+#     in __llm_autotune_profile_save and __llm_autotune_profiles_remap_by_registry instead of
+#     hardcoding the i9-12900HK P-core ceiling (6).
 #   v45 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v44 (2026-11-10): the SECOND budget (card bf92711c, host half).  __autotune_host_weight_bytes
@@ -686,6 +689,9 @@ function __llm_autotune_profile_save() {
             | cut -d'|' -f2-
     )
 
+    local _thread_cap="${LLAMA_THREAD_CAP:-6}"
+    [[ "$_thread_cap" =~ ^[0-9]+$ ]] || _thread_cap=6
+
     awk -F'|' -v f="$model_file" \
         -v ctx="$ctx_size" \
         -v batch="$batch" \
@@ -718,6 +724,7 @@ function __llm_autotune_profile_save() {
         -v ctx_policy_val="$ctx_policy" \
         -v llama_build_val="$llama_build" \
         -v gpu_carve_val="$gpu_carve" \
+        -v thread_cap="$_thread_cap" \
         -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
@@ -787,10 +794,9 @@ function __llm_autotune_profile_save() {
                 # measured in.
                 if (gpu_carve_val != "") $48 = gpu_carve_val
             }
-            # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
-            # P-core ceiling (6) on every registry write — a pre-cap row must
-            # not survive the save with an E-core-spilling value.
-            if ($9 != "" && $9 + 0 > 6) $9 = 6
+            # SPEC-DEC-002: clamp the stored thread count to the host
+            # LLAMA_THREAD_CAP (0 = uncapped, 6 on i9-12900HK P-cores).
+            if (thread_cap > 0 && $9 != "" && $9 + 0 > thread_cap) $9 = thread_cap
             print
         }' "$profile_file" > "${profile_file}.tmp"
 
@@ -1239,7 +1245,10 @@ function __llm_autotune_profiles_remap_by_registry() {
     local new_registry="${2:-}"
     [[ -s "$old_registry" && -f "$new_registry" ]] || return 0
 
-    awk -F'|' -v header="$LLM_REGISTRY_HEADER" '
+    local _thread_cap="${LLAMA_THREAD_CAP:-6}"
+    [[ "$_thread_cap" =~ ^[0-9]+$ ]] || _thread_cap=6
+
+    awk -F'|' -v thread_cap="$_thread_cap" -v header="$LLM_REGISTRY_HEADER" '
         BEGIN {
             OFS="|"
             # Always emit the canonical header so a headerless input registry
@@ -1281,10 +1290,9 @@ function __llm_autotune_profiles_remap_by_registry() {
                 }
             }
             if ($16 == "") $16 = "on"
-            # SPEC-DEC-002: clamp the carried thread count to the i9-12900HK
-            # P-core ceiling (6) — a pre-cap registry must not reintroduce
-            # E-core-spilling threads through a remap.
-            if ($9 != "" && $9 + 0 > 6) $9 = 6
+            # SPEC-DEC-002: clamp the carried thread count to the host
+            # LLAMA_THREAD_CAP (0 = uncapped, 6 on i9-12900HK P-cores).
+            if (thread_cap > 0 && $9 != "" && $9 + 0 > thread_cap) $9 = thread_cap
             _row = $1
             for (i = 2; i <= ncols; i++) _row = _row OFS $i
             print _row

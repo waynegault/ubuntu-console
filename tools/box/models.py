@@ -1,9 +1,11 @@
 """Pydantic v2 domain models for box profiles and hardware awareness.
 
 Module Version: 2 (2026-11-11)
+Module Version: 3 (2026-11-18)
 Provides typed, validated, and immutable schemas for hardware architectures,
 memory models, serving parameters, quantization policies, and lane port allocations.
 
+v3 (2026-11-18): add baseline_model (TAC_HOST_BASELINE_MODEL) to HardwareProfile.
 v2 (2026-11-11): PortAllocation rejects two lanes on one TCP port.  The check was
     asserted by tests/test_box_awareness.py but never implemented — the case passed
     only because the constructor was missing its required primary_port, so it raised
@@ -259,6 +261,7 @@ class HardwareProfile(BaseModel):
     hf_hub_cache: str | None = Field(default=None, description="HuggingFace hub cache directory")
     registry_path: str | None = Field(default=None, description="models.conf registry path")
     state_dir: str | None = Field(default=None, description="Tactical state directory")
+    baseline_model: str | None = Field(default=None, description="Baseline fleet-model provider/model id for recovery")
 
     @property
     def profile_id(self) -> str:
@@ -358,4 +361,6 @@ class HardwareProfile(BaseModel):
             env["LLM_REGISTRY"] = self.registry_path
         if self.state_dir:
             env["LLM_STATE_DIR"] = self.state_dir
+        if self.baseline_model:
+            env["TAC_HOST_BASELINE_MODEL"] = self.baseline_model
         return env

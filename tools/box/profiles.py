@@ -1,9 +1,12 @@
 """Target hardware profile definitions for the repository.
 
-Module Version: 1 (2026-11-10)
+Module Version: 2 (2026-11-18)
 Declares static profile definitions for:
 - Asus ProArt P16 / RTX Spark N1X (128GB unified memory)
 - Dell XPS 15 (Intel i9 / 4GB discrete CUDA)
+
+v2 (2026-11-18): sync ASUS_RTX_SPARK_PROFILE autotune_census, measure lane (18089),
+and baseline_model (both boxes) with config/hosts.d/*.conf.
 """
 
 from __future__ import annotations
@@ -130,6 +133,14 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
                 is_gated=False,
                 description="Always-on embeddings lane (Qwen3-Embedding-0.6B)",
             ),
+            LaneSpec(
+                unit_name="llama-cuda-qwen25-3b-measure.service",
+                port=18089,
+                is_primary=False,
+                is_protected=False,
+                is_gated=True,
+                description="Measurement lane (Qwen2.5 3B)",
+            ),
         ],
     ),
     gpu_label="RTX Spark N1X",
@@ -138,7 +149,7 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
     cuda_fa_quants="all",
     build_dir="$HOME/llama.cpp/build-cuda",
     server_bin="$HOME/llama.cpp/build-cuda/bin/llama-server",
-    autotune_census="llama-cuda-qwen3embedding-embed.service",
+    autotune_census="llama-cuda-qwen3coder-30b-chat.service llama-cuda-qwen25-3b-measure.service",
     autotune_census_max_mib=6144,
     autotune_baseline_gap_max=3500,
     gpu_free_threshold_mib=3500,
@@ -148,6 +159,7 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
     hf_hub_cache="$HOME/models/active",
     registry_path="$HOME/models/active/models.conf",
     state_dir="$HOME/models/.llm",
+    baseline_model="cuda-qwen3coder-30b/qwen3-coder-30b-gpu",
 )
 
 
@@ -274,6 +286,7 @@ DELL_XPS_PROFILE = HardwareProfile(
     igpu_label="Intel Xe",
     cuda_arch="86",
     autotune_baseline_gap_max=3500,
+    baseline_model="cuda-llama32-3b/llama32",
 )
 
 # Registry of all shipped profiles keyed by profile id
