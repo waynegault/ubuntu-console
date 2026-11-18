@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 2
+#   v2 (2026-11-18): one stderr helper (_ab_warn) instead of fourteen hand-written
+#   `>&2` sites, and each usage `exit 2` says so — the §18.3 ratchet's 10.7 and 9.7.
 # Module Version: 1
 #   v1 (2026-11-18): first tracked version.  Replaces a throwaway harness that measured
 #   --spec-type ngram-mod on this box's chat lane by hand (2026-11-18 11:07-11:13 GMT);
@@ -58,6 +61,10 @@ SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspen
 LOGDIR="${LLM_STATE_DIR:-$HOME/.llm}/autotune-logs"
 mkdir -p "$LOGDIR"
 
+# _ab_warn — the one place this script writes to stderr, so a message is never
+# hand-written per site (the opposite of the 12 scattered `>&2` this replaced).
+_ab_warn() { printf '%s\n' "$*" >&2; }
+
 AB_PORT=18090
 UNIT=""
 SPEC_FLAG="--spec-type ngram-mod"
@@ -82,23 +89,25 @@ while [[ $# -gt 0 ]]; do
         --spec-type)  SPEC_FLAG="--spec-type $2"; shift 2 ;;
         --print-plan) PRINT_PLAN=1; shift ;;
         -h|--help)    _ab_usage; exit 0 ;;
-        *)            echo "bench-spec-ab: unknown argument '$1'" >&2; _ab_usage; exit 2 ;;
+        # 2 = usage error
+        *)            _ab_warn "bench-spec-ab: unknown argument '$1'"; _ab_usage; exit 2 ;;
     esac
 done
 
 if ! [[ "$REPS" =~ ^[0-9]+$ ]] || (( REPS <= 0 )); then
-    echo "bench-spec-ab: --reps must be a positive integer" >&2
-    exit 2
+    _ab_warn "bench-spec-ab: --reps must be a positive integer"
+    exit 2  # 2 = usage error
 fi
 if ! [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] || (( MAX_TOKENS <= 0 )); then
-    echo "bench-spec-ab: --max-tokens must be a positive integer" >&2
-    exit 2
+    _ab_warn "bench-spec-ab: --max-tokens must be a positive integer"
+    exit 2  # 2 = usage error
 fi
-[[ "$AB_PORT" =~ ^[0-9]+$ ]] || { echo "bench-spec-ab: --port must be numeric" >&2; exit 2; }
+# 2 = usage error, kept beside the check it belongs to
+[[ "$AB_PORT" =~ ^[0-9]+$ ]] || { _ab_warn "bench-spec-ab: --port must be numeric"; exit 2; }
 
 [[ -n "$UNIT" ]] || UNIT="$(_tac_cuda_lane_unit)"
 if [[ -z "$UNIT" ]]; then
-    echo "bench-spec-ab: REFUSING — no CUDA lane resolved (host profile not loaded)" >&2
+    _ab_warn "bench-spec-ab: REFUSING — no CUDA lane resolved (host profile not loaded)"
     exit 1
 fi
 
@@ -144,9 +153,9 @@ _arm_argv() {
         _out+="$_tok "
         _i=$((_i + 1))
     done
-    (( _port_seen == 1 )) || { echo "bench-spec-ab: REFUSING — no '--port N' in $UNIT" >&2; return 1; }
+    (( _port_seen == 1 )) || { _ab_warn "bench-spec-ab: REFUSING — no '--port N' in $UNIT"; return 1; }
     if [[ -n "$_stripped" ]]; then
-        echo "bench-spec-ab: stripped the unit's own '$_stripped' from the $_arm arm" >&2
+        _ab_warn "bench-spec-ab: stripped the unit's own '$_stripped' from the $_arm arm"
     fi
     if [[ "$_arm" == "spec" ]]; then
         _out+="$SPEC_FLAG "
@@ -166,7 +175,7 @@ _ab_wait_up() {
     while (( _waited < _seconds )); do
         # swallow-ok: a dead pid is the condition this loop tests, not a failure
         if ! kill -0 "$_pid" 2>/dev/null; then
-            echo "bench-spec-ab: server exited during load (pid $_pid)" >&2
+            _ab_warn "bench-spec-ab: server exited during load (pid $_pid)"
             return 1
         fi
         if _ab_healthy; then
@@ -175,7 +184,7 @@ _ab_wait_up() {
         sleep 2
         _waited=$((_waited + 2))
     done
-    echo "bench-spec-ab: server did not become healthy within ${_seconds}s" >&2
+    _ab_warn "bench-spec-ab: server did not become healthy within ${_seconds}s"
     return 1
 }
 
@@ -230,8 +239,8 @@ _ab_measure() {
     # failure here aborts: /health answered but the server cannot complete a request,
     # and every number after it would be an artifact of that condition.
     if ! _ab_ask "Say ok." >/dev/null; then
-        echo "bench-spec-ab: warm-up request failed on arm $_arm — aborting" \
-             "(a server that answers /health but not a request is not measurable)" >&2
+        _ab_warn "bench-spec-ab: warm-up request failed on arm $_arm — aborting (a server" \
+                  "that answers /health but not a request is not measurable)"
         _ab_stop "$_pid"
         return 1
     fi
@@ -239,10 +248,10 @@ _ab_measure() {
         for (( _rep = 1; _rep <= REPS; _rep++ )); do
             if ! _row="$(_ab_ask "${PROMPTS[_i]}")"; then
                 _errors=$((_errors + 1))
-                echo "  ${PROMPT_NAMES[_i]} rep $_rep ERROR (${_errors} consecutive)" >&2
+                _ab_warn "  ${PROMPT_NAMES[_i]} rep $_rep ERROR (${_errors} consecutive)"
                 if (( _errors >= 2 )); then
                     _ab_stop "$_pid"
-                    echo "bench-spec-ab: ABORT after 2 consecutive errors (bench fail-fast)" >&2
+                    _ab_warn "bench-spec-ab: ABORT after 2 consecutive errors (bench fail-fast)"
                     return 1
                 fi
                 continue
@@ -264,7 +273,7 @@ _ab_measure() {
 }
 
 __resolve_prompt_set "$PROMPT_SET" || {
-    echo "bench-spec-ab: unknown --set '$PROMPT_SET' (all|physics|legal|agentic)" >&2
+    _ab_warn "bench-spec-ab: unknown --set '$PROMPT_SET' (all|physics|legal|agentic)"
     exit 1
 }
 
@@ -279,8 +288,7 @@ fi
 # ── The window: same order as bench-rows.sh, same helpers ────────────────────
 if ! _tac_suspend_acquire "$SUSPEND"; then
     _owner="$(_tac_suspend_pid "$SUSPEND")"
-    echo "bench-spec-ab: REFUSING — $SUSPEND is held by a live run" \
-         "(owner pid ${_owner:-unknown})" >&2
+    _ab_warn "bench-spec-ab: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner:-unknown})"
     exit 1
 fi
 LOG="$LOGDIR/spec-ab-$(date +%Y%m%d-%H%M%S)-$PROMPT_SET.log"
