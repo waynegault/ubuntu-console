@@ -138,6 +138,11 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 17
+#   v17 (2026-11-18): STOCK_MANAGED_BUILDER_0251 is written as two adjacent single-quoted
+#   fragments joined by a continuation, so the line fits the §18.3 120-column bound.  The
+#   VALUE is unchanged (108 chars, verified by digest) — 0.25.1's builder text is compared
+#   against the bundle, so a reformat that altered it would silently stop matching.
 # Module Version: 16
 #   v16 (2026-11-17): the corefilter hunk gains a CLI 0.25.1 anchor. Measured on this box: the
 #   global npm CLI is 0.25.1, whose builders take no `omitted` parameter, have no
@@ -327,7 +332,8 @@ STOCK_TEAM_BUILDER='return assembleIndex(groupTeamDocsByDescription(docs)'
 # The anchor is the FUNCTION BODY ONLY, deliberately: the trailing `__name(...)` annotation is
 # not part of the builder's semantics, and the shipped bundle and the test fixtures differ in
 # whether they carry it. Anchoring on the body keeps one definition shared by check and apply.
-STOCK_MANAGED_BUILDER_0251='function buildManagedAutoMemoryIndex(docs,_metadata){return assembleIndex(docs.map(doc=>docIndexLine(doc)))}'
+STOCK_MANAGED_BUILDER_0251='function buildManagedAutoMemoryIndex(docs,_metadata){return assembleIndex('\
+'docs.map(doc=>docIndexLine(doc)))}'
 STOCK_SCANNER_TAIL='body:bodyContent.trim(),mtimeMs}}'
 
 # Hunk 6 lives in a DIFFERENT chunk from the builder (0.26.5/0.26.8: the scanner is
