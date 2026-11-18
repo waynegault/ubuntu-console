@@ -205,6 +205,19 @@ def c_scopeless_systemctl_openclaw(text):
     return n
 
 
+def _definition_owns_one_line(line):
+    """Does a definition's opening line also close its body?
+
+    `warn() { printf '%s\\n' "$*" >&2; }` is a one-line function, but the span ran from
+    it to the NEXT definition, so script-scope code between the two was counted as its
+    body: measured 2026-11-18 in bin/autotune-rows.sh, where 17 added lines of a refusal
+    message pushed the phantom body past 100 and reddened 10.4 (41 -> 42) for a file that
+    contains no long function at all.  Brace BALANCE rather than a `} ` suffix test, so a
+    one-liner carrying braces in a quoted awk program still reads as one line.
+    """
+    return line.count("{") > 0 and line.count("{") == line.count("}")
+
+
 def c_funcs_over_100(text):
     """10.4 — functions longer than 100 lines (bounded by the next definition).
 
@@ -220,7 +233,9 @@ def c_funcs_over_100(text):
     total = len(lines)
     n = 0
     for k, (start, _name) in enumerate(defs):
-        if k + 1 < len(defs):
+        if _definition_owns_one_line(lines[start]):
+            end = start + 1
+        elif k + 1 < len(defs):
             end = defs[k + 1][0]
         else:
             # The LAST definition has no successor to bound it, so a script's trailing
@@ -307,6 +322,9 @@ FIXTURES: dict[str, tuple[str, int] | list[tuple[str, int]]] = {
         # ...and the exemption that keeps this counter compatible with the swallow
         # guard: 60 code lines + 60 comment lines is 60, not 120.
         ("g() {\n" + "\n".join(["  :", "  # why"] * 60) + "\n}\n", 0),
+        # ...and a ONE-LINE definition owns only its own line: the 150 script-scope
+        # lines after it are not its body (measured 2026-11-18, bin/autotune-rows.sh).
+        ("h() { :; }\n" + "\n".join(["  :"] * 150) + "\n", 0),
     ],
     "10.7": ("echo bad >&2\nhelper warn\n", 1),
     "10.8": (
