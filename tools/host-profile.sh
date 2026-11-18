@@ -28,6 +28,11 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 16
+#   v16 (2026-11-18): LLAMA_CUDA_LANE_PORT joins the cleared and exported set.  It was
+#   consumed by bin/gpu-busy.sh with THIS box's 18087 as a hardcoded default and declared
+#   by no conf, so the probe asked the ASUS's chat port on the XPS as well — the same
+#   class 124476a0 swept out of five other shared paths.  Each conf now names its own.
 # Module Version: 15
 #   v15 (2026-11-18): LLM_REGISTRY / LLM_DEFAULT_FILE / LLM_STATE_DIR leave the CLEARED set.
 #   Clearing them made a caller's explicit value unexpressible: 01-constants:407-409 derive
@@ -456,7 +461,8 @@ tac_host_ram_avail_bytes() {
 # export what the rest of the console reads.  Called once per shell.
 tac_host_profile_apply() {
     local _id _file _facts _arch _cuda _render _pool _ram
-    unset LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT LLAMA_GPU_FREE_THRESHOLD_MIB \
+    unset LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT LLAMA_CUDA_LANE_PORT \
+          LLAMA_GPU_FREE_THRESHOLD_MIB \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
           LLAMA_THREAD_CAP LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
           VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
@@ -520,6 +526,7 @@ tac_host_profile_apply() {
     export TAC_HOST_PROFILE TAC_HOST_PROFILE_MATCHED
     export LLAMA_DRIVE_ROOT LLAMA_GPU_LAYERS LLAMA_FIT_TARGET_MB \
            LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT \
+           LLAMA_CUDA_LANE_PORT \
            LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
            LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB LLAMA_THREAD_CAP \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
