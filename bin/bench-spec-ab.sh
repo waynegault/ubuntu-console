@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 3
+#   v3 (2026-11-18): the cross-arm verdict the header promised is now produced —
+#   per prompt and repetition, both arms' generation rate and whether the two arms
+#   emitted the SAME text.  Rows are collected in one TSV so the comparison is a
+#   read of the data, not a second copy of the measurement.
 # Module Version: 2
 #   v2 (2026-11-18): one stderr helper (_ab_warn) instead of fourteen hand-written
 #   `>&2` sites, and each usage `exit 2` says so — the §18.3 ratchet's 10.7 and 9.7.
@@ -263,13 +268,42 @@ _ab_measure() {
             _b64="$(cut -f4 <<< "$_row")"
             _sha="$(printf '%s' "$_b64" | base64 -d | sha256sum | cut -c1-16)"
             printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$_arm" "${PROMPT_NAMES[_i]}" "$_rep" "$_tg" "$_draft" "$_acc" "$_sha"
+                "$_arm" "${PROMPT_NAMES[_i]}" "$_rep" "$_tg" "$_draft" "$_acc" "$_sha" \
+                | tee -a "$ROWS"
             printf '  %-12s rep %s  tg=%8.2f  draft=%s accepted=%s\n' \
                 "${PROMPT_NAMES[_i]}" "$_rep" "$_tg" "$_draft" "$_acc"
         done
     done
     _ab_stop "$_pid"
     return 0
+}
+
+# _ab_summary — the cross-arm table: both arms' tg per prompt, and whether the two
+# arms emitted the same words.  The text column is the honesty check, not a detail:
+# speculation that changes the output did not save time on the same answer, and the
+# caller must see that rather than a speed ratio on its own.
+_ab_summary() {
+    printf '\n%-12s %-3s %9s %9s %8s  %s\n' prompt rep base_tg spec_tg change text
+    awk -F'\t' '
+        { k = $2 "|" $3; seen[k] = 1 }
+        $1 == "baseline" { btg[k] = $4; bsha[k] = $7; bt += $4; bn++ }
+        $1 == "spec"     { stg[k] = $4; ssha[k] = $7; st += $4; sn++ }
+        END {
+            for (k in seen) {
+                split(k, p, "|")
+                if (!(k in btg) || !(k in stg)) {
+                    printf "%-12s %-3s %9s %9s %8s  %s\n", p[1], p[2], "n/a", "n/a", "-", "missing arm"
+                    continue
+                }
+                ch = (btg[k] > 0) ? (stg[k] - btg[k]) / btg[k] * 100 : 0
+                txt = (bsha[k] == ssha[k]) ? "same" : "DIFFERS"
+                printf "%-12s %-3s %9.2f %9.2f %+7.1f%%  %s\n", p[1], p[2], btg[k], stg[k], ch, txt
+            }
+            if (bn > 0 && sn > 0) {
+                printf "%-12s %-3s %9.2f %9.2f %+7.1f%%  %s\n", "MEAN", "", bt / bn, st / sn,
+                       (bt / bn > 0) ? (st / sn - bt / bn) / (bt / bn) * 100 : 0, ""
+            }
+        }' "$ROWS" | sort -k1,1 -k2,2n
 }
 
 __resolve_prompt_set "$PROMPT_SET" || {
@@ -291,7 +325,10 @@ if ! _tac_suspend_acquire "$SUSPEND"; then
     _ab_warn "bench-spec-ab: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner:-unknown})"
     exit 1
 fi
-LOG="$LOGDIR/spec-ab-$(date +%Y%m%d-%H%M%S)-$PROMPT_SET.log"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+LOG="$LOGDIR/spec-ab-$STAMP-$PROMPT_SET.log"
+ROWS="$LOGDIR/spec-ab-$STAMP-$PROMPT_SET.rows.tsv"
+: > "$ROWS"
 trap '_tac_suspend_release "$SUSPEND"; _tac_cleanroom_restore' EXIT
 
 {
@@ -312,6 +349,7 @@ fi
 {
     _ab_measure baseline || exit 1
     _ab_measure spec || exit 1
+    _ab_summary
 } 2>&1 | tee -a "$LOG"
 
 echo "=== done $(date -Iseconds) — the lane is restored by the EXIT trap" | tee -a "$LOG"
