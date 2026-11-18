@@ -28,6 +28,14 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 17
+#   v17 (2026-11-18): the GPU INVENTORY is declared, and the pool probe stops guessing.
+#   TAC_HOST_GPU_COUNT / TAC_HOST_CUDA_GPU_INDEX join the cleared+exported set; the XPS
+#   states 2 (Intel Xe + RTX 3050 Ti) and the ASUS 1 (RTX Spark N1X).  tac_host_gpu_pool_bytes
+#   read ONE column and took `head -1`, so a box with two NVIDIA devices would silently size
+#   against whichever came first; it now reads every device line and REFUSES an ambiguous
+#   answer unless the profile names the index.  The probe also moved after the conf is
+#   sourced — the index it may need lives there, and no conf reads the pool during source.
 # Module Version: 16
 #   v16 (2026-11-18): LLAMA_CUDA_LANE_PORT joins the cleared and exported set.  It was
 #   consumed by bin/gpu-busy.sh with THIS box's 18087 as a hardcoded default and declared
@@ -417,9 +425,31 @@ tac_host_gpu_pool_bytes() {
             return 0
         fi
     fi
-    # An unreadable card returns 1 on the next line, so the caller keeps its own fallback.
-    # swallow-ok: an nvidia-smi failure is reported by the `return 1` on the line below
-    _mb="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+    # EVERY device line, not `head -1`: a box with two NVIDIA cards must not silently size
+    # against whichever nvidia-smi listed first.  One line is unambiguous and needs no
+    # index; several are refused unless the profile names the device.
+    local -a _lines=()
+    # swallow-ok: an nvidia-smi failure is reported by the `return 1` below
+    mapfile -t _lines < <(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null)
+    local _want=""
+    if (( ${#_lines[@]} == 0 ))
+    then
+        return 1
+    elif (( ${#_lines[@]} == 1 ))
+    then
+        _mb="${_lines[0]// /}"
+    else
+        _want="${TAC_HOST_CUDA_GPU_INDEX:-}"
+        if [[ ! "$_want" =~ ^[0-9]+$ ]] || (( _want >= ${#_lines[@]} ))
+        then
+            # Refusing is the point: several cards and no declaration is exactly the guess
+            # this function used to make.  The caller keeps its own fallback.
+            printf '[tac] gpu pool: %d NVIDIA devices and no usable TAC_HOST_CUDA_GPU_INDEX in this profile\n' \
+                   "${#_lines[@]}" >&2
+            return 1
+        fi
+        _mb="${_lines[_want]// /}"
+    fi
     [[ "$_mb" =~ ^[0-9]+$ ]] || return 1
     if [[ -n "$_boot" ]]
     then
@@ -462,6 +492,7 @@ tac_host_ram_avail_bytes() {
 tac_host_profile_apply() {
     local _id _file _facts _arch _cuda _render _pool _ram
     unset LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT LLAMA_CUDA_LANE_PORT \
+          TAC_HOST_GPU_COUNT TAC_HOST_CUDA_GPU_INDEX \
           LLAMA_GPU_FREE_THRESHOLD_MIB \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
           LLAMA_THREAD_CAP LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
@@ -480,11 +511,8 @@ tac_host_profile_apply() {
     # box's fact.  This is a per-boot MEASUREMENT, and no shell can outlive the boot it
     # was started in, so inheritance within a boot is the same number — while clearing it
     # would discard a caller's explicit value (a fallback path, a test, an operator).
-    if _pool="$(tac_host_gpu_pool_bytes)"
-    then
-        : "${TAC_HOST_GPU_POOL_BYTES:=$_pool}"
-        export TAC_HOST_GPU_POOL_BYTES
-    fi
+    # MOVED BELOW the conf (v17): the probe may need TAC_HOST_CUDA_GPU_INDEX, which the
+    # profile declares, and no conf reads the pool while it is being sourced.
     # The HOST figure, taken in the same pass as the pool above.  Overwritten rather than
     # `:=`: this is a live measurement, so an inherited copy describes an earlier moment in
     # this shell's ancestry, and the whole point of pairing the two is that they are read
@@ -514,6 +542,13 @@ tac_host_profile_apply() {
             printf '[tac] host profile: none selected — generic defaults in use (see tools/host-profile.sh)\n' >&2
             __TAC_HOST_PROFILE_WARNED=1
         fi
+        # No profile to name a device, so this is the old single-line read: it answers on a
+        # one-card box and refuses on a multi-card one instead of guessing there either.
+        if _pool="$(tac_host_gpu_pool_bytes)"
+        then
+            : "${TAC_HOST_GPU_POOL_BYTES:=$_pool}"
+            export TAC_HOST_GPU_POOL_BYTES
+        fi
         return 0
     fi
 
@@ -524,9 +559,16 @@ tac_host_profile_apply() {
     TAC_HOST_PROFILE="$_id"
     TAC_HOST_PROFILE_MATCHED=1
     export TAC_HOST_PROFILE TAC_HOST_PROFILE_MATCHED
+    # The per-boot pool, now that the profile can name the device it should read.
+    if _pool="$(tac_host_gpu_pool_bytes)"
+    then
+        : "${TAC_HOST_GPU_POOL_BYTES:=$_pool}"
+        export TAC_HOST_GPU_POOL_BYTES
+    fi
     export LLAMA_DRIVE_ROOT LLAMA_GPU_LAYERS LLAMA_FIT_TARGET_MB \
            LLAMA_CACHE_RAM_MB LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT \
            LLAMA_CUDA_LANE_PORT \
+           TAC_HOST_GPU_COUNT TAC_HOST_CUDA_GPU_INDEX \
            LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
            LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB LLAMA_THREAD_CAP \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \

@@ -477,6 +477,62 @@ install_stub_env() {
     [ "$output" = "$((96 * 1024 * 1024 * 1024))" ]
 }
 
+@test "GPU inventory: every profile's declared count matches its iGPU flag" {
+    # Catches: a profile that grows an iGPU, or a second card, without stating how many
+    # devices that means.  The XPS carried TAC_HOST_PROFILE_XE=1 with nothing saying "two
+    # GPUs", so a reader had to infer the count from the presence of a label, and shared
+    # code that assumed one card had no fact to contradict it.
+    #
+    # The invariant, for the boxes this repo serves: an iGPU is one more device.  A third
+    # box that breaks it should fail here and be a decision, not a silent pass.
+    local _conf _out _id _count _xe
+    for _conf in "$REPO_ROOT"/config/hosts.d/*.conf; do
+        # The ASUS quant guide lives in hosts.d and is not a profile (it has no ID).
+        grep -q 'TAC_HOST_PROFILE_ID=' "$_conf" || continue
+        # Sourced under env -i: an inherited export would answer for the conf.
+        _out="$(env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c \
+            '. "$1"; printf "%s|%s|%s\n" "${TAC_HOST_PROFILE_ID:-}" \
+                                   "${TAC_HOST_GPU_COUNT:-}" "${TAC_HOST_PROFILE_XE:-0}"' \
+            _ "$_conf")" || { echo "FAIL: $_conf did not source cleanly"; return 1; }
+        IFS='|' read -r _id _count _xe <<< "$_out"
+        [[ "$_count" =~ ^[0-9]+$ ]] \
+            || { echo "FAIL: $_id declares no numeric TAC_HOST_GPU_COUNT"; return 1; }
+        [ "$_count" -eq $(( 1 + _xe )) ] \
+            || { echo "FAIL: $_id says GPU_COUNT=$_count with XE=$_xe (an iGPU is one more device)"; return 1; }
+        # `:=` is how the confs declare it, so match the separator rather than the name
+        grep -qE 'TAC_HOST_CUDA_GPU_INDEX(:|=)' "$_conf" \
+            || { echo "FAIL: $_id declares no TAC_HOST_CUDA_GPU_INDEX"; return 1; }
+    done
+}
+
+@test "GPU pool: two NVIDIA devices with no declared index REFUSES instead of taking the first" {
+    # Catches the `head -1` this replaced: on a two-card box the pool sized against
+    # whichever nvidia-smi happened to list first, and nothing said so.  TAC_STATE_DIR is
+    # redirected because the real function caches its answer per boot and a warm cache
+    # would answer instead of the stub.
+    local stub="$BATS_TEST_TMPDIR/twocard" st="$BATS_TEST_TMPDIR/state-two"
+    mkdir -p "$stub" "$st"
+    printf '#!/bin/sh\nprintf "4096\\n24576\\n"\n' > "$stub/nvidia-smi"
+    chmod +x "$stub/nvidia-smi"
+    run env -u TAC_HOST_CUDA_GPU_INDEX TAC_STATE_DIR="$st" PATH="$stub:$PATH" \
+        bash -c 'source "$1"; tac_host_gpu_pool_bytes' _ "$REPO_ROOT/tools/host-profile.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"TAC_HOST_CUDA_GPU_INDEX"* ]]
+}
+
+@test "GPU pool: the declared index selects the device" {
+    # Catches an index that is accepted but ignored — the guess would come back, just
+    # with a declaration printed beside it.
+    local stub="$BATS_TEST_TMPDIR/twocard2" st="$BATS_TEST_TMPDIR/state-two-b"
+    mkdir -p "$stub" "$st"
+    printf '#!/bin/sh\nprintf "4096\\n24576\\n"\n' > "$stub/nvidia-smi"
+    chmod +x "$stub/nvidia-smi"
+    run env TAC_HOST_CUDA_GPU_INDEX=1 TAC_STATE_DIR="$st" PATH="$stub:$PATH" \
+        bash -c 'source "$1"; tac_host_gpu_pool_bytes' _ "$REPO_ROOT/tools/host-profile.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(( 24576 * 1048576 ))" ]
+}
+
 # NOTE ON THE UNREADABLE-CARD STUB (2026-10-30).  The stub is re-prepended AFTER
 # env.sh is sourced, not only passed in the environment.  env.sh puts WSL's
 # /usr/lib/wsl/lib on the front of PATH so CUDA works, and on the arm64 box that
