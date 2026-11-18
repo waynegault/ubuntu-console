@@ -203,7 +203,7 @@ for a in "\$@"; do
         mkdir -p "\$2/bin" && : > "\$2/bin/llama-server" && chmod +x "\$2/bin/llama-server"
     fi
 done
-exit 0
+exit "\${OCL_CMAKE_RC:-0}"
 EOF
     # heavy_job: swallow `--timeout N` and run the rest.
     cat > "$OCL_BIN/heavy_job" <<'EOF'
@@ -242,8 +242,31 @@ EOF
     [[ "$_configure" == *"-DGGML_OPENCL_TARGET_VERSION=300"* ]]
     [[ "$_configure" == *"-DGGML_OPENCL_USE_ADRENO_KERNELS=OFF"* ]]
     [[ "$_configure" == *"-B $OCL_DIR"* ]]
+    # -S: without it cmake takes the CALLER's cwd as the source.  Measured 2026-11-18 on the
+    # first real run, called from the console repo: it configured "…/ubuntu-console" and died
+    # on a missing CMakeLists.txt.  The stub never checked, so only a real run could find it.
+    [[ "$_configure" == *"-S $OCL_ROOT"* ]]
     # and the separate build call happened, for the server target only
     [[ "$(sed -n 2p "$OCL_ARGV")" == *"--target llama-server"* ]]
+}
+
+@test "OpenCL: a failed build puts the previous tree back" {
+    # Catches the worst shape this lane can produce: the tree a served lane runs is moved
+    # aside for a rebuild, the rebuild fails, and the box is left with no binary.  Measured
+    # 2026-11-18 — three Xe lanes could not start until the tree was moved back by hand.
+    _ocl_harness
+    mkdir -p "$OCL_DIR"
+    printf 'CMAKE_HOME_DIRECTORY:INTERNAL=/home/wayne/llama-src/b6b003d2cb29647d968302eb2db8da6f66303b3e\n' \
+        > "$OCL_DIR/CMakeCache.txt"
+    : > "$OCL_DIR/OLD-TREE-MARKER"
+    run env OCL_CMAKE_RC=1 LLAMA_OPENCL_ENABLE=1 LLAMA_OPENCL_DIR="$OCL_DIR" PATH="$OCL_BIN:$PATH" \
+        bash -c 'source "$1"; __llm_build_opencl "$2" 2 60 "$3" false; echo "rc=$?"' _ \
+        "$REPO_ROOT/scripts/11e-llm-model.sh" "$OCL_ROOT" "$OCL_BIN/heavy_job"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rc=1"* ]]
+    # the old tree is back at its own name, marker and all, and nothing is left beside it
+    [ -f "$OCL_DIR/OLD-TREE-MARKER" ]
+    ! compgen -G "$OCL_DIR.foreign-*" >/dev/null
 }
 
 @test "OpenCL: a tree configured from ANOTHER source is moved aside, not reused" {

@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 143
+#   v143 (2026-11-18): the first real Xe build found two defects, both fixed here.  The
+#   configure passed -B without -S, so cmake took the CALLER's cwd as the source (it
+#   configured ubuntu-console and died on a missing CMakeLists.txt); and a tree moved
+#   aside was not put back when the build failed, which left build-opencl/ empty and took
+#   all three Xe lanes down.  -S "$root" is passed now, and one failure tail restores the
+#   aside tree unless the new one produced a binary.
 # Module Version: 142
 #   v142 (2026-11-18): llm-build owns the OpenCL (Xe) tree.  __llm_build_opencl runs AFTER
 #   the CUDA build, switched by the host profile (LLAMA_OPENCL_ENABLE/_DIR/_ADRENO/_TARGET),
@@ -6086,6 +6093,48 @@ function model() {
 # lane impact) is printed first and confirmed; with no terminal to confirm on,
 # it FAILS CLOSED rather than pulling — pass --yes or --no-pull.
 # ---------------------------------------------------------------------------
+# __llm_opencl_params — validate this box's OpenCL lane and print `dir|adreno|target`.
+# One place for the four refusals, so __llm_build_opencl below reads as the build it performs.
+# Returns 1 with a named reason on bad input; 0 with the triple on stdout.
+function __llm_opencl_params() {
+    local dir="${LLAMA_OPENCL_DIR:-}"
+    local adreno="${LLAMA_OPENCL_ADRENO:-0}"
+    local target="${LLAMA_OPENCL_TARGET:-300}"
+    if [[ -z "$dir" ]]; then
+        __tac_info "Error" "LLAMA_OPENCL_ENABLE=1 but LLAMA_OPENCL_DIR is unset - refusing to guess a tree" \
+            "$C_Error"
+        return 1
+    fi
+    if [[ "$adreno" != "0" && "$adreno" != "1" ]]; then
+        __tac_info "Error" "LLAMA_OPENCL_ADRENO must be 0 or 1 (got '${adreno}')" "$C_Error"
+        return 1
+    fi
+    if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+        __tac_info "Error" "LLAMA_OPENCL_TARGET must be numeric (got '${target}')" "$C_Error"
+        return 1
+    fi
+    printf '%s|%s|%s\n' "$dir" "$adreno" "$target"
+}
+
+# __llm_opencl_restore_tree <odir> <aside> — put a moved-aside tree back after a failed build.
+# The lanes were serving <odir>; leaving it empty or half-built is what took all three Xe lanes
+# down on 2026-11-18.  A half-configured new tree is kept beside it as .failed-<ts>, never deleted.
+function __llm_opencl_restore_tree() {
+    local odir="$1"
+    local aside="$2"
+    local failed_tree
+    [[ -n "$aside" ]] || return 0
+    if [[ -e "$odir" ]]; then
+        failed_tree="${odir}.failed-$(date -u +%Y%m%dT%H%M%SZ)"
+        mv "$odir" "$failed_tree" || __tac_info "Error" "could not set ${odir} aside" "$C_Error"
+    fi
+    if mv "$aside" "$odir"; then
+        __tac_info "OpenCL" "build did not succeed - the previous tree is back at ${odir}" "$C_Warning"
+        return 0
+    fi
+    __tac_info "Error" "could not restore ${aside} to ${odir} - the Xe lanes have no tree" "$C_Error"
+    return 1
+}
 # ---------------------------------------------------------------------------
 # __llm_build_opencl — build the OpenCL (Intel Xe) server, when THIS box serves one.
 #
@@ -6115,24 +6164,15 @@ function __llm_build_opencl() {
     # 0 = this box serves no Xe device; a CUDA-only box must not grow an OpenCL step.
     [[ "${LLAMA_OPENCL_ENABLE:-0}" == "1" ]] || return 0
 
-    local odir="${LLAMA_OPENCL_DIR:-}"
-    if [[ -z "$odir" ]]; then
-        __tac_info "Error" "LLAMA_OPENCL_ENABLE=1 but LLAMA_OPENCL_DIR is unset - refusing to guess a tree" \
-            "$C_Error"
-        return 1
-    fi
-    local adreno="${LLAMA_OPENCL_ADRENO:-0}"
-    local target="${LLAMA_OPENCL_TARGET:-300}"
-    if [[ "$adreno" != "0" && "$adreno" != "1" ]]; then
-        __tac_info "Error" "LLAMA_OPENCL_ADRENO must be 0 or 1 (got '${adreno}')" "$C_Error"
-        return 1
-    fi
-    if [[ ! "$target" =~ ^[0-9]+$ ]]; then
-        __tac_info "Error" "LLAMA_OPENCL_TARGET must be numeric (got '${target}')" "$C_Error"
-        return 1
-    fi
+    local params=""
+    params="$(__llm_opencl_params)" || return 1
+    local odir="" adreno="" target=""
+    IFS='|' read -r odir adreno target <<< "$params"
 
     # A cache configured from another source keeps compiling THAT source (see the header).
+    # `moved_aside` is what makes the move SAFE: if the build below fails, this tree goes
+    # back, because the lanes were serving it.
+    local moved_aside=""
     if [[ -f "$odir/CMakeCache.txt" ]]; then
         local home_dir=""
         home_dir="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$odir/CMakeCache.txt" | head -1)"
@@ -6146,19 +6186,24 @@ function __llm_build_opencl() {
                     "$C_Error"
                 return 1
             fi
+            moved_aside="$aside"
         fi
     fi
 
     local adreno_flag="OFF"
     [[ "$adreno" == "1" ]] && adreno_flag="ON"
 
+    local rc_configure=0
     if [[ "$quick" != "true" || ! -f "$odir/CMakeCache.txt" ]]; then
         # No libOpenCL.so dev symlink exists on this box (only libOpenCL.so.1), so the
         # library is pinned by path rather than left to find_package.
         local ocl_lib="${LLAMA_OPENCL_LIBRARY:-/usr/lib/x86_64-linux-gnu/libOpenCL.so.1}"
         __tac_info "OpenCL" "configuring ${odir} from ${root} (target ${target}, adreno ${adreno_flag})" \
             "$C_Info"
-        "$heavy_job" --timeout "$lock_wait" cmake -B "$odir" \
+        # -S is not decoration: `cmake -B` without it takes the CALLER's working directory as
+        # the source.  Measured 2026-11-18 on the first real run: called from the console repo
+        # it configured "…/ubuntu-console" and died on a missing CMakeLists.txt.
+        "$heavy_job" --timeout "$lock_wait" cmake -S "$root" -B "$odir" \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_CUDA=OFF \
             -DGGML_OPENCL=ON \
@@ -6172,43 +6217,44 @@ function __llm_build_opencl() {
             -DBUILD_SHARED_LIBS=ON \
             -DLLAMA_BUILD_SERVER=ON \
             2>&1 | tail -5
-        local configure_rc=${PIPESTATUS[0]}
+        rc_configure=${PIPESTATUS[0]}
         # 3 is bin/heavy-job's lock-timeout status, as at the CUDA configure above.
-        if (( configure_rc == 3 )); then
+        if (( rc_configure == 3 )); then
             __tac_info "Refused" "heavy-job lock not acquired for the OpenCL configure" "$C_Error"
-            return 1
-        fi
-        if (( configure_rc != 0 )); then
-            __tac_info "Error" "OpenCL configuration failed (exit=${configure_rc})" "$C_Error"
-            return 1
+        elif (( rc_configure != 0 )); then
+            __tac_info "Error" "OpenCL configuration failed (exit=${rc_configure})" "$C_Error"
         fi
     else
         __tac_info "OpenCL" "using the existing cache (--quick)" "$C_Dim"
     fi
 
-    __tac_info "OpenCL" "compiling llama-server (${jobs} threads) ..." "$C_Info"
-    "$heavy_job" --timeout "$lock_wait" cmake --build "$odir" --target llama-server -j"$jobs" 2>&1 | tail -5
-    local rc=${PIPESTATUS[0]}
-    if (( rc == 3 )); then
-        __tac_info "Refused" "heavy-job lock not acquired for the OpenCL build" "$C_Error"
-        return 1
-    fi
-    if (( rc != 0 )); then
-        __tac_info "Error" "OpenCL build failed (exit=${rc})" "$C_Error"
-        return "$rc"
+    local rc_build=0
+    if (( rc_configure == 0 )); then
+        __tac_info "OpenCL" "compiling llama-server (${jobs} threads) ..." "$C_Info"
+        "$heavy_job" --timeout "$lock_wait" cmake --build "$odir" --target llama-server -j"$jobs" 2>&1 | tail -5
+        rc_build=${PIPESTATUS[0]}
+        if (( rc_build == 3 )); then
+            __tac_info "Refused" "heavy-job lock not acquired for the OpenCL build" "$C_Error"
+        elif (( rc_build != 0 )); then
+            __tac_info "Error" "OpenCL build failed (exit=${rc_build})" "$C_Error"
+        fi
     fi
 
-    local obin="$odir/bin/llama-server"
-    if [[ ! -x "$obin" ]]; then
-        __tac_info "Error" "OpenCL binary not found at ${obin}" "$C_Error"
+    # ONE failure tail, so the tree is put back before returning (see the helper).
+    if (( rc_configure != 0 || rc_build != 0 )) || [[ ! -x "$odir/bin/llama-server" ]]; then
+        __llm_opencl_restore_tree "$odir" "$moved_aside"
+        (( rc_configure != 0 )) && return 1
+        (( rc_build != 0 )) && return "$rc_build"
+        __tac_info "Error" "OpenCL binary not found at ${odir}/bin/llama-server" "$C_Error"
         return 1
     fi
+
     local ocommit
     # swallow-ok: an unreadable commit prints "?"; the build already succeeded
     ocommit="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo "?")"
-    __tac_info "Done" "OpenCL llama-server built: commit ${ocommit} (${obin})" "$C_Success"
-    # The running Xe lanes keep the OLD inode until restarted, and three of them do not fit
-    # at once (two of three by ctx, measured), so name the restart rather than doing it.
+    __tac_info "Done" "OpenCL llama-server built: commit ${ocommit} (${odir}/bin/llama-server)" "$C_Success"
+    # The running Xe lanes keep the OLD inode until restarted, and three of them do not fit at
+    # once (two of three by ctx, measured), so name the restart rather than doing it.
     __tac_info "OpenCL" "running Xe lanes still execute the old inode - restart them individually" "$C_Dim"
     return 0
 }
