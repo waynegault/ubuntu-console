@@ -169,9 +169,15 @@ selected_with() {
     [ "$output" = "intel-xe-cuda|5|4294967296|quant-guide.conf" ]
 }
 
-@test "applying the arm64 profile claims its own CUDA lanes and no quant ratings" {
-    # Catches: the 4 GB quant guide (which auto-archives on `model scan`) or this
-    # box's lanes being applied on a machine they do not describe.
+@test "applying the arm64 profile claims its own CUDA lanes and its OWN quant guide" {
+    # Catches: the 4 GB quant guide (which auto-archives quants that fit here) being
+    # applied on this box, or this box's lanes arriving on a machine they do not describe.
+    #
+    # The guide assertion CHANGED on 2026-11-18.  It used to require an EMPTY guide
+    # ("and no quant ratings"), which was right while this box had none: the shared
+    # config/quant-guide.conf describes a 4 GB card.  The box's own guide now exists
+    # (config/hosts.d/asus-rtx-spark-quant-guide.conf), so the criterion is WHICH guide
+    # arrives — its own, never the shared one.
     #
     # The lane check NAMES the lanes instead of counting them.  It asserted exactly 2,
     # which is a census: llama-cuda-qwen25-3b-measure.service (2026-11-13) is this box's
@@ -180,9 +186,10 @@ selected_with() {
     run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
         bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s|%s|%s\n" \
             "$TAC_HOST_PROFILE" "$LLAMA_LANE_SPECS" \
-            "${QUANT_GUIDE:-}" "$VRAM_TOTAL_BYTES_FALLBACK"' _ "$LIB"
+            "${QUANT_GUIDE##*/}" "$VRAM_TOTAL_BYTES_FALLBACK"' _ "$LIB"
     [ "$status" -eq 0 ]
-    [[ "$output" == "asus-n1n-rtx-spark|"*"||0" ]]
+    [[ "$output" == "asus-n1n-rtx-spark|"*"|asus-rtx-spark-quant-guide.conf|0" ]]
+    [[ "$output" != *"|quant-guide.conf|"* ]]
     [[ "$output" == *"llama-cuda-qwen3coder-30b-chat.service|18087"* ]]
     [[ "$output" == *"llama-cuda-qwen3embedding-embed.service|18080"* ]]
     [[ "$output" != *"llama-xe-"* ]]
