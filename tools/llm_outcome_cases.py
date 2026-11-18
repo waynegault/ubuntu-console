@@ -763,7 +763,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("LLM_SERVER_BASE_URL", "http://127.0.0.1:18081/v1"),
+        # THIS box's serving port, from the profile (LLM_SERVICE_PORT is exported by
+        # tools/host-profile.sh).  The old default was 18081 — the XPS's MiniCPM lane —
+        # which names nothing on the ASUS.  8081 is llama.cpp's own default and is
+        # box-neutral, so a shell with no profile still gets a runnable tool.
+        default=os.environ.get("LLM_SERVER_BASE_URL")
+        or f"http://127.0.0.1:{os.environ.get('LLM_SERVICE_PORT') or 8081}/v1",
         help="loopback base URL for --run",
     )
     parser.add_argument(

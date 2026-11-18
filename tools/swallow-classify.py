@@ -138,7 +138,10 @@ if TOOL_DIR not in sys.path:
     sys.path.insert(0, TOOL_DIR)
 _llm = importlib.import_module("llm_client")
 DUMP_TIMEOUT = 300.0
-DEFAULT_ENDPOINT = "http://127.0.0.1:18084"
+# THIS box's serving port, from the profile (LLM_SERVICE_PORT is exported by
+# tools/host-profile.sh).  The old default was 18084 — the XPS's CPU lane — which names
+# nothing on the ASUS.  8081 is llama.cpp's own default and is box-neutral.
+DEFAULT_ENDPOINT = f"http://127.0.0.1:{os.environ.get('LLM_SERVICE_PORT') or 8081}"
 ENDPOINT_ENV = "SWALLOW_CLASSIFY_ENDPOINT"
 VERDICTS = ("benign", "masking")
 # The same 8-character floor the corpus marker uses: a reason a reviewer can weigh.

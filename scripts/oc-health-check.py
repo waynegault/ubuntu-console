@@ -784,7 +784,17 @@ def _check_wsl_dns() -> dict[str, object]:
 
 def _default_llm_service_port() -> int:
     """Resolve the default LLM service port from the active box profile when set, else 18081."""
-    active_id = os.environ.get("LLM_HOST_PROFILE", "").strip() or os.environ.get("TAC_HOST_PROFILE_ID", "").strip()
+    # TAC_HOST_PROFILE is the name the profile layer EXPORTS; TAC_HOST_PROFILE_ID is the
+    # conf's own variable and is never exported, so reading it alone left this empty on
+    # every box and fell through to 18081 — the XPS's MiniCPM lane — on the ASUS too
+    # (measured 2026-11-18: `TAC_HOST_PROFILE_ID` is None in a python child while
+    # `TAC_HOST_PROFILE` reads asus-n1n-rtx-spark).  LLM_HOST_PROFILE stays first: it is
+    # the explicit selector a caller may set to ask about another box.
+    active_id = (
+        os.environ.get("LLM_HOST_PROFILE", "").strip()
+        or os.environ.get("TAC_HOST_PROFILE", "").strip()
+        or os.environ.get("TAC_HOST_PROFILE_ID", "").strip()
+    )
     if active_id:
         try:
             from tools.box import get_hardware_profile

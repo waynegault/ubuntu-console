@@ -755,6 +755,12 @@ def test_build_report_follows_the_production_llm_lane(monkeypatch: pytest.Monkey
     # the scratch port read a healthy production stack as a warning (2026-10-06).
     monkeypatch.setenv("LLM_PORT", "8081")
     monkeypatch.delenv("LLM_SERVICE_PORT", raising=False)
+    # The profile reaches a pytest process from the shell that started it — TAC_HOST_PROFILE
+    # IS exported, which is exactly what the resolver fix below makes use of — and the
+    # subject HERE is LLM_PORT vs LLM_SERVICE_PORT, so the profile is cleared to exercise
+    # the documented last resort rather than this box's real lane.
+    for _key in ("TAC_HOST_PROFILE", "LLM_HOST_PROFILE", "TAC_HOST_PROFILE_ID"):
+        monkeypatch.delenv(_key, raising=False)
     for name in (
         "_check_openclaw_cli",
         "_check_gateway_port",
@@ -1111,3 +1117,26 @@ def test_main_help_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
         checker.main(["--help"])
     assert excinfo.value.code == 0
     assert "OpenClaw health diagnostics" in capsys.readouterr().out
+
+
+# --- which box's serving port? ---------------------------------------------
+# The resolver used to read TAC_HOST_PROFILE_ID, which the profile layer never EXPORTS
+# (it is a conf variable), so on every box the id came back empty and the fallback named
+# 18081 — the XPS's MiniCPM lane.  On the ASUS that is a port nothing serves, so `oc
+# health` warned "LLM port 18081 not listening" on a healthy box.
+
+
+def test_the_exported_profile_id_resolves_this_boxs_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Catches: reading an unexported variable, so the ASUS falls back to the XPS's lane."""
+    for key in ("LLM_SERVICE_PORT", "TAC_HOST_PROFILE_ID", "LLM_HOST_PROFILE"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("TAC_HOST_PROFILE", "asus-n1n-rtx-spark")
+    assert checker._default_llm_service_port() == 18087
+
+
+def test_an_explicit_selector_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Catches: a resolver that ignores the caller's box and reports the running one."""
+    monkeypatch.delenv("LLM_SERVICE_PORT", raising=False)
+    monkeypatch.setenv("TAC_HOST_PROFILE", "asus-n1n-rtx-spark")
+    monkeypatch.setenv("LLM_HOST_PROFILE", "intel-xe-cuda")
+    assert checker._default_llm_service_port() == 18081
