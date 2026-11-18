@@ -28,6 +28,18 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 15
+#   v15 (2026-11-18): LLM_REGISTRY / LLM_DEFAULT_FILE / LLM_STATE_DIR leave the CLEARED set.
+#   Clearing them made a caller's explicit value unexpressible: 01-constants:407-409 derive
+#   all three with `:-` precisely so a fixture or operator can point them elsewhere
+#   (measured 2026-10-30, "the assignment ignored a pre-set LLM_REGISTRY"), and the unset
+#   at line 167 threw that value away BEFORE those lines ran.  So no test could
+#   sandbox the registry by exporting LLM_REGISTRY: every case that tried wrote the live
+#   store instead, which is why Alpha/Beta/Gamma fixture backups were accumulating in
+#   ~/models/.llm/backups (measured 2026-11-18), and a one-row probe of mine overwrote
+#   ~/models/active/models.conf.  These three are PATHS, not machine identity: the profile
+#   confs already declare them with `:=` (asus-n1n-rtx-spark.conf:106-107), so an inherited
+#   value is honoured by the conf itself — a shell cannot outlive its box.
 # Module Version: 14
 #   v14 (2026-11-16): TAC_HOST_BASELINE_MODEL joins the cleared and exported profile-owned
 #   set — the model the fleet must RETURN to, which bin/fleet-model.sh prints when a sweep's
@@ -451,9 +463,12 @@ tac_host_profile_apply() {
           TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
           TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT \
           LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \
-          LLM_REGISTRY LLM_DEFAULT_FILE LLM_STATE_DIR \
           HF_HOME HF_HUB_CACHE \
           LLAMA_QUANT_GUIDE_REL QUANT_GUIDE
+    # LLM_REGISTRY / LLM_DEFAULT_FILE / LLM_STATE_DIR are deliberately NOT cleared here
+    # (v15): they are PATHS, not machine facts, and the confs declare them with `:=`.
+    # Clearing them discarded a caller's explicit value before 01-constants:407-409 could
+    # honour it, so no test could sandbox the registry — see the v15 changelog above.
     # Measured per boot.  DELIBERATELY NOT in the clear list above: those clear because a
     # profile constant describes a machine identity, so a parent's value is a foreign
     # box's fact.  This is a per-boot MEASUREMENT, and no shell can outlive the boot it

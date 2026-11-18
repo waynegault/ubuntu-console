@@ -378,6 +378,34 @@ install_stub_env() {
     [ "$output" = "/home/wayne/.llm/models.conf|/home/wayne/.llm/default_model.conf|/home/wayne/.llm" ]
 }
 
+@test "an exported LLM_REGISTRY and LLM_STATE_DIR survive the profile apply" {
+    # Catches: the apply CLEARING the paths before 01-constants:407-409 can honour them.
+    # Measured 2026-11-18 — every hermetic case that exported LLM_REGISTRY to sandbox the
+    # registry wrote the live store instead (fixture backups accumulated in
+    # ~/models/.llm/backups), and a one-row probe overwrote ~/models/active/models.conf.
+    # A fixture that cannot redirect the registry cannot be hermetic (AGENTS.md §4).
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin LLM_HOST_PROFILE="asus-n1n-rtx-spark" \
+        TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        LLM_REGISTRY="$BATS_TEST_TMPDIR/sandbox.conf" \
+        LLM_STATE_DIR="$BATS_TEST_TMPDIR/state" \
+        bash -c 'source "$1"; tac_host_profile_apply; printf "%s|%s\n" \
+            "$LLM_REGISTRY" "$LLM_STATE_DIR"' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BATS_TEST_TMPDIR/sandbox.conf|$BATS_TEST_TMPDIR/state" ]
+}
+
+@test "a sandboxed LLM_STATE_DIR carries the derived registry and default pointer" {
+    # Catches: the derivation ignoring the caller's state dir, so a test that redirects
+    # the state dir still writes the box's own registry and default pointer.
+    run env -i HOME=/home/wayne PATH=/usr/bin:/bin TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" \
+        TAC_HOST_PROFILE_FILE="$BATS_TEST_TMPDIR/none" \
+        LLM_STATE_DIR="$BATS_TEST_TMPDIR/state" \
+        bash -c 'source "$1" >/dev/null 2>&1; printf "%s|%s\n" \
+            "$LLM_REGISTRY" "$LLM_DEFAULT_FILE"' _ "$REPO_ROOT/scripts/01-constants.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BATS_TEST_TMPDIR/state/models.conf|$BATS_TEST_TMPDIR/state/default_model.conf" ]
+}
+
 @test "the intel profile keeps the derived dirs, the mount test and private VRAM" {
     # Control: nothing about this box's store or memory model changes.  The dirs stay
     # unset here so 01-constants derives <root>/active; the mount test stays on.
