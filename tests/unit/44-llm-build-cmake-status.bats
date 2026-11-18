@@ -39,6 +39,14 @@ setup() {
     # case targets the real serving tree (measured: build-cuda/ was configured into a case
     # whose LLAMA_ROOT was a temp dir; llm-build now refuses that mismatch outright).
     unset LLAMA_BUILD_DIR LLAMA_CUDA_ARCH
+    # The OpenCL lane is the same hazard, newly wired (2026-11-18): llm-build now ends by
+    # building the Xe tree, switched by the host profile.  On the XPS that switch is ON and
+    # points at the REAL build-opencl, so a build case that did not override it moved the
+    # served tree aside and left its cmake double's 12K tree at the path - measured twice,
+    # ~9 minutes after two pushes, when this box's CI ran the suite.  Off here, and pointed
+    # at a path no case can serve from.
+    export LLAMA_OPENCL_ENABLE=0
+    export LLAMA_OPENCL_DIR="$BATS_TEST_TMPDIR/opencl-tree-not-real"
     # The quiet gate (v85) counts Runner.Worker processes.  These cases run ON a CI runner or
     # beside one, so without this every build case would refuse for a reason it is not testing;
     # the two CI cases below unset/set it explicitly.
@@ -212,6 +220,13 @@ EOF
 exec "$@"
 EOF
     chmod +x "$OCL_BIN/cmake" "$OCL_BIN/heavy_job"
+}
+
+@test "llm-build fixture: the OpenCL lane is off and pointed away from the real tree" {
+    # Catches the fixture losing control of the lane again: with the switch ON (this box's real
+    # profile on the XPS) every plain llm-build case would move the LIVE build-opencl aside.
+    [ "${LLAMA_OPENCL_ENABLE}" = "0" ]
+    [[ "${LLAMA_OPENCL_DIR}" == "$BATS_TEST_TMPDIR/"* ]]
 }
 
 @test "OpenCL: a CUDA-only box issues no cmake call at all" {

@@ -27,6 +27,10 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 SUBJECT="${LLM_REBUILD_SCRIPT:-$REPO_ROOT/bin/llm-rebuild-monthly.sh}"
 
 setup() {
+    # llm-build ends by building the Xe tree, switched by the profile; on an Xe box that
+    # would move the LIVE build-opencl aside for a case that is testing the rebuild order.
+    export LLAMA_OPENCL_ENABLE=0
+    export LLAMA_OPENCL_DIR="$BATS_TEST_TMPDIR/opencl-tree-not-real"
     # NOT a skip: a missing subject in CI would mean the vendored copy is gone, which is a defect
     # in this repo, not an environment fact to wave through.
     [[ -r "$SUBJECT" ]] || { echo "the monthly rebuild subject is missing: $SUBJECT" >&2; return 1; }
