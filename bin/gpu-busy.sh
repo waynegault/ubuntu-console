@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.19.0 (2026-11-18, one line per card): the utilisation arm read the whole
+#          `--query-gpu` output through `tr -dc '0-9'`, which CONCATENATES a line per GPU —
+#          two cards reading 0 and 25 became "025".  The peak is now taken per line and
+#          then across lines, so the answer is the most-contended card.  The box this
+#          protects is the XPS: its discrete RTX 3050 Ti is an NVML device and its Iris Xe
+#          is not (oneAPI), so a second NVML row is a real possibility there, and a
+#          corrupted percentage would stop a healthy lane with a false "GPU busy".
+#          TAC_SMI_BIN is honoured here too — the seam `_tac_gpu_used_mib` already had.
 # Version: 1.18.0 (2026-11-18, box awareness): SANCTIONED_LANE_PORT no longer defaults to a
 #          literal 18087 — the value is a machine fact, declared by each host profile as
 #          LLAMA_CUDA_LANE_PORT (v16 of tools/host-profile.sh) and empty when no profile is
@@ -181,6 +189,11 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
+# Module Version: 28
+#   v28 (2026-11-18): the utilisation arm reads a line per card — see the 1.19.0 entry at the
+#     top of this file.  `tr -dc '0-9'` over the whole output concatenated a multi-GPU table
+#     into one nonsense number ("0" + "25" = "025"), which the XPS can reach with its
+#     discrete RTX 3050 Ti plus any second NVML device.
 # Module Version: 27
 #   v27 (2026-11-18): SANCTIONED_LANE_PORT comes from the host profile, not a literal 18087
 #     - see the 1.18.0 entry at the top of this file.
@@ -416,20 +429,32 @@ sanctioned_lane_serving() {
 # act on, without a second sampling loop and without the risk of a read that appends
 # to REASONS by itself.
 util_peak() {
-    local max_util=0 s out rc
+    local max_util=0 s out rc line
     for _ in $(seq 1 "$SAMPLES"); do
-        out=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null); rc=$?
+        # TAC_SMI_BIN is the seam _tac_gpu_used_mib already honours: `timeout` execs a
+        # BINARY, so a test's nvidia-smi FUNCTION is invisible, and a suite that doubles
+        # the probe needs a path it can point at (measured 2026-11-06 on the twin).
+        #
+        # ONE LINE PER CARD: `--query-gpu` prints every GPU the driver reports, and
+        # `tr -dc '0-9'` over two lines CONCATENATES them — two cards reading 0 and 25
+        # scored "025", not 25.  The peak is taken per line, then across lines, so the
+        # answer is the most-contended card.  The XPS is the box this protects: its
+        # discrete RTX 3050 Ti appears in this table and its Iris Xe never does
+        # (oneAPI, not NVML), so any second NVML row would corrupt the reading here.
+        out=$("${TAC_SMI_BIN:-nvidia-smi}" --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null); rc=$?
         # While the driver is unavailable every sample is a *crashing* nvidia-smi, and
         # each crash makes WSL capture a core dump (kernel-log noise + jitter). One
         # failed probe is enough proof they will all fail: stop sampling and let
         # foreign_apps_busy() fail closed with reason nvidia-smi-unavailable.
         (( rc != 0 )) && return 1
-        s=$(tr -dc '0-9' <<<"$out")
-        [[ -z "$s" ]] && s=0
-        (( s > max_util )) && max_util=$s
+        while IFS= read -r line; do
+            s=$(tr -dc '0-9' <<<"$line")
+            [[ -z "$s" ]] && continue
+            (( s > max_util )) && max_util=$s
+        done <<< "$out"
         # Above the threshold the exact peak no longer matters: every caller compares
         # against the threshold, so returning here keeps the probe as fast as before.
-        (( s >= UTIL_THRESHOLD )) && { printf '%s\n' "$s"; return 0; }
+        (( max_util >= UTIL_THRESHOLD )) && { printf '%s\n' "$max_util"; return 0; }
         sleep "$SAMPLE_INTERVAL"
     done
     printf '%s\n' "$max_util"

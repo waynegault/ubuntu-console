@@ -16,6 +16,16 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 36
+#   v36 (2026-11-18): the VRAM baseline reads EVERY card, not the first one.  It used
+#     `memory.free | head -1` and `memory.total | head -1`, so on a box with more than one
+#     NVML device it judged card 0 and ignored the rest — the XPS's discrete RTX 3050 Ti is
+#     such a device.  The reading is now the MOST-CONSTRAINED card (least free, with its own
+#     total), which is identical on a one-device box.  It also honours TAC_SMI_BIN, the seam
+#     _tac_gpu_used_mib already had: without it no suite could drive this reader at all.
+#     What it still cannot see: the Dell's Iris Xe is served through oneAPI and never appears
+#     in an NVML table, which is why the Xe lanes are keep-units there, not census tenants —
+#     the gate can only speak about devices the driver reports.
 # Module Version: 35
 #   v35 (2026-11-18): _tac_cuda_lane_unit / _tac_cuda_lane_units — ONE definition of this
 #     box's CUDA lane(s): LLAMA_CUDA_LANE_UNIT, else TAC_HOST_PRIMARY_LANE, then the
@@ -1004,12 +1014,29 @@ _tac_vram_baseline_verdict() {
 _tac_gpu_wait_baseline() {
     local _timeout="${1:-90}" _poll="${2:-2}" _waited=0 _free _total _verdict _rc
     while :; do
+        # ONE LINE PER CARD, and `head -1` used to pick the FIRST — which is the wrong
+        # card on any box whose contended device is not index 0.  The reading is instead
+        # the most-constrained card: least free headroom, and its OWN total.  On a
+        # one-device box (the ASUS) this is the same number it always was; on the XPS it
+        # means "would a measurement fit anywhere", not "does card 0 have room".
+        #
+        # NOTE what this does NOT see: the Dell's Iris Xe is served through oneAPI and
+        # never appears in an NVML table, so no nvidia-smi reading describes it.  That is
+        # why the Xe lanes are keep-units in that box's conf rather than census tenants —
+        # the gate can only speak about devices the driver reports.
         # swallow-ok: an unreadable card yields empty, and the verdict refuses on a non-numeric reading
-        _free="$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" 2>/dev/null \
-            nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1 | tr -d ' ')"
-        # swallow-ok: same reading, other field; the verdict fails closed on either being unreadable
-        _total="$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" 2>/dev/null \
-            nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')"
+        _pairs="$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" "${TAC_SMI_BIN:-nvidia-smi}" 2>/dev/null \
+            --query-gpu=memory.free,memory.total --format=csv,noheader,nounits \
+            | tr -d ' ' | tr ',' ' ' | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {print $1, $2}')"
+        _free=""
+        _total=""
+        while read -r _f _t; do
+            [[ -n "$_f" && -n "$_t" ]] || continue
+            if [[ -z "$_free" ]] || (( _f < _free )); then
+                _free="$_f"
+                _total="$_t"
+            fi
+        done <<< "$_pairs"
         _verdict="$(_tac_vram_baseline_verdict "$_free" "$_total")"
         _rc=$?
         case "$_rc" in

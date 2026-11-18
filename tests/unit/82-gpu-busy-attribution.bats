@@ -347,3 +347,54 @@ _hold_gpu_lock() {
     [[ "$output" == free* ]]
     [[ "$output" != *"gpu-lock-held-by-another-run"* ]]
 }
+
+# ── one line per card ───────────────────────────────────────────────────────
+# `--query-gpu` prints a line for EVERY GPU the driver reports.  The util arm used to
+# `tr -dc '0-9'` across the whole output, which CONCATENATES the lines: two cards reading
+# 0 and 25 scored "025".  The box this protects is the XPS — its discrete RTX 3050 Ti is
+# in that table and its Iris Xe is not — so a second NVML row is a real possibility there,
+# and a corrupted percentage is a false "GPU busy" that stops a healthy lane.
+
+@test "two cards read 0 and 25: the peak is 25, never the concatenation 025" {
+    local fake="$BATS_TEST_TMPDIR/smi-two-cards"
+    printf '#!/usr/bin/env bash\nprintf "0\\n25\\n"\n' > "$fake"
+    chmod +x "$fake"
+    run env TAC_SMI_BIN="$fake" TAC_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
+        "$REPO_ROOT/bin/gpu-busy.sh" --json
+    # 25 is above the 15% threshold, so the probe reads BUSY and NAMES the percentage.
+    [[ "$output" == *'"busy":true'* ]]
+    [[ "$output" == *"util=25%"* ]]
+    # the OLD code concatenated the two lines into "025" and printed that verbatim;
+    # arithmetic still read 25, so only the printed reading distinguishes the two
+    [[ "$output" != *"util=025%"* ]]
+}
+
+@test "two idle cards read BUSY=false, not a bogus large percentage" {
+    local fake="$BATS_TEST_TMPDIR/smi-idle-cards"
+    printf '#!/usr/bin/env bash\nprintf "0\\n0\\n"\n' > "$fake"
+    chmod +x "$fake"
+    run env TAC_SMI_BIN="$fake" TAC_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
+        "$REPO_ROOT/bin/gpu-busy.sh" --json
+    [[ "$output" != *"util="* ]]
+}
+
+# ── the baseline reads the MOST-CONSTRAINED card ────────────────────────────
+# The reader used `memory.free | head -1` and `memory.total | head -1`, so on a box with
+# more than one NVML device it judged the FIRST card and ignored the rest.  The XPS is the
+# box at risk: its discrete RTX 3050 Ti is one NVML device, and a second one would be
+# silently skipped.  (Its Iris Xe is NOT in this table at all — oneAPI, not NVML — which
+# is why the Xe lanes are keep-units there, not census tenants.)
+
+@test "two cards: the baseline judges the card with less free headroom, not card 0" {
+    local fake="$BATS_TEST_TMPDIR/smi-two-vram"
+    # card 0 is a roomy 24 GB card; card 1 is the 4 GB card this repo actually contends
+    printf '#!/usr/bin/env bash\ncase "$*" in\n  *memory.free,memory.total*) printf "24000, 24576\\n626, 4096\\n" ;;\n  *memory.free*) printf "24000\\n626\\n" ;;\n  *memory.total*) printf "24576\\n4096\\n" ;;\n  *) printf "" ;;\nesac\n' > "$fake"
+    chmod +x "$fake"
+    run env TAC_SMI_BIN="$fake" TAC_TEST_TMPDIR="$BATS_TEST_TMPDIR" \
+        bash -c 'source "$1"; _tac_gpu_wait_baseline 1 1' _ "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    # 626 free of 4096 is a 3470 MiB gap against a 3500 bound: PASSES narrowly, and the
+    # reading must be card 1's.  With card 0 (24000/24576, gap 576) it would ALSO pass,
+    # so the discriminating assertion is the printed held_mib.
+    [[ "$output" == *"held_mib=3470"* ]]
+    [[ "$output" != *"held_mib=576"* ]]
+}
