@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from tools.box import (
     ASUS_RTX_SPARK_PROFILE,
     DELL_XPS_PROFILE,
     PROFILES,
+    HardwareProfile,
     LaneSpec,
     MemoryArchitecture,
     PortAllocation,
@@ -190,7 +192,7 @@ def _conf_facts(conf: Path, keys: tuple[str, ...]) -> dict[str, str]:
 
 
 # conf fact -> the Python value it must equal.
-SHARED_FACTS: dict[str, object] = {
+SHARED_FACTS: dict[str, Callable[[HardwareProfile], object]] = {
     "LLM_SERVICE_PORT": lambda p: p.serving.primary_port,
     "LLAMA_THREAD_CAP": lambda p: p.serving.thread_cap,
     "LLAMA_GPU_LAYERS": lambda p: p.serving.gpu_layers,

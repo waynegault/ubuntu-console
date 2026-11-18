@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 4
+#   v4 (2026-11-18): the file ends with the `# end of file` marker the fast suite
+#   requires (tests/tactical-console-fast.bats:351). It sat at `exit 0` alone, which
+#   reddened CI hygiene case 25 for a marker whose absence changes no behaviour — but
+#   the marker is how a truncated file is distinguishable from a complete one, so it
+#   is not cosmetic.
 # Module Version: 3
 #   v3 (2026-11-18): the cross-arm verdict the header promised is now produced —
 #   per prompt and repetition, both arms' generation rate and whether the two arms
@@ -354,3 +360,5 @@ fi
 
 echo "=== done $(date -Iseconds) — the lane is restored by the EXIT trap" | tee -a "$LOG"
 exit 0
+
+# end of file
