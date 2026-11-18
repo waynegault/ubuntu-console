@@ -496,6 +496,31 @@ setup_core_chunks() {
     [ "$s1" = "$s2" ]
 }
 
+@test "index patch: the 0.25.1 builder is a KNOWN shape, so check and apply agree about it" {
+    # Measured 2026-11-17 on the global npm CLI (0.25.1): its managed builder has no `ordered`
+    # sort and no `omitted` parameter, so the 0.26.8 anchors matched nothing. The apply refused
+    # the whole copy as "UNKNOWN shape" while --check SKIPPED it as "no known builder" — two
+    # different answers about the same bytes, and neither one patched it.
+    # Catches: a future narrowing back to the 0.26.8 anchor alone, which would silently stop
+    # the core filter from ever reaching a 0.25.1 CLI.
+    command -v node >/dev/null || skip "node is required by the patcher's own syntax check"
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS_0251" bash "$PATCHER" --check
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"corefilter: stock"* ]]
+    [[ "$output" != *"no known auto-memory index builder"* ]]
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS_0251" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"patched  corefilter"* ]]
+
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS_0251" bash "$PATCHER" --check
+    [[ "$output" == *"corefilter: applied"* ]]
+    # The property, not the marker: the builder must route through the core split.
+    grep -qF 'memoryCoreSplit' "$PATCHED_0251"
+    # ...and the stock body must be gone, or the filter is a receipt over an unfiltered builder.
+    ! grep -qF 'return assembleIndex(docs.map(doc=>docIndexLine(doc)))' "$PATCHED_0251"
+}
+
 @test "index patch: 500 notes with exactly 1 core emit 2 lines, and the pointer names 499 and the store" {
     command -v node >/dev/null || skip "node is required to run the harness"
     setup_core_chunks

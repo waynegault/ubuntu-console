@@ -138,7 +138,16 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-11-17): the corefilter hunk gains a CLI 0.25.1 anchor. Measured on this box: the
+#   global npm CLI is 0.25.1, whose builders take no `omitted` parameter, have no
+#   `isImportedMemoryDocument`/`describeScanOmissions`, and call a ONE-argument `assembleIndex`.
+#   The 0.26.8 anchors therefore matched nothing and the whole copy was refused as "UNKNOWN
+#   shape", so `--check` reported `corefilter: stock` on a bundle that could never be patched.
+#   The 0.25.1 patched form keeps the same PROPERTY (core-only emit, fallback notice, pointer)
+#   and drops the omitted term, which that version does not define. The helper insertion point
+#   is now found by the MARKER rather than by a builder signature, because the signature is
+#   version-specific and a signature search silently missed 0.25.1.
 #   v15 (2026-11-09): EIGHTH HUNK (corefilter + coreflag), card MEMORY-INDEX-CORE-001. The index
 #   was a FULL ENUMERATION: every note was one line in every session's context (measured
 #   2026-11-05: user store 183 entries / 24,813 units; project store 200 / 28,283 with 152 notes
@@ -311,6 +320,14 @@ MARKER_COREFLAG="LOCAL PATCH 2026-11-09 (qwen-memory-index-coreflag)"
 # 2026-10-25, when three marker-only copies reported green over stock constants.
 STOCK_MANAGED_BUILDER='return assembleIndex(ordered.map(doc=>docIndexLine(doc))'
 STOCK_TEAM_BUILDER='return assembleIndex(groupTeamDocsByDescription(docs)'
+# CLI 0.25.1's managed builder body, which the two anchors above do not match: it has no
+# `ordered` sort and no `omitted` parameter (measured 2026-11-17). Without this the check called
+# a 0.25.1 chunk "no known auto-memory index builder" and SKIPPED it, so the apply and the check
+# disagreed about the same file — the apply could patch a builder the check refused to look at.
+# The anchor is the FUNCTION BODY ONLY, deliberately: the trailing `__name(...)` annotation is
+# not part of the builder's semantics, and the shipped bundle and the test fixtures differ in
+# whether they carry it. Anchoring on the body keeps one definition shared by check and apply.
+STOCK_MANAGED_BUILDER_0251='function buildManagedAutoMemoryIndex(docs,_metadata){return assembleIndex(docs.map(doc=>docIndexLine(doc)))}'
 STOCK_SCANNER_TAIL='body:bodyContent.trim(),mtimeMs}}'
 
 # Hunk 6 lives in a DIFFERENT chunk from the builder (0.26.5/0.26.8: the scanner is
@@ -521,10 +538,14 @@ for f in "${files[@]}"; do
     # Exact-match, per-copy all-or-nothing: every hunk this copy still needs must find its
     # anchor exactly once, or nothing is written.  Post-conditions then re-check the promises.
     if ! PATCH_FILE="$f" PATCH_MARKER_TRUNC="$MARKER_TRUNC" PATCH_MARKER_BYTES="$MARKER_BYTES" \
-         PATCH_MARKER_TITLE="$MARKER_TITLE" PATCH_MARKER_LINES="$MARKER_LINES" "$PYTHON_BIN" - <<'PY'
+         PATCH_MARKER_TITLE="$MARKER_TITLE" PATCH_MARKER_LINES="$MARKER_LINES" \
+         PATCH_LINE_TARGET_CAP="$LINE_TARGET_CAP" "$PYTHON_BIN" - <<'PY'
 import os, pathlib, re
 
 p = pathlib.Path(os.environ["PATCH_FILE"])
+# The line cap the check enforces, passed in rather than duplicated: a literal here would drift
+# from LINE_TARGET_CAP and the apply would again disagree with --check about the same bytes.
+LINE_TARGET_CAP = int(os.environ["PATCH_LINE_TARGET_CAP"])
 marker_trunc = os.environ["PATCH_MARKER_TRUNC"]
 marker_bytes = os.environ["PATCH_MARKER_BYTES"]
 marker_title = os.environ["PATCH_MARKER_TITLE"]
@@ -1009,7 +1030,13 @@ else:
     applied.append("titlecap")
 
 # hunk 5 (linecap)
-if marker_lines in src:
+# The MARKER is corroboration, never evidence (v16). Measured 2026-11-17 on the 0.25.1 global
+# CLI: the copy carried the marker with MAX_INDEX_LINES still at 400, so this branch printed
+# "already linecap" and skipped the raise while --check read `linecap: counterfeit` — the apply
+# and the check disagreeing about the same bytes. The apply now tests the NUMBER, which is the
+# property --check tests, so a stale marker is upgraded instead of trusted.
+_lines_decl = re.search(r"MAX_INDEX_LINES *= *([0-9]+)", src)
+if _lines_decl and int(_lines_decl.group(1)) >= LINE_TARGET_CAP:
     already.append("linecap")
 else:
     ln = None
@@ -1464,7 +1491,8 @@ for f in "${files[@]}"; do
     # is `counterfeit`, and it must read as a failure rather than as `applied`.
     if grep -qF 'memoryCoreSplit' "$f"; then st_core="applied"
     elif grep -qF "$MARKER_CORE" "$f"; then st_core="counterfeit"
-    elif grep -qF "$STOCK_MANAGED_BUILDER" "$f" || grep -qF "$STOCK_TEAM_BUILDER" "$f"; then
+    elif grep -qF "$STOCK_MANAGED_BUILDER" "$f" || grep -qF "$STOCK_TEAM_BUILDER" "$f" \
+        || grep -qF "$STOCK_MANAGED_BUILDER_0251" "$f"; then
         st_core="stock"
     fi
 
@@ -1495,6 +1523,17 @@ p = pathlib.Path(os.environ["PATCH_FILE"])
 marker = os.environ["PATCH_MARKER_CORE"]
 src = p.read_text(encoding="utf-8")
 
+# ALREADY APPLIED is a success, not an UNKNOWN shape (v16). Without this, a second --apply on a
+# patched copy found no stock anchor, counted zero hits and refused — so the hunk could be
+# applied once and never re-verified, and a run that had already succeeded reported a failure.
+# The marker alone is not trusted: the property is checked below, and a marker with no
+# memoryCoreSplit is still refused.
+if marker in src:
+    if src.count("function memoryCoreSplit(") == 1:
+        print("  already  corefilter")
+        raise SystemExit(0)
+    raise SystemExit("refusing to patch: the corefilter marker is present but memoryCoreSplit is not")
+
 # The two stock builders, byte-for-byte as 0.26.8 ships them. Each must match EXACTLY ONCE: a
 # chunk carrying two copies is refused rather than half-patched, the same all-or-nothing rule the
 # other hunks use.
@@ -1513,6 +1552,21 @@ STOCK_TEAM = (
     "return assembleIndex(groupTeamDocsByDescription(docs).map(({primary,others})=>"
     "docIndexLine(primary,others)),describeScanOmissions(docs,omitted),omitted.length)}"
     '__name(buildTeamAutoMemoryIndex,"buildTeamAutoMemoryIndex");'
+)
+
+# CLI 0.25.1's builders, byte-for-byte. A DIFFERENT SHAPE, not a variant of the above: 0.25.1
+# has no `omitted` parameter, no `isImportedMemoryDocument` and no `describeScanOmissions`, and
+# its `assembleIndex` takes ONE argument. Measured 2026-11-17: the global npm CLI on this box is
+# 0.25.1, so the 0.26.8 anchors above matched nothing and the whole copy was refused as
+# "UNKNOWN shape" — the corefilter hunk could not be applied to it at all.
+STOCK_MANAGED_0251 = (
+    "function buildManagedAutoMemoryIndex(docs,_metadata){"
+    "return assembleIndex(docs.map(doc=>docIndexLine(doc)))}"
+)
+STOCK_TEAM_0251 = (
+    "function buildTeamAutoMemoryIndex(docs){"
+    "return assembleIndex(groupTeamDocsByDescription(docs).map(({primary,others})=>"
+    "docIndexLine(primary,others)))}"
 )
 
 HELPERS = (
@@ -1569,8 +1623,35 @@ NEW_TEAM = (
     '__name(buildTeamAutoMemoryIndex,"buildTeamAutoMemoryIndex");'
 )
 
+# The 0.25.1 patched forms. Same PROPERTY as NEW_MANAGED/NEW_TEAM — emit only core notes, add
+# the fallback notice, add the pointer — expressed against 0.25.1's one-argument assembleIndex
+# and its absent scan-omission helpers. `omitted` does not exist there, so `more` is the hidden
+# count alone; inventing an omitted term would reference a variable the bundle never defines.
+NEW_MANAGED_0251 = (
+    "function buildManagedAutoMemoryIndex(docs,_metadata){"
+    "/*" + marker + "*/"
+    "const{core,hidden,fallback}=memoryCoreSplit(docs);"
+    "const emit=fallback?docs:core;"
+    "const content=assembleIndex(emit.map(doc=>docIndexLine(doc)));"
+    "if(fallback){return content+memoryCoreFallbackNotice(docs)}"
+    "const more=hidden.length;"
+    "return more>0?content+\"\\n\\n\"+memoryCorePointerLine(docs,more):content}"
+)
+NEW_TEAM_0251 = (
+    "function buildTeamAutoMemoryIndex(docs){"
+    "/*" + marker + "*/"
+    "const{core,hidden,fallback}=memoryCoreSplit(docs);"
+    "const emit=fallback?docs:core;"
+    "const content=assembleIndex(groupTeamDocsByDescription(emit).map(({primary,others})=>"
+    "docIndexLine(primary,others)));"
+    "if(fallback){return content+memoryCoreFallbackNotice(docs)}"
+    "const more=hidden.length;"
+    "return more>0?content+\"\\n\\n\"+memoryCorePointerLine(docs,more):content}"
+)
+
 hits = 0
-for stock, new in ((STOCK_MANAGED, NEW_MANAGED), (STOCK_TEAM, NEW_TEAM)):
+for stock, new in ((STOCK_MANAGED, NEW_MANAGED), (STOCK_TEAM, NEW_TEAM),
+                   (STOCK_MANAGED_0251, NEW_MANAGED_0251), (STOCK_TEAM_0251, NEW_TEAM_0251)):
     n = src.count(stock)
     if n == 0:
         continue
@@ -1583,12 +1664,15 @@ if hits == 0:
     raise SystemExit("refusing to patch: no known auto-memory index builder body (UNKNOWN shape)")
 
 # The helpers are defined ONCE, immediately before the first builder that uses them, so the
-# pointer and the fallback cannot drift between the managed and the team builder.
-first = src.find("function buildManagedAutoMemoryIndex(docs,_metadata,omitted=[]){")
-if first < 0:
-    first = src.find("function buildTeamAutoMemoryIndex(docs,omitted=[]){")
+# pointer and the fallback cannot drift between the managed and the team builder. Located by the
+# MARKER rather than by a builder signature, because the signature differs per CLI version
+# (0.26.8 carries `omitted=[]`, 0.25.1 does not) and a signature search silently missed 0.25.1.
+first = src.find("/*" + marker + "*/")
 if first < 0:
     raise SystemExit("refusing to patch: the patched builders are not found in the result")
+first = src.rfind("function build", 0, first)
+if first < 0:
+    raise SystemExit("refusing to patch: the patched builder's function head is not found")
 src = src[:first] + HELPERS + src[first:]
 
 # Post-conditions: the property, not the marker. Both builders must route through
@@ -1596,9 +1680,12 @@ src = src[:first] + HELPERS + src[first:]
 # BOTH builders; and docIndexLine must be untouched (recall and search still see every note).
 if src.count("function memoryCoreSplit(") != 1:
     raise SystemExit("refusing to patch: memoryCoreSplit is not defined exactly once in the result")
-if src.count("memoryCorePointerLine(") < 3:
-    raise SystemExit("refusing to patch: the pointer line is not wired into both builders")
-for stock in (STOCK_MANAGED, STOCK_TEAM):
+# One pointer call per builder this chunk actually carries, plus the definition. A chunk with
+# only the managed builder (the 0.25.0 fixture, and any bundle that ships one) legitimately has
+# two, so a fixed `>= 3` refused a correct patch — measured 2026-11-17.
+if src.count("memoryCorePointerLine(") < hits + 1:
+    raise SystemExit("refusing to patch: the pointer line is not wired into every patched builder")
+for stock in (STOCK_MANAGED, STOCK_TEAM, STOCK_MANAGED_0251, STOCK_TEAM_0251):
     if stock in src:
         raise SystemExit("refusing to patch: a stock builder body is still present in the result")
 if src.count("function docIndexLine") != 1:
