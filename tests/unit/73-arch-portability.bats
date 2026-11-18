@@ -186,8 +186,10 @@ stub_uname() {
     # that key outranks the arch/CUDA/render facts, so without it this case passes only
     # on a box whose CPU string matches the profile (measured 2026-11-11: the CI runner
     # read a generic CPU and detection reported "no profile matches").
-    run env TAC_HOST_CPU_OVERRIDE="Cortex-X925" \
-        bash -c 'HOSTTYPE=aarch64; source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
+    run env -u LLAMA_LANE_SPECS -u TAC_HOST_PROFILE -u LLM_HOST_PROFILE \
+        TAC_HOST_CPU_OVERRIDE="Cortex-X925" \
+        TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        bash -c 'source "$1"; printf "%s\n" "$LLAMA_LANE_SPECS"' \
         _ "$REPO_ROOT/scripts/01-constants.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"llama-cuda-qwen3coder-30b-chat.service|18087"* ]]

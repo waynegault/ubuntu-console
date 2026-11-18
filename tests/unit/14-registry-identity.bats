@@ -661,9 +661,9 @@ STUB
     PATH="$TMPDIR_BATS/bin:$PATH"
     __gguf_metadata() { printf 'Split-New|qwen35|40|131072|32\n'; }
 
-    run __model_download "unsloth/Split-New-GGUF:BF16/Split-New-00001-of-00002.gguf"
+    run __model_download "unsloth/Split-New-GGUF:Q8_0/Split-New-00001-of-00002.gguf"
     [ "$status" -eq 0 ]
-    [ "$(cat "$LLAMA_MODEL_DIR/.pull-recorded")" = "unsloth/Split-New-GGUF|BF16/Split-New-*-of-00002.gguf" ]
+    [ "$(cat "$LLAMA_MODEL_DIR/.pull-recorded")" = "unsloth/Split-New-GGUF|Q8_0/Split-New-*-of-00002.gguf" ]
     [ -f "$LLAMA_MODEL_DIR/Split-New-00001-of-00002.gguf" ]
     [ -f "$LLAMA_MODEL_DIR/Split-New-00002-of-00002.gguf" ]
     [ "$(awk -F'|' '$3 == "Split-New-00001-of-00002.gguf" {print $4}' "$LLM_REGISTRY")" = "0.8G" ]

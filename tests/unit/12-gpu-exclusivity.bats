@@ -351,10 +351,11 @@ EOS
     # Wired in, and released.
     [[ "$_use" == *"__model_use_claim_cuda_card"* ]]
     [[ "$_stop" == *"card released"* ]]
-    # It refuses a foreign owner and displaces our own CUDA lanes...
+    # It refuses a foreign owner and displaces our own profile-declared CUDA lanes...
     [[ "$_claim" == *"__llm_gpu_foreign_owner"* ]]
-    [[ "$_claim" == *"llama-cuda-llama32-3b-chat.service"* ]]
-    [[ "$_claim" == *"llama-cuda-qwen35-4b-pipeline.service"* ]]
+    [[ "$_claim" == *"LLAMA_CUDA_LANE_UNIT"* ]]
+    [[ "$_claim" == *"LLAMA_LANE_SPECS"* ]]
+    [[ "$_claim" == *"llama-cuda-*"* ]]
     # ...and never the Xe card's units.
     [[ "$_claim" != *"llama-xe-minicpm5-1b-chat.service"* ]]
     [[ "$_claim" != *"llama-xe-embeddinggemma-embed.service"* ]]
@@ -915,21 +916,18 @@ EOS
 # the 2026-09-15 re-tune burned two rows on exactly that).  It therefore names the
 # lane a second time, and the two names must be the one unit.
 @test "gpu-exclusivity: the re-tune wrapper and the watchdog name the same CUDA lane" {
-    local from_wrapper
-    from_wrapper=$(sed -nE 's/.*LLAMA_CUDA_LANE_UNIT:-([^}]*)\}.*/\1/p' "$REPO_ROOT/scripts/retune-band-chunk.sh")
-    [[ -n "$from_wrapper" ]] \
-        || { echo "FAIL: the re-tune wrapper names no CUDA lane default"; return 1; }
+    # Both resolve from the host profile's LLAMA_CUDA_LANE_UNIT rather than hardcoding
+    # a single machine's unit name: retune-band-chunk.sh via _tac_cuda_lane_unit, and
+    # llama-watchdog.sh directly from LLAMA_CUDA_LANE_UNIT.
+    grep -q 'CUDA_LANE_UNIT="$(_tac_cuda_lane_unit)"' "$REPO_ROOT/scripts/retune-band-chunk.sh" \
+        || { echo "FAIL: the re-tune wrapper no longer resolves its CUDA lane via _tac_cuda_lane_unit"; return 1; }
+    grep -q 'LLAMA_CUDA_LANE_UNIT' "$REPO_ROOT/bin/_tac-bin-lib.sh" \
+        || { echo "FAIL: _tac_cuda_lane_unit no longer reads LLAMA_CUDA_LANE_UNIT"; return 1; }
 
-    # The watchdog used to carry its OWN `CUDA_UNIT="…"` literal, and this case existed
-    # to keep the two spellings equal.  It now DERIVES the lane from the same
-    # LLAMA_CUDA_LANE_UNIT variable the wrapper defaults (bin/llama-watchdog.sh), which
-    # is the stronger guarantee — provided nothing reintroduces a second literal.  That
-    # reintroduction is what this case catches now; measured 2026-11-01, when the old
-    # literal-against-literal assertion could only report an empty match.
     grep -q 'CUDA_LANE_UNIT="${LLAMA_CUDA_LANE_UNIT' "$REPO_ROOT/bin/llama-watchdog.sh" \
         || { echo "FAIL: the watchdog no longer derives its lane from LLAMA_CUDA_LANE_UNIT"; return 1; }
     ! grep -qE '^CUDA_UNIT="[^"]+"' "$REPO_ROOT/bin/llama-watchdog.sh" \
-        || { echo "FAIL: a hardcoded CUDA_UNIT literal is back in the watchdog (the wrapper's default: $from_wrapper)"; return 1; }
+        || { echo "FAIL: a hardcoded CUDA_UNIT literal is back in the watchdog"; return 1; }
 }
 
 # run-autotune-batch.sh's footer is where a failed row used to disappear: it sliced
