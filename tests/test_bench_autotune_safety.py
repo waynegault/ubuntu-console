@@ -314,3 +314,70 @@ def test_worktree_wrappers_use_their_own_checkout(tmp_path: Path) -> None:
     )
     assert res_bench.returncode == 0, f"bench-rows failed: {res_bench.stdout} {res_bench.stderr}"
     assert tac_exec_marker.read_text(encoding="utf-8").strip() == f"repo={wt.resolve()} args=model bench test.gguf"
+
+
+def test_run_autotune_batch_display_row_for_bare_number_and_unknown_file(tmp_path: Path) -> None:
+    """`run-autotune-batch.sh` displays bare row numbers as themselves and unknown files as '?'."""
+    wt = tmp_path / "batch_wt"
+    (wt / "scripts").mkdir(parents=True)
+    (wt / "bin").mkdir(parents=True)
+
+    shutil.copy2(REPO_ROOT / "scripts" / "run-autotune-batch.sh", wt / "scripts" / "run-autotune-batch.sh")
+    (wt / "bin" / "_tac-bin-lib.sh").write_text(
+        "_tac_suspend_held() { return 1; }\n"
+        "_tac_cleanroom_stops_allowed() { return 1; }\n"
+        "_tac_dxg_health_check() { return 0; }\n"
+        "_tac_is_retired() { return 1; }\n",
+        encoding="utf-8",
+    )
+    (wt / "env.sh").write_text(
+        "export TAC_LOAD_DEGRADED=0\n"
+        "export LLAMA_CUDA_LANE_UNIT=test-lane.service\n"
+        "export TAC_HOST_PRIMARY_LANE=test-lane.service\n"
+        'export LLM_REGISTRY="' + str(tmp_path / "models.conf") + '"\n'
+        "warn() { printf '%s\\n' \"$*\" >&2; }\n"
+        "sleep() { :; }\n"
+        "__llm_train_lane_holder() { return 0; }\n"
+        "__llm_gpu_foreign_owner() { return 1; }\n"
+        "__llm_kill_cuda_llama_servers() { return 0; }\n"
+        "__llm_registry_row_for_file() { return 0; }\n",
+        encoding="utf-8",
+    )
+    (wt / "scripts" / "autotune-model.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (wt / "scripts" / "autotune-model.sh").chmod(0o755)
+    (tmp_path / "models.conf").write_text("#|name|file\n", encoding="utf-8")
+    (tmp_path / "cycles").write_text("33\n", encoding="utf-8")
+
+    # Stub timeout/ss/nvidia-smi on PATH so drain_vram completes immediately without touching host GPU.
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    (stub_bin / "timeout").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (stub_bin / "ss").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    for exe in (stub_bin / "timeout", stub_bin / "ss"):
+        exe.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "HEAVY_JOB_HELD": "1",
+            "TAC_TEST_TMPDIR": str(tmp_path),
+            "CUDA_CYCLE_FILE": str(tmp_path / "cycles"),
+            "CUDA_CYCLE_BUDGET": "60",
+            "PATH": f"{stub_bin}:{env.get('PATH', '')}",
+        }
+    )
+
+    res = subprocess.run(
+        ["bash", str(wt / "scripts" / "run-autotune-batch.sh"), "9", "missing.gguf"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=20,
+        env=env,
+        check=False,
+    )
+    assert res.returncode == 0, f"run-autotune-batch failed: {res.stdout}\n{res.stderr}"
+    assert "[1/2] model 9 (row 9, cyc 33/60)" in res.stdout
+    assert "[2/2] model missing.gguf (row ?, cyc 33/60)" in res.stdout
+    assert "(row , " not in res.stdout

@@ -558,6 +558,44 @@ _selftest_run() {
     [[ "$output" != *"recording best-effort config"* ]]
 }
 
+@test "autotune-selftest: a flat below-floor row is NOT re-walked at the certification's sample count" {
+    # Catches the 2026-11-19 budget burn (row 9, Qwen3.8 27B, 27.7G dense on unified memory):
+    # Phase 4 read ~8.2 tps at every rung, declared "flat across ctx — too slow (walk stopped
+    # early)", and then the post-certification descent re-walked the SAME ladder from 147,456
+    # down to 4,096 at 5 samples a rung — 13 more llama-server spawns, all ~8.0 tps.  The
+    # ledger went 49 -> 62, the guard fired after the walk, and the row exited 3 with nothing
+    # saved: two hours of measurement discarded and the row left owed for the next boot.
+    # The post-cert descent exists for the OPPOSITE case (Phase 4 passed the floor on one
+    # sample, the 5-sample median failed it); a row Phase 4 already judged too slow has no
+    # window left to find.  The default canned curve is exactly that row: 8.5 tps at every ctx;
+    # the plain-ctx fixture (native 32,768) gives the ladder enough rungs for the flat stop to
+    # fire ABOVE min ctx, which is the precondition for the post-cert descent to run at all.
+    run _selftest_run "$BATS_TEST_TMPDIR/flatcert" _SELFTEST_FIXTURE=plain-ctx
+    [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"recording best-effort config"* ]]
+    [[ "$output" != *"descending at the certification's sample count"* ]] || {
+        echo "a row Phase 4 already judged too slow was re-walked at 5 samples a rung:"
+        echo "$output"
+        return 1
+    }
+}
+
+@test "autotune-selftest: flat beam anchors skip neighbor expansion rounds" {
+    run _selftest_run "$BATS_TEST_TMPDIR/beamflat" _SELFTEST_FIXTURE=plain-ctx
+    [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"anchors flat"* ]]
+    [[ "$output" == *"skipping neighbor rounds"* ]]
+    [[ "$output" != *"combo 512/512"* ]]
+    [[ "$output" != *"combo 1024/128"* ]]
+}
+
+@test "autotune-selftest: re-climbing ctx is skipped when already at MAX_CTX" {
+    run _selftest_run "$BATS_TEST_TMPDIR/reclimbmax" _SELFTEST_FIXTURE=plain-ctx
+    [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"re-climbing ctx: skipped — already at max ctx"* ]]
+    [[ "$output" != *"re-climbing ctx for combo"* ]]
+}
+
 @test "autotune-selftest: a ceiling above the probed capacity forces the filled-load descent" {
     run _selftest_run "$BATS_TEST_TMPDIR/oom" _SELFTEST_OOM_ABOVE=8192
     [[ "$status" -eq 0 ]]
@@ -666,6 +704,17 @@ _selftest_run() {
     run _selftest_run "$BATS_TEST_TMPDIR/nospec" AUTOTUNE_SPEC_SWEEP=0
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"skipping the sweep to conserve CUDA cycles"* ]]
+    [[ "$output" == *"winner:"* ]]
+}
+
+@test "autotune-dxg: tight budget after Phase 4 skips optional post-cert sweeps and still certifies" {
+    local sb="$BATS_TEST_TMPDIR/tightbudget"
+    mkdir -p "$sb"
+    printf '57\n' > "$sb/cycles"
+    : > "$sb/stalls"
+    run _selftest_run "$sb" CUDA_CYCLE_FILE="$sb/cycles" CUDA_STALL_FILE="$sb/stalls"
+    [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"skipping spec-decode sweep to preserve certification save"* ]]
     [[ "$output" == *"winner:"* ]]
 }
 

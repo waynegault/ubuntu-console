@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 148
+# Module Version: 149
+#   v149 (2026-11-19): four autotune cycle-budget & waste fixes from row 9 (27.7G dense):
+#   (1) Post-certification floor descent no longer re-walks a row Phase 4 already judged too
+#       slow (_P4_TOO_SLOW), and carries its own flat-curve early stop (_cert_flat).
+#   (2) Beam search stops after anchor probes when anchors are flat (<=5% spread,
+#       __autotune_beam_anchors_flat), and skips redundant re-climb when BEST_CTX == MAX_CTX.
+#   (3) _cuda_guard_or_exit runs inside multi-launch sweep loops (top-level, never inside $(...))
+#       so the cycle budget halts mid-sweep instead of overshooting (62 >= 60).
+#   (4) _cuda_budget_has_headroom reserves _POST_CERT_RESERVE cycles so tight budgets skip
+#       optional post-cert sweeps (profile 2, spec-decode, threads) and preserve the save.
 #   v148 (2026-11-18): box-aware RTX Spark / unified-memory autotune improvements:
 #   (1) Unified-memory pool sizing (TAC_HOST_PROFILE_SHARED_MEMORY=1): size BUDGET and
 #       BAND_MIN_MB against the effective pool (max of FREE_VRAM and guest MemAvailable minus
@@ -264,6 +273,9 @@ _VRAM_BOOT_BASELINE_FILE="${TAC_VRAM_BASELINE_FILE:-/dev/shm/autotune-vram-basel
 export CUDA_CYCLE_FILE
 # Halting budget, same default and same counter file as run-autotune-batch.sh:
 CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"
+# Reserve enough cycles after Phase 4 for TTFT + pos2 + task-quality + margin.
+_POST_CERT_RESERVE="${LLM_AUTOTUNE_POST_CERT_RESERVE:-4}"
+[[ "$_POST_CERT_RESERVE" =~ ^[0-9]+$ ]] || _POST_CERT_RESERVE=4
 # Maximum allowed cumulative VRAM baseline drift (MiB) before halting due to VA fragmentation.
 LLM_AUTOTUNE_MAX_DRIFT_MIB="${LLM_AUTOTUNE_MAX_DRIFT_MIB:-1536}"
 # Consecutive launches that stall (health never ready, process still alive, no
@@ -483,6 +495,14 @@ _cuda_guard_or_exit() {
         fi
     fi
     return 0
+}
+
+# _cuda_budget_has_headroom <reserve> — return 0 when more than <reserve> CUDA cycles remain.
+_cuda_budget_has_headroom() {
+    local _reserve="${1:-4}" _c
+    [[ "$_reserve" =~ ^[0-9]+$ ]] || _reserve=4
+    _c=$(_cuda_cycles)
+    (( _c + _reserve < CUDA_CYCLE_BUDGET ))
 }
 
 # VRAM-baseline guarantee: the KV-math START_CTX below is only trustworthy
@@ -2032,13 +2052,8 @@ kv_pair_status() {
     printf '%s\n' "not eligible: no long-context retrieval validation (KVCACHE-QUANT-VALIDATE-001)"
 }
 
-# probe_upward — bounded ctx re-climb for a fixed config (quick benches).
-probe_upward() {
-    local _pc="$1" _pb="$2" _pu="$3" _pm="${4:-auto}" _pngl="${5:-$BENCH_NGL}"
-    local _pkk="${6:-q8_0}" _pkv="${7:-q8_0}"
-    local _tps _lo _hi=0 _steps=0 _mid _fail_label
-
-    # Which decode policy is this row being measured under?  Say it ONCE per row, before
+# _log_sampler_policy_once — print the active decode sampler policy once per autotune row.
+_log_sampler_policy_once() {
     if [[ -z "${_SAMPLER_POLICY_LOGGED:-}" ]]; then
         _SAMPLER_POLICY_LOGGED=1
         local -a _policy_args=()
@@ -2049,6 +2064,43 @@ probe_upward() {
             echo "  sampler: none configured (registry columns 38/39 blank) — llama.cpp defaults apply"
         fi
     fi
+}
+
+# __autotune_beam_anchors_flat <flat_pct> <tps...> — return 0 when >=2 anchors lie within flat_pct%.
+__autotune_beam_anchors_flat() {
+    local _pct="${1:-5}"
+    shift
+    [[ "$_pct" =~ ^[0-9]+([.][0-9]+)?$ ]] || _pct=5
+    (( $# >= 2 )) || return 1
+    local _res
+    _res=$(printf '%s\n' "$@" | awk -v pct="$_pct" '
+        /^[0-9]+([.][0-9]+)?$/ {
+            if ($1 > 0) {
+                if (n == 0 || $1 < min) min = $1
+                if (n == 0 || $1 > max) max = $1
+                n++
+            }
+        }
+        END {
+            if (n < 2) exit 1
+            if (max <= min * (1 + pct / 100.0)) {
+                printf "%s|%s\n", min, max
+                exit 0
+            }
+            exit 1
+        }') || return 1
+    _BEAM_MIN_TPS="${_res%%|*}"
+    _BEAM_MAX_TPS="${_res##*|}"
+    return 0
+}
+
+# probe_upward — bounded ctx re-climb for a fixed config (quick benches).
+probe_upward() {
+    local _pc="$1" _pb="$2" _pu="$3" _pm="${4:-auto}" _pngl="${5:-$BENCH_NGL}"
+    local _pkk="${6:-q8_0}" _pkv="${7:-q8_0}"
+    local _tps _lo _hi=0 _steps=0 _mid _fail_label
+
+    _log_sampler_policy_once
 
     _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
         _fail_label=$(_last_fail_label)
@@ -2337,6 +2389,7 @@ elif [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
     beam_eval() {
         local key="$1"
         [[ -n "${SEEN[$key]:-}" ]] && return
+        _cuda_guard_or_exit
         SEEN[$key]=1
         local _b2 _u2 tps fail_label
         IFS=':' read -r _b2 _u2 <<< "$key"
@@ -2393,39 +2446,51 @@ elif [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
     _a2=""
     for _a2 in "${FILTERED_ANCHORS[@]}"; do beam_eval "$_a2"; done
 
-    mapfile -t BEAM < <(beam_top)
-    _round=0
-    while [[ $_round -lt $BEAM_ROUNDS ]] && [[ ${#BEAM[@]} -gt 0 ]]; do
-        _round=$((_round + 1))
-        FRONTIER=()
-        _bk=""; _nk=""; _in=0; _dup=0
-        for _bk in "${BEAM[@]}"; do
-            while IFS= read -r _nk; do
-                [[ -n $_nk ]] || continue
-                _in=0
-                for _sk in "${SPACE[@]}"; do [[ "$_sk" == "$_nk" ]] && _in=1 && break; done
-                [[ $_in == 1 ]] || continue
-                [[ -n "${SEEN[$_nk]:-}" ]] && continue
-                _dup=0
-                _fk=""
-                for _fk in "${FRONTIER[@]}"; do [[ "$_fk" == "$_nk" ]] && _dup=1 && break; done
-                [[ $_dup == 1 ]] && continue
-                FRONTIER+=("$_nk")
-            done < <(beam_neighbors "$_bk")
+    _beam_flat_pct="${LLM_AUTOTUNE_BEAM_FLAT_PCT:-5}"
+    _BEAM_MIN_TPS=""; _BEAM_MAX_TPS=""
+    if (( ${#COMBO_TPS[@]} >= 2 )) && __autotune_beam_anchors_flat "$_beam_flat_pct" "${COMBO_TPS[@]}"; then
+        echo "  beam search: anchors flat (${_BEAM_MIN_TPS}-${_BEAM_MAX_TPS} tps," \
+             "<=${_beam_flat_pct}% spread) — skipping neighbor rounds"
+    else
+        mapfile -t BEAM < <(beam_top)
+        _round=0
+        while [[ $_round -lt $BEAM_ROUNDS ]] && [[ ${#BEAM[@]} -gt 0 ]]; do
+            _round=$((_round + 1))
+            FRONTIER=()
+            _bk=""; _nk=""; _in=0; _dup=0
+            for _bk in "${BEAM[@]}"; do
+                while IFS= read -r _nk; do
+                    [[ -n $_nk ]] || continue
+                    _in=0
+                    for _sk in "${SPACE[@]}"; do [[ "$_sk" == "$_nk" ]] && _in=1 && break; done
+                    [[ $_in == 1 ]] || continue
+                    [[ -n "${SEEN[$_nk]:-}" ]] && continue
+                    _dup=0
+                    _fk=""
+                    for _fk in "${FRONTIER[@]}"; do [[ "$_fk" == "$_nk" ]] && _dup=1 && break; done
+                    [[ $_dup == 1 ]] && continue
+                    FRONTIER+=("$_nk")
+                done < <(beam_neighbors "$_bk")
+            done
+            _nk2=""
+            for _nk2 in "${FRONTIER[@]}"; do beam_eval "$_nk2"; done
+            _nb2=()
+            while IFS= read -r _nk3; do _nb2+=("$_nk3"); done < <(beam_top)
+            if [[ "${_nb2[*]:-}" == "${BEAM[*]}" ]]; then break; fi
+            BEAM=("${_nb2[@]}")
         done
-        _nk2=""
-        for _nk2 in "${FRONTIER[@]}"; do beam_eval "$_nk2"; done
-        _nb2=()
-        while IFS= read -r _nk3; do _nb2+=("$_nk3"); done < <(beam_top)
-        if [[ "${_nb2[*]:-}" == "${BEAM[*]}" ]]; then break; fi
-        BEAM=("${_nb2[@]}")
-    done
+    fi
 
     # The beam winner may enable a higher ctx ceiling (smaller ubatch → less
     if [[ -n $BEST_COMBO ]]; then
         IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
-        echo "  re-climbing ctx for combo $(fmt "$BEST_B")/$(fmt "$BEST_U")"
-        probe_upward "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP"
+        _log_sampler_policy_once
+        if (( BEST_CTX < MAX_CTX )); then
+            echo "  re-climbing ctx for combo $(fmt "$BEST_B")/$(fmt "$BEST_U")"
+            probe_upward "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP"
+        else
+            echo "  re-climbing ctx: skipped — already at max ctx $(fmt "$MAX_CTX")"
+        fi
     fi
 fi
 
@@ -2518,6 +2583,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     echo "  ---------------------"
     _dc=$BEST_CTX
     _ft=""
+    # 1 = Phase 4 itself concluded the row is below the floor at every rung it walked (flat
+    # curve or min ctx reached).  The post-certification descent below must not re-walk it.
+    _P4_TOO_SLOW=0
     # TPS-first (2026-08-29, Wayne): the certified ctx is the highest ctx
     _FAST_REJECT=1
     _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
@@ -2539,6 +2607,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             # The ladder is computed ONCE, from the ctx that failed, so capture it before the
             _dc_from=$_dc
             while IFS= read -r _dc; do
+                _cuda_guard_or_exit
                 _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
                 if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
                     IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -2571,6 +2640,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 fi
             done < <(__autotune_descent_candidates "$_dc_from" "$MIN_CTX" "$PREV_CERT_CTX")
             if [[ $_dok == 0 || $_pok == 0 ]]; then
+                _P4_TOO_SLOW=1
                 if (( _flat >= 2 )); then
                     echo "  ⚠ below floor and flat across ctx — too slow (walk stopped early)"
                     echo "    recording best-effort config (max TPS) for capability profiling"
@@ -2586,6 +2656,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # The capacity ctx failed the FILLED load (memory pressure at fill) — fall back to a
         _dc_from=$_dc
         while IFS= read -r _dc; do
+            _cuda_guard_or_exit
             _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
             if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
                 IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -2613,12 +2684,19 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 
     # POST-CERTIFICATION FLOOR DESCENT (2026-09-17).  Phase 4's floor gate judges every rung
-    if [[ $BEST_CTX -gt $MIN_CTX ]] \
+    # from ONE sample, so a rung can pass it and then certify below the floor on the 5-sample
+    # median; this walk finds the window that holds the floor under the SAME measurement.
+    # It is for that gap ONLY: a row Phase 4 already judged too slow (_P4_TOO_SLOW) has no
+    # window left to find, and re-walking it burned 13 spawns on 2026-11-19 (v149).
+    if [[ "${_P4_TOO_SLOW:-0}" != "1" ]] \
+        && [[ $BEST_CTX -gt $MIN_CTX ]] \
         && [[ $(echo "${BEST_TPS:-0} < $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "  certified ${BEST_TPS} tps is below the floor at ctx $(fmt "$BEST_CTX")" \
             "— descending at the certification's sample count"
         _cert_from=$BEST_CTX
+        _cert_flat=0 _cert_prev=$BEST_TPS
         while IFS= read -r _cert_dc; do
+            _cuda_guard_or_exit
             : > "/tmp/at-served-ctx-$$" 2>/dev/null || rm -f "/tmp/at-served-ctx-$$" 2>/dev/null || true
             _cert_t=$(bench_ctx "$_cert_dc" "$BEST_B" "$BEST_U" 5 \
                 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert_t=""
@@ -2635,6 +2713,19 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                     AUTOTUNE_SERVED_CTX=$_cert_served
                 fi
                 echo "  ✓ floor met at ctx $(fmt "$_cert_dc") — certifying this as the usable ctx"
+                break
+            fi
+            # The same flat-curve stop Phase 4 uses: two rungs with no >10% gain means a
+            # smaller window will not reach the floor either, so stop spending spawns.
+            # swallow-ok: bc's own failure is the "no improvement" answer, which stops the walk (the cheap side)
+            if [[ $(echo "$_cert_t > $_cert_prev * 1.10" | bc -l 2>/dev/null || echo "0") == 1 ]]; then
+                _cert_flat=0
+            else
+                _cert_flat=$((_cert_flat + 1))
+            fi
+            _cert_prev=$_cert_t
+            if (( _cert_flat >= 2 )); then
+                echo "  tps is flat across ctx at the certification's sample count — stopping the walk early"
                 break
             fi
         done < <(__autotune_descent_candidates "$_cert_from" "$MIN_CTX" "$PREV_CERT_CTX")
@@ -2683,13 +2774,19 @@ fi
 # Profile 2 (interactive) certification: one filled bench at the max-TPS
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     if [[ "$P2_CTX|$P2_B:$P2_U" != "$BEST_CTX|$BEST_B:$BEST_U" ]]; then
-        echo "  certifying profile 2 (interactive) at ctx=$(fmt "$P2_CTX")  $(fmt "$P2_B")/$(fmt "$P2_U")"
-        # 3 samples (2026-09-14, was 1).  The old "one sample keeps churn to a
-        _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
-        if [[ -n $_p2t ]] && [[ $(echo "$_p2t > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
-            P2_TPS=$_p2t
-            IFS='|' read -r _pd3 _pp3 _pf3 < "/tmp/at-metrics-$$" 2>/dev/null || true
-            P2_PREFILL="${_pp3:-0}"
+        if ! _cuda_budget_has_headroom "$_POST_CERT_RESERVE"; then
+            echo "  profile 2: skipped to preserve CUDA cycle budget" \
+                 "($(_cuda_cycles)/${CUDA_CYCLE_BUDGET}) — reusing certified profile"
+            P2_TPS=$BEST_TPS; P2_PREFILL=$BEST_PREFILL
+        else
+            echo "  certifying profile 2 (interactive) at ctx=$(fmt "$P2_CTX")  $(fmt "$P2_B")/$(fmt "$P2_U")"
+            # 3 samples (2026-09-14, was 1).  The old "one sample keeps churn to a
+            _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
+            if [[ -n $_p2t ]] && [[ $(echo "$_p2t > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
+                P2_TPS=$_p2t
+                IFS='|' read -r _pd3 _pp3 _pf3 < "/tmp/at-metrics-$$" 2>/dev/null || true
+                P2_PREFILL="${_pp3:-0}"
+            fi
         fi
     else
         P2_TPS=$BEST_TPS; P2_PREFILL=$BEST_PREFILL
@@ -2720,6 +2817,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if [[ "${AUTOTUNE_SPEC_SWEEP:-1}" == "0" ]]; then
         _sb_skip=1
         echo "  (AUTOTUNE_SPEC_SWEEP=0 — skipping the sweep to conserve CUDA cycles)"
+    elif ! _cuda_budget_has_headroom "$_POST_CERT_RESERVE"; then
+        _sb_skip=1
+        echo "  (budget tight ($(_cuda_cycles)/${CUDA_CYCLE_BUDGET}) —" \
+             "skipping spec-decode sweep to preserve certification save)"
     fi
     for _sb_type in $_sb_types
     do
@@ -2736,6 +2837,13 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             if [[ ! "$_sb_block" =~ ^[0-9]+$ ]] || (( _sb_block <= 0 )); then
                 continue
             fi
+            if ! _cuda_budget_has_headroom "$_POST_CERT_RESERVE"; then
+                echo "  ${_sb_type}: stopping sweep early to preserve CUDA cycle budget" \
+                     "($(_cuda_cycles)/${CUDA_CYCLE_BUDGET})"
+                _sb_skip=1
+                break
+            fi
+            _cuda_guard_or_exit
             BENCH_SPEC_TYPE="$_sb_type"; BENCH_SPEC_N_MAX="$_sb_block"
             if [[ "$_sb_type" == "draft-mtp" && -n "${MTP_DRAFT_PATH:-}" ]]; then
                 BENCH_SPEC_DRAFT_MODEL="$MTP_DRAFT_PATH"
@@ -2823,27 +2931,32 @@ if [[ $ANY_OK == true && -n $BEST_COMBO && "${AUTOTUNE_THREAD_SWEEP:-1}" != "0" 
     fi
     if (( ${#_th_candidates[@]} > 0 )); then
         echo ""
-        _cuda_guard_or_exit
-        echo "  threads probe: ${TUNE_THREADS} (recorded) vs ${_th_candidates[*]} (ceiling)"
-        echo "  -------------------------------------"
-        _th_best_threads="$RECORDED_THREADS"
-        _th_best_tps="${BEST_TPS:-0}"
-        for _th_cand in "${_th_candidates[@]}"; do
-            _th_wide=$(__autotune_thread_probe "$_th_cand" "$_th_best_tps")
-            if [[ "$_th_wide" =~ ^[0-9] ]] && (( ${_th_wide%%.*} > 0 ))
-            then
-                _th_best_threads="$_th_cand"
-                _th_best_tps="$_th_wide"
-            fi
-        done
-        TUNE_THREADS="$_th_best_threads"
-        if (( TUNE_THREADS != RECORDED_THREADS ))
-        then
-            echo "  threads winner: ${TUNE_THREADS} (${_th_best_tps} tps — a material gain over the"
-            echo "                  recorded count, so column 9 is rewritten below)"
+        if ! _cuda_budget_has_headroom "$_POST_CERT_RESERVE"; then
+            echo "  threads probe: skipped to preserve CUDA cycle budget" \
+                 "($(_cuda_cycles)/${CUDA_CYCLE_BUDGET}) — keeping ${RECORDED_THREADS}"
         else
-            echo "  threads: ${_th_cap} gave no material gain (${_th_wide:-0} tps)"
-            echo "           keeping ${RECORDED_THREADS}"
+            _cuda_guard_or_exit
+            echo "  threads probe: ${TUNE_THREADS} (recorded) vs ${_th_candidates[*]} (ceiling)"
+            echo "  -------------------------------------"
+            _th_best_threads="$RECORDED_THREADS"
+            _th_best_tps="${BEST_TPS:-0}"
+            for _th_cand in "${_th_candidates[@]}"; do
+                _th_wide=$(__autotune_thread_probe "$_th_cand" "$_th_best_tps")
+                if [[ "$_th_wide" =~ ^[0-9] ]] && (( ${_th_wide%%.*} > 0 ))
+                then
+                    _th_best_threads="$_th_cand"
+                    _th_best_tps="$_th_wide"
+                fi
+            done
+            TUNE_THREADS="$_th_best_threads"
+            if (( TUNE_THREADS != RECORDED_THREADS ))
+            then
+                echo "  threads winner: ${TUNE_THREADS} (${_th_best_tps} tps — a material gain over the"
+                echo "                  recorded count, so column 9 is rewritten below)"
+            else
+                echo "  threads: ${_th_cap} gave no material gain (${_th_wide:-0} tps)"
+                echo "           keeping ${RECORDED_THREADS}"
+            fi
         fi
     else
         echo "  threads probe: skipped — the ceiling (${_th_cap:-?}) is not above ${TUNE_THREADS}"

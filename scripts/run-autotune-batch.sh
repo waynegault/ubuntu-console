@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-11-19): the per-row header shows a bare row NUMBER as itself and '?' for an
+#       empty lookup; "(row , cyc 33/60)" was printed for `autotune-rows.sh 8 9`.
 #   v33 (2026-11-18): classify all remaining swallow sites so run-autotune-batch.sh has zero
 #       unclassified swallows in tools/contracts-swallows-baseline.tsv.
 #   v32 (2026-11-18): the lane comes from this box's profile (_tac_cuda_lane_unit) and
@@ -404,8 +406,16 @@ for ((i = 0; i < TOTAL; i++)); do
     COUNT=$((COUNT + 1))
     # Identity is the file name; the row number is resolved for DISPLAY only, so the
     # line stays useful to a human reading the log without carrying a stale identity.
-    # swallow-ok: display-only row number lookup falls back to '?' when absent
-    _disp_row=$(__llm_registry_row_for_file "$m" 2>/dev/null || echo '?')
+    # A bare row NUMBER is its own display; the lookup answers empty with rc 0 for an
+    # unknown file, so the '?' is applied to an empty answer, not to a failed status
+    # (measured 2026-11-19: `autotune-rows.sh 8 9` printed "(row , cyc 33/60)").
+    if [[ "$m" =~ ^[0-9]+$ ]]; then
+        _disp_row="$m"
+    else
+        # swallow-ok: display-only lookup; an empty or failed answer becomes '?' on the next line
+        _disp_row=$(__llm_registry_row_for_file "$m" 2>/dev/null) || _disp_row=""
+        [[ -n "$_disp_row" ]] || _disp_row='?'
+    fi
     printf '\n[%d/%d] model %s (row %s, cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" \
         "$_disp_row" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
     _row_rc=0
