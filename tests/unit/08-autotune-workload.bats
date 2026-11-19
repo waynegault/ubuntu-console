@@ -859,8 +859,13 @@ EOF
     source "$REPO_ROOT/bin/_tac-bin-lib.sh"
     local f="$TMPDIR_BATS/held-dead.suspend"
     local dead
-    sleep 30 & dead=$!
-    kill "$dead" 2>/dev/null || true
+    # A child that exits at once and is reaped: its pid is dead, which is what "a
+    # holder that never ran its EXIT trap" leaves behind.  This used to be
+    # `sleep 30 & kill $!`, and that is a RACE — measured 2026-11-19, 3 of 6 runs
+    # blocked the full 30 s because the child inherited an ignored SIGTERM, so the
+    # case cost 30 s whenever the signal was not enough.  No signal, no 30 s.
+    ( exit 0 ) &
+    dead=$!
     wait "$dead" 2>/dev/null || true
     printf '%s\n' "$dead" > "$f"
     ! _tac_suspend_held "$f"
