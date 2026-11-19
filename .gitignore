@@ -112,6 +112,13 @@ graphify-out/
 # so each reason must sit on its own line above its rule.
 *.lock
 
+# Commit-guard alert output, written into the repo root by an out-of-repo guard.
+# Measured 2026-11-19: `life/alerts/{ownership-scoping.jsonl,*warn.log}` appeared
+# during a commit round and recorded a foreign-staged file.  Nothing here writes
+# it, so it is run output, not source — and left merely untracked it sat one
+# `git add -A` away from being committed.  Root-anchored so only the root matches.
+/life/
+
 # ---- Per-box state ----------------------------------------------------------
 # This repo serves two machines (Intel x86_64 and ASUS arm64).  The CODE is
 # identical on both and stays tracked, and so do the per-box DECLARATIONS the code
