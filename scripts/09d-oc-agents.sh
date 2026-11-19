@@ -121,7 +121,15 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 71
+# Module Version: 72
+#   v72 (2026-11-19): `__oc_converge_shared_auth_profiles` is now a 14-line CALLER; the
+#     conversion body moved to scripts/oc-converge-shared-auth-profiles.py. Inline it was a
+#     124-line shell function, and §18.3 10.4 counts brace-bounded bodies, so it reddened the
+#     count ratchet (40 -> 41). Re-baselining would have recorded a decision to keep ~100 lines
+#     of Python in a shell function; this repo already keeps such helpers as scripts/*.py, so
+#     the body moved out. Behaviour is unchanged and was re-tested at both layers: the .py
+#     directly (defer / byte-identical no-op / convert / idempotent / refuse) and the shell
+#     caller that boot uses (faked-down no-op, Gateway-up defer), plus 01-refresh-keys 46/46.
 #   v71 (2026-11-19): `__oc_converge_shared_auth_profiles` converges CONFIG-DECLARED auth
 #     profiles in the SHARED auth store (state/openclaw.sqlite ->
 #     config_machine_state.authProfiles.store) from plaintext `key` to env-backed `keyRef`,
@@ -145,6 +153,11 @@
 #     100%, breaking an unrelated pytest run AND this module's own bats suite (write errors,
 #     "Executed 17 instead of 46"). Now a `TemporaryDirectory` context, which removes the tree
 #     on the exception path too. The suite went 17/46 (disk-starved) to 46/46 with /tmp flat.
+#     EXTRACTED: the conversion logic moved to scripts/oc-converge-shared-auth-profiles.py.
+#     Inline it was a 124-line shell function, and §18.3 10.4 counts brace-bounded bodies, so
+#     it reddened the count ratchet (40 -> 41). Re-baselining would have recorded a decision
+#     to keep 100 lines of Python in a shell function; the repo already keeps such helpers as
+#     scripts/*.py, so the body moved out and the function is now a 14-line caller.
 #   v70 (2026-11-15): `TAC_UPTIME_FILE` names the monotonic clock (default /proc/uptime) for the
 #     UNKNOWN-phase age exemption in oc-refresh-keys' gateway step. The clock is a BOX FACT, and
 #     case 23 of 01-refresh-keys could not fake it by choosing an entry stamp: it computed
@@ -1774,128 +1787,18 @@ PYEOF
 # name is set), never typed into a list.
 # ---------------------------------------------------------------------------
 function __oc_converge_shared_auth_profiles() {
+    # The work lives in scripts/oc-converge-shared-auth-profiles.py: ~100 lines of Python
+    # do not belong inside a shell function (§18.3 10.4 counts brace-bounded bodies, and
+    # the heredoc version pushed this past 100 lines).  That module documents WHY this
+    # exists, why it defers while the Gateway is up, and the env-var derivation rules.
     local _cfg="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
     local _db="${OPENCLAW_STATE_DB:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/state/openclaw.sqlite}"
     local _state
     # swallow-ok: no user manager in an agent/CI shell; an unknown state is treated as UP, so nothing is written without proof the Gateway is down
     _state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
+    local _helper="$TACTICAL_REPO_ROOT/scripts/oc-converge-shared-auth-profiles.py"
     # swallow-ok: the helper's own notes are the report; a crash in it must not abort the refresh
-    "${TAC_PYTHON:-python3}" - "$_cfg" "$_db" "$_state" "${TAC_CACHE_DIR:-/tmp}/tac_win_api_keys" <<'PY' 2>/dev/null
-import json, os, re, shutil, sqlite3, sys, time
-
-cfg_path, db_path, gw_state, cache_path = sys.argv[1:5]
-
-# The Gateway is the only writer that may hold this row open; a write while it is
-# up is lost on its next persist.  Anything not PROVEN down is treated as up.
-if gw_state.strip() not in ("inactive", "failed"):
-    print("deferred: Gateway is %s — shared auth-profile convergence needs it down; next boot applies it"
-          % (gw_state.strip() or "unknown (no user manager)"))
-    sys.exit(0)
-
-def env_value(name):
-    v = os.environ.get(name)
-    if v:
-        return v
-    try:
-        with open(cache_path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("export "):
-                    line = line[len("export "):]
-                if line.startswith(name + "="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return ""
-
-try:
-    cfg = json.load(open(cfg_path, encoding="utf-8"))
-except Exception as exc:
-    print("error: cannot read %s (%s: %s)" % (cfg_path, type(exc).__name__, exc))
-    sys.exit(0)
-profiles_cfg = ((cfg.get("auth") or {}).get("profiles") or {})
-providers_cfg = ((cfg.get("models") or {}).get("providers") or {})
-
-def provider_env_name(provider, existing):
-    # 1. what the store already resolves to; 2. the provider's own config ref;
-    # 3. the conventional name, but only when it is actually set.
-    ref = (existing or {}).get("keyRef") or {}
-    if ref.get("id"):
-        return ref["id"]
-    api = (providers_cfg.get(provider) or {}).get("apiKey")
-    if isinstance(api, dict) and api.get("id"):
-        return api["id"]
-    guess = re.sub(r"[^A-Z0-9]+", "_", provider.upper()).strip("_") + "_API_KEY"
-    return guess if env_value(guess) else ""
-
-if not os.path.isfile(db_path):
-    print("error: shared auth store not found at %s" % db_path)
-    sys.exit(0)
-
-con = sqlite3.connect(db_path, timeout=20)
-row = con.execute(
-    "SELECT value_json FROM config_machine_state WHERE state_key='authProfiles.store'"
-).fetchone()
-if not row:
-    print("shared auth store has no authProfiles.store row; nothing to do")
-    sys.exit(0)
-store = json.loads(row[0])
-profiles = store.get("profiles") or {}
-
-converted, stale, unresolved = [], [], []
-for pid in sorted(profiles_cfg):
-    existing = profiles.get(pid)
-    if not isinstance(existing, dict):
-        continue                      # never invent a profile id
-    if "keyRef" in existing and "key" not in existing:
-        continue                      # already converged
-    if "key" not in existing:
-        continue
-    provider = existing.get("provider") or (profiles_cfg.get(pid) or {}).get("provider") or ""
-    var = provider_env_name(provider, existing)
-    if not var:
-        unresolved.append(pid)
-        continue
-    value = env_value(var)
-    if not value:
-        unresolved.append("%s (no $%s)" % (pid, var))
-        continue
-    if existing["key"] != value:
-        # Name it: a plaintext that disagrees with the canonical env is exactly the
-        # drift that made it look authoritative.  The env still wins.
-        stale.append(pid)
-    profiles[pid] = {
-        "type": existing.get("type", "api_key"),
-        "provider": provider,
-        "keyRef": {"source": "env", "provider": "default", "id": var},
-    }
-    converted.append(pid)
-
-notes = []
-if converted:
-    backup = db_path + ".pre-shared-auth-converge"
-    try:
-        shutil.copyfile(db_path, backup)
-    except OSError as exc:
-        con.close()
-        print("error: could not back up %s before writing (%s) — nothing written" % (db_path, exc))
-        sys.exit(0)
-    store["profiles"] = profiles
-    con.execute(
-        "UPDATE config_machine_state SET value_json=?, updated_at_ms=? "
-        "WHERE state_key='authProfiles.store'",
-        (json.dumps(store, separators=(",", ":")), int(time.time() * 1000)),
-    )
-    con.commit()
-    notes.append("converted %d shared auth profile(s): %s" % (len(converted), ", ".join(converted)))
-if stale:
-    notes.append("plaintext differed from the env for: %s (env wins)" % ", ".join(stale))
-if unresolved:
-    notes.append("could not resolve an env var for: %s" % ", ".join(unresolved))
-con.close()
-if notes:
-    print("; ".join(notes))
-PY
+    "${TAC_PYTHON:-python3}" "$_helper" "$_cfg" "$_db" "$_state" "${TAC_CACHE_DIR:-/tmp}/tac_win_api_keys" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
