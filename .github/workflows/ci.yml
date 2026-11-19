@@ -30,6 +30,30 @@ permissions:
 # run (2026-09-26, run 36272668820) with headroom, in the posture the investigator's
 # unittest.yml states: cap generously, then tighten once a green run gives the real duration.
 jobs:
+  # The per-box arms this repo's CI must run, derived from config/hosts.d by
+  # tools/ci-boxes.sh.  A hand-written `[ARM64, X64]` literal cannot notice that
+  # one box's runner is gone, and an absent runner does not fail an arm — it
+  # QUEUES it, so the run never concludes and the gate says nothing.  Measured
+  # 2026-11-19: wsl-console-1 (X64, XPS 15) offline and its host unreachable;
+  # run 44512057230 sat queued on Behavioral BATS (X64) indefinitely.
+  # Adding or retiring a box is now a config edit, not a workflow edit.
+  boxes:
+    name: CI box matrix
+    runs-on: [self-hosted, wsl-console]
+    timeout-minutes: 5
+    outputs:
+      boxes: ${{ steps.derive.outputs.boxes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Derive the per-box matrix from config/hosts.d
+        id: derive
+        run: |
+          set -euo pipefail
+          boxes="$(tools/ci-boxes.sh --json)"
+          printf 'boxes=%s\n' "$boxes" >> "$GITHUB_OUTPUT"
+          printf 'per-box CI arms: %s\n' "$boxes"
+
   lint:
     name: Lint & Static Analysis
     runs-on: [self-hosted, wsl-console]
@@ -214,6 +238,7 @@ jobs:
     # architecture-neutral gates twice would double the wall clock on a serial runner.
     # A BLOCK sequence, not [a, b, ${{ … }}]: an expression inside a flow sequence is a
     # YAML parse error ("expected ',' or ']', but got '{'"), measured on this edit.
+    needs: boxes
     runs-on:
       - self-hosted
       - wsl-console
@@ -222,7 +247,9 @@ jobs:
       # One box's red must not cancel the other's arm, or the verdict names neither.
       fail-fast: false
       matrix:
-        box: [ARM64, X64]
+        # DERIVED, not literal: tools/ci-boxes.sh reads config/hosts.d, so a box
+        # with no runner cannot be left queued by a workflow that never asked.
+        box: ${{ fromJSON(needs.boxes.outputs.boxes) }}
     # Measured 735 s (12.3 min) on 2026-09-26 — the longest job on the push path, so this cap
     # is also the longest a hang can hold the single runner.
     timeout-minutes: 45
@@ -579,6 +606,7 @@ jobs:
     # PER-BOX, same reason as `behavioral`: this job runs the HOST-COUPLED cases, whose
     # expectations are the running box's profile.  It fires only on PRs and dispatch, so
     # a second arm costs nothing on the push lane.
+    needs: boxes
     runs-on:
       - self-hosted
       - wsl-console
@@ -586,7 +614,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        box: [ARM64, X64]
+        # DERIVED — same reason as `behavioral`.
+        box: ${{ fromJSON(needs.boxes.outputs.boxes) }}
     timeout-minutes: 120
     steps:
       - name: Checkout
