@@ -12,7 +12,15 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-19): every suite is bounded by the budget tests/bats-suites.tsv already
+#   carries.  The table's per-case and per-file budgets were honoured by the pytest
+#   bridge and ignored here, so a wedged case had no bound at all (measured: a 2 h 9 m
+#   stall at case 833).  BATS_TEST_TIMEOUT bounds each case — bats marks it "not ok ...
+#   # timeout after Ns" and carries on — and `timeout` bounds the file; a file that hits
+#   its budget is named and reddens the run.  Also drops the repo-wide __pycache__ purge
+#   before pytest: Python invalidates bytecode by source mtime and size, so the walk
+#   protected nothing and defeated the cache it was meant to protect.
 #   v8 (2026-11-19): `unittest` now ends with a junit record and one summary.  The bats
 #   half is TAP, which nothing outside this script reads, so each suite's TAP is kept and
 #   converted (tools/tap_to_junit.py) while the pytest half writes its own report
@@ -77,6 +85,35 @@ trap 'rm -rf "$TAP_DIR"' EXIT
 # anything can fail and leave an old one in place.
 mkdir -p "$REPO_ROOT/.pytest_cache"
 rm -f "$REPO_ROOT/.pytest_cache/bats.xml" "$REPO_ROOT/.pytest_cache/unittest.xml"
+
+# ── Per-suite budgets (tests/bats-suites.tsv) ────────────────────────────────
+# The table carries a per-case and a per-file budget, and the pytest bridge honours
+# both.  This runner honoured neither, so a hung case had no bound at all (measured
+# 2026-11-19: a 2 h 9 m stall at case 833).  Read the same table rather than
+# restating the numbers here.
+declare -A _SUITE_PERCASE=() _SUITE_FILEBUDGET=()
+
+# _load_suite_budgets — read the per-case and per-file budgets from the suite table.
+_load_suite_budgets() {
+    local path _marker percase filebudget f
+    while IFS=$'\t' read -r path _marker percase filebudget; do
+        [[ -n "$path" && "$path" != \#* ]] || continue
+        [[ "$percase" =~ ^[0-9]+$ && "$filebudget" =~ ^[0-9]+$ ]] || continue
+        if [[ "$path" == *'*'* ]]; then
+            # swallow-ok: a glob row that matches nothing contributes no budget; the
+            # table's coverage is checked by the bridge, not here.
+            while IFS= read -r f; do
+                [[ -n "$f" ]] || continue
+                _SUITE_PERCASE["${f#"$REPO_ROOT"/}"]="$percase"
+                _SUITE_FILEBUDGET["${f#"$REPO_ROOT"/}"]="$filebudget"
+            done < <(compgen -G "$REPO_ROOT/$path" || true)
+        else
+            _SUITE_PERCASE["$path"]="$percase"
+            _SUITE_FILEBUDGET["$path"]="$filebudget"
+        fi
+    done < "$REPO_ROOT/tests/bats-suites.tsv"
+}
+_load_suite_budgets
 
 # Fail fast: without bats every suite silently produces zero results, which the
 # summary would otherwise report as "ALL N TESTS PASSED".
@@ -156,6 +193,11 @@ _run_bats_file() {
     # The suite path as the summary should name it, and where its TAP is kept.
     local _bf_rel="${bats_file#"$REPO_ROOT"/}"
     local _tap_file="$TAP_DIR/${_bf_rel//\//-}.tap"
+    local _rc_file="$TAP_DIR/${_bf_rel//\//-}.rc"
+    # The table's own budgets; the defaults match its unit row, so a suite the table
+    # does not name is still bounded rather than unbounded.
+    local _percase="${_SUITE_PERCASE[$_bf_rel]:-300}"
+    local _filebudget="${_SUITE_FILEBUDGET[$_bf_rel]:-900}"
 
     while IFS= read -r line; do
         # Parse timing from TAP: "ok N test_name in XXXms" or "not ok N test_name in XXXs"
@@ -210,10 +252,23 @@ _run_bats_file() {
     # same case passes in CI, where stdin is not a tty.  Measured 2026-11-19: the suite
     # hung at case 14-registry-identity #32 because it inherited the operator's pty.
     # The tee keeps the TAP as well: the live stream is for reading, the file is what
-    # the junit record is built from.
-    done < <(bats --tap --timing "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1 < /dev/null \
-        | tee "$_tap_file") || true
+    # the junit record is built from.  BATS_TEST_TIMEOUT bounds each CASE (bats marks
+    # it "not ok ... # timeout after Ns" and carries on); `timeout` bounds the FILE,
+    # so a suite that wedges outside a case cannot outlive its table budget either.
+    done < <( { BATS_TEST_TIMEOUT="$_percase" timeout -k 5 "$((_filebudget + 15))" \
+        bats --tap --timing "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1 < /dev/null
+        printf '%s\n' "$?" > "$_rc_file"; } | tee "$_tap_file") || true
     _JUNIT_PAIRS+=("$_bf_rel=$_tap_file")
+
+    local _rc=""
+    # swallow-ok: a missing rc file means the subshell never wrote it; the empty value
+    # matches no branch below, and the TAP itself still reports the cases.
+    _rc=$(cat "$_rc_file" 2>/dev/null || true)
+    if [[ "$_rc" == "124" ]]; then
+        _BATS_TIMEOUT=1
+        test_line "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${_bf_rel}: file budget ${_filebudget}s" \
+            "exceeded — the run was killed"
+    fi
 }
 
 # ── Parse TAP output into section arrays ─────────────────────────────────────
@@ -251,6 +306,7 @@ _TAP_OUTPUT=""
 _LIVE_NUM=0 _LIVE_PASS=0 _LIVE_FAIL=0 _LIVE_SKIP=0
 _SKIPPED=()
 _BATS_EMPTY=0
+_BATS_TIMEOUT=0
 _JUNIT_PAIRS=()
 _JUNIT_EXIT=0
 _LIVE_EMPTY_PLAN=0
@@ -353,9 +409,10 @@ if [[ "${_MODE:-}" != "fast" ]]; then
 
     cd "$REPO_ROOT" || exit 1
 
-    # Clear Python bytecode caches so tests always run against latest code.
-    find "$REPO_ROOT" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-    find "$REPO_ROOT" -name "*.pyc" -delete 2>/dev/null || true
+    # No __pycache__ purge: Python invalidates bytecode by source mtime and size, so
+    # a stale .pyc cannot be imported, and the purge cost a whole-tree walk on every
+    # run while defeating the cache it was meant to protect.  (It was added when a
+    # test seemed to run old code; the cause was the interpreter, not the cache.)
 
     _PYTHON="python3"
     if [[ -f "$REPO_ROOT/.venv/bin/python" ]]; then
@@ -565,6 +622,7 @@ exit_code=0
 (( GRAND_FAIL > 0 )) && exit_code=1
 (( _PY_EXIT != 0 )) && exit_code=1
 (( _BATS_EMPTY == 1 )) && exit_code=1
+(( _BATS_TIMEOUT == 1 )) && exit_code=1
 (( _JUNIT_EXIT != 0 )) && exit_code=1
 exit $exit_code
 
