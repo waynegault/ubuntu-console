@@ -19,6 +19,16 @@ setup() {
     # The NAS mirror marker is STATE, not cache: 71516c30 moved it off tmpfs onto
     # TAC_STATE_DIR.  Sandbox it too, or the assertions below read the real state dir.
     export TAC_STATE_DIR="$TAC_TEST_TMPDIR/state"
+    # OPENCLAW_STATE_DIR / _DB point the shared auth store at the REAL host store when
+    # exported by a caller.  A Gateway-run shell exports both, so without this the suite
+    # reads (and, via __oc_converge_shared_auth_profiles, can WRITE) the live
+    # state/openclaw.sqlite from inside the sandbox — measured 2026-11-19: the suite went
+    # 46/46 -> 36/46 purely from a caller that had those vars set.  Same convention as
+    # tests/unit/50-python-interpreter-resolution.bats: export a sandboxed value rather
+    # than unset, so the path is defined as well as isolated.
+    export OPENCLAW_STATE_DIR="$TAC_TEST_TMPDIR/oc-state"
+    unset OPENCLAW_STATE_DB
+    mkdir -p "$OPENCLAW_STATE_DIR"
     export MOCK_BIN_DIR="$TAC_TEST_TMPDIR/mocks"
     mkdir -p "$TAC_CACHE_DIR"
     mkdir -p "$TAC_STATE_DIR"
