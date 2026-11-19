@@ -21,7 +21,10 @@
 # The sudo stub matters: `sudo -n true` SUCCEEDS on this box (measured 2026-10-24), so an
 # unstubbed run would really copy units into /etc and enable them.
 setup() {
-    REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
+    # -P: the case compares readlink -f output with $REPO_ROOT, and install.sh
+    # writes canonical targets (its own REPO is `pwd -P`), so a symlinked root
+    # would never compare equal.
+    REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd -P)"
     FAKE_HOME="$BATS_TEST_TMPDIR/home"
     STUB_DIR="$BATS_TEST_TMPDIR/stubs"
     mkdir -p "$FAKE_HOME" "$STUB_DIR"

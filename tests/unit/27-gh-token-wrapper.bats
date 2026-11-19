@@ -26,7 +26,9 @@
 bats_require_minimum_version 1.5.0
 
 setup() {
-    REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
+    # -P: readlink -f below returns a canonical target, and install.sh writes one
+    # (its own REPO is `pwd -P`), so a symlinked root would never compare equal.
+    REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd -P)"
     SHIM_DIR="$BATS_TEST_TMPDIR/shim"
     REAL_DIR="$BATS_TEST_TMPDIR/real"
     CACHE_DIR="$BATS_TEST_TMPDIR/cache"

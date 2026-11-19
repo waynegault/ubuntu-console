@@ -24,7 +24,11 @@ VERSION="1.7"
 
 setup_file() {
     export REPO_ROOT
-    REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+    # -P: install.sh resolves its own root with `pwd -P`, so the loader it writes
+    # names the canonical checkout.  Compared against a symlinked root (the operator
+    # runs from ~/ubuntu-console, a link to github-wsl/ubuntu-console) every grep
+    # below missed — measured 2026-11-19, three loader cases red from the link only.
+    REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
     export PROFILE_PATH="$REPO_ROOT/tactical-console.bashrc"
 
     # Temp home to avoid mutating the real environment
@@ -462,8 +466,29 @@ EOF
     # 0.11.0 reports SC2329 for bin/bench-timeout-runner.sh's trap-only cleanup
     # -- so a file that lints clean under the pin came back as a FAIL.  The pin
     # must be resolved by version, not inherited from PATH order.
-    [[ -x /usr/local/bin/shellcheck ]] || skip "pinned shellcheck not installed"
-    run env PATH="/usr/bin:/bin" "$REPO_ROOT/tools/lint.sh" --files \
+    # The pin may be installed into either prefix (tools/install-shellcheck.sh -p
+    # "$HOME/.local/bin" is a documented form, and tools/lint.sh itself reads both),
+    # so ask the same two places rather than /usr/local/bin alone: measured
+    # 2026-11-19, the pin sat in ~/.local/bin and this case skipped, which hid the
+    # very regression it exists for.
+    _pin=$(sed -n 's/^_SHELLCHECK_PIN="\(.*\)"$/\1/p' "$REPO_ROOT/tools/lint.sh")
+    [[ -n "$_pin" ]] || { echo "no _SHELLCHECK_PIN in tools/lint.sh"; return 1; }
+    _pinned=""
+    # _TAC_REAL_HOME: setup_file points HOME at a temp dir, so a bare $HOME would
+    # look for the operator's install in a directory that never had one.
+    for _sc in /usr/local/bin/shellcheck "${_TAC_REAL_HOME:-$HOME}/.local/bin/shellcheck"
+    do
+        [[ -x "$_sc" ]] || continue
+        [[ "$("$_sc" --version 2>/dev/null)" == *"version: $_pin"* ]] || continue
+        _pinned="$_sc"
+        break
+    done
+    [[ -n "$_pinned" ]] || skip "pinned shellcheck $_pin not installed"
+    # HOME is passed explicitly: setup_file points HOME at a temp dir, and
+    # tools/lint.sh resolves the pin from "$HOME/.local/bin" as well as
+    # /usr/local/bin, so the fake home made it find no shellcheck at all and the
+    # case failed on the harness rather than on PATH order (measured 2026-11-19).
+    run env HOME="$_TAC_REAL_HOME" PATH="/usr/bin:/bin" "$REPO_ROOT/tools/lint.sh" --files \
         "$REPO_ROOT/bin/bench-timeout-runner.sh"
     [ "$status" -eq 0 ]
     [[ "$output" != *"FAIL"* ]]
