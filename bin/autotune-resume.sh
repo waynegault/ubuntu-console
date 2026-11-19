@@ -60,7 +60,11 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-11-19): derive_rows() treats autotuned=slow (when meas_state != indicative) and
+#   meas_state=unacceptable as terminal states, matching bin/autotune-rows.sh,
+#   scripts/run-autotune-batch.sh, and scope_rows().  Fixes multi-boot re-tuning loops on
+#   below-floor models that already certified meas_state=certified.
 #   v33 (2026-11-06): PROGRESS IS A VERDICT, NOT A SHRINK.  The v32 guard compared the OWED
 #   count before and after, which a CAP can shrink: measured at 13:45, the plan went 8 -> 7 when
 #   apply_indicative_cap capped GLM-5.3 out, "progress" was declared, a restart was armed for
@@ -421,6 +425,7 @@ derive_rows() {
         $1 ~ /^[0-9]+$/ && NF > 1 {
             if (tolower($6) ~ /embedding/) next
             if (parked != "" && $3 ~ ("^(" parked ")$")) next
+            if ($44 == "unacceptable") next
             t = $17 + 0; p = $25 + 0
             # A ruled NEW QUANT stays in BY NAME - but only while it is not certified (v6).  Pinning it
             # unconditionally re-measured law-chat-Q2_K and Spark-X2.5-4B on EVERY boot after both had
@@ -434,7 +439,9 @@ derive_rows() {
             # The state test is deliberately `== "indicative"`, NOT `!= "certified"`: a row whose
             # column is EMPTY predates the provenance columns and is not owed on its own.  The one
             # such row that IS owed is MemSFT, and it is owed BY NAME through NEW_QUANTS.
-            if ($18 != "yes" || (p > t && t > 0) || $44 == "indicative") { print $3; next }
+            # Both "yes" and "slow" are terminal (matching bin/autotune-rows.sh and
+            # scripts/run-autotune-batch.sh) unless meas_state is "indicative" or p2_tps > tps.
+            if (($18 != "yes" && $18 != "slow") || (p > t && t > 0) || $44 == "indicative") { print $3; next }
             # A ruled NEW QUANT is owed while its measurement is not certified, whatever its state.
             if ($3 ~ ("^(" nq ")$") && $44 != "certified") print $3
         }' "$REGISTRY" | sort -u

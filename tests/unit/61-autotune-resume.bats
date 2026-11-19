@@ -806,4 +806,33 @@ EOS
     [ ! -e "$TAC_RESUME_PLAN" ] || ! grep -q '^capped.gguf$' "$TAC_RESUME_PLAN"
 }
 
+@test "autotune-resume: a certified slow row is terminal and NOT re-planned" {
+    { _row_state certified 1 slow27b.gguf 7.98 slow 7.98; } > "$TAC_RESUME_REGISTRY"
+    : > "$TAC_RESUME_MODEL_DIR/slow27b.gguf"
+
+    run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to plan"* ]]
+    [ ! -e "$TAC_RESUME_PLAN" ]
+}
+
+@test "autotune-resume: an indicative slow row IS still owed a quiet-box re-measure" {
+    { _row_state indicative 1 slow27b.gguf 7.82 slow 7.82; } > "$TAC_RESUME_REGISTRY"
+    : > "$TAC_RESUME_MODEL_DIR/slow27b.gguf"
+
+    run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    grep -qx 'slow27b.gguf' "$TAC_RESUME_PLAN"
+}
+
+@test "autotune-resume: a derived row marked unacceptable is terminal even when autotuned=no" {
+    { _row_state unacceptable 1 bad.gguf 0 no 0; } > "$TAC_RESUME_REGISTRY"
+    : > "$TAC_RESUME_MODEL_DIR/bad.gguf"
+
+    run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to plan"* ]]
+    [ ! -e "$TAC_RESUME_PLAN" ]
+}
+
 # end of file
