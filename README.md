@@ -1326,8 +1326,7 @@ where it was last present.)
 │   ├── test_report.py                 # Tests for kgraph.report
 │   ├── test_update.py                 # Tests for kgraph.update
 │   ├── test_validate.py               # Tests for kgraph.validate
-│   ├── unit/                          # BATS unit tests (1488 tests
-│   └── integration/                   # BATS integration tests (170 tests: 14+50+10+64+3+29)
+│   ├── unit/                          # BATS unit tests (1488 tests: 46+43+14+7+5+11+63+4+12+10+8+53+59+34+6+1+9+10+2+3+3+20+23+59+41+15+33+6+8+11+8+3+4+6+13+36+29+16+9+17+21+6+4+4+6+3+31+4+5+4+13+2+10+27+1+8+6+14+28+34+23+5+7+2+13+36+28+2+11+8+8+10+6+4+5+24+6+10+5+4+3+3+13+36+1+4+15+9+8+10+6+6+15+16+9+8+6+8+4+13+15+10+4+9+6+7+13+9+3+11)
 ├── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
     │   └── tac-loopback0.service      #     WSL mirrored-networking 127.0.0.2, at boot
