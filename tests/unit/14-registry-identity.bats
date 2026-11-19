@@ -698,7 +698,10 @@ __dup_fixture() {
 @test "model scan: a byte-identical pair is reported, and nothing is deleted off a terminal" {
     __dup_fixture
 
-    run __model_scan_duplicates
+    # This case asserts the NO-terminal refusal, so it supplies a non-terminal stdin
+    # itself: inherited from a terminal, __model_scan_duplicates takes its prompt branch
+    # and `read` blocks the whole suite (measured 2026-11-19, hung at case 834 of 3415).
+    run __model_scan_duplicates < /dev/null
     [ "$status" -eq 0 ]
     [[ "$output" == *"older copy"* ]]
     [[ "$output" == *"no terminal to ask on"* ]]

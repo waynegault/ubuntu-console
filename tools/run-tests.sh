@@ -12,7 +12,13 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-11-19): a BATS case can no longer wedge the run on the operator's terminal.
+#   bats was started with the caller's stdin, so a case reaching a `read` prompt inherited
+#   the pty and blocked forever — bats has no per-test timeout — while the same case
+#   passed in CI, where stdin is not a tty.  Measured: the run printed its last case at
+#   833, 2 h 9 m in, blocked in 14-registry-identity #32 ("a byte-identical pair ... off a
+#   terminal").  bats now runs with its stdin on /dev/null.
 #   v6 (2026-10-15): the duration-anomaly helper no longer hides its own failures.  It used
 #   a bare `python3`, interpolated the durations path INTO the program text, swallowed
 #   every error with `except: sys.exit(0)`, and discarded stderr with `2>/dev/null` - so a
@@ -167,7 +173,11 @@ _run_bats_file() {
             _SKIPPED+=("$line")
         fi
         _TAP_OUTPUT+="$line"$'\n'
-    done < <(bats --tap --timing "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1) || true
+    # stdin is /dev/null, never the caller's terminal.  A case that reaches a `read`
+    # prompt would otherwise block forever — bats has no per-test timeout — while the
+    # same case passes in CI, where stdin is not a tty.  Measured 2026-11-19: the suite
+    # hung at case 14-registry-identity #32 because it inherited the operator's pty.
+    done < <(bats --tap --timing "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1 < /dev/null) || true
 }
 
 # ── Parse TAP output into section arrays ─────────────────────────────────────
