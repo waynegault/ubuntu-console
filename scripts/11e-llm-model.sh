@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 144
+# Module Version: 145
+#   v145 (2026-11-19): (1) __model_autotune_clean_room only exports TAC_CONTENDED=1 when
+#   --allow-contended or an upstream TAC_CONTENDED=1 bypass is set, so quiet `model autotune`
+#   runs certify instead of forcing meas_state=indicative; (2) __model_bench acquires the
+#   re-entrant global heavy-job lock (HEAVY_JOB_LOCK / HEAVY_JOB_HELD) before its bench mutex;
+#   (3) __model_bench writes the benchmark TSV atomically via a temp file and checks write/mv
+#   status before reporting "Saved".
 #   v144 (2026-11-18): in __model_bench, size _bench_free_vram_mb on unified-memory hosts
 #   (TAC_HOST_PROFILE_SHARED_MEMORY=1) against max(free_vram, MemAvailable - LLAMA_FIT_KEEP_RESERVE_MB)
 #   so a small Windows dedicated GPU carve (e.g. 8 GiB with ~7 GiB held) does not trigger the
@@ -3871,7 +3877,7 @@ function __autotune_script_path() {
 # @returns the wrapper's exit code; 2 on a malformed flag.
 # ---------------------------------------------------------------------------
 function __model_autotune_clean_room() {
-    local _wl="${LLM_AUTOTUNE_WORKLOAD:-}" _cont="${TAC_CONTENDED:-1}"
+    local _wl="${LLM_AUTOTUNE_WORKLOAD:-}" _cont="${TAC_CONTENDED:-}"
     local -a _rows=()
     while (( $# > 0 ))
     do
@@ -3901,8 +3907,14 @@ function __model_autotune_clean_room() {
         # Exit 2: missing required row/file argument
         return 2
     fi
-    LLM_AUTOTUNE_WORKLOAD="${_wl:-chat}" TAC_CONTENDED="$_cont" \
-        bash "$(__autotune_script_path ../bin/autotune-rows.sh)" "${_rows[@]}" 2>&1
+    if [[ "$_cont" == "1" ]]
+    then
+        LLM_AUTOTUNE_WORKLOAD="${_wl:-chat}" TAC_CONTENDED=1 \
+            bash "$(__autotune_script_path ../bin/autotune-rows.sh)" "${_rows[@]}" 2>&1
+    else
+        LLM_AUTOTUNE_WORKLOAD="${_wl:-chat}" \
+            bash "$(__autotune_script_path ../bin/autotune-rows.sh)" "${_rows[@]}" 2>&1
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -4001,6 +4013,57 @@ function __bench_autotune_failure_why() {
     return 0
 }
 
+# __bench_heavy_lock_acquire — acquire the global heavy-job lock when not already held.
+# Sets caller-scoped _bench_heavy_fd and _bench_acquired_heavy=1 and exports HEAVY_JOB_HELD=1.
+# Returns 0 on success (or re-entrant pass-through), 1 on open failure, 3 on lock timeout.
+function __bench_heavy_lock_acquire() {
+    local _lock="${HEAVY_JOB_LOCK:-/tmp/heavy-job.lock}"
+    local _wait="${LLM_BENCH_HEAVY_LOCK_WAIT_SECONDS:-}"
+    if [[ -n "${HEAVY_JOB_HELD:-}" ]] || ! command -v flock >/dev/null 2>&1
+    then
+        return 0
+    fi
+    if ! exec {_bench_heavy_fd}>"$_lock"
+    then
+        __tac_info "Bench" "[Unable to open heavy-job lock: $_lock]" "$C_Error"
+        return 1
+    fi
+    if [[ -n "$_wait" ]]
+    then
+        if ! flock -x -w "$_wait" "$_bench_heavy_fd"
+        then
+            __tac_info "Bench" "[Heavy-job lock still busy after ${_wait}s]" "$C_Error"
+            exec {_bench_heavy_fd}>&-
+            # Exit 3: matches bin/heavy-job lock-timeout status
+            return 3
+        fi
+    elif ! flock -x -n "$_bench_heavy_fd"
+    then
+        __tac_info "Bench" "[Waiting for box-wide heavy-job lock ($_lock)...]" "$C_Warning"
+        flock -x "$_bench_heavy_fd"
+    fi
+    local _note
+    _note="pid=$$ started=$(date -Is) cmd=model bench $*"
+    # swallow-ok: advisory last-holder record; flock owns the lock even if write fails
+    printf '%s\n' "$_note" > "$_lock" 2>/dev/null || true
+    export HEAVY_JOB_HELD=1
+    _bench_acquired_heavy=1
+    return 0
+}
+
+# __bench_heavy_lock_release — release the global heavy-job lock if this bench acquired it.
+function __bench_heavy_lock_release() {
+    if (( ${_bench_acquired_heavy:-0} == 1 ))
+    then
+        # swallow-ok: releasing the heavy-job lock; releasing twice is harmless
+        flock -u "$_bench_heavy_fd" 2>/dev/null || true
+        # swallow-ok: closing the heavy-job lock fd; closing twice is harmless
+        exec {_bench_heavy_fd}>&- 2>/dev/null || true
+        unset HEAVY_JOB_HELD
+        _bench_acquired_heavy=0
+    fi
+}
+
 # __model_bench — bench the selected registry rows one at a time, restoring traps after each.
 function __model_bench() {
     local -a bench_selectors=("$@")
@@ -4060,17 +4123,28 @@ function __model_bench() {
     # before attempting to acquire the bench lock.
     __tac_cleanup_stale_locks
 
+    # Box-wide heavy-job serialisation (same lock & order as bin/bench-rows.sh).
+    local _bench_heavy_fd="" _bench_acquired_heavy=0 _bench_heavy_rc=0
+    __bench_heavy_lock_acquire "${bench_selectors[@]}" || _bench_heavy_rc=$?
+    if (( _bench_heavy_rc != 0 ))
+    then
+        return "$_bench_heavy_rc"
+    fi
+
     local bench_lock_fd=""
     if command -v flock >/dev/null 2>&1
     then
-        exec {bench_lock_fd}>"$bench_mutex" || {
+        if ! exec {bench_lock_fd}>"$bench_mutex"
+        then
             __tac_info "Bench" "[Unable to open lock file: $bench_mutex]" "$C_Error"
+            __bench_heavy_lock_release
             return 1
-        }
+        fi
         if ! flock -w "$bench_lock_wait_seconds" "$bench_lock_fd"
         then
             __tac_info "Bench" "[Another bench run is already active (lock: $bench_lock_file)]" "$C_Error"
             exec {bench_lock_fd}>&-
+            __bench_heavy_lock_release
             return 1
         fi
         # Write our PID to the lock (cooperative PID tracking)
@@ -4173,6 +4247,7 @@ function __model_bench() {
             exec {bench_lock_fd}>&- 2>/dev/null || true
         fi
         rm -f "$bench_lock_file"
+        __bench_heavy_lock_release
         __bench_restore_traps
         return "$_exit_code"
     }
@@ -4595,13 +4670,14 @@ function __model_bench() {
         [[ -n "${b_notes[$i]:-}" ]] && printf "       ${C_Warning}⚠ %s${C_Reset}\n" "${b_notes[$i]}"
     done
 
-    local bench_file
+    local bench_file _bench_tmp _bench_save_rc=0
     bench_file="$LLM_STATE_DIR/bench_$(date +%Y%m%d_%H%M%S).tsv"
+    _bench_tmp="${bench_file}.tmp.$$"
     # Build identity is read ONCE for the file, not per row: every row in one run came from
     # the same binary, and a per-row probe would invent a difference that does not exist.
     local _bi_drv _bi_cuda _bi_build _bi_arch
     IFS=$'\t' read -r _bi_drv _bi_cuda _bi_build _bi_arch < <(__bench_build_identity)
-    {
+    if {
         printf "#\tmodel\tsize\ttps\tnotes\tdriver\tcuda\tbuild\tarch\n"
         for i in "${!b_num[@]}"
         do
@@ -4609,8 +4685,15 @@ function __model_bench() {
                 "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}" "${b_notes[$i]:-}" \
                 "${_bi_drv:-unknown}" "${_bi_cuda:-unknown}" "${_bi_build:-unknown}" "${_bi_arch:-unknown}"
         done
-    } > "$bench_file"
-    __tac_info "Saved" "$bench_file" "$C_Dim"
+    } > "$_bench_tmp" && mv -f "$_bench_tmp" "$bench_file"
+    then
+        __tac_info "Saved" "$bench_file" "$C_Dim"
+    else
+        # swallow-ok: removing partial temp TSV after write/mv failure; absence is fine
+        rm -f "$_bench_tmp" 2>/dev/null || true
+        __tac_info "Error" "[Failed to save benchmark TSV: $bench_file]" "$C_Error"
+        _bench_save_rc=1
+    fi
     __tac_info "Bench Logs" "$bench_log_dir" "$C_Dim"
 
     # Rotate old bench log directories — keep only the last 5 runs.
@@ -4671,8 +4754,10 @@ function __model_bench() {
         exec {bench_lock_fd}>&-
         rm -f "$bench_lock_file" "$bench_pid_file"
     fi
+    __bench_heavy_lock_release
     __bench_restore_traps
     __tac_footer
+    return "$_bench_save_rc"
 }
 
 # ---------------------------------------------------------------------------

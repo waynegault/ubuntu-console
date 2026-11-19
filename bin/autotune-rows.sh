@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-11-19): derive REPO and bin/heavy-job from this script's realpath instead of
+#     hardcoding /home/wayne/github-wsl/ubuntu-console, and invoke "$REPO/scripts/run-autotune-batch.sh"
+#     explicitly so worktree and secondary-clone invocations never run another checkout's code.
 #   v29 (2026-11-18): the lane is THIS box's, from its profile, and an empty answer REFUSES.
 #     `${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}` named the Dell's unit in
 #     code shared with the ASUS box; it never fired while the profile loaded, but a shell
@@ -136,9 +139,11 @@
 set -uo pipefail
 
 # Shared helpers (_tac_suspend_*, _tac_gpu_wait_used_below) — see bin/_tac-bin-lib.sh.
-# Sourced by realpath so the ~/.local/bin symlink and the repo path both resolve.
+# Sourced by realpath so the ~/.local/bin symlink, worktrees, and secondary clones all resolve.
+_SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+_SCRIPT_REPO="$(cd "$_SCRIPT_DIR/.." && pwd)"
 # shellcheck source=_tac-bin-lib.sh
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
+source "$_SCRIPT_DIR/_tac-bin-lib.sh"
 
 # --help / -h answers and exits 0 BEFORE the heavy-job lock is taken or any probe runs
 # (AGENTS.md §2, CLI entrypoint discipline).  Placed above warn() deliberately: §18.3 10.4
@@ -165,11 +170,11 @@ warn() { printf '%s\n' "$*" >&2; }
 # parent holds.  Resolved from this script's own location so the guard does not
 # depend on ~/.local/bin being on PATH.
 if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
-    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/heavy-job" \
+    exec "$_SCRIPT_REPO/bin/heavy-job" \
         "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
 fi
 
-REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
+REPO="${REPO:-$_SCRIPT_REPO}"
 # The restart method this repo owns (bin/wsl-restart.sh), overridable so a test can
 # substitute a recorder — the same seam autotune-resume.sh uses for its own arming.
 RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
@@ -463,7 +468,7 @@ _HEARTBEAT_PID=$!
 # both — see `tests/unit/68-autotune-rows-quiet-gate.bats`, which asserts the count AND that
 # the release functions actually run.
 
-bash scripts/run-autotune-batch.sh "${ROWS[@]}" 2>&1 | tee -a "$LOG"
+bash "$REPO/scripts/run-autotune-batch.sh" "${ROWS[@]}" 2>&1 | tee -a "$LOG"
 rc=${PIPESTATUS[0]}
 # swallow-ok: a heartbeat already gone is the state sought, and the EXIT trap stops it again
 kill "$_HEARTBEAT_PID" 2>/dev/null || :

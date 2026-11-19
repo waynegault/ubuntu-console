@@ -94,8 +94,9 @@ EOF
     _logdir="$(bash -c 'source '"$REPO_ROOT"'/tools/host-profile.sh 2>/dev/null; tac_host_profile_apply 2>/dev/null; printf %s "${LLM_STATE_DIR:-$HOME/.llm}"' 2>/dev/null)/autotune-logs"
     _before=$(ls -t "$_logdir" 2>/dev/null | head -1)
 
-    run env HEAVY_JOB_HELD=1 AUTOTUNE_QUIET_GATE="$BATS_TEST_TMPDIR/gate-ok" \
+    run env REPO="$REPO_ROOT" HEAVY_JOB_HELD=1 AUTOTUNE_QUIET_GATE="$BATS_TEST_TMPDIR/gate-ok" \
         CUDA_CYCLE_FILE="$BATS_TEST_TMPDIR/ledger" \
+        LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$BATS_TEST_TMPDIR/suspend" \
         "$root/bin/autotune-rows.sh" some-model.gguf
 
     _after=$(ls -t "$_logdir" 2>/dev/null | head -1)

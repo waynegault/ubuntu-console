@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-11-19): derive REPO, bin/heavy-job, and bin/tac-exec from this script's realpath
+#   instead of hardcoding /home/wayne/github-wsl/ubuntu-console or ~/.local/bin/tac-exec, so
+#   worktree and secondary-clone invocations execute their own checkout.
 #   v13 (2026-11-18): the CUDA lane is THIS box's, from its profile, and an empty answer
 #   REFUSES rather than falling back to the Dell's unit name.  01-constants does NOT provide
 #   _tac_cuda_lane_unit (measured), so the shared library is sourced here explicitly — one
@@ -56,9 +59,11 @@
 set -uo pipefail
 
 # Shared helpers (_tac_suspend_*, _tac_gpu_wait_used_below) — see bin/_tac-bin-lib.sh.
-# Sourced by realpath so the ~/.local/bin symlink and the repo path both resolve.
+# Sourced by realpath so the ~/.local/bin symlink, worktrees, and secondary clones all resolve.
+_SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+_SCRIPT_REPO="$(cd "$_SCRIPT_DIR/.." && pwd)"
 # shellcheck source=_tac-bin-lib.sh
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
+source "$_SCRIPT_DIR/_tac-bin-lib.sh"
 
 # ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
 # At most ONE heavy job runs on this box at a time: two of them oversubscribe all
@@ -68,11 +73,11 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 # deadlocking on the lock its own parent holds.  Resolved from this script's own
 # location so the guard does not depend on ~/.local/bin being on PATH.
 if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
-    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/heavy-job" \
+    exec "$_SCRIPT_REPO/bin/heavy-job" \
         "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
 fi
 
-REPO="${REPO:-/home/wayne/github-wsl/ubuntu-console}"
+REPO="${REPO:-$_SCRIPT_REPO}"
 # Resolve the host profile so the store and lane are THIS box's, not the old box's
 # hardcoded lane/model-dir (01-constants exports LLM_STATE_DIR / LLAMA_MODEL_DIR /
 # LLAMA_CUDA_LANE_UNIT from the profile).
@@ -83,7 +88,7 @@ source "$REPO/scripts/01-constants.sh"
 # "not found".  Loading it here keeps ONE definition of "this box's lane" rather than a
 # second copy in this file.
 # shellcheck source=_tac-bin-lib.sh
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
+source "$_SCRIPT_DIR/_tac-bin-lib.sh"
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 # THIS box's lane, from its profile — never the Dell's unit name (2026-11-18).  The
 # fallback was llama-cuda-llama32-3b-chat.service (the XPS box's lane, intel-xe-cuda.conf:80);
@@ -177,7 +182,7 @@ fi
 echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"
 
 # The repo's own non-interactive function runner; `model bench` accepts several rows.
-"$HOME/.local/bin/tac-exec" model bench "$@" >> "$LOG" 2>&1
+"$REPO/bin/tac-exec" model bench "$@" >> "$LOG" 2>&1
 rc=$?
 if (( rc == 0 )); then
     # swallow-ok: clearing an absent plan is the outcome sought; the bench already succeeded

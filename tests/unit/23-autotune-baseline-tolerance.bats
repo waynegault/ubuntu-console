@@ -298,6 +298,19 @@ BINLIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
     [ "$output" = "wl=legal cont=1 args=3" ]
 }
 
+@test "clean-room: model autotune leaves TAC_CONTENDED unset unless --allow-contended is passed" {
+    local stub="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$stub"
+    run env -u TAC_CONTENDED STUB_DIR="$stub" bash -c '
+        source "$1/scripts/11e-llm-model.sh" >/dev/null 2>&1
+        __autotune_script_path() { printf "%s/rows.sh\n" "$STUB_DIR"; }
+        printf "#!/usr/bin/env bash\nprintf \"wl=%%s cont=%%s args=%%s\\\\n\" \"\$LLM_AUTOTUNE_WORKLOAD\" \"\${TAC_CONTENDED-<unset>}\" \"\$*\"\n" \
+            > "$STUB_DIR/rows.sh"
+        __model_autotune_clean_room 3 --workload chat' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "wl=chat cont=<unset> args=3" ]
+}
+
 @test "clean-room: a bare --workload is refused, not forwarded" {
     run bash -c '
         source "$1/scripts/01-constants.sh" >/dev/null 2>&1 || true
