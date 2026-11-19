@@ -121,7 +121,30 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 70
+# Module Version: 71
+#   v71 (2026-11-19): `__oc_converge_shared_auth_profiles` converges CONFIG-DECLARED auth
+#     profiles in the SHARED auth store (state/openclaw.sqlite ->
+#     config_machine_state.authProfiles.store) from plaintext `key` to env-backed `keyRef`,
+#     and oc-refresh-keys calls it right after `__oc_apply_secret_refs`.
+#     WHY: `secrets audit` reported PLAINTEXT_FOUND for huggingface:manual and
+#     cheaper-inference:manual. `auth_map` could not have prevented it — it writes PER-AGENT
+#     `openclaw-agent.sqlite`, and all 14 of those were already clean (measured 2026-11-19).
+#     The plaintext lived in the SHARED store, because openclaw.json declares those two under
+#     `auth.profiles`, and the runtime keeps shared profiles in the state DB. So the durable
+#     fix needed a shared-store path, not another auth_map row.
+#     GATING: every sanctioned mutation path (`models auth *`, `secrets configure/apply`) is
+#     offline-only ("requires exclusive offline state ownership"), and the running Gateway
+#     holds authProfiles.store in memory — a live write is clobbered by its next persist. The
+#     function therefore writes ONLY when `systemctl --user is-active` proves the Gateway down
+#     (the boot window: this unit is Before=openclaw-gateway.service). Up, it defers and says
+#     so. It touches only profiles that ALREADY exist in the store, and derives the env var
+#     name rather than listing it.
+#     ALSO v71, found while testing the above: `__oc_gateway_resolved_env_names` leaked a
+#     ~850 MB copy of every agent sqlite on EVERY call — `tempfile.mkdtemp()` with no cleanup,
+#     so 14 agents x 854 MB per call. Measured 2026-11-19: it filled the 51 GB /tmp tmpfs to
+#     100%, breaking an unrelated pytest run AND this module's own bats suite (write errors,
+#     "Executed 17 instead of 46"). Now a `TemporaryDirectory` context, which removes the tree
+#     on the exception path too. The suite went 17/46 (disk-starved) to 46/46 with /tmp flat.
 #   v70 (2026-11-15): `TAC_UPTIME_FILE` names the monotonic clock (default /proc/uptime) for the
 #     UNKNOWN-phase age exemption in oc-refresh-keys' gateway step. The clock is a BOX FACT, and
 #     case 23 of 01-refresh-keys could not fake it by choosing an entry stamp: it computed
@@ -1725,6 +1748,157 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# __oc_converge_shared_auth_profiles — convert CONFIG-DECLARED auth profiles in
+# the SHARED auth store from plaintext `key` to env-backed `keyRef`.
+#
+# WHY THIS EXISTS (measured 2026-11-19).  `openclaw secrets audit` reported
+# PLAINTEXT_FOUND for `state/openclaw.sqlite` profiles huggingface:manual and
+# cheaper-inference:manual.  The auth_map above could not have prevented it: it
+# writes PER-AGENT `openclaw-agent.sqlite`, and all 14 of those were already clean.
+# The plaintext lived in the SHARED store (`state/openclaw.sqlite` ->
+# `config_machine_state.state_key='authProfiles.store'`), which nothing here had
+# ever touched — because openclaw.json declares those two as SHARED profiles
+# (`auth.profiles`), and the runtime keeps shared profiles in the state DB.
+#
+# WHY IT IS GATED ON A STOPPED GATEWAY.  Every sanctioned mutation path
+# (`models auth *`, `secrets configure/apply`) is offline-only by admission
+# ("requires exclusive offline state ownership"), and the running Gateway holds
+# authProfiles.store in memory — a live write would be silently clobbered by the
+# next persist.  The one window oc-refresh-keys reliably has is BOOT: the unit is
+# ordered Before=openclaw-gateway.service, so the Gateway is down.  With it up the
+# function writes nothing and says so; the next boot converges.
+#
+# SCOPE: profiles that ALREADY EXIST in the store, and only those — it never
+# invents a profile id.  The env var name is DERIVED (existing keyRef id, else the
+# provider's config env ref, else the conventional <PROVIDER>_API_KEY when that
+# name is set), never typed into a list.
+# ---------------------------------------------------------------------------
+function __oc_converge_shared_auth_profiles() {
+    local _cfg="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+    local _db="${OPENCLAW_STATE_DB:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/state/openclaw.sqlite}"
+    local _state
+    # swallow-ok: no user manager in an agent/CI shell; an unknown state is treated as UP, so nothing is written without proof the Gateway is down
+    _state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
+    # swallow-ok: the helper's own notes are the report; a crash in it must not abort the refresh
+    "${TAC_PYTHON:-python3}" - "$_cfg" "$_db" "$_state" "${TAC_CACHE_DIR:-/tmp}/tac_win_api_keys" <<'PY' 2>/dev/null
+import json, os, re, shutil, sqlite3, sys, time
+
+cfg_path, db_path, gw_state, cache_path = sys.argv[1:5]
+
+# The Gateway is the only writer that may hold this row open; a write while it is
+# up is lost on its next persist.  Anything not PROVEN down is treated as up.
+if gw_state.strip() not in ("inactive", "failed"):
+    print("deferred: Gateway is %s — shared auth-profile convergence needs it down; next boot applies it"
+          % (gw_state.strip() or "unknown (no user manager)"))
+    sys.exit(0)
+
+def env_value(name):
+    v = os.environ.get(name)
+    if v:
+        return v
+    try:
+        with open(cache_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[len("export "):]
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+try:
+    cfg = json.load(open(cfg_path, encoding="utf-8"))
+except Exception as exc:
+    print("error: cannot read %s (%s: %s)" % (cfg_path, type(exc).__name__, exc))
+    sys.exit(0)
+profiles_cfg = ((cfg.get("auth") or {}).get("profiles") or {})
+providers_cfg = ((cfg.get("models") or {}).get("providers") or {})
+
+def provider_env_name(provider, existing):
+    # 1. what the store already resolves to; 2. the provider's own config ref;
+    # 3. the conventional name, but only when it is actually set.
+    ref = (existing or {}).get("keyRef") or {}
+    if ref.get("id"):
+        return ref["id"]
+    api = (providers_cfg.get(provider) or {}).get("apiKey")
+    if isinstance(api, dict) and api.get("id"):
+        return api["id"]
+    guess = re.sub(r"[^A-Z0-9]+", "_", provider.upper()).strip("_") + "_API_KEY"
+    return guess if env_value(guess) else ""
+
+if not os.path.isfile(db_path):
+    print("error: shared auth store not found at %s" % db_path)
+    sys.exit(0)
+
+con = sqlite3.connect(db_path, timeout=20)
+row = con.execute(
+    "SELECT value_json FROM config_machine_state WHERE state_key='authProfiles.store'"
+).fetchone()
+if not row:
+    print("shared auth store has no authProfiles.store row; nothing to do")
+    sys.exit(0)
+store = json.loads(row[0])
+profiles = store.get("profiles") or {}
+
+converted, stale, unresolved = [], [], []
+for pid in sorted(profiles_cfg):
+    existing = profiles.get(pid)
+    if not isinstance(existing, dict):
+        continue                      # never invent a profile id
+    if "keyRef" in existing and "key" not in existing:
+        continue                      # already converged
+    if "key" not in existing:
+        continue
+    provider = existing.get("provider") or (profiles_cfg.get(pid) or {}).get("provider") or ""
+    var = provider_env_name(provider, existing)
+    if not var:
+        unresolved.append(pid)
+        continue
+    value = env_value(var)
+    if not value:
+        unresolved.append("%s (no $%s)" % (pid, var))
+        continue
+    if existing["key"] != value:
+        # Name it: a plaintext that disagrees with the canonical env is exactly the
+        # drift that made it look authoritative.  The env still wins.
+        stale.append(pid)
+    profiles[pid] = {
+        "type": existing.get("type", "api_key"),
+        "provider": provider,
+        "keyRef": {"source": "env", "provider": "default", "id": var},
+    }
+    converted.append(pid)
+
+notes = []
+if converted:
+    backup = db_path + ".pre-shared-auth-converge"
+    try:
+        shutil.copyfile(db_path, backup)
+    except OSError as exc:
+        con.close()
+        print("error: could not back up %s before writing (%s) — nothing written" % (db_path, exc))
+        sys.exit(0)
+    store["profiles"] = profiles
+    con.execute(
+        "UPDATE config_machine_state SET value_json=?, updated_at_ms=? "
+        "WHERE state_key='authProfiles.store'",
+        (json.dumps(store, separators=(",", ":")), int(time.time() * 1000)),
+    )
+    con.commit()
+    notes.append("converted %d shared auth profile(s): %s" % (len(converted), ", ".join(converted)))
+if stale:
+    notes.append("plaintext differed from the env for: %s (env wins)" % ", ".join(stale))
+if unresolved:
+    notes.append("could not resolve an env var for: %s" % ", ".join(unresolved))
+con.close()
+if notes:
+    print("; ".join(notes))
+PY
+}
+
+# ---------------------------------------------------------------------------
 # __oc_gateway_resolved_env_names — print the env var names the OpenClaw gateway
 # actually resolves as secrets, one per line, sorted and unique:
 #   * env-backed SecretRefs in openclaw.json   ({"source":"env",...,"id":NAME})
@@ -1772,14 +1946,24 @@ if raw is not None:
                 stack.extend(node)
 
 for db in glob.glob(os.path.join(state, 'agents', '*', 'agent', 'openclaw-agent.sqlite')):
-    tmp = os.path.join(tempfile.mkdtemp(), 'store.sqlite')
+    # The copy exists only to read a live DB without taking a write lock, so the
+    # directory MUST go with it.  Measured 2026-11-19: `tempfile.mkdtemp()` with no
+    # cleanup leaked one ~850 MB copy PER AGENT PER CALL — 14 agents x 854 MB — and
+    # filled the 51 GB /tmp tmpfs to 100%, which broke an unrelated pytest run and
+    # this module's own bats suite (write errors, "Executed 17 instead of 46").  A
+    # `TemporaryDirectory` context removes the tree on every path out, including the
+    # exception path that used to `continue` past the leak.
     try:
-        shutil.copy(db, tmp)
-        conn = sqlite3.connect(f'file:{tmp}?mode=ro', uri=True)
-        for (blob,) in conn.execute('select store_json from auth_profile_store'):
-            for hit in re.finditer(r'"id"\s*:\s*"([A-Z_][A-Z0-9_]*)"', blob or ''):
-                names.add(hit.group(1))
-        conn.close()
+        with tempfile.TemporaryDirectory(prefix='oc-envnames-') as _tmpdir:
+            tmp = os.path.join(_tmpdir, 'store.sqlite')
+            shutil.copy(db, tmp)
+            conn = sqlite3.connect(f'file:{tmp}?mode=ro', uri=True)
+            try:
+                for (blob,) in conn.execute('select store_json from auth_profile_store'):
+                    for hit in re.finditer(r'"id"\s*:\s*"([A-Z_][A-Z0-9_]*)"', blob or ''):
+                        names.add(hit.group(1))
+            finally:
+                conn.close()
     except Exception:
         continue
 
@@ -2807,6 +2991,25 @@ function oc-refresh-keys() {
     #    the refs first makes mapping and injection converge in one pass, and it
     #    makes both of this run's reports describe the same post-patch state.
     __oc_apply_secret_refs
+
+    # 3b. Converge CONFIG-DECLARED auth profiles in the SHARED auth store to env-backed
+    #     keyRefs (2026-11-19). Step 3's auth_map writes PER-AGENT stores only; a profile
+    #     declared in openclaw.json `auth.profiles` lives in state/openclaw.sqlite instead,
+    #     and nothing else here touched it — so a plaintext key there survived every refresh.
+    #     The Gateway holds that row in memory, so this writes ONLY when it is proven down,
+    #     which is the case at boot (this unit is Before=openclaw-gateway.service). With the
+    #     Gateway up the function defers and names it; the next boot converges.
+    local _shared_auth_msg
+    _shared_auth_msg=$(__oc_converge_shared_auth_profiles)
+    if [[ -n "$_shared_auth_msg" ]]
+    then
+        if [[ "$_shared_auth_msg" == deferred:* || "$_shared_auth_msg" == error:* ]]
+        then
+            __tac_info "Shared auth profiles" "[${_shared_auth_msg}]" "$C_Dim"
+        else
+            __tac_info "Shared auth profiles" "[${_shared_auth_msg}]" "$C_Success"
+        fi
+    fi
 
     # 4. Push the gateway-resolved bridged vars into the systemd user manager
     #    environment so the running gateway can resolve env-backed SecretRefs
