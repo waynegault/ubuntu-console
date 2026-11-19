@@ -494,6 +494,12 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
 _DURATIONS_FILE = Path(".pytest_cache/tac-durations.json")
 _DURATIONS: dict[str, list[float]] = {}
 _REGRESSION_THRESHOLD = 2.0  # warn if duration exceeds baseline × this
+# Below this a ratio is noise, not a signal: a 4ms case that takes 9ms is "2.2x" and
+# says nothing.  tools/run-tests.sh's own anomaly check draws the same 0.5s floor.
+_REGRESSION_FLOOR_S = 0.5
+# Set on an item that skipped or failed, so its wall clock is not recorded as a
+# duration: a skip costs ~1 ms and a setup error costs whatever the fixture did.
+_NOT_MEASURED = "_tac_not_measured"
 
 
 def _load_durations() -> dict[str, list[float]]:
@@ -518,25 +524,40 @@ def _save_durations(durations: dict[str, list[float]]) -> None:
     path.write_text(json.dumps(durations, indent=2), encoding="utf-8")
 
 
-def _collect_duration(item: pytest.Item, duration_s: float) -> None:
-    """Record a test duration and flag regressions."""
-    # A bridged BATS case reports its own TAP duration ("in 2033ms").  Its wall
-    # clock here is not a per-case measurement: the first case of a file carries
-    # that file's whole-file BATS run, and every later case is a cache lookup near
-    # zero.  Prefer the reported figure when the test provided one.
+def _measured_duration(item: pytest.Item, elapsed_s: float) -> float:
+    """The duration that describes *item*, not the invocation that produced it.
+
+    A bridged BATS case reports its own TAP duration ("in 2033ms"), and that is the
+    only per-case measurement when the whole file ran as one process: the first case
+    of a file carries that file's whole-file BATS run, and every later case is a
+    cache lookup near zero.  So the reported figure wins whenever bats gave one.
+    """
     reported = getattr(item, "_bats_case_seconds", None)
-    if reported is not None:
-        duration_s = reported
-    key = f"{item.nodeid.split('::')[0]}::{getattr(item, 'originalname', None) or item.name}"
-    _DURATIONS.setdefault(key, []).append(duration_s)
+    return elapsed_s if reported is None else reported
+
+
+def _record_duration(item: pytest.Item, elapsed_s: float) -> str | None:
+    """Record this run's duration, and return a regression warning if warranted.
+
+    Recording and checking take the SAME figure.  They used to differ — the recorder
+    preferred the TAP seconds while the check was handed the wall clock — so a
+    whole-file BATS run's first case (12.2 s, the FILE's cost) was compared against a
+    baseline of per-case TAP times (0.2 s) and reported a false 66x regression for a
+    case that had not changed (measured 2026-11-19).
+    """
+    duration_s = _measured_duration(item, elapsed_s)
+    _DURATIONS.setdefault(_duration_key(item), []).append(duration_s)
+    return _check_regression(item, duration_s)
 
 
 def _check_regression(item: pytest.Item, duration_s: float) -> str | None:
     """Return a warning string if *duration_s* is a significant regression."""
     baselines = _load_durations()
-    key = f"{item.nodeid.split('::')[0]}::{getattr(item, 'originalname', None) or item.name}"
+    key = _duration_key(item)
     history = baselines.get(key)
     if not history or len(history) < 2:
+        return None
+    if duration_s < _REGRESSION_FLOOR_S:
         return None
     # Use median of historical runs as the stable baseline
     sorted_hist = sorted(history)
@@ -575,6 +596,23 @@ def _is_full_run(config: pytest.Config) -> bool:
 
 
 @pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None, None, None]:
+    """Mark an item that did not run, so its wall clock is not recorded as a duration.
+
+    A skipped case costs ~1 ms and a test that errors in setup costs whatever the
+    failed fixture did — neither measures the test.  Recorded anyway they made the
+    history bimodal: measured 2026-11-19, test_bridge_parse_matches_bats_count held
+    five ~1 ms entries beside nine 13-20 s ones, because the ~1 ms entries came from
+    runs where bats was absent and the case skipped.  A later genuine run was then
+    flagged as a 162x regression against a median taken from those skips.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if report.skipped or report.failed:
+        setattr(item, _NOT_MEASURED, True)
+
+
+@pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
     """Wrap each test to capture its wall-clock duration."""
     import time as _time
@@ -582,10 +620,9 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
     start = _time.monotonic()
     yield
     elapsed = _time.monotonic() - start
-    if not _is_vscode_discovery():
+    if not _is_vscode_discovery() and not getattr(item, _NOT_MEASURED, False):
         _SEEN.add(_duration_key(item))
-        _collect_duration(item, elapsed)
-        warning = _check_regression(item, elapsed)
+        warning = _record_duration(item, elapsed)
         if warning:
             import sys as _sys
 

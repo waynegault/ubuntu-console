@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -678,6 +679,60 @@ def test_bridge_parse_names_cases_despite_trailing_markers() -> None:
     # The diagnostics after a failure stay attached to that failure.
     assert "failed due to timeout" in results["slow"]["output"]
     assert "`false' failed" in results["fails"]["output"]
+
+
+def _tests_conftest():
+    """This directory's conftest module, however the runner registered it."""
+    for name, module in sys.modules.items():
+        if name == "conftest" or name.endswith(".conftest"):
+            path = getattr(module, "__file__", None)
+            if path and Path(path).parent == Path(__file__).parent:
+                return module
+    raise AssertionError("tests/conftest.py is not in sys.modules — the duration tracker is untested")
+
+
+def test_a_bridged_cases_duration_is_judged_by_its_tap_time_not_the_files_run(monkeypatch) -> None:
+    """A case is judged against its own measurement, or every file's first case lies.
+
+    A whole-file BATS run attributes the whole file's cost to its first case —
+    measured 2026-11-19: 12.2 s, then 13.3 s on a re-run of the same unchanged case —
+    while the recorder stored that case's own TAP seconds (~0.25 s).  Judging the wall
+    clock against that history reported a 66x regression for a case that had not
+    changed, on the first case of every bridged file.
+
+    The criterion: the figure recorded and the figure judged are the same
+    measurement, so a case whose own TAP time matches its baseline never warns.  The
+    control keeps the check honest — with no reported figure the wall clock IS the
+    measurement, and a 48x overrun must still warn.
+    """
+    conftest = _tests_conftest()
+
+    class _Item:
+        nodeid = "tests/test_bats_bridge.py::test_case"
+        name = "test_case"
+
+    bridged = _Item()
+    bridged._bats_case_seconds = 0.246
+    key = conftest._duration_key(bridged)
+    monkeypatch.setattr(conftest, "_DURATIONS", {})
+    monkeypatch.setattr(conftest, "_load_durations", lambda: {key: [0.25, 0.25, 0.25, 0.25]})
+
+    assert conftest._record_duration(bridged, 12.2) is None
+    assert conftest._DURATIONS[key] == [0.246]
+
+    unbridged = _Item()
+    unbridged_key = conftest._duration_key(unbridged)
+    monkeypatch.setattr(conftest, "_load_durations", lambda: {unbridged_key: [0.25, 0.25, 0.25, 0.25]})
+    warning = conftest._record_duration(unbridged, 12.2)
+    assert warning is not None
+    assert "12.2s" in warning
+
+    # And a ratio under the floor is noise, not a regression: 4ms to 9ms is "2.2x".
+    # The criterion is tools/run-tests.sh's own anomaly rule — a ratio AND a 0.5s floor.
+    noisy = _Item()
+    noisy_key = conftest._duration_key(noisy)
+    monkeypatch.setattr(conftest, "_load_durations", lambda: {noisy_key: [0.004] * 4})
+    assert conftest._record_duration(noisy, 0.009) is None
 
 
 def test_bridge_parse_decodes_a_quoted_name_the_way_bats_reports_it(tmp_path) -> None:
