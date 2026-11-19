@@ -12,7 +12,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 
 import pytest_junit_summary
-import tap_to_junit
+from tools import tap_to_junit
 
 TAP = "\n".join(
     [

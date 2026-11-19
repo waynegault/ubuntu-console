@@ -710,6 +710,8 @@ def test_a_bridged_cases_duration_is_judged_by_its_tap_time_not_the_files_run(mo
     class _Item:
         nodeid = "tests/test_bats_bridge.py::test_case"
         name = "test_case"
+        # Declared so mypy can see the attribute the bridge sets on real items.
+        _bats_case_seconds: float | None = None
 
     bridged = _Item()
     bridged._bats_case_seconds = 0.246

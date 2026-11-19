@@ -596,7 +596,7 @@ def _is_full_run(config: pytest.Config) -> bool:
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None, None, None]:
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None, Any, None]:
     """Mark an item that did not run, so its wall clock is not recorded as a duration.
 
     A skipped case costs ~1 ms and a test that errors in setup costs whatever the
