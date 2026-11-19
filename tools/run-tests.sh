@@ -12,7 +12,16 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-11-19): `unittest` now ends with a junit record and one summary.  The bats
+#   half is TAP, which nothing outside this script reads, so each suite's TAP is kept and
+#   converted (tools/tap_to_junit.py) while the pytest half writes its own report
+#   (--junitxml in pytest.ini addopts); scripts/pytest_junit_summary.py then prints counts,
+#   failures and the slowest cases across BOTH halves.  Previous reports are deleted at
+#   the start, so a summary can only describe this run — a stale file would otherwise be
+#   reported as this run's results.  REPO_ROOT is also resolved with -P, matching
+#   install.sh, whose canonical loader/symlink targets three install suites compare
+#   against (they failed when the run was started through the ~/ubuntu-console symlink).
 #   v7 (2026-11-19): a BATS case can no longer wedge the run on the operator's terminal.
 #   bats was started with the caller's stdin, so a case reaching a `read` prompt inherited
 #   the pty and blocked forever — bats has no per-test timeout — while the same case
@@ -47,7 +56,27 @@ if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
         "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
 fi
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# -P: the path handed to bats becomes $BATS_TEST_FILENAME, and the suites derive
+# their own REPO_ROOT from it.  install.sh canonicalises with `pwd -P`, so a run
+# started through the ~/ubuntu-console symlink compared a symlinked root against
+# canonical `readlink -f` targets and failed five install cases (2026-11-19).
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+
+# The bats half is streamed for the operator but also kept: one TAP file per suite
+# lets tools/tap_to_junit.py turn this run into junit without losing which file a
+# case came from.  Removed on exit.
+TAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tac-tap.XXXXXX")" || {
+    # Routed through the file's own output helper (§10.7) and on stderr, because the
+    # run never started.
+    test_line "ERROR: cannot create a temp dir for the TAP record." >&2
+    exit 2  # environment error, like the missing-bats check; a test failure is 1
+}
+trap 'rm -rf "$TAP_DIR"' EXIT
+
+# A summary must describe THIS run, so drop the previous run's reports before
+# anything can fail and leave an old one in place.
+mkdir -p "$REPO_ROOT/.pytest_cache"
+rm -f "$REPO_ROOT/.pytest_cache/bats.xml" "$REPO_ROOT/.pytest_cache/unittest.xml"
 
 # Fail fast: without bats every suite silently produces zero results, which the
 # summary would otherwise report as "ALL N TESTS PASSED".
@@ -124,6 +153,9 @@ _build_bats_list() {
 _run_bats_file() {
     local bats_file="$1"
     local label="$2"  # optional label prefix for display
+    # The suite path as the summary should name it, and where its TAP is kept.
+    local _bf_rel="${bats_file#"$REPO_ROOT"/}"
+    local _tap_file="$TAP_DIR/${_bf_rel//\//-}.tap"
 
     while IFS= read -r line; do
         # Parse timing from TAP: "ok N test_name in XXXms" or "not ok N test_name in XXXs"
@@ -177,7 +209,11 @@ _run_bats_file() {
     # prompt would otherwise block forever — bats has no per-test timeout — while the
     # same case passes in CI, where stdin is not a tty.  Measured 2026-11-19: the suite
     # hung at case 14-registry-identity #32 because it inherited the operator's pty.
-    done < <(bats --tap --timing "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1 < /dev/null) || true
+    # The tee keeps the TAP as well: the live stream is for reading, the file is what
+    # the junit record is built from.
+    done < <(bats --tap --timing "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1 < /dev/null \
+        | tee "$_tap_file") || true
+    _JUNIT_PAIRS+=("$_bf_rel=$_tap_file")
 }
 
 # ── Parse TAP output into section arrays ─────────────────────────────────────
@@ -215,6 +251,8 @@ _TAP_OUTPUT=""
 _LIVE_NUM=0 _LIVE_PASS=0 _LIVE_FAIL=0 _LIVE_SKIP=0
 _SKIPPED=()
 _BATS_EMPTY=0
+_JUNIT_PAIRS=()
+_JUNIT_EXIT=0
 _LIVE_EMPTY_PLAN=0
 GRAND_PASS=0 GRAND_FAIL=0 GRAND_SKIP=0
 
@@ -254,6 +292,21 @@ for bf in "${BATS_FILES[@]}"; do
         fi
     fi
 done
+
+# ── Part 1b: junit record of the bats half ──────────────────────────────────
+# The Python half writes its own report (--junitxml in pytest.ini addopts); bats
+# speaks TAP, so its results are converted here and both are summarised at the end.
+_BATS_XML="$REPO_ROOT/.pytest_cache/bats.xml"
+if (( ${#_JUNIT_PAIRS[@]} > 0 )); then
+    _junit_py="$REPO_ROOT/.venv/bin/python3"
+    [[ -x "$_junit_py" ]] || _junit_py="python3"
+    if ! "$_junit_py" "$REPO_ROOT/tools/tap_to_junit.py" -o "$_BATS_XML" \
+            "${_JUNIT_PAIRS[@]}"
+    then
+        _JUNIT_EXIT=1
+        test_line "  ${C_Red}${FAIL_SYMBOL}${C_Reset} the bats junit record could not be written (${_BATS_XML})"
+    fi
+fi
 
 # ── Part 2: Aggregate section counts (no display) ───────────────────────────
 _parse_tap "$_TAP_OUTPUT"
@@ -496,10 +549,23 @@ PY
     fi
 fi
 
+# ── JUnit summary ────────────────────────────────────────────────────────────
+# One view of both halves, from the reports THIS run wrote.  Exit 1 means failures
+# were found (already counted above); exit 2 means there was no report to read —
+# this run left no record, which is a failure of the runner rather than of a test.
+spacer
+header "JUnit summary"
+_sum_py="$REPO_ROOT/.venv/bin/python3"
+[[ -x "$_sum_py" ]] || _sum_py="python3"
+_sum_rc=0
+( cd "$REPO_ROOT" && "$_sum_py" scripts/pytest_junit_summary.py ) || _sum_rc=$?
+(( _sum_rc == 2 )) && _JUNIT_EXIT=1
+
 exit_code=0
 (( GRAND_FAIL > 0 )) && exit_code=1
 (( _PY_EXIT != 0 )) && exit_code=1
 (( _BATS_EMPTY == 1 )) && exit_code=1
+(( _JUNIT_EXIT != 0 )) && exit_code=1
 exit $exit_code
 
 # end of file
