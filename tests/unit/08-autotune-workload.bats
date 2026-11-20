@@ -662,9 +662,12 @@ _selftest_run() {
     [[ "$src" == *'launch failed (no load-failure signature)'* ]]
     # ...the ONE legitimate load-failure retry (FA off) is still attempted...
     [[ "$src" == *'_launch_server || true'* ]]
-    # ...and the ctx walk consults the classification before halving.
+    # ...and the ctx walk consults the classification before halving.  The spelling moved to
+    # the one predicate when incomplete_download was added (AUTOTUNE-SHARD-001): the call
+    # sites each wrote `== "load_fail"` by hand, so a new unloadable class would have been
+    # honoured only at the sites someone remembered.  The property is unchanged.
     [[ "$src" == *'_lft=$(last_fail_type)'* ]]
-    [[ "$src" == *'if [[ "$_lft" == "load_fail" ]]; then'* ]]
+    [[ "$src" == *'if _gguf_unrunnable; then'* ]]
 }
 
 # ── WSL2 dxgkrnl leak ledger (2026-09-14) ────────────────────────────────────
