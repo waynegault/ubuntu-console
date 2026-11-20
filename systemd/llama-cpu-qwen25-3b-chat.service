@@ -12,6 +12,9 @@ StartLimitIntervalSec=600
 StartLimitBurst=6
 
 [Service]
+# CARD DECLARATION (AUTOTUNE-CARD-ATTR-003): the card this lane runs on, asserted
+# by its launcher against the build it execs.  A unit name is not evidence of a card.
+Environment=LLAMA_GPU=none
 # No ExecStartPre GPU clear, and none is wanted: this tier holds no GPU context,
 # so there is no card for it to clear and no card it could take from a lane that
 # needs one.  The build links no libcuda/libOpenCL, so neither card's reap can

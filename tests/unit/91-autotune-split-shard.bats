@@ -233,17 +233,21 @@ Big-00005-of-00005.gguf" ]] || { echo "got: '$out'"; return 1; }
         || { echo "label: '$(_fail_label_for_unrunnable)'"; rm -f "$f"; return 1; }
     # An OOM still descends: shrinking ctx is exactly the remedy for it.
     printf '0|0|oom\n' > "$f"
-    ! _gguf_unrunnable || { echo "an OOM must still descend"; rm -f "$f"; return 1; }
+    _gguf_unrunnable && { echo "an OOM must still descend"; rm -f "$f"; return 1; }
     printf '0|0|\n' > "$f"
-    ! _gguf_unrunnable
+    # An EMPTY token must descend too.  Written as `&& { … return 1; }`, never a bare `!`:
+    # in Bats a `!` does not fail the test (shellcheck SC2314), so `! _gguf_unrunnable`
+    # asserted nothing — and the `rm` after it would have masked the status anyway.
+    _gguf_unrunnable && { echo "an empty token must still descend"; rm -f "$f"; return 1; }
     rm -f "$f"
 }
 
 @test "split: no call site compares last_fail_type to a literal any more" {
     # The population is DERIVED, not listed: every `== "load_fail"` spelling is gone, so a
-    # future class cannot be added to one site and forgotten at the other ten.
-    ! grep -q 'last_fail_type) == "load_fail"' "$REPO_ROOT/scripts/autotune-model.sh" \
-        || { echo "a literal comparison survived; use _gguf_unrunnable"; return 1; }
+    # future class cannot be added to one site and forgotten at the other ten.  `&& { … }`,
+    # not a bare `!`, because in Bats `!` does not fail the test (shellcheck SC2314).
+    grep -q 'last_fail_type) == "load_fail"' "$REPO_ROOT/scripts/autotune-model.sh" \
+        && { echo "a literal comparison survived; use _gguf_unrunnable"; return 1; }
     # And the predicate is actually used more than once (a helper nobody calls is not a fix).
     [[ "$(grep -c '_gguf_unrunnable' "$REPO_ROOT/scripts/autotune-model.sh")" -ge 5 ]] \
         || { echo "the predicate is barely wired"; return 1; }
@@ -311,7 +315,6 @@ _gate_run() {
     { printf '%s\n' "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
       printf '1|AD|%s|0.1G|Q4_K_M/q8_0|qwen4exp|0|4096|4|1024|256|1|256|native|auto|on|0|no|no|no\n' "$first"
     } > "$reg"
-    # shellcheck disable=SC2317  # invoked by the child bash through the exported environment
     nvidia-smi() {
         case "$*" in
             *memory.free*|*memory.total*) printf '81920\n' ;;

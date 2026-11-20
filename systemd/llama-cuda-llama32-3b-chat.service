@@ -14,6 +14,9 @@ StartLimitIntervalSec=600
 StartLimitBurst=6
 
 [Service]
+# CARD DECLARATION (AUTOTUNE-CARD-ATTR-003): the card this lane runs on, asserted
+# by its launcher against the build it execs.  A unit name is not evidence of a card.
+Environment=LLAMA_GPU=cuda
 # Clears the CUDA card before this lane loads, and REFUSES to start while another
 # run owns the card — one LLM on the CUDA card, ever.  See docs/llm.md.
 ExecStartPre=%h/.local/bin/llama-gpu-clear.sh %n

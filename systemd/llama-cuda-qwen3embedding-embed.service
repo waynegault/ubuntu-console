@@ -36,6 +36,9 @@ StartLimitIntervalSec=600
 StartLimitBurst=6
 
 [Service]
+# CARD DECLARATION (AUTOTUNE-CARD-ATTR-003): the card this lane runs on, asserted
+# by its launcher against the build it execs.  A unit name is not evidence of a card.
+Environment=LLAMA_GPU=cuda
 # --embeddings restricts the server to the embedding use case.  --pooling last is NOT optional:
 # Qwen3-Embedding is trained for LAST-token pooling (the GGUF's pooling_type is 3), so the mean
 # default would emit vectors the model never intended.  Naming it also keeps the vector space
