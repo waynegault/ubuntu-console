@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-11-20): the empty-lane refusal now comes AFTER the usage exit.  v9 put it above the
+#   usage block, so a no-argument call — what tests/unit/38-heavy-job.bats uses to prove the
+#   heavy-job wiring, and the usage exit's own documented contract — answered a question it was
+#   not asked, and exited 1 instead of 2.  A usage error with nothing to act on stays a usage error.
 #   v10 (2026-11-18): classify all remaining swallow sites so retune-band-chunk.sh has zero
 #   unclassified swallows in tools/contracts-swallows-baseline.tsv.
 #   v9 (2026-11-18): the lane this chunk needs down is resolved from THIS box's profile
@@ -81,22 +85,30 @@ source "$_SELF_DIR/../bin/_tac-bin-lib.sh"
 # Same env override and default as bin/llama-watchdog.sh — keep the two in step.
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 
+if [[ $# -eq 0 ]]
+then
+    echo "usage: $0 <row> [row ...]" >&2
+    exit 2
+fi
+
 # The CUDA lane this chunk needs down.  The same unit bin/llama-watchdog.sh owns
 # as CUDA_UNIT — a test asserts the two agree, so the name cannot drift apart.
 # THIS box's lane, from its profile — never the Dell's unit name (2026-11-18).  The
 # fallback was llama-cuda-llama32-3b-chat.service (the XPS box's lane, intel-xe-cuda.conf:80);
 # the profile always wins, so it never fired here, but a shell without the profile would have
 # retuned against the wrong machine's lane and reported success.
+#
+# Resolved AFTER the usage exit on purpose (v11): a no-argument call asks what the rows are,
+# not what the lane is, and answering that question with a refusal about the GPU profile is
+# both the wrong answer and the wrong exit status.
 CUDA_LANE_UNIT="$(_tac_cuda_lane_unit)"
 if [[ -z "$CUDA_LANE_UNIT" ]]; then
-    warn "RETUNE REFUSING: no CUDA lane resolved (profile not loaded) — nothing was measured"
+    # Builtin printf, not a helper: `warn` exists in most scripts/ and bin/ files but never in
+    # this one, so v9's `warn` here EXITED 127 (`warn: command not found`) and never printed
+    # the refusal at all — a lost diagnosis, not only a wrong status.
+    printf 'retune-band-chunk: %s\n' \
+        "RETUNE REFUSING: no CUDA lane resolved (profile not loaded) — nothing was measured" >&2
     exit 1
-fi
-
-if [[ $# -eq 0 ]]
-then
-    echo "usage: $0 <row> [row ...]" >&2
-    exit 2
 fi
 
 # Cycle ledger, boot-scoped exactly as run-autotune-batch.sh names it (a WSL
