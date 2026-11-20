@@ -26,7 +26,13 @@
 # records a stop and `model use` exits 0.  Verified against the pre-change file.
 #
 # HERMETIC: HOME, registry and model dir are sandboxed; systemctl, the launcher and the
-# download are stubbed.  Nothing touches the card, no server starts.
+# download are stubbed.  Nothing touches the card, no server starts.  The box-wide
+# heavy-job lock is sandboxed too: __model_bench takes it before its bench mutex, and a
+# case that contended for the REAL one queued behind whatever else held the box — with
+# no bound, because LLM_BENCH_HEAVY_LOCK_WAIT_SECONDS is unset by default.  Measured
+# 2026-11-19: the VS Code BATS runner wedged 10+ minutes in `flock -x` on
+# /tmp/heavy-job.lock while an unrelated pytest session held it.  Same seam as
+# tests/integration/02-model-lifecycle.bats and tests/unit/38-heavy-job.bats.
 # ==============================================================================
 
 setup() {
@@ -37,6 +43,7 @@ setup() {
     export HOME="$SANDBOX/home"
     export TAC_TEST_TMPDIR="$SANDBOX/tac"
     export TAC_CACHE_DIR="$SANDBOX/cache"
+    export HEAVY_JOB_LOCK="$SANDBOX/heavy-job.lock"
     mkdir -p "$HOME" "$TAC_TEST_TMPDIR" "$TAC_CACHE_DIR"
 
     # shellcheck source=env.sh
@@ -368,6 +375,33 @@ EOF
             *) echo "unexpected stop recorded: $_line"; return 1 ;;
         esac
     done < <(grep " stop " "$sys_log")
+}
+
+@test "__bench_heavy_lock_acquire binds the fd in the CALLER, so release frees the box lock" {
+    # Criterion: bin/heavy-job's header — the box-wide lock is held for the job and
+    # released when the job ends, so the next heavy job gets the box.
+    # Wrong outcome detected: the bench returns while the lock is STILL held.  Bash's
+    # `exec {var}>file` assigns `var` in the function that runs it, so a helper that
+    # opens the lock without a caller-scoped name leaves __model_bench's own
+    # _bench_heavy_fd empty; its release gate then never fires and the lock is shipped
+    # to the parent.  Measured 2026-11-19: fd 11 stayed flocked in the VS Code extension
+    # host, every later `heavy-job` invocation queued forever, and this suite wedged
+    # 10+ minutes in `flock -x` on the real lock.
+    local _lock="$SANDBOX/heavy-job.lock"
+    run bash -c '
+        export HEAVY_JOB_LOCK="$1"
+        unset HEAVY_JOB_HELD
+        source "$2/env.sh" >/dev/null
+        _bench_heavy_fd=""
+        _bench_acquired_heavy=0
+        __bench_heavy_lock_acquire _bench_heavy_fd || { echo "acquire failed"; exit 1; }
+        [[ -n "$_bench_heavy_fd" ]] || { echo "fd not bound in the caller"; exit 2; }
+        __bench_heavy_lock_release
+        if flock -n "$HEAVY_JOB_LOCK" -c true; then echo RELEASED; else echo STILL_HELD; fi
+    ' _ "$_lock" "$REPO_ROOT"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "RELEASED" ]
 }
 
 # end of file

@@ -56,6 +56,6 @@ unclassified	tools/import-windows-env.sh	1
 unclassified	tools/install-shellcheck.sh	1
 unclassified	tools/lint.sh	11
 unclassified	tools/mirror-vault.sh	2
-unclassified	tools/run-tests.sh	9
+unclassified	tools/run-tests.sh	8
 unclassified	tools/hooks/post-commit	1
 unclassified	tools/hooks/post-merge	1

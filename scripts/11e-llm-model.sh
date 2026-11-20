@@ -1,7 +1,26 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 145
+# Module Version: 146
+#   v146 (2026-11-19): __bench_heavy_lock_acquire opens the lock through its caller's
+#   scope.  Bash's `exec {var}>file` ASSIGNS `var` in the function that runs it, so
+#   `exec {_bench_heavy_fd}>` bound the name in the HELPER's own dynamic scope and left
+#   __model_bench's `_bench_heavy_fd` at the "" it was initialised to.  The release gate
+#   (`_bench_acquired_heavy == 1`) still fired, but its two steps then ran on an empty
+#   name — `flock -u ""` and `exec {}>&-` — and both are swallowed by `2>/dev/null ||
+#   true`, so the descriptor stayed open and the box-wide heavy-job lock was shipped to
+#   the caller's parent.  The helper now takes the fd name and declares it with
+#   `local -n`, so `exec` assigns the caller's variable; the nameref is deliberately not
+#   called _bench_heavy_fd, because bash warns "circular name reference" when a nameref
+#   shares its target's name.  Found by reading while chasing the wedge below; the leak
+#   itself was not observed in the wild, and the case added to
+#   tests/unit/85-model-use-sweep-ownership.bats fails on the pre-fix code.
+#   Separately, that suite never sandboxed HEAVY_JOB_LOCK, so its __model_bench cases
+#   contended for the REAL box lock with no bound (LLM_BENCH_HEAVY_LOCK_WAIT_SECONDS is
+#   unset by default).  Measured 2026-11-19: the VS Code BATS runner sat 25+ minutes in
+#   `flock -x` on /tmp/heavy-job.lock while an unrelated pytest session held it.  The
+#   suite now points HEAVY_JOB_LOCK at its own sandbox, as 02-model-lifecycle,
+#   e2e-bench-autotune, 08-autotune-workload and 38-heavy-job already do.
 #   v145 (2026-11-19): (1) __model_autotune_clean_room only exports TAC_CONTENDED=1 when
 #   --allow-contended or an upstream TAC_CONTENDED=1 bypass is set, so quiet `model autotune`
 #   runs certify instead of forcing meas_state=indicative; (2) __model_bench acquires the
@@ -4014,33 +4033,40 @@ function __bench_autotune_failure_why() {
 }
 
 # __bench_heavy_lock_acquire — acquire the global heavy-job lock when not already held.
-# Sets caller-scoped _bench_heavy_fd and _bench_acquired_heavy=1 and exports HEAVY_JOB_HELD=1.
+# Opens the lock into the caller's `_bench_heavy_fd` (name passed as $1, by reference, so
+# the caller can gate its own release on it — see v146), sets caller-scoped
+# _bench_acquired_heavy=1 and exports HEAVY_JOB_HELD=1.
 # Returns 0 on success (or re-entrant pass-through), 1 on open failure, 3 on lock timeout.
 function __bench_heavy_lock_acquire() {
+    # The nameref must NOT be called _bench_heavy_fd: bash warns "circular name
+    # reference" when a nameref's own name matches its target, and the warning is
+    # the only thing that would tell us the indirection had gone wrong.
+    local -n _bench_heavy_fd_ref="$1"
+    shift
     local _lock="${HEAVY_JOB_LOCK:-/tmp/heavy-job.lock}"
     local _wait="${LLM_BENCH_HEAVY_LOCK_WAIT_SECONDS:-}"
     if [[ -n "${HEAVY_JOB_HELD:-}" ]] || ! command -v flock >/dev/null 2>&1
     then
         return 0
     fi
-    if ! exec {_bench_heavy_fd}>"$_lock"
+    if ! exec {_bench_heavy_fd_ref}>"$_lock"
     then
         __tac_info "Bench" "[Unable to open heavy-job lock: $_lock]" "$C_Error"
         return 1
     fi
     if [[ -n "$_wait" ]]
     then
-        if ! flock -x -w "$_wait" "$_bench_heavy_fd"
+        if ! flock -x -w "$_wait" "$_bench_heavy_fd_ref"
         then
             __tac_info "Bench" "[Heavy-job lock still busy after ${_wait}s]" "$C_Error"
-            exec {_bench_heavy_fd}>&-
+            exec {_bench_heavy_fd_ref}>&-
             # Exit 3: matches bin/heavy-job lock-timeout status
             return 3
         fi
-    elif ! flock -x -n "$_bench_heavy_fd"
+    elif ! flock -x -n "$_bench_heavy_fd_ref"
     then
         __tac_info "Bench" "[Waiting for box-wide heavy-job lock ($_lock)...]" "$C_Warning"
-        flock -x "$_bench_heavy_fd"
+        flock -x "$_bench_heavy_fd_ref"
     fi
     local _note
     _note="pid=$$ started=$(date -Is) cmd=model bench $*"
@@ -4125,7 +4151,7 @@ function __model_bench() {
 
     # Box-wide heavy-job serialisation (same lock & order as bin/bench-rows.sh).
     local _bench_heavy_fd="" _bench_acquired_heavy=0 _bench_heavy_rc=0
-    __bench_heavy_lock_acquire "${bench_selectors[@]}" || _bench_heavy_rc=$?
+    __bench_heavy_lock_acquire _bench_heavy_fd "${bench_selectors[@]}" || _bench_heavy_rc=$?
     if (( _bench_heavy_rc != 0 ))
     then
         return "$_bench_heavy_rc"
