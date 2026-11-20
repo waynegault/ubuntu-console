@@ -53,7 +53,7 @@ setup() {
     run env -u VIRTUAL_ENV HOME="$SANDBOX_HOME" \
         bash -c 'source "$1" >/dev/null 2>&1; tac_test_state_sandbox "$2"' \
         _ "$HELPER" "$SANDBOX_HOME/models"
-    [ "$status" -eq 2 ]
+    [ "$status" -eq 1 ]
     [[ "$output" == *"refusing a sandbox inside the live model store"* ]]
 }
 

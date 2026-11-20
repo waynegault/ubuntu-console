@@ -12,7 +12,11 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-11-19): the sandbox's failure line goes through test_line, the file's
+#   own stderr helper, instead of a hand-written printf (ratchet 10.7).  test_line is
+#   defined further down, but nothing between the two points calls it, so the helper
+#   is bound by the time the exit-2 branch can run.
 #   v10 (2026-11-19): every suite inherits a SANDBOXED LLM store.  The operator's
 #   shell exports the live paths and the runner passed them through, so a suite that
 #   did not pin LLM_STATE_DIR / LLM_REGISTRY / LLAMA_MODEL_DIR wrote production —
@@ -102,9 +106,9 @@ trap 'rm -rf "$TAP_DIR"' EXIT
 source "$REPO_ROOT/tools/test-state-sandbox.sh"
 if ! tac_test_state_sandbox "$TAP_DIR/llm"
 then
-    # printf rather than test_line: the drawing helpers are defined below this point.
-    printf '%s\n' "ERROR: cannot create the test LLM sandbox under $TAP_DIR." >&2
-    exit 2
+    # Routed through the file's own stderr helper (10.7), not a hand-written printf.
+    test_line "ERROR: cannot create the test LLM sandbox under $TAP_DIR." >&2
+    exit 2  # environment error, like the TAP-dir failure above; a test failure is 1
 fi
 
 # A summary must describe THIS run, so drop the previous run's reports before

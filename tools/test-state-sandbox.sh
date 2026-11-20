@@ -22,32 +22,43 @@
 # NOT a general-purpose tool: <root> must be an absolute temp dir.  A root inside the
 # live model store is REFUSED, because a "sandbox" there is still the production tree.
 # ==============================================================================
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-11-19): every refusal is return 1 through _tac_sandbox_refuse, one stderr
+#   path, and the absolute-path case states why it has no `*)` arm — three count
+#   ratchets (9.7, 10.7, 4.2.4) caught the first cut's shape.
 #   v1 (2026-11-19): first cut, after the 2026-11-19 contamination census.
 
+# _tac_sandbox_refuse <reason> — the ONE stderr path, so every refusal has one shape.
+_tac_sandbox_refuse() {
+    printf '%s\n' "tac_test_state_sandbox: $1" >&2
+}
+
 # tac_test_state_sandbox <root> — export a throwaway LLM store under <root>.
-# Returns 0 on success, 2 when <root> is missing, relative, or inside the live store.
+# Returns 0 on success and 1 on any refusal — the caller's only decision is "may a
+# suite run", and a distinct code per refusal would be a vocabulary nothing reads.
+# Every refusal is NAMED; a silent 1 would be indistinguishable from a typo.
 tac_test_state_sandbox() {
     local root="${1:-}"
     if [[ -z "$root" ]]; then
-        printf '%s\n' "tac_test_state_sandbox: a sandbox root is required" >&2
-        return 2
+        _tac_sandbox_refuse "a sandbox root is required"
+        return 1
     fi
     # Absolute: a suite that `cd`s must not be able to drag the sandbox into the repo
-    # or, worse, into the live store.
+    # or, worse, into the live store.  No `*)` arm on purpose — an absolute path is the
+    # ONLY shape accepted, so a wildcard here would be the bug rather than the default.
     case "$root" in
         /*) ;;
         *)
-            printf '%s\n' "tac_test_state_sandbox: root must be absolute: $root" >&2
-            return 2
+            _tac_sandbox_refuse "root must be absolute: $root"
+            return 1
             ;;
     esac
     # Refuse the live store by name rather than sanding it.  A caller that passes
     # ~/models would otherwise believe it had sandboxed while writing production.
     case "$root" in
         "$HOME/models"|"$HOME/models/"*)
-            printf '%s\n' "tac_test_state_sandbox: refusing a sandbox inside the live model store: $root" >&2
-            return 2
+            _tac_sandbox_refuse "refusing a sandbox inside the live model store: $root"
+            return 1
             ;;
     esac
     export LLM_STATE_DIR="$root/.llm"
@@ -55,7 +66,7 @@ tac_test_state_sandbox() {
     export LLM_DEFAULT_FILE="$root/default_model.conf"
     export LLAMA_MODEL_DIR="$root/active"
     export TAC_STATE_DIR="$root/tac-state"
-    mkdir -p "$LLM_STATE_DIR" "$LLAMA_MODEL_DIR" "$TAC_STATE_DIR" || return 2
+    mkdir -p "$LLM_STATE_DIR" "$LLAMA_MODEL_DIR" "$TAC_STATE_DIR" || return 1
     return 0
 }
 

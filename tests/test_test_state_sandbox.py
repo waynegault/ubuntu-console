@@ -79,7 +79,7 @@ def test_every_writable_path_is_redirected_under_the_root(tmp_path: Path, home: 
 def test_a_sandbox_inside_the_live_model_store_is_refused(tmp_path: Path, home: Path) -> None:
     root = home / "models" / "active"
     res = _sandboxed_env(root, home)
-    assert res.returncode == 2, res.stdout
+    assert res.returncode == 1, res.stdout
     assert "refusing a sandbox inside the live model store" in res.stderr
     # Refused, not half-applied: no path was exported.
     assert res.stdout == ""
@@ -87,7 +87,7 @@ def test_a_sandbox_inside_the_live_model_store_is_refused(tmp_path: Path, home: 
 
 def test_a_relative_root_is_refused(tmp_path: Path, home: Path) -> None:
     res = _sandboxed_env(Path("relative-sandbox"), home)
-    assert res.returncode == 2, res.stdout
+    assert res.returncode == 1, res.stdout
     assert "root must be absolute" in res.stderr
 
 
