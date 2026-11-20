@@ -31,7 +31,9 @@ StartLimitBurst=6
 # (session too small)"). Prompts in this fleet routinely measure 30k-104k tokens, so 32k was
 # structurally too small for the default model, not occasionally tight. Measured VRAM before
 # the change: 22,524 MiB used of 81,920 (weights 17.3 GiB, ~5.2 GiB was the 32k q8_0 KV), so
-# 128k costs roughly 21 GiB KV and still leaves ~30 GiB free. --cache-ram 0 keeps the host-side
+# 128k costs roughly 21 GiB KV and still leaves ~30 GiB free. [The 81,920 figure is the
+# Windows CARVE reported by nvidia-smi; it is not the memory pool — see the correction at
+# the end of this block.] --cache-ram 0 keeps the host-side
 # prompt cache off, because WSL2 shares this box's 39 GiB of RAM with Windows and the CPU tier
 # (17.3 GiB of page cache) may still be holding the same weights.
 # The launcher shim defaults to build/bin (the retired Intel build); this box's
@@ -46,14 +48,19 @@ Environment=LLAMA_CUDA_SERVER_BIN=%h/llama.cpp/build-cuda/bin/llama-server
 # that no longer matches what is served, and on a reason that no longer names the
 # certified value it argues about.  The `— <number>` clauses below quote row 6.
 #
-# (3) 2026-11-19 — the lane is DOWN, and 4 slots is why, at least in part.
-# Measured this boot: `nvidia-smi --query-gpu=memory.total` reads 8192 MiB (7,365 used
-# by the two remaining lanes), while the 2026-11-09 measurement above was taken against
-# a 32,768 MiB pool.  The KV that cost 6.38 GiB of 32,768 is 19.5% of 32,768 and 78% of
-# 8,192.  With --kv-unified the window is split into four 32,768-token slots, so the
-# process cannot drain and every stop now needs SIGKILL (50-stop-budget.conf), and the
-# unit's own documented symptom — 98.6% VRAM, SW thermal slowdown, 3.9 tok/s — is what
-# an 8 GiB carve would show.  Verify against /props before relying on either number.
+# (3) CORRECTED 2026-11-20 (Wayne) — do NOT read `nvidia-smi` memory.total as memory.
+# On WSL the figure it reports is the Windows DEDICATED CARVE, which is not the memory
+# the GPU can address.  This box declares TAC_HOST_PROFILE_SHARED_MEMORY=1, so the pool
+# a model is sized against is the guest's MemAvailable minus LLAMA_FIT_KEEP_RESERVE_MB
+# (scripts/11e-llm-model.sh v144), and a carve reading of 8192 MiB is a reading of the
+# split at one boot, not a KV budget — an earlier version of this comment divided
+# 6.38 GiB of KV by 8,192 and called it 78% of the pool.  That was wrong, and so was
+# the inference drawn from it: the lane is down because the watchdog stopped it at
+# 22:44:34 for ANOTHER run's declared workload (journal: "GPU busy — stopping
+# llama-cuda-qwen3coder-30b-chat ... [probe: cuda-owned-by-another-run pid=18485]"),
+# not because four slots exhausted anything.  Size against MemAvailable, reconcile
+# two surfaces before any fit verdict, and read /props for what the process actually
+# allocated.
 #
 # lane-deviation: ctx 131072 — the provider advertises 131072, so the certified 262144
 #                 paid 12.75 GiB of KV for a window no client can use; 131072 keeps 6.38.

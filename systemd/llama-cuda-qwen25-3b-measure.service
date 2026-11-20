@@ -26,8 +26,12 @@ ExecStartPre=%h/.local/bin/llama-gpu-clear.sh %n
 # flash attention on — never launch q8_0 V with FA off on this box. flash attention on;
 # --fit off with an explicit --ctx-size, because an omitted --fit inherits llama.cpp's
 # `on` and may silently shrink the served window to --fit-ctx (4096).
-# -ngl 99 puts the whole 3B on the card: Q4_K_M weights are ~2.1 GB, so it fits beside
-# nothing else — this lane and the 30B coder lane cannot both be resident in 8 GiB.
+# -ngl 99 puts the whole 3B on the card: Q4_K_M weights are ~2.1 GB.  The "8 GiB" this
+# used to quote is the Windows DEDICATED CARVE nvidia-smi reports on WSL — NOT the memory
+# pool a model is sized against (guest MemAvailable minus the 12 GiB reserve, see
+# scripts/11e-llm-model.sh v144 and the chat unit's 2026-11-20 correction), so residency
+# is decided by that pool, not by the carve, and the two lanes are not mutually excluded
+# by arithmetic on the carve.
 #
 # SERVED vs CERTIFIED. This lane's registry row (16) was certified with --fit left at
 # llama.cpp's own default, which on the sweep's box let more layers offload; this unit
