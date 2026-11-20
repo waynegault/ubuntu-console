@@ -24,10 +24,33 @@ set -uo pipefail
 # sourced shell).
 _bin="${LLAMA_CPU_SERVER_BIN:-/home/wayne/llama.cpp/build-cpu/bin/llama-server}"
 
+# ── CARD DECLARATION (AUTOTUNE-CARD-ATTR-003) ────────────────────────────────
+# A lane unit states its card with Environment=LLAMA_GPU=...  The CPU tier declares
+# `none`, the same word its `# CARD:` line uses.  A unit that declares a GPU card
+# while starting this launcher is refused: the CPU build links neither libcuda nor
+# libOpenCL, so the declaration would be the only thing claiming a card.
+_declared="${LLAMA_GPU:-none}"
+case "${_declared,,}" in
+    none|cpu) ;;
+    *)
+        echo "llama-cpu-server: REFUSING: the unit declares LLAMA_GPU=${_declared} but starts the CPU launcher" >&2
+        exit 1
+        ;;
+esac
+
 if [[ ! -x "$_bin" ]]; then
     echo "llama-cpu-server: CPU build not executable: $_bin" >&2
     exit 1
 fi
+
+# The DECLARATION is not the evidence; the path is.
+_self_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -x "$_self_dir/llama-card-assert" ]]; then
+    echo "llama-cpu-server: REFUSING: llama-card-assert is not installed beside this launcher ($_self_dir)" >&2
+    echo "llama-cpu-server: cannot prove $_bin takes no card; re-run install.sh" >&2
+    exit 1
+fi
+"$_self_dir/llama-card-assert" none "$_bin" "llama-cpu-server" || exit 1
 
 exec "$_bin" "$@"
 

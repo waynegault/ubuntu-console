@@ -1,6 +1,17 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 147
+#   v147 (2026-11-20, rebased from AUTOTUNE-CARD-ATTR-003): the CARD DISCIPLINE note in
+#   __model_use_claim_cuda_card stopped calling the spared embedding lane an Xe lane.  It named
+#   llama-xe-embeddinggemma-embed (:18080) as a lane that "keeps serving throughout", but :18080
+#   on this box is llama-cuda-qwen3embedding-embed, on the CUDA card — so the block justified
+#   sparing a tenant on the very card the incoming model needs by a belief about a different
+#   card.  The SPARING is unchanged and still correct: the lane is kept for memory search, and
+#   its ~1.5 GB is what --fit already sizes around.  Comment only — no scheduling change.  The
+#   fact is now mechanical rather than a comment: every lane unit declares Environment=LLAMA_GPU
+#   and bin/llama-card-assert checks it against the binary the launcher is about to exec.
+#   (Landed as v147 because v111 was already taken on main by the model-shell PID-file note.)
 # Module Version: 146
 #   v146 (2026-11-19): __bench_heavy_lock_acquire opens the lock through its caller's
 #   scope.  Bash's `exec {var}>file` ASSIGNS `var` in the function that runs it, so
@@ -1949,13 +1960,24 @@ function __model_use_configure_params() {
 #   takes a different subsystem down for the life of the server.  Measured
 #   2026-11-05 on the arm64 box — `model use 1` printed "stopping
 #   llama-cuda-embeddinggemma-embed.service (one LLM per card; this lane takes
-#   it)" and nothing brought memory search back until the card was released.
-#   The incoming lane already sizes itself around what is free (build_command's
-#   --fit), so keeping a ~1.5 GB tenant is a considered trade, not an oversight.
+#   it)" (that unit was renamed the same day, see below) and nothing brought
+#   memory search back until the card was released.  The incoming lane already
+#   sizes itself around what is free (build_command's --fit), so keeping a
+#   ~1.5 GB tenant is a considered trade, not an oversight.
 #
-#   CARD DISCIPLINE: the Xe card is a DIFFERENT card and is never touched here.
-#   Both Xe lanes keep serving throughout — llama-xe-minicpm5-1b-chat (:18081)
-#   and llama-xe-embeddinggemma-embed (:18080).
+#   WHICH CARD THE SPARED LANE IS ON (corrected 2026-11-10, AUTOTUNE-CARD-ATTR-003).
+#   This block used to end by asserting that both Xe lanes keep serving throughout and
+#   naming llama-xe-embeddinggemma-embed (:18080) as one of them — on this box that unit
+#   is not installed and :18080 is served by a CUDA lane.  The lane this function spares
+#   is llama-cuda-qwen3embedding-embed (:18080), and it is on the CUDA card — the same
+#   card the incoming model needs.  It is spared for MEMORY SEARCH, not because it is
+#   elsewhere: its cost (~1.5 GB) is what --fit already sizes around.  The Xe card is
+#   still a different card and is still never touched here; its lanes are
+#   llama-xe-minicpm5-1b-chat (:18081) and llama-xe-llama32-3b-chat (:18085), plus
+#   llama-xe-embeddinggemma-embed (:18080) on the intel-xe-cuda profile only.  Measured
+#   2026-11-10: no llama-xe unit is installed on this box (`systemctl --user
+#   list-unit-files | grep -c '^llama-xe'` = 0), so those Xe sentences describe the
+#   sibling profile, not this host.
 #
 # @returns 0 when the card is ours, 1 when another run owns it.
 # ---------------------------------------------------------------------------
