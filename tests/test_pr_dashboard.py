@@ -17,6 +17,21 @@ class TestPRDashboard(unittest.TestCase):
             self.assertIn("Error", html)
             self.assertIn("Not a git repository", html)
 
+    def test_generate_pr_dashboard_accepts_a_linked_worktree(self):
+        # Catches: the dashboard refusing every `git worktree add` checkout.  A linked
+        # worktree has a `.git` FILE ("gitdir: <path>"), not a directory, so the
+        # os.path.isdir repo test rejected it and the page said "Not a git repository"
+        # (measured 2026-11-20, when two tests rebased in a worktree failed for that
+        # reason alone while passing on main).  The case above is the CONTROL: a
+        # directory with no `.git` at all must still be refused, so a fix that simply
+        # stopped checking would fail one of the two.
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, ".git"), "w", encoding="utf-8") as fh:
+                fh.write("gitdir: /nonexistent/.git/worktrees/example\n")
+            html = kgraph.generate_pr_dashboard(td)
+            self.assertNotIn("Not a git repository", html)
+            self.assertIn("PR Dashboard", html)
+
     def test_generate_pr_dashboard_real_repo(self):
         # THIN SMOKE, deliberately: it proves generate_pr_dashboard runs against a
         # real repository and returns HTML, nothing about the content. The ROWS are

@@ -36,7 +36,12 @@ def generate_pr_dashboard(repo_root: str, **kwargs) -> str:
     graph_data = kwargs.get("graph_data", None)
     output_path = kwargs.get("output_path", None)
 
-    if not os.path.isdir(os.path.join(repo_root, ".git")):
+    # A LINKED WORKTREE has a `.git` FILE holding "gitdir: <path>", not a directory, and
+    # os.path.isdir was false for it — so the dashboard answered "Not a git repository"
+    # for every `git worktree add` checkout until 2026-11-20, when two tests rebased in
+    # one failed for that reason alone.
+    git_marker = os.path.join(repo_root, ".git")
+    if not (os.path.isdir(git_marker) or os.path.isfile(git_marker)):
         return "<html><body><h1>Error</h1><p>Not a git repository</p></body></html>"
 
     # Gather git data
