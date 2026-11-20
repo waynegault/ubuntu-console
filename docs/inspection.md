@@ -323,10 +323,23 @@ SC2034/SC2154) that no source-following can resolve.
 `ls -la /usr/bin/bash /usr/bin/bash.distrib; dpkg-divert --list | grep 'usr/bin/bash'; dpkg --verify bash`
 
 `/usr/bin/bash` must be a KNOWN, DELIBERATE interpreter rather than whatever dpkg
-last happened to write. On this box it is a symlink to
-`/home/linuxbrew/.linuxbrew/bin/bash` (Homebrew 5.3.9), replacing the packaged
-`bash 5.2.21-2ubuntu4`. Because the replacement is deliberate it is registered as a
-dpkg diversion, and that is what makes it survive:
+last happened to write.
+
+**WITHDRAWN as an arrangement, 2026-11-20 — the substitution described below no
+longer exists on this box, and the audit that recorded it is wrong about the state.**
+The 2026-11-11 audit (`docs/inspection-audit-2026-11-11.md` §1.13) already measured
+"no symlink, no `.distrib`, no diversion" on `asus-n1n-rtx-spark`; re-measured
+2026-11-20 at `27a6b32c`: `dpkg -S /usr/bin/bash` answers `bash: /usr/bin/bash`,
+`ls /usr/bin/bash.distrib` is absent, `dpkg-divert --list | grep usr/bin/bash` is
+empty, `dpkg --verify bash` is silent, and `/usr/bin/bash --version` reports
+`5.3.9(1)-release`, which is the packaged `bash 5.3-2ubuntu1`'s version.
+`/home/linuxbrew/.linuxbrew/bin/bash` does not exist. So the check still has teeth
+(it catches a *future* substitution), but its "expected" answer is now the packaged
+bash, not a diversion — read the three observations above, not the paragraph below.
+
+The paragraph that follows records the 2026-09-16 experiment that was **reverted**:
+the box then ran Homebrew 5.3.9 at `/usr/bin/bash`, replacing packaged
+`bash 5.2.21-2ubuntu4`, registered as a dpkg diversion so it survived apt:
 
     local diversion of /usr/bin/bash to /usr/bin/bash.distrib
 
@@ -345,6 +358,9 @@ check exists to catch the two ways it can still go wrong:
 
 Revert the arrangement entirely with:
 `sudo rm -f /usr/bin/bash && sudo dpkg-divert --local --rename --remove /usr/bin/bash`
+
+(The revert has since been performed: as of 2026-11-20 the box is back on the
+packaged bash and every probe above reports the packaged arrangement.)
 
 2. Security — Critical
 
@@ -3608,6 +3624,10 @@ while the summary below kept describing it as open. Only ONE entry is still real
 11.5, the suppression migration. The others are kept here with what actually happened,
 because a stale summary reads exactly like an open decision.
 
+CLOSED 2026-11-20: 11.5 has since been done and re-measured (24 sites, every one
+reasoned — see its bullet at the end of this section), so **no entry in this list is
+real work any more**.
+
 - 12.2.3 — SETTLED as a design choice (item updated 2026-09-16), with one
     correction: the FLAGS DO EXIST in this build — `-cmoe/--cpu-moe`,
     `-ncmoe/--n-cpu-moe` and `-ot/--override-tensor` are all in `llama-server --help`
@@ -3650,14 +3670,27 @@ because a stale summary reads exactly like an open decision.
     2026-09-16: 1024 ×14, 512 ×7, 2048 ×6", and that the old "4096 (GPU)" figure was
     a stale copy of the bench's candidate ladder.
 
-  11.5 remains the other open item, and it is a documentation migration rather than a
-  decision: 46 `# shellcheck disable=` lines exist (16 shell, 30 `.bats`; recounted
-  2026-09-16 — the shell count has fallen from 20 as file-wide disables were removed)
-  and 41 of the 46 end the line stating no reason — the 30 `.bats` ones are all bare
-  `disable=SC1090`. Fix the cause where a fix exists (a `# shellcheck source=` directive
-  resolves SC1090 rather than muting it), remove what the module graph made
+  11.5 — CLOSED 2026-11-20. It was the last item this section still called open, and a
+  re-measurement shows the migration finished underneath it: **24** `# shellcheck
+  disable=` sites remain at `27a6b32c` (down from 46 on 2026-09-16), and **every one
+  carries its reason** — 18 inline after the directive, 6 on the line immediately
+  above — which is the item's own "inline comment explaining why, same or previous
+  line". No blanket file-level disable covers unrelated issues: the two file-level
+  lines that remain (`env.sh:2`, `tactical-console.bats:13` /
+  `-fast.bats:14`) name their exact codes and state why the code must be muted. The
+  item's opening claims are therefore stale in both directions (46 → 24 sites; 41
+  undocumented → 0). A ratchet on the count would need a baseline that a legitimate
+  new suppression has to justify, which is what the per-line reason already does;
+  §18.3's RATCHETED set is left unchanged for that reason.
+  The 2026-09-16 text it replaces recorded the migration as still open: *"46
+  `# shellcheck disable=` lines exist (16 shell, 30 `.bats`; recounted 2026-09-16 —
+  the shell count has fallen from 20 as file-wide disables were removed) and 41 of the
+  46 end the line stating no reason — the 30 `.bats` ones are all bare
+  `disable=SC1090`. Fix the cause where a fix exists (a `# shellcheck source=`
+  directive resolves SC1090 rather than muting it), remove what the module graph made
   unnecessary, and see §18.3: this belongs in a RATCHET that fails when the count
-  rises, not in a per-pass to-do list.
+  rises, not in a per-pass to-do list."* That work has since been done; the
+  directive/ratchet question is answered by the per-line-reason requirement above.
 
 18.7 Field Notes — the 2026-10-25 pass
 
