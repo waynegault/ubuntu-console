@@ -411,6 +411,8 @@ jobs:
                tests/unit/94-git-commit.bats \
                tests/unit/95-bench-spec-ab.bats \
                tests/unit/96-ci-box-matrix.bats \
+               tests/unit/97-test-state-sandbox.bats \
+               tests/unit/98-lane-certification.bats \
             2>&1 | tee "$RUNNER_TEMP/unit-tests.tap"
 
       - name: Upload the unit suite's output

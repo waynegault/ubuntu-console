@@ -39,7 +39,13 @@ setup() {
     source "$REPO_ROOT/scripts/11e-llm-model.sh"
     export LLM_REGISTRY="$TMPDIR_BATS/models.conf"
     export LLAMA_MODEL_DIR="$TMPDIR_BATS/active"
-    mkdir -p "$LLAMA_MODEL_DIR"
+    # `model scan` backs the registry up under $LLM_STATE_DIR/backups.  Without this
+    # pin a direct run wrote the LIVE store: 631 of 782 backups in
+    # ~/models/.llm/backups were this suite's Alpha/Beta/Gamma fixtures (measured
+    # 2026-11-19).  AGENTS.md §4.
+    export LLM_STATE_DIR="$TMPDIR_BATS/state"
+    export TAC_STATE_DIR="$TMPDIR_BATS/tac-state"
+    mkdir -p "$LLAMA_MODEL_DIR" "$LLM_STATE_DIR" "$TAC_STATE_DIR"
     cat > "$LLM_REGISTRY" <<'EOF'
 #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens
 1|Alpha|alpha.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|256|llama_server|auto|on|11.0|yes|no|no|20.0|2048|512|128|22.0|900.0|ngram||8|||0|chat|1000|||

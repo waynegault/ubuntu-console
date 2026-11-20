@@ -204,6 +204,13 @@ classify_with() {
 # blames the MODEL, which only unsupported_arch has evidence for.
 
 report_with() {
+    # LLM_STATE_DIR / LLAMA_MODEL_DIR are pinned because _autotune_failure_report
+    # calls the archive recorder, which appends to $LLM_STATE_DIR/autotune-failures.tsv
+    # and may archive under $LLAMA_MODEL_DIR — measured 2026-11-19: this suite put
+    # stub.gguf tallies in the LIVE ledger.  AGENTS.md §4.
+    LLM_STATE_DIR="$BATS_TEST_TMPDIR/.llm" \
+    LLAMA_MODEL_DIR="$BATS_TEST_TMPDIR/active" \
+    TAC_STATE_DIR="$BATS_TEST_TMPDIR/tac-state" \
     bash -c '
         source "$1" || exit 90
         printf "classification=%s\nconfig=ctx=8192 batch=512\nlog=/tmp/x.log\n" "$2" > "/tmp/at-fail-$$"

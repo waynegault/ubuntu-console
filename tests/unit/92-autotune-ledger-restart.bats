@@ -105,8 +105,13 @@ run_wrapper() {
     # _tac_suspend_acquire and exit 1 before the arm — the case then failed with an empty
     # recorder, intermittently, depending on what the box was doing.  Measured
     # 2026-11-17: the same file passed 4/4 and failed 3/4 on consecutive runs.
+    # The wrapper writes its run log under $LLM_STATE_DIR/autotune-logs, so without
+    # this pin every arm left a rows-999 log in the LIVE store (286 measured
+    # 2026-11-19).  Same class as the tenancy seam documented above.
     "$@" env PATH="$SANDBOX/bin:$PATH" \
         HEAVY_JOB_HELD=1 \
+        LLM_STATE_DIR="$SANDBOX/.llm" \
+        TAC_STATE_DIR="$SANDBOX/tac-state" \
         RESTART_CALLS="$CALLS" \
         TAC_RESUME_RESTART_TOOL="$RECORDER" \
         CUDA_CYCLE_FILE="$ledger_file" \

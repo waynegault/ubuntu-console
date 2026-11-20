@@ -12,7 +12,13 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-11-19): every suite inherits a SANDBOXED LLM store.  The operator's
+#   shell exports the live paths and the runner passed them through, so a suite that
+#   did not pin LLM_STATE_DIR / LLM_REGISTRY / LLAMA_MODEL_DIR wrote production —
+#   631 of 782 scan backups were fixtures, 286 row-999 logs, stub.gguf failure
+#   tallies, and a 0-byte beta.gguf in the model store (measured 2026-11-19).  The
+#   sandbox sits under TAP_DIR, so the existing EXIT trap removes it.
 #   v9 (2026-11-19): every suite is bounded by the budget tests/bats-suites.tsv already
 #   carries.  The table's per-case and per-file budgets were honoured by the pytest
 #   bridge and ignored here, so a wedged case had no bound at all (measured: a 2 h 9 m
@@ -80,6 +86,26 @@ TAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tac-tap.XXXXXX")" || {
     exit 2  # environment error, like the missing-bats check; a test failure is 1
 }
 trap 'rm -rf "$TAP_DIR"' EXIT
+
+# ── Hermetic LLM state (AGENTS.md §4) ───────────────────────────────────────
+# The operator's shell exports the LIVE store paths (env.sh names
+# LLM_STATE_DIR=~/models/.llm, LLM_REGISTRY=~/models/active/models.conf and
+# LLAMA_MODEL_DIR=~/models/active), and every suite inherited them.  A suite that
+# did not pin all three then wrote production: measured 2026-11-19, 631 of 782 scan
+# backups in ~/models/.llm/backups were Alpha/Beta/Gamma fixtures, 286 rows-999 logs
+# sat beside the real autotune logs, autotune-failures.tsv carried stub.gguf tallies,
+# and a 0-byte beta.gguf appeared in the model store.
+#
+# The sandbox lives under TAP_DIR, so the EXIT trap above removes it with the TAP
+# record.  A suite that genuinely needs the live paths must export them itself.
+# shellcheck source=tools/test-state-sandbox.sh
+source "$REPO_ROOT/tools/test-state-sandbox.sh"
+if ! tac_test_state_sandbox "$TAP_DIR/llm"
+then
+    # printf rather than test_line: the drawing helpers are defined below this point.
+    printf '%s\n' "ERROR: cannot create the test LLM sandbox under $TAP_DIR." >&2
+    exit 2
+fi
 
 # A summary must describe THIS run, so drop the previous run's reports before
 # anything can fail and leave an old one in place.

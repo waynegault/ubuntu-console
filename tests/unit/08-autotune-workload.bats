@@ -479,8 +479,12 @@ _selftest_run() {
     # 45+ min investigator pytest held it and this filtered case hung with no output. A
     # test-private lock makes the suite independent of the shared box-wide lock while still
     # exercising the real heavy-job serialisation path (card 34c28be3).
+    # LLM_STATE_DIR is pinned for the same reason as the registry: the engine writes
+    # its run log under $LLM_STATE_DIR/autotune-logs, so a direct run of this suite
+    # put fixture logs beside the live ones (286 rows-999 logs measured 2026-11-19).
     env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
-        LLM_REGISTRY="$_reg" \
+        LLM_REGISTRY="$_reg" LLM_STATE_DIR="$sandbox/.llm" \
+        TAC_STATE_DIR="$sandbox/tac-state" \
         HEAVY_JOB_LOCK="$sandbox/heavy-job.lock" \
         CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
         LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 \
