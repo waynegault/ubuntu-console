@@ -28,6 +28,19 @@ ExecStartPre=%h/.local/bin/llama-gpu-clear.sh %n
 # `on` and may silently shrink the served window to --fit-ctx (4096).
 # -ngl 99 puts the whole 3B on the card: Q4_K_M weights are ~2.1 GB, so it fits beside
 # nothing else — this lane and the 30B coder lane cannot both be resident in 8 GiB.
+#
+# SERVED vs CERTIFIED. This lane's registry row (16) was certified with --fit left at
+# llama.cpp's own default, which on the sweep's box let more layers offload; this unit
+# pins --fit off to keep the served window exactly --ctx-size (a silently shrunk window
+# would make every measurement here describe a different server). Every difference from
+# row 16 is declared below, and tests/test_lane_certification.py enforces it.
+#
+# lane-deviation: batch 1024 — tuned for prefill latency on a 3B measurement lane; the
+#                 certified 2048 is the sweep's ceiling, not a measured optimum here.
+# lane-deviation: ubatch 128 — the sweep's starting point for the 3B; a 3B decode does
+#                 not fill even this ubatch, and the certified 256 never showed a gain.
+# lane-deviation: gpu_layers 99 — the certified 999 is llama.cpp's "all layers" idiom,
+#                 and the loader resolves both to the full 37 layers of this model.
 ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/qwen2.5-3b-instruct-q4_k_m.gguf --alias qwen2.5-3b-instruct --port 18089 --host 127.0.0.1 --ctx-size 32768 --batch-size 1024 --ubatch-size 128 --threads 6 --n-gpu-layers 99 --parallel 1 --cache-ram 0 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off --metrics
 Restart=no
 # The 3B plus its KV at 32768 sits well under 7G; the cap keeps a runaway allocation

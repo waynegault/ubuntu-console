@@ -37,13 +37,44 @@ StartLimitBurst=6
 # The launcher shim defaults to build/bin (the retired Intel build); this box's
 # CUDA 13.4.3 build lives at build-cuda, so Environment names it for the shim.
 Environment=LLAMA_CUDA_SERVER_BIN=%h/llama.cpp/build-cuda/bin/llama-server
+#
+# SERVED vs CERTIFIED — this lane does NOT serve its registry row (row 6) verbatim, and
+# every difference is declared HERE.  Nothing else checked it: the files that carried
+# these numbers were installed drop-ins with no tracked source, so the repo's unit said
+# `--ctx-size 262144` while the box ran 131072, and no reviewer could see why.
+# tests/test_lane_certification.py fails on an undeclared difference, on a declaration
+# that no longer matches what is served, and on a reason that no longer names the
+# certified value it argues about.  The `— <number>` clauses below quote row 6.
+#
+# (3) 2026-11-19 — the lane is DOWN, and 4 slots is why, at least in part.
+# Measured this boot: `nvidia-smi --query-gpu=memory.total` reads 8192 MiB (7,365 used
+# by the two remaining lanes), while the 2026-11-09 measurement above was taken against
+# a 32,768 MiB pool.  The KV that cost 6.38 GiB of 32,768 is 19.5% of 32,768 and 78% of
+# 8,192.  With --kv-unified the window is split into four 32,768-token slots, so the
+# process cannot drain and every stop now needs SIGKILL (50-stop-budget.conf), and the
+# unit's own documented symptom — 98.6% VRAM, SW thermal slowdown, 3.9 tok/s — is what
+# an 8 GiB carve would show.  Verify against /props before relying on either number.
+#
+# lane-deviation: ctx 131072 — the provider advertises 131072, so the certified 262144
+#                 paid 12.75 GiB of KV for a window no client can use; 131072 keeps 6.38.
+# lane-deviation: parallel 4 — measured 2026-11-07: 189-218 ms for four concurrent 8-token
+#                 requests against 305 ms sequential; the certified 1 slot is the
+#                 single-slot autotune and never measured four.
+# lane-deviation: batch 2048 — the unit's serving choice for 30k-104k token prompts; no
+#                 measurement against the certified 512 exists.
+# lane-deviation: ubatch 512 — same provenance and same untested status as batch: the
+#                 certified 256 is the sweep's starting point and no run compared the two.
+# lane-deviation: threads 10 — this box's threads_base is 10; the certified 6 is the
+#                 sweep's starting point, and threads do not bound the GPU decode.
 # --metrics (SWITCH-CONSOLE-METRICS-001): serves llama.cpp's Prometheus counters on
 # the SAME listener as the model API.  --host 127.0.0.1 is the only bind, so
 # /metrics is loopback-only — never a wider interface.
 # REF: "The Hidden Cost of LLM Routing: Why Switching Models Costs More"
 # (Nhu Hoang, TDS 2026-10-20) — https://towardsdatascience.com/the-hidden-cost-of-llm-routing-why-switching-models-costs-more/
 # CARD: SWITCH-CONSOLE-METRICS-001
-ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf --alias qwen3-coder-30b-gpu --port 18087 --host 127.0.0.1 --ctx-size 262144 --batch-size 2048 --ubatch-size 512 --threads 10 --parallel 4 --kv-unified --cache-ram 0 -ctk q8_0 -ctv q8_0 --flash-attn on --jinja --metrics -ngl 999
+# The window is 131072, not 262144: see the SERVED vs CERTIFIED block above for the
+# measurement (98.6% VRAM at 262144) and for why the registry row says otherwise.
+ExecStart=%h/.local/bin/llama-cuda-server -m %h/models/active/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf --alias qwen3-coder-30b-gpu --port 18087 --host 127.0.0.1 --ctx-size 131072 --batch-size 2048 --ubatch-size 512 --threads 10 --parallel 4 --kv-unified --cache-ram 0 -ctk q8_0 -ctv q8_0 --flash-attn on --jinja --metrics -ngl 999
 # Model load is 18.6 GiB from disk through the Windows driver into VRAM; the CPU tier
 # needed 600 s cold, so this gets the same.
 Restart=always
