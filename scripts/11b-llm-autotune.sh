@@ -1,6 +1,18 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 49
+#   v49 (2026-11-20): __autotune_split_shards_missing — the shards a split GGUF's own
+#     -NNNNN-of-NNNNN name requires and its directory does not hold (AUTOTUNE-SHARD-001).  A
+#     half-downloaded set reached the launch, failed to load, and was reported as "unsupported
+#     model" — a durable verdict about the model drawn from an unfinished download, which
+#     bin/llm-archive-unusable.sh may act on.  __autotune_staged_shard_bytes already sums the
+#     shards it FINDS, so it silently sizes a partial set as if it were the whole model; this
+#     helper is the test that says the set is not the whole model.  Pure (no logging, no
+#     profile deps) so a test can drive it against fixture shards.  __autotune_fa_retry also
+#     gains an incomplete_download arm: no flag pair makes an absent file loadable, so an
+#     FA-off retry would only spend a CUDA cycle and record the row as a load failure.
+#     Ported onto current main from fix/autotune-shard-attr.
 # Module Version: 48
 #   v48 (2026-11-18): fix positional argument collision in __llm_autotune_profile_save where
 #     threads_override read ${29:-} (colliding with meas_drift_pct) instead of ${34:-} (the
@@ -379,6 +391,14 @@ function __autotune_fa_retry() {
     # Stopping the row is the only action that claims nothing.
     if [[ "$fail" == "loader_crash_unknown" ]]; then
         printf 'stop\n'
+        return 0
+    fi
+    # A MISSING SHARD is not a hypothesis to retry.  No flag pair makes an absent file loadable,
+    # so a flash-attention-off retry costs a CUDA cycle and then reports the row as an
+    # unsupported model (AUTOTUNE-SHARD-001).  The pre-launch gate in autotune-model.sh refuses
+    # a partial SET; this arm covers a shard that disappears between that gate and the launch.
+    if [[ "$fail" == "incomplete_download" ]]; then
+        printf 'incomplete_download\n'
         return 0
     fi
     # The reference dtypes run with or without flash attention; a quantised V cache
@@ -979,6 +999,70 @@ function __autotune_model_bytes() {
     single=$(stat --format=%s "$path") || single=0
     [[ "$single" =~ ^[0-9]+$ ]] || single=0
     printf '%s' "$single"
+}
+
+# __autotune_split_shards_missing <path> — the shard file names a split GGUF's OWN
+# -NNNNN-of-NNNNN declaration requires and the file's directory does not hold.
+# @stdout one missing file name per line; EMPTY when the set is complete or the file is
+#         not a split at all.
+#
+# A row names ONE FILE.  llama.cpp opens the whole SET, so a set missing any member is a
+# model that cannot load at ANY ctx — and that is a DOWNLOAD fault, not a property of the
+# architecture.  Measured 2026-11-02 (AUTOTUNE-SHARD-001): three of eight rows on disk were
+# shard 1 of N with the rest absent, and the batch reported each as "unsupported model —
+# model cannot be loaded at any ctx", retried with --flash-attn off (a different hypothesis
+# that cannot succeed), and left the operator concluding the QUANT was broken on this card.
+# The missing-shard list is what makes the sentence true, so it is returned rather than a
+# boolean: the refusal names the files.
+#
+# Siblings are looked for beside the named file, never in the store root: a nested download's
+# shards live in its own directory (11e v95 reunites a family, but a family that was never
+# complete has nothing to reunite).
+#
+# Pure on purpose — no logging, no profile dependencies — so a test can drive it against
+# fixture shards without sourcing the console.
+function __autotune_split_shards_missing() {
+    local path="${1:-}" _dir _fname _expected _i _prefix _want
+    [[ -n "$path" ]] || return 0
+    _dir=$(dirname -- "$path")
+    _fname=$(basename -- "$path")
+    [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]] || return 0
+    _expected=$(( 10#${BASH_REMATCH[2]} ))
+    (( _expected > 1 )) || return 0
+    _prefix="${_fname%-[0-9][0-9][0-9][0-9][0-9]-of-*.gguf}"
+    for (( _i = 1; _i <= _expected; _i++ ))
+    do
+        printf -v _want '%s-%05d-of-%05d.gguf' "$_prefix" "$_i" "$_expected"
+        [[ -f "$_dir/$_want" ]] || printf '%s\n' "$_want"
+    done
+    return 0
+}
+
+# __autotune_split_refusal <path> — the sentence that refuses an INCOMPLETE split GGUF, or
+# nothing when the set is whole.
+# @stdout "shard P of N present — expecting <names>" and nothing when the set is complete.
+# @returns 0 always (the caller tests the OUTPUT, so a set that is complete and a helper that
+#          is missing are both "say nothing" rather than two different empty states).
+#
+# Pure on purpose: every input is an argument, nothing here touches the card, the registry or
+# the ledger, so the rule can be unit-tested without a GPU and without running the script
+# (tests/unit/91-autotune-split-shard.bats).
+function __autotune_split_refusal() {
+    local path="${1:-}" _missing _count _expected=0 _present _list
+    declare -f __autotune_split_shards_missing &>/dev/null || return 0
+    _missing=$(__autotune_split_shards_missing "$path")
+    [[ -n "$_missing" ]] || return 0
+    _count=$(printf '%s\n' "$_missing" | grep -c .)
+    if [[ "${path##*/}" =~ -[0-9]{5}-of-([0-9]{5})\.gguf$ ]]; then
+        _expected=$(( 10#${BASH_REMATCH[1]} ))
+    fi
+    # The named file EXISTS (the caller checked it), so at least one shard is present; this
+    # fallback keeps that true if the name ever stops matching.
+    (( _expected > 0 )) || _expected=$(( _count + 1 ))
+    _present=$(( _expected - _count ))
+    _list=$(printf '%s' "$_missing" | tr '\n' ' ')
+    _list="${_list% }"
+    printf 'shard %s of %s present — expecting %s' "$_present" "$_expected" "$_list"
 }
 
 # __autotune_staged_shard_bytes <path> — bytes a LOAD must stage in HOST RAM.

@@ -1,5 +1,23 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 150
+#   v150 (2026-11-20): an INCOMPLETE split GGUF is refused before launch as incomplete_download
+#     (AUTOTUNE-SHARD-001), ported onto current main from fix/autotune-shard-attr.  A row names
+#     one file of a -NNNNN-of-NNNNN set and llama.cpp opens every shard, so a set missing a member
+#     could not load at ANY ctx; the run walked the whole ladder, retried with --flash-attn off (a
+#     hypothesis that cannot help an absent file), printed "unsupported model" and left the reader
+#     concluding the QUANT was broken on this card.  Measured 2026-11-02: three of eight rows were
+#     shard 1 of N with the rest absent.  Four pieces, all keyed off the CLASSIFIER:
+#       * __autotune_split_refusal (pure, in 11b) refuses above the lane stand-down and the CUDA
+#         cleanup, so a refusal stops no serving lane and spends no cycle;
+#       * _preflight_refuse writes the result file EAGERLY, because that gate can run before the
+#         EXIT trap is installed and an absent result reads to the batch as "no cause recorded";
+#       * the classifier gains an incomplete_download arm ordered BEFORE _re_load, whose "no such
+#         file" would otherwise claim it, and _gguf_unrunnable carries the new class to the ctx
+#         walk so a missing shard never descends;
+#       * the failure label and the per-line case print a sentence that says DOWNLOAD fault and
+#         never "unsupported model", and the row is left unchanged (not model-attributable).
+#     tests/unit/91 pins all of it (16 cases) and 08's ctx-walk assertion follows the predicate.
 # Module Version: 149
 #   v149 (2026-11-19): four autotune cycle-budget & waste fixes from row 9 (27.7G dense):
 #   (1) Post-certification floor descent no longer re-walks a row Phase 4 already judged too
@@ -315,6 +333,10 @@ incomplete or misnamed (re-convert or obtain a matching GGUF); if it does not, r
 (split GGUFs stage one shard; guest RAM is the wall, not VRAM)" ;;
         insufficient_host_ram) printf "the row's HOST footprint (weights not offloaded at this \
 ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not the GPU pool" ;;
+        incomplete_download) printf "an incomplete split GGUF — the model is one file of a \
+-NNNNN-of-NNNNN set and this box does not hold every shard, so llama.cpp cannot load the weights \
+that are absent.  The file is unfinished, not unsupported: re-download or complete the set.  This \
+run made no verdict about the model and left the row unchanged" ;;
         loader_crash_unknown) printf "the launch died with no OOM witness and no load signature \
 (unexplained — stopped without a descent, so nothing was measured)" ;;
         window_timeout)     printf "the readiness window expired with no error signature \
@@ -331,10 +353,21 @@ ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not 
 warn() { printf '%s\n' "$*" >&2; }
 
 # _preflight_refuse <classification> <exit-rc> [detail] — end a run that never launched a
+# server, recording WHY for the result file.  The caller has already printed its own message;
+# this carries the verdict (and an optional one-line detail the caller composes for a
+# CALLER-side summary, e.g. the byte count a consumer would not otherwise see) to the EXIT
+# trap, so the operator message here stays exactly as it was.
 _preflight_refuse() {
     _PREFLIGHT_CLASS="${1:-unclassified}"
     _PREFLIGHT_RC="${2:-1}"
     _PREFLIGHT_DETAIL="${3:-}"
+    # Write the verdict HERE as well as in the EXIT trap.  A refusal raised BEFORE the trap is
+    # installed (the incomplete-split gate is one: it runs above the lane stand-down so that a
+    # refusal cannot stop a serving lane) would otherwise exit with no result file at all, and
+    # the batch reads the ABSENCE of a result as "no cause recorded".  Idempotent: when the trap
+    # does run it writes the same bytes again.
+    # swallow-ok: the EXIT trap repeats this write with the same bytes, so a failure here still lands the verdict.
+    __autotune_write_result "$_PREFLIGHT_RC" 2>/dev/null || true
     exit "$_PREFLIGHT_RC"
 }
 
@@ -504,6 +537,35 @@ _cuda_budget_has_headroom() {
     _c=$(_cuda_cycles)
     (( _c + _reserve < CUDA_CYCLE_BUDGET ))
 }
+
+# ---------------------------------------------------------------------------
+# INCOMPLETE SPLIT GGUF (AUTOTUNE-SHARD-001) — refuse BEFORE anything is stood down.
+#
+# A row names one file of a -NNNNN-of-NNNNN set; llama.cpp opens every shard.  A set with
+# a member missing cannot load at ANY ctx, so the run used to walk the whole ladder (and
+# retry with --flash-attn off, a quant/attention hypothesis that cannot help), report
+# "unsupported model", and leave the reader concluding the QUANT was broken on this card.
+# Measured 2026-11-02: three of eight rows on disk were shard 1 of N with the rest absent.
+#
+# THE CLASS IS incomplete_download, NOT unsupported_arch.  DEF-024's rule is that only a
+# durable verdict about the MODEL marks meas_state; an unfinished download is a property of
+# a transfer, so the row is left exactly as it is and the operator is told which files to
+# fetch.  This gate is the reason the classifier's incomplete_download arm is a backstop
+# rather than the control.
+#
+# Placed HERE — after _preflight_refuse exists, and BEFORE the CUDA cleanup and the lane
+# stand-down below — because a refusal must not stop a serving lane, spawn a server, or
+# spend a CUDA cycle to discover that a file was never downloaded.
+if declare -f __autotune_split_refusal &>/dev/null; then
+    _incomplete_detail=$(__autotune_split_refusal "$MODEL_PATH") || _incomplete_detail=""
+    if [[ -n "$_incomplete_detail" ]]; then
+        warn "ERROR: incomplete split GGUF: ${_incomplete_detail}"
+        warn "       ${MODEL_FILE} is one file of a split set and this box does not hold all of it."
+        warn "       Nothing was launched and the registry row is unchanged: this is a DOWNLOAD fault," \
+             "not an unsupported model."
+        _preflight_refuse incomplete_download 1 "incomplete split GGUF: ${_incomplete_detail}"
+    fi
+fi
 
 # VRAM-baseline guarantee: the KV-math START_CTX below is only trustworthy
 if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
@@ -1214,6 +1276,13 @@ __autotune_classify_failure() {
     _re_vintage+='tensor .* not found|check_tensor_dims|wrong shape'
     local _re_load='failed to load model|error loading model|failed to open|cannot open model file|'
     _re_load+='no such file'
+    # A SHARD the set declares and this box does not hold (AUTOTUNE-SHARD-001).  Ordered BEFORE
+    # _re_load, whose `no such file` would otherwise claim it: the loader naming a missing
+    # -NNNNN-of-NNNNN member is a DOWNLOAD fault, not a model that cannot be loaded.  The class
+    # matters because unsupported_arch is model-attributable in bin/llm-archive-unusable.sh,
+    # so a repeated partial download could otherwise archive 40-70 GiB of weights.
+    # Leading character class, not a bare '-': grep reads an option-looking pattern as flags.
+    local _re_shard='[-]00[0-9]{3}-of-00[0-9]{3}\.gguf'
     local _re_launch='invalid argument|unknown argument|unrecognized (option|argument)|unexpected argument|'
     _re_launch+='error while handling argument|invalid value for|failed to parse|usage: |address already in use|cannot open model'
     if grep -qiE "$_re_vintage" <<< "$_text"; then
@@ -1222,6 +1291,9 @@ __autotune_classify_failure() {
         printf 'resource_exhausted'
     elif grep -qiE "$_re_unsupported" <<< "$_text"; then
         printf 'unsupported_arch'
+    elif grep -qiE "$_re_shard" <<< "$_text" \
+        && grep -qiE 'no such file|cannot open|failed to open|not found' <<< "$_text"; then
+        printf 'incomplete_download'
     elif grep -qiE "$_re_load" <<< "$_text"; then
         printf 'launch_error'
     elif grep -qiE "$_re_launch" <<< "$_text"; then
@@ -1399,6 +1471,17 @@ _bench_spawn() {
                 return 1
                 ;;
             stop) _bench_stop_unknown; return 1 ;;
+            incomplete_download)
+                # A shard named by this split set is absent.  No flag pair, no smaller ctx and no
+                # --load-mode makes a file that is not there loadable, so this row stops here with
+                # the DOWNLOAD class recorded — not load_fail, which bin/llm-archive-unusable.sh
+                # counts as model-attributable and would retire a half-downloaded model.
+                warn "  a shard named by this split set is missing — stopping this row (no descent, no FA retry)"
+                _bench_stop "${_BENCH_PID:-}"
+                _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v" "incomplete_download"
+                echo "0|0|incomplete_download" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="incomplete_download"
+                return 1
+                ;;
             *)
                 # Unreachable through __autotune_fa_retry, but a silent fall-through
                 warn "  unrecognised fa-retry decision '${_fa_act}' — leaving flash attention as it is"
@@ -2023,10 +2106,38 @@ _last_fail_label() {
     case "$_t" in
         oom)                  printf '%s\n' "OOM" ;;
         load_fail)            printf '%s\n' "unsupported model" ;;
+        incomplete_download)  printf '%s\n' "incomplete download (shard missing)" ;;
         window_timeout)       printf '%s\n' "readiness timeout" ;;
         loader_crash_unknown) printf '%s\n' "unclassified crash" ;;
         "")                   printf '%s\n' "unclassified crash (no failure token recorded)" ;;
         *)                    printf '%s\n' "unclassified crash (token: $_t)" ;;
+    esac
+}
+
+# _gguf_unrunnable — is the last failure one a SMALLER CTX cannot fix?
+# @returns 0 for load_fail and incomplete_download, 1 for anything else (oom, empty).
+#
+# One predicate, because the call sites had each spelled the test as a literal
+# `== "load_fail"`, and every one of them would have had to be found and edited by hand
+# when incomplete_download was added — the listed-scope failure mode.  Shrinking the ctx
+# is pointless for both: an unloadable file does not become loadable, and neither does
+# a file that is not there.  Everything else still descends.
+_gguf_unrunnable() {
+    case "$(last_fail_type)" in
+        load_fail|incomplete_download) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# _fail_label_for_unrunnable — the operator-facing per-line label for the two classes
+# above.  Naming them apart is the whole point: "unsupported model" for a missing shard
+# is the sentence AUTOTUNE-SHARD-001 exists to delete.
+# @stdout the label; empty when the last failure is not one of these classes.
+_fail_label_for_unrunnable() {
+    case "$(last_fail_type)" in
+        load_fail)           printf 'unsupported model' ;;
+        incomplete_download) printf 'incomplete download (shard missing)' ;;
+        *)                   printf '' ;;
     esac
 }
 
@@ -2162,7 +2273,8 @@ for combo in "${COMBOS[@]}"; do
             _lft=$(last_fail_type)
             fail_label=$(_last_fail_label "$_lft")
             # STOP, do not halve, on a hard load failure, timeout, or unclassified crash:
-            if [[ "$_lft" == "load_fail" ]]; then
+            # (the load-failure half is _gguf_unrunnable, so a missing shard stops here too)
+            if _gguf_unrunnable; then
                 break
             fi
             if [[ "$_lft" == "loader_crash_unknown" || "$_lft" == "window_timeout" ]]; then
@@ -2291,7 +2403,8 @@ probe_no_mmap() {
                 _lft=$(last_fail_type)
                 fail_label=$(_last_fail_label "$_lft")
                 # Same stop-on-load-fail rule as the mmap walk: an unloadable GGUF
-                if [[ "$_lft" == "load_fail" ]]; then
+                # (and a split set missing a shard) cannot be fixed by a smaller ctx.
+                if _gguf_unrunnable; then
                     break
                 fi
                 if [[ "$_lft" == "loader_crash_unknown" || "$_lft" == "window_timeout" ]]; then
@@ -3225,6 +3338,9 @@ _autotune_failure_report() {
             echo "  failed: the server rejected its launch before it could be measured — not certified on this run" ;;
         loader_vintage)
             echo "  failed: the file and the loader disagree about a required GGUF key — NOT CERTIFIED" ;;
+        incomplete_download)
+            echo "  failed: the split GGUF is INCOMPLETE — shards are missing, so nothing was" \
+                 "launched and the row is not at fault" ;;
         *)
             echo "  failed: no configuration could be measured — not certified on this run" ;;
     esac

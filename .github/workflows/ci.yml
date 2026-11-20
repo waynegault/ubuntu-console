@@ -403,6 +403,7 @@ jobs:
                tests/unit/88-slots-probe.bats \
                tests/unit/89-model-idle-release.bats \
                tests/unit/90-model-mmproj.bats \
+               tests/unit/91-autotune-split-shard.bats \
                tests/unit/91-health-timeout.bats \
                tests/unit/91-llm-rebuild-monthly-order.bats \
                tests/unit/92-autotune-ledger-restart.bats \
