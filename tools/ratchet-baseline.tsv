@@ -264,7 +264,15 @@
 # site recorded above for tools/check-ruff-pin.sh and bin/wsl-restart.sh.  The same commit's
 # 9.7 +8 was NOT accepted: those were eight bare `exit 2` sites, now one `die_usage` helper
 # holding the status, so 9.7 stays at 79.  Hand-edited, not --update.
-4.2.4	20
+# 2026-11-19: 4.2.4 20 -> 21 and 10.7 254 -> 255 — CORPUS GROWTH from ONE newly added
+# file, tools/test-state-sandbox.sh (the sandbox the test runner hands every suite after
+# 631 scan backups, 287 log sets and the failure ledger were found full of fixtures).  Its
+# `_tac_sandbox_refuse` is the module's single stderr writer, which is what 10.7 asks for
+# and the counter counts, the same irreducible site recorded above for slots-probe.sh.
+# Its absolute-path `case` states why it has no `*)` arm.  The rises are NOT drift: the
+# two files this change also edited FELL (tools/run-tests.sh 9.7 2 -> 1, 10.7 3 -> 2;
+# tools/test-state-sandbox.sh's own 9.7 4 -> 0, 10.7 3 -> 1).  Hand-edited, not --update.
+4.2.4	21
 4.2.6	9
 4.3.6	31
 6.7	106
@@ -272,5 +280,5 @@
 9.5	114
 9.7	79
 10.4	40
-10.7	254
+10.7	255
 10.8	0
