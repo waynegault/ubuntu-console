@@ -79,17 +79,29 @@ jobs:
       - name: Run the unit suites CI excludes
         if: ${{ !cancelled() && steps.install_bats.outcome == 'success' }}
         run: |
-          # 38-heavy-job.bats is listed HERE rather than in ci.yml's per-push unit list
-          # for one reason only: ci.yml carried another lane's uncommitted edit when this
-          # suite landed (2026-10-01), so adding to it would have committed that lane's
-          # work.  The suite is fast (~15 s, hermetic — its own lock under the test tmpdir)
-          # and belongs in ci.yml; move it there when that edit is committed.
+          # 38-heavy-job.bats USED TO BE LISTED HERE, and on 2026-11-21 it was moved to
+          # ci.yml's per-push unit list — the move this comment had been asking for since
+          # the suite landed.  The stated blocker was that ci.yml carried another lane's
+          # uncommitted edit (2026-10-01); measured 2026-11-21, `git status --porcelain`
+          # on .github/workflows/ci.yml was empty, so that block was long gone.
+          #
+          # WHY THE MOVE MATTERS — it is the whole defect on card 88d1cb02.  A suite that
+          # runs ONLY here cannot red the push that breaks it: 3bbccd9d (2026-11-18) made
+          # a bare `retune-band-chunk.sh` call hit an undefined `warn` and exit 1 where the
+          # suite asserts 2.  CI ran GREEN on the very tip the nightly was red on
+          # (run 44654380584 at 37f6bee06: "Behavioral BATS ... success", while Nightly
+          # 44668096964 failed at this step on the same commit).  The nightly then sat red
+          # for two scheduled nights before a manual dispatch at 27a6b32c fixed it.
+          # The suite is fast (~11 s, hermetic — its own lock under the test tmpdir).
+          #
+          # The SIX below stay, and each has a reason that is not the one above: 12 is
+          # excluded from CI on a lock rationale this workflow has separately corrected
+          # (it sandboxes INVESTIGATOR_GPU_LOCK), and 05-08 are here for cadence.
           bats --print-output-on-failure tests/unit/05-spec-dec-threads.bats \
                tests/unit/06-spec-dec-stats.bats \
                tests/unit/07-spec-dec-launch.bats \
                tests/unit/08-autotune-workload.bats \
-               tests/unit/12-gpu-exclusivity.bats \
-               tests/unit/38-heavy-job.bats
+               tests/unit/12-gpu-exclusivity.bats
 
       - name: Run the function-availability suite
         if: ${{ !cancelled() && steps.install_bats.outcome == 'success' }}
