@@ -518,3 +518,22 @@ carries no items.
 first: **12.4.5** (a lane stop/switch errors in-flight turns instead of draining them, `llama-watchdog.sh:153`),
 **12.4.1** (no existence/readability check on the resolved GGUF before launch), **13.2.2** (exit code 2 means
 *usage* in most tools and *refused* in `bin/fleet-model.sh`). 16.7 is the one item still owed a full run.
+
+---
+
+## Postscript — 2026-11-21 Remediations
+
+The following `FAILS` rows from the 2026-11-11 audit were remediated in code and re-verified on 2026-11-21:
+
+- **1.6 & 1.11 (`tools/hooks/` directive & EOF markers)**: Added `# shellcheck shell=bash` and `# end of file` to `tools/hooks/_kgraph-auto-rebuild`, and `# end of file` to `tools/hooks/pre-push`.
+- **6.2 (UUOC in `scripts/cache-ram-probe-watch.sh:118`)**: Already fixed in commit `612a47ec` (redirects `/proc/meminfo` directly into `awk` without `cat`).
+- **8.2.1 (per-file mixed function declarations)**: Normalised `scripts/01-constants.sh` (Module Version 60), `scripts/11b-llm-autotune.sh` (Module Version 49), and `scripts/11d-llm-gpu.sh` (Module Version 58) to `function name() {`, and normalised `tests/tactical-console.bats` (VERSION 1.8), `tests/unit/{01-refresh-keys,17-startup-notice-hold,22-contracts-state,25-claimed-success-witness}.bats`, and `tests/integration/{01-maintenance,05-refresh-keys}.bats` to `name() {`. Zero files mix styles.
+- **9.4.4 (`README.md` drift)**: Ran `tools/docs-sync-check.sh --fix`; `tools/docs-sync-check.sh` now exits `0` ("Docs are in sync with repo facts.").
+- **11.5 / 1.12 (ShellCheck directives)**: Closed in commit `27a6b32c` (all 24 directives carry inline or preceding-line justifications).
+- **11.8 & 11.12 (`BLE001,S110,S112`)**: Fixed in `scripts/oc-health-check.py` (`612a47ec`) and extended across the entire `tools/`, `scripts/`, and `bin/` trees (0 violations under `.venv/bin/python3 -m ruff check --select BLE001,S110,S112 tools/ scripts/ bin/`).
+- **11.9 & 11.10 (Python tests & Pydantic v2 validation)**: Wired all disconnected Pydantic v2 models into runtime boundaries, fixed `_is_usable_bats()` in `tests/_bats_suites.py`, and updated `docs/inspection.md` §11.9 with live collection counts (**477** kgraph tests, **981** non-BATS unit tests, **333** E2E tests).
+- **11.13 (`.venv` & shebang hygiene)**: Fixed `nas/butler/scripts/mi-scale-subscriber.py` shebang (`#!/usr/bin/env python3`), removed all `sys.path.insert` hacks, and documented `.venv/bin/python3` resolution via `tools/python-runtime.sh` and `TAC_PYTHON`.
+- **12.4.1 & 12.4.5 (GGUF pre-launch readability & in-flight drain)**: Remediated in commits `4163420a` and `8f6b569d`.
+- **13.2.2 (`bin/fleet-model.sh` exit code 2 collision)**: Remediated in commit `612a47ec` (refused action now exits `3`).
+- **17.1 (suppression directives)**: Eliminated all `# noqa` directives (0 remaining) and reduced `# type: ignore` directives to 2 (`tests/test_heavy_job_gate.py:328,347`).
+- **17.16 (`kgraph wiring --repo .`)**: Updated `DEFAULT_ENTRY_DIRS` and multi-segment entry-dir resolution in `scripts/kgraph/wiring.py` so `kgraph wiring --repo .` reports **0 orphans, 0 broken imports, and 0 unused facades**.

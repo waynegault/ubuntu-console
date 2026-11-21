@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 57
+# Module Version: 58
+#   v58 (2026-11-21): normalise warn to `function warn()` so the module uses one function
+#     declaration style throughout (inspection 8.2.1).
 #   v57 (2026-11-18): __spec_launch_flags honours in-file `draft-mtp` rows where
 #     `spec_draft_model` is empty (drafting from the model's own `nextn` head), in
 #     addition to sidecar `mtp-*.gguf` draft files.
@@ -844,7 +846,7 @@ function __llm_vram_holder_report() {
 # warn — one stderr channel for this file's operator messages. §18.3 10.7 counts a
 # hand-written `>&2` per site; a helper keeps new lines off that count and gives the
 # messages one shape.
-warn() { printf '%s\n' "$*" >&2; }
+function warn() { printf '%s\n' "$*" >&2; }
 
 # The lanes THIS run stood down, so __llm_restore_stopped_lanes can put them back.  Declared
 # here rather than inside the function: both the recorder and the restorer are file-scope.

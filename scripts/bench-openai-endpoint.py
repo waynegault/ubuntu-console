@@ -27,7 +27,6 @@ Exit: 0 measured; 1 the endpoint could not be used; 2 usage error.
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import statistics
 import sys
@@ -37,12 +36,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from tools import llm_client as _llm
+from tools.fsutil import atomic_write_text
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-_fsutil = importlib.import_module("tools.fsutil")
-atomic_write_text = _fsutil.atomic_write_text
-_llm = importlib.import_module("tools.llm_client")
 
 # One coding prompt and one prose prompt, deliberately short in prompt tokens so
 # the measurement is dominated by DECODE, which is what this box is bound on.
@@ -147,7 +144,13 @@ def bench_concurrent(args, model, concurrency: int):
             )
             with lock:
                 results.append({"i": idx, "tokens": ct, "seconds": secs, "ok": True})
-        except Exception as exc:  # a failed request is a finding, not a zero
+        except (
+            _llm.LLMClientError,
+            RuntimeError,
+            TimeoutError,
+            OSError,
+            ValueError,
+        ) as exc:  # a failed request is a finding, not a zero
             with lock:
                 results.append({"i": idx, "ok": False, "error": str(exc)[:200]})
 
@@ -259,7 +262,7 @@ def main() -> int:
             args.timeout,
         )
         print(f"  preflight ok: {ct} tok in {secs:.2f}s (prompt {pt} tok)")
-    except Exception as exc:
+    except (_llm.LLMClientError, RuntimeError, TimeoutError, OSError, ValueError) as exc:
         print(f"bench: PREFLIGHT FAILED - {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
@@ -275,7 +278,7 @@ def main() -> int:
             for c in [int(x) for x in args.concurrency.split(",") if x.strip()]:
                 sweep.append(bench_concurrent(args, model, c))
             result["concurrency"] = sweep
-    except Exception as exc:
+    except (_llm.LLMClientError, RuntimeError, TimeoutError, OSError, ValueError) as exc:
         print(f"bench: FAILED mid-run - {type(exc).__name__}: {exc}", file=sys.stderr)
         result["error"] = f"{type(exc).__name__}: {exc}"
         result["finished_at"] = now()

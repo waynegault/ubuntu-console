@@ -29,10 +29,13 @@ EU_REDIRECT_URI = "https://myair.resmed.eu/authentication/callback"
 USERNAME = os.environ.get("CPAP_MYAIR_USERNAME", "")
 PASSWORD = os.environ.get("CPAP_MYAIR_PASSWORD", "")
 
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def http_error_302(self, req, fp, code, msg, headers):
         return fp
+
     http_error_301 = http_error_303 = http_error_307 = http_error_302
+
 
 def _get_graph_token() -> str:
     cache = json.loads(pathlib.Path(TOKEN_CACHE).read_text())
@@ -41,53 +44,65 @@ def _get_graph_token() -> str:
             return token["secret"]
     raise RuntimeError("No Graph token")
 
+
 def _graph_get(url: str) -> dict:
     return graph_get(url, _get_graph_token())
+
 
 def _graph_delete(url: str) -> int:
     return graph_delete(url, _get_graph_token())
 
+
 def _get_fresh_otp() -> str:
     """Trigger MFA, poll for email, extract OTP."""
     # Step 1: Trigger MFA
-    payload = json.dumps({
-        "username": USERNAME,
-        "password": PASSWORD,
-        "options": {"warnBeforePasswordExpired": True, "multiOptionalFactorEnroll": False}
-    }).encode("utf-8")
-    req = urllib.request.Request(EU_OKTA_AUTHN_URL, data=payload, headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+    payload = json.dumps(
+        {
+            "username": USERNAME,
+            "password": PASSWORD,
+            "options": {"warnBeforePasswordExpired": True, "multiOptionalFactorEnroll": False},
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        EU_OKTA_AUTHN_URL,
+        data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode())
         if data.get("status") != "MFA_REQUIRED":
             raise RuntimeError(f"Unexpected auth status: {data.get('status')}")
-    
+
     print("MFA triggered, waiting for email...", file=sys.stderr)
-    
+
     # Step 2: Poll Graph API for new email (max 30 seconds)
     for attempt in range(10):
         time.sleep(3)
-        
+
         base_url = f"{GRAPH_API}/me/messages"
-        params = urllib.parse.urlencode({
-            "$top": "5",
-            "$select": "id,subject,sender,bodyPreview,receivedDateTime",
-            "$orderby": "receivedDateTime desc",
-        })
+        params = urllib.parse.urlencode(
+            {
+                "$top": "5",
+                "$select": "id,subject,sender,bodyPreview,receivedDateTime",
+                "$orderby": "receivedDateTime desc",
+            }
+        )
         url = f"{base_url}?{params}"
-        
+
         try:
             data = _graph_get(url)
             messages = data.get("value", [])
-            
+
             for msg in messages:
                 sender = msg.get("sender", {}).get("emailAddress", {}).get("address", "")
                 if "resmed" not in sender.lower():
                     continue
-                
+
                 subject = msg.get("subject", "")
                 body = msg.get("bodyPreview", "")
                 otp = extract_otp(f"{subject}\n{body}")
-                
+
                 if otp:
                     # Delete the email
                     msg_id = msg["id"]
@@ -96,36 +111,49 @@ def _get_fresh_otp() -> str:
                     return otp
         except Exception as e:
             print(f"Poll error: {e}", file=sys.stderr)
-    
+
     raise RuntimeError("No OTP found after polling")
+
 
 def _get_bearer_token(otp: str) -> str:
     """Complete OAuth2 flow."""
     import base64
     import hashlib
     import secrets
-    
+
     # Authn
-    payload = json.dumps({
-        "username": USERNAME,
-        "password": PASSWORD,
-        "options": {"warnBeforePasswordExpired": True, "multiOptionalFactorEnroll": False}
-    }).encode("utf-8")
-    req = urllib.request.Request(EU_OKTA_AUTHN_URL, data=payload, headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+    payload = json.dumps(
+        {
+            "username": USERNAME,
+            "password": PASSWORD,
+            "options": {"warnBeforePasswordExpired": True, "multiOptionalFactorEnroll": False},
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        EU_OKTA_AUTHN_URL,
+        data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode())
         state_token = data.get("stateToken", "")
         factors = data.get("_embedded", {}).get("factors", [])
         email_factor = next((f for f in factors if f.get("factorType") == "email"), None)
         verify_url = (((email_factor or {}).get("_links") or {}).get("verify") or {}).get("href") or ""
-    
+
     # Verify OTP
     verify_payload = json.dumps({"stateToken": state_token, "passCode": otp}).encode("utf-8")
-    verify_req = urllib.request.Request(verify_url, data=verify_payload, headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+    verify_req = urllib.request.Request(
+        verify_url,
+        data=verify_payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(verify_req, timeout=30) as resp:
         verify_data = json.loads(resp.read().decode())
         session_token = verify_data.get("sessionToken", "")
-    
+
     # Authorize
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).decode("ascii").rstrip("=")
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("utf-8")).digest()).decode("ascii").rstrip("=")
@@ -144,7 +172,7 @@ def _get_bearer_token(otp: str) -> str:
     auth_url = f"{EU_OKTA_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(auth_url, headers={"Accept": "text/html,*/*"}, method="GET")
     opener = urllib.request.build_opener(NoRedirect())
-    
+
     try:
         with opener.open(req, timeout=30) as resp:
             status = resp.status
@@ -152,26 +180,34 @@ def _get_bearer_token(otp: str) -> str:
     except urllib.error.HTTPError as e:
         status = e.code
         location = e.headers.get("Location", "")
-    
+
     if status not in (302, 303):
         raise RuntimeError(f"Authorize did not redirect (status {status})")
-    
+
     code = urllib.parse.parse_qs(urllib.parse.urlparse(location).query).get("code", [""])[0]
     if not code:
         raise RuntimeError("Authorize redirect missing code")
-    
+
     # Token exchange
-    form = urllib.parse.urlencode({
-        "client_id": EU_CLIENT_ID,
-        "redirect_uri": EU_REDIRECT_URI,
-        "grant_type": "authorization_code",
-        "code_verifier": verifier,
-        "code": code,
-    }).encode("utf-8")
-    token_req = urllib.request.Request(EU_OKTA_TOKEN_URL, data=form, headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    form = urllib.parse.urlencode(
+        {
+            "client_id": EU_CLIENT_ID,
+            "redirect_uri": EU_REDIRECT_URI,
+            "grant_type": "authorization_code",
+            "code_verifier": verifier,
+            "code": code,
+        }
+    ).encode("utf-8")
+    token_req = urllib.request.Request(
+        EU_OKTA_TOKEN_URL,
+        data=form,
+        headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
     with urllib.request.urlopen(token_req, timeout=30) as resp:
         token_data = json.loads(resp.read().decode())
         return token_data.get("access_token", "")
+
 
 def _fetch_cpap_data(bearer: str) -> dict:
     """Deliberate unimplemented placeholder: the active EU adapter is ``cpap-myair-fetch.py``.
@@ -187,28 +223,29 @@ def _fetch_cpap_data(bearer: str) -> dict:
     fetched (card 8dda5918). Never return placeholder data from a function whose success
     callers trust.
     """
-    raise NotImplementedError(
-        "myAir CPAP fetch is not implemented; refusing to return mock data"
-    )
+    raise NotImplementedError("myAir CPAP fetch is not implemented; refusing to return mock data")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return 0
     if not USERNAME or not PASSWORD:
         print("CPAP_MYAIR_USERNAME and CPAP_MYAIR_PASSWORD required", file=sys.stderr)
         return 1
 
     try:
-        otp = _get_fresh_otp()
-        bearer = _get_bearer_token(otp)
-
-        # An unimplemented fetch raises, so this never reports ok:true on mock data.
-        data = _fetch_cpap_data(bearer)
+        # Fail closed before triggering live MFA emails: this entrypoint is retired in
+        # favour of cpap-myair-fetch.py.
+        data = _fetch_cpap_data("")
         print(json.dumps({"ok": True, "data": data}))
         return 0
 
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

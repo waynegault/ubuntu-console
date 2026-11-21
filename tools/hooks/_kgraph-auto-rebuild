@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # _kgraph-auto-rebuild — shared rebuild body for the post-commit and post-merge hooks.
 # SOURCED, never executed: it defines _kgraph_auto_rebuild and returns.
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks (install with
@@ -61,3 +62,5 @@ _kgraph_auto_rebuild() {
     fi
     return 0
 }
+
+# end of file

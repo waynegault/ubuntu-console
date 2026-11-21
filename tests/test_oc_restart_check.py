@@ -28,7 +28,7 @@ from unittest.mock import mock_open
 
 import pytest
 
-from _probe_paths import load_probe
+from _test_harness import load_probe
 
 probe = load_probe("oc_restart_check", "oc-restart-check.py")
 

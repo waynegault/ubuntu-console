@@ -21,7 +21,7 @@ teardown_file() {
     rm -rf "${TAC_TEST_TMPDIR:-/tmp/bats-noop}"
 }
 
-function __mock_command_local() {
+__mock_command_local() {
     local cmd="$1"
     local behavior="$2"
     cat > "$MOCK_BIN_DIR/$cmd" << MOCK_EOF

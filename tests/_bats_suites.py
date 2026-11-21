@@ -24,6 +24,25 @@ _cached_bats: str | None = None
 _bats_checked: bool = False
 
 
+def _is_usable_bats(candidate: Path) -> bool:
+    """True when *candidate* is an executable bats binary whose core runner exists.
+
+    A half-installed ``~/.local/bin/bats`` wrapper can pass ``is_file()`` and
+    ``os.access(X_OK)`` while its ``../libexec/bats-core/bats`` payload is missing,
+    causing every BATS bridge test to fail with exit code 127 instead of skipping.
+    """
+    if not (candidate.is_file() and os.access(candidate, os.X_OK)):
+        return False
+    try:
+        text = candidate.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    if "libexec/bats-core/bats" in text:
+        libexec = candidate.resolve().parent.parent / "libexec" / "bats-core" / "bats"
+        return libexec.is_file() and os.access(libexec, os.X_OK)
+    return True
+
+
 def resolve_bats(*, required: bool = False) -> str | None:
     """The bats executable as an absolute path, or None (or FileNotFoundError if required).
 
@@ -35,8 +54,9 @@ def resolve_bats(*, required: bool = False) -> str | None:
     """
     global _cached_bats, _bats_checked
     if not _bats_checked:
+        _cached_bats = None
         found = shutil.which("bats")
-        if found:
+        if found and _is_usable_bats(Path(found)):
             _cached_bats = found
         else:
             for candidate in (
@@ -44,7 +64,7 @@ def resolve_bats(*, required: bool = False) -> str | None:
                 Path("/usr/local/bin/bats"),
                 Path("/usr/bin/bats"),
             ):
-                if candidate.is_file() and os.access(candidate, os.X_OK):
+                if _is_usable_bats(candidate):
                     _cached_bats = str(candidate)
                     break
         _bats_checked = True

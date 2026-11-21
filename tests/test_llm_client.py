@@ -120,3 +120,28 @@ def test_http_error_closes_response_resource():
             with pytest.raises(llm_client.LLMClientError):
                 llm_client.get_url("http://127.0.0.1:1/v1/models", timeout=1)
     close_spy.assert_called_once()
+
+
+def test_post_chat_validates_request_payload_via_pydantic():
+    """Catches malformed chat request payloads (invalid role or temperature out of range) before HTTP send."""
+    with pytest.raises(llm_client.LLMClientError, match="invalid chat request payload"):
+        llm_client.post_chat(
+            "http://127.0.0.1:1/v1",
+            {"model": "m", "messages": [{"role": "invalid_role", "content": "hi"}]},
+            timeout=1.0,
+        )
+    with pytest.raises(llm_client.LLMClientError, match="invalid chat request payload"):
+        llm_client.post_chat(
+            "http://127.0.0.1:1/v1",
+            {"model": "m", "messages": [{"role": "user", "content": "hi"}], "temperature": 5.0},
+            timeout=1.0,
+        )
+
+
+def test_extract_text_validates_response_via_pydantic():
+    """Catches malformed chat responses (invalid role in choice message) at extraction boundary."""
+    assert (
+        llm_client.extract_text({"choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}]}) == "ok"
+    )
+    with pytest.raises(llm_client.LLMClientError, match="invalid chat response"):
+        llm_client.extract_text({"choices": [{"index": 0, "message": {"role": "unknown_role", "content": "ok"}}]})

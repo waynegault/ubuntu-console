@@ -31,7 +31,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 USER_AGENT = "ubuntu-console-llm-client/1"
 
@@ -50,10 +50,12 @@ class ChatCompletionRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
     model: str = ""
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(default_factory=list)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1)
+    seed: int | None = None
     stream: bool = False
+    stream_options: dict[str, Any] | None = None
 
 
 class UsageInfo(BaseModel):
@@ -86,7 +88,7 @@ class ChatCompletionResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
     id: str = ""
-    choices: list[ChatChoice]
+    choices: list[ChatChoice] = Field(min_length=1)
     usage: UsageInfo | None = None
 
 
@@ -189,7 +191,11 @@ def post_chat(
     timeout: float,
     api_key: str | None = None,
 ) -> dict[str, Any]:
-    """POST ``payload`` to ``/chat/completions``."""
+    """POST ``payload`` to ``/chat/completions`` after validating the request boundary."""
+    try:
+        ChatCompletionRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise LLMClientError(f"invalid chat request payload: {exc}") from exc
     return post_json(base_url, "chat/completions", payload, timeout=timeout, api_key=api_key)
 
 
@@ -281,7 +287,11 @@ def extract_text(response: dict[str, Any]) -> str:
     content = message.get("content")
     if not isinstance(content, str):
         raise LLMClientError("chat response message carried no text")
-    return content
+    try:
+        validated = ChatCompletionResponse.model_validate(response)
+    except ValidationError as exc:
+        raise LLMClientError(f"invalid chat response: {exc}") from exc
+    return validated.choices[0].message.content or content
 
 
 def extract_usage(response: dict[str, Any]) -> dict[str, int]:
@@ -294,10 +304,15 @@ def extract_usage(response: dict[str, Any]) -> dict[str, int]:
     usage = response.get("usage")
     if not isinstance(usage, dict):
         raise LLMClientError("chat response carried no usage record")
-    counts: dict[str, int] = {}
     for key in ("prompt_tokens", "completion_tokens"):
         value = usage.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise LLMClientError(f"usage.{key} must be a non-negative integer, got {value!r}")
-        counts[key] = value
-    return counts
+    try:
+        validated = UsageInfo.model_validate(usage)
+    except ValidationError as exc:
+        raise LLMClientError(f"invalid usage record: {exc}") from exc
+    return {
+        "prompt_tokens": validated.prompt_tokens,
+        "completion_tokens": validated.completion_tokens,
+    }

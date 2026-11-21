@@ -11,6 +11,7 @@ from lib.butler_common import extract_otp, graph_delete, graph_get
 TOKEN_CACHE = "/mnt/HD/HD_a2/butler/cron/outlook-mcp-token-cache"
 GRAPH_API = "https://graph.microsoft.com/v1.0"
 
+
 def _get_access_token() -> str:
     cache_path = pathlib.Path(TOKEN_CACHE)
     if not cache_path.exists():
@@ -20,6 +21,7 @@ def _get_access_token() -> str:
         if "graph.microsoft.com" in key:
             return token["secret"]
     raise RuntimeError("No Graph API access token found in cache")
+
 
 def _looks_like_myair(sender: str, subject: str) -> bool:
     s = sender.lower()
@@ -34,30 +36,37 @@ def _looks_like_myair(sender: str, subject: str) -> bool:
         or ("noreply" in s and "resmed" in s)
     )
 
-def main() -> int:
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return 0
     try:
         token = _get_access_token()
-        
+
         # Build URL with encoded query params
         base_url = f"{GRAPH_API}/me/messages"
-        params = urllib.parse.urlencode({
-            "$top": "30",
-            "$select": "id,subject,sender,bodyPreview,receivedDateTime",
-            "$orderby": "receivedDateTime desc",
-        })
+        params = urllib.parse.urlencode(
+            {
+                "$top": "30",
+                "$select": "id,subject,sender,bodyPreview,receivedDateTime",
+                "$orderby": "receivedDateTime desc",
+            }
+        )
         url = f"{base_url}?{params}"
-        
+
         data = graph_get(url, token)
         messages = data.get("value", [])
-        
+
         for msg in messages:
             sender = msg.get("sender", {}).get("emailAddress", {}).get("address", "")
             subject = msg.get("subject", "")
             body = msg.get("bodyPreview", "")
-            
+
             if not _looks_like_myair(sender, subject):
                 continue
-            
+
             otp = extract_otp(f"{subject}\n{body}")
             if otp:
                 msg_id = msg["id"]
@@ -65,13 +74,14 @@ def main() -> int:
                 graph_delete(delete_url, token)
                 print(otp)
                 return 0
-        
+
         print("No myAir OTP found in recent messages", file=sys.stderr)
         return 1
-        
+
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

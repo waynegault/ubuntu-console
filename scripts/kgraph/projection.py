@@ -126,7 +126,7 @@ SEMANTIC_EDGE_OVERRIDE_THRESHOLD = 0.88
 class ProjectedGraph(BaseModel):
     """Pydantic schema for a projected knowledge graph view."""
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     edges: list[dict[str, Any]] = Field(default_factory=list)
@@ -341,6 +341,7 @@ def _enrich_graph_payload(projected: dict, current_mode: str) -> dict:
     out["_meta"]["edgeCount"] = len(out["edges"])
     if cluster_suggestions:
         out["_meta"]["clusterSuggestions"] = [suggestion.model_dump(mode="json") for suggestion in cluster_suggestions]
+    ProjectedGraph.model_validate(out)
     return out
 
 

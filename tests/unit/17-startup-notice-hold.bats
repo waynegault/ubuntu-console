@@ -44,11 +44,11 @@ MOD
     # Module 5's stand-in: the banner, without a screen clear.
     cat > "$FAKE_REPO/scripts/05-ui-engine.sh" <<'MOD'
 # Module Version: 1
-function clear_tactical() {
+clear_tactical() {
     printf '%s\n' "CLEAR"
     __show_header
 }
-function __show_header() {
+__show_header() {
     printf '%s\n' "HEADER"
 }
 MOD

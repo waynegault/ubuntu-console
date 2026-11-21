@@ -30,7 +30,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt
 
-from _probe_paths import load_probe
+from _test_harness import load_probe
 from _test_harness import load_script
 from kgraph.models import Graph, GraphEdge, GraphNode
 from kgraph.projection import project_graph

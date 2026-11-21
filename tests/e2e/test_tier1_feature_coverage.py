@@ -751,7 +751,7 @@ def test_tier1_f7_05_immutability_frozen_models() -> None:
     """F7: Domain models are frozen; mutation raises ValidationError."""
     lane = LaneSpec(unit_name="test.service", port=18081)
     with pytest.raises(ValidationError):
-        lane.port = 18082  # type: ignore[misc]
+        setattr(lane, "port", 18082)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

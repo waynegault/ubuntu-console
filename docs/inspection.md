@@ -20,11 +20,11 @@ The following file classes are in-scope for every audit pass:
 - `scripts/09b-gog.sh` — a profile module with a non-numeric name, listed in the same
   canonical list
 - `tools/*.sh` — utility scripts. Enumerated by the DIRECTORY, not by a hand-list: the
-  hand-list that used to sit here had drifted (21 named against **24** on disk, measured
-  2026-11-03). Read `ls tools/*.sh` for the current set; the ones an audit pass is most
-  likely to need are `lint.sh`, `run-tests.sh`, `check-contracts.py`,
-  `check-module-versions.sh`, `count-ratchet.sh`, `docs-sync-check.sh`,
-  `check-swallows-staged.sh` and `check-repo-boundaries.sh`.
+  hand-list that used to sit here had drifted (21 named against **27** on disk, re-derived
+  2026-11-21). Read `ls tools/*.sh` for the current set; the ones an audit pass is most
+  likely to need are `lint.sh`, `run-tests.sh`, `check-contracts.sh` (which dispatches to
+  `tools/contracts_check.py`), `check-module-versions.sh`, `count-ratchet.sh`,
+  `docs-sync-check.sh`, `check-swallows-staged.sh` and `check-repo-boundaries.sh`.
 - `tools/hooks/*` — the repo's git hooks (`pre-commit`, `pre-push`, `post-commit`,
   `post-merge`, `_kgraph-auto-rebuild`). Tracked here, NOT in `.git/hooks/`
   (which holds only git's own samples); activated via `core.hooksPath`
@@ -52,8 +52,8 @@ The following file classes are in-scope for every audit pass:
 - `tests/test_<module>.py` — per-module kgraph tests (call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate, server, report, cli, memory_import, projection, ast_extractor, source_import), split out of the former `test_untested_modules.py` (card 842f2b93); `tests/_kgraph_fixtures.py` holds the shared graph fixtures
 - `tests/conftest.py` — Pytest fixtures (BATS serialization via flock)
 
-Inventory re-derived 2026-10-25: 41 `tests/*.py` files, 3 root `.bats`,
-71 `tests/unit/*.bats` and 6 `tests/integration/*.bats`. The per-file list
+Inventory re-derived 2026-11-21: 66 `tests/*.py` files (plus 4 `tests/e2e/test_*.py`),
+3 root `.bats`, 112 `tests/unit/*.bats` and 6 `tests/integration/*.bats`. The per-file list
 above is illustrative, not exhaustive — a new suite in any of those directories
 joins the audit even when it is not named here.
 
@@ -244,7 +244,7 @@ Backup exists
 
 head -1 <file>
 
-`#!/usr/bin/env bash` or `#!/bin/bash` for standalone scripts. Sourced modules use `# shellcheck shell=bash` instead of a shebang. The `nas/butler/` mirror is the exception: its scripts run on the Debian NAS and deliberately use `#!/bin/sh` (12 at 2026-10-25) — foreign code for a different target, not a repo shebang.
+`#!/usr/bin/env bash` or `#!/bin/bash` for standalone scripts. Sourced modules and tracked hook libraries (`tools/hooks/_kgraph-auto-rebuild`) use `# shellcheck shell=bash` instead of a shebang. The `nas/butler/` mirror is the exception: its scripts run on the Debian NAS and deliberately use `#!/bin/sh` (11 at 2026-11-21) — foreign code for a different target, not a repo shebang.
 
 1.7
 
@@ -293,13 +293,12 @@ rather than matching the line exactly. Both halves are checked because they rot
 independently: `bin/llama-gpu-clear.sh` had the comment but no final newline, and six
 files had neither — all fixed 2026-09-16.
 
-COVERAGE GAP, and this item is what closed most of it on 2026-10-25: the automated
-hygiene tests (`tests/tactical-console.bats`, "hygiene: all scripts end with …") now
-glob `scripts/*.sh`, `bin/*.sh`, `install.sh`, `tools/*.sh` and
-`tools/qwen-hooks/*.sh`. That still MISSES `tools/hooks/*` and the `nas/butler/`
-mirror; the 2026-10-25 census found 15 NAS files without the marker (out of scope for
-the repo's Bash style, but not for this item). A new script in either remaining gap
-has nothing watching it but this item.
+COVERAGE GAP, closed for `tools/hooks/*` on 2026-11-21: the automated hygiene tests
+(`tests/tactical-console.bats`, "hygiene: all scripts end with …") glob `scripts/*.sh`,
+`bin/*.sh`, `install.sh`, `tools/*.sh` and `tools/qwen-hooks/*.sh`, and all 5 tracked files
+in `tools/hooks/*` (`pre-commit`, `pre-push`, `post-commit`, `post-merge`,
+`_kgraph-auto-rebuild`) now carry `# end of file`. That leaves only the `nas/butler/`
+mirror outside the repo's Bash EOF convention.
 
 1.12
 
@@ -1317,17 +1316,16 @@ single digits.
 
 `grep -nE '\bcat [^|]*\|[[:space:]]*[a-z]' <file>`
 
-No `cmd <file> | cmd` where `<file` or `<<<` would do. **Three hits at 2026-10-25, two
-of them known false positives:** `journalctl --output=cat | grep`
-(`scripts/09a-oc-gateway.sh:679`, where `cat` is a flag value), a usage comment
-(`scripts/11f-llm-runtime.sh:798` — the line has moved since the 2026-09-16 audit while
-the old citation did not), and one **genuine UUOC** —
-`cat /dev/shm/autotune-cuda-cycles-* | awk` (`scripts/cache-ram-probe-watch.sh:118`),
-where `awk` can take the glob directly. The third is a follow-up, not fixed in this
-pass: replacing the pipeline with `awk '…' /dev/shm/autotune-cuda-cycles-* 2>/dev/null`
-removes the fork and preserves the `0` on no-match. The previous command here had a
-literal newline inside its character class plus an empty alternative, so grep rejected
-it rather than reporting anything.
+No `cmd <file> | cmd` where `<file` or `<<<` would do. **Re-derived 2026-11-21: 0 real
+UUOCs remain.** The three hits from the probe over `scripts/*.sh`, `bin/*` and `tools/*.sh`
+are all non-UUOC false positives: `journalctl --output=cat | grep`
+(`scripts/09a-oc-gateway.sh:674`, where `cat` is a flag value), `systemctl --user cat
+"$_unit" | grep` (`scripts/11e-llm-model.sh:1184`, where `cat` is a systemctl subcommand),
+and a usage comment (`scripts/11f-llm-runtime.sh:816`). The genuine UUOC that used to sit
+at `scripts/cache-ram-probe-watch.sh` (`cat /dev/shm/autotune-cuda-cycles-* | awk`) was
+fixed in `8083d981` (v2 of that script: `awk` now reads the glob directly). The previous
+command here had a literal newline inside its character class plus an empty alternative, so
+grep rejected it rather than reporting anything.
 
 6.3
 
@@ -1853,11 +1851,14 @@ Expected
 
 `grep -cE '^function ' <file>` and `grep -cE '^[a-z_][A-Za-z0-9_]*\(\)' <file>`
 
-House style is `function name() {`. Re-derived 2026-10-25: **396** definitions use the
-`function` keyword and **309** use the bare `name()`, and **no file mixes the two** —
-each file is internally consistent, which is the property that actually matters.  The
-2026-10-25 pass restored that property: `13-init.sh` and `cache-ram-probe.sh` each
-carried one outlier, now converted to the file's majority style.
+House style is `function name() {`. Re-derived 2026-11-21: **453** definitions use the
+`function` keyword and **946** use the bare `name()`, and **no shell or BATS file mixes the
+two** — each file is internally consistent, which is the property that actually matters.
+The 2026-11-21 pass restored that property after three modules (`01-constants.sh`,
+`11b-llm-autotune.sh`, `11d-llm-gpu.sh`) and seven BATS suites had drifted by one or two
+outlier declarations (note: `51-memory-index-patch.bats` and
+`76-vscode-bats-timeout-patch.bats` embed JavaScript `function name(...)` inside heredocs,
+not Bash declarations).
 
 So the requirement is ONE STYLE PER FILE. The previous wording ("prefer func_name() { }")
 implied migrating the 298, and that is not wanted: it is churn that buries findings, and
@@ -1978,13 +1979,15 @@ Both loaders read the canonical module list from `scripts/_module-list.sh` (via 
 
 Inspect tactical-console.bashrc
 
-The loader contains only: header comments, the interactive guard, sourcing of the
-shared fragments (`_startup-env.sh`, `_module-list.sh`), `TACTICAL_PROFILE_VERSION`,
-the module loop, `unset` cleanup — PLUS two blocks this item originally omitted: the
-`-f`-guarded host-env sources (`~/.openclaw/secrets.env`, wrapped in `set -a`/`set +a`,
-and `~/.config/environment.d/90-openclaw.conf`) and the optional display banner
-(`__TAC_DISPLAY_BANNER`, which calls `clear_tactical`). All LOGIC lives in modules.
-Measured 2026-09-16: those are the loader's only non-comment lines — nothing else.
+The loader contains only: header comments, the interactive guard, the 10-line
+startup output-hold block (`mktemp` + `exec 8>&1 9>&2` to hold notices until the
+header renders), `HOMEBREW_NO_PATH_SHADOW_CHECK`, sourcing of the shared fragments
+(`_startup-env.sh`, `_module-list.sh`), `TACTICAL_PROFILE_VERSION`, the module loop,
+`unset` cleanup, the `-f`-guarded host-env sources (`~/.openclaw/secrets.env`, wrapped
+in `set -a`/`set +a`, and `~/.config/environment.d/90-openclaw.conf`) and the optional
+display banner (`__TAC_DISPLAY_BANNER`, which calls `clear_tactical`). All LOGIC lives
+in modules. Re-derived 2026-11-21: 113 non-comment lines — those are the loader's only
+non-comment lines.
 
 9.5
 
@@ -2275,7 +2278,7 @@ TWO assertions are required, and the reason matters:
 
 🔧 Python lint (ruff) passes
 
-`.venv/bin/python -m ruff check scripts/kgraph/ scripts/oc-health-check.py tests/`
+`.venv/bin/python3 -m ruff check tools/ scripts/ bin/ tests/ nas/`
 
 All checks passed — no bare excepts (BLE001), no unused imports (F401), no import order violations (E402)
 
@@ -2283,13 +2286,12 @@ All checks passed — no bare excepts (BLE001), no unused imports (F401), no imp
 
 🔧 Python tests pass
 
-`.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_call_flow.py tests/test_update.py tests/test_life_index.py tests/test_benchmark.py tests/test_mcp_server.py tests/test_pr_dashboard.py tests/test_validate.py tests/test_graph_server.py tests/test_report.py tests/test_cli.py tests/test_memory_import.py tests/test_projection.py tests/test_ast_extractor.py tests/test_kgraph_package.py --timeout=60 -q`
+`.venv/bin/python3 -m pytest tests/test_kgraph.py tests/test_models.py tests/test_call_flow.py tests/test_update.py tests/test_life_index.py tests/test_benchmark.py tests/test_mcp_server.py tests/test_pr_dashboard.py tests/test_validate.py tests/test_graph_server.py tests/test_report.py tests/test_cli.py tests/test_memory_import.py tests/test_projection.py tests/test_ast_extractor.py tests/test_kgraph_package.py --timeout=60 -q`
 
 All collected tests pass. Do not trust a written-down count: derive it with
-`--collect-only -q` before quoting one. Measured 2026-10-25 by collection: **463**
-tests, with ZERO skip/xfail markers — so the "174 passed" this item
-used to state cannot describe the command any more (that would require ~150 failures,
-which would itself be the finding). A stale pass-count is worse than none: it reads as
+`--collect-only -q` before quoting one. Measured 2026-11-21 by collection: **477**
+tests across the 16 kgraph test modules (and **981** across the full non-BATS unit suite
+plus **333** in `tests/e2e/runner.py`). A stale pass-count is worse than none: it reads as
 a target and quietly stops being checked. The 16 files named above are the kgraph
 split of the former `test_untested_modules.py` (card 842f2b93).
 
@@ -2313,17 +2315,17 @@ Check `.github/workflows/ci.yml`
 
 🔍 No bare `except Exception:` in Python
 
-`.venv/bin/python -m ruff check --select BLE001,S110,S112 scripts/kgraph/ scripts/oc-health-check.py`
+`.venv/bin/python3 -m ruff check --select BLE001,S110,S112 tools/ scripts/ bin/`
 
-0 violations — all exception handlers use specific types
+0 violations across `tools/`, `scripts/`, and `bin/` — all exception handlers use specific types (re-verified 2026-11-21 after narrowing the remaining `BLE001`/`S110` handlers in `scripts/bench-openai-endpoint.py`, `scripts/grpo-vram-probe.py`, `scripts/oc-converge-shared-auth-profiles.py`, `tools/llm_benchmark.py`, and `tools/vscode-pytest-log/vscode_pytest_log.py`)
 
 11.13
 
 🔍 Python .venv compliance
 
-Check shebangs in `scripts/oc-health-check.py`
+Check `tools/python-runtime.sh` (`_tac_python_path`), `scripts/01-constants.sh` (`TAC_PYTHON`), and shebangs across `scripts/`, `tools/`, `bin/`, and `nas/butler/scripts/`
 
-Shebangs point to `.venv/bin/python`, not system `python3`
+Linux shebangs cannot carry repo-relative paths, so standalone Python scripts use `#!/usr/bin/env python3` (the last hardcoded `#!/opt/bin/python3` in `nas/butler/scripts/mi-scale-subscriber.py` was replaced on 2026-11-21), while every shell caller (`scripts/01-constants.sh`, `tools/python-runtime.sh`, `tools/lint.sh`, `tools/check-contracts.sh`, `tools/count-ratchet.sh`, `tools/docs-sync-check.sh`) resolves `.venv/bin/python3` explicitly via `_tac_python_path "$REPO_ROOT"` or `TAC_PYTHON`. `.venv/lib/python3.14/site-packages/ubuntu_console.pth` and `pytest.ini` (`pythonpath = . scripts tools nas/butler/scripts`) provide repo import resolution without `sys.path.insert` hacks.
 
 11.14
 
@@ -3158,23 +3160,24 @@ Expected
 
 `grep -rnE '# *noqa|# *type: *ignore|shellcheck disable=SC' scripts/ bin/ tools/ tests/ tactical-console.bashrc env.sh`
 
-No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code — with ONE standing exception: an E402 where a directly-executable tool must put the repo root on `sys.path` before importing its own package, and the directive states that reason. The seven such sites at 2026-10-25 are the whole exception. Residue cleared (2026-09-12): the `scripts/` path insert now lives in `tests/_paths.py`, and the three `# noqa: E402` suppressions in `tests/test_kgraph.py`, `tests/test_kgraph_wiring.py` and `tests/test_untested_modules.py` are gone (standalone `python tests/x.py` runs still work).
+No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code.
 
-Re-derived 2026-10-25 with this item's own command: **20 `shellcheck disable=` lines
-across 14 files**, and **8 directive lines across 8 files** in the `noqa` /
-`type: ignore` class (7 E402 path-bootstrap imports, 1 S310 bandit exception), plus one
-prose mention.  The 2026-09-18 figure of **0** in the noqa class had drifted: 28
-directives accumulated between 2026-09-27 and 2026-10-17, every one in Python added
-after that date.  The 2026-10-25 pass removed 19 `type: ignore[attr-defined]`
-directives (replaced by `setattr`), one `F401` (replaced by
-`importlib.import_module`), and gave the 7 E402 sites their reason.  Every remaining
-line's code is structural rather than noise — SC1090/SC1091 (computed source paths:
+Re-derived 2026-11-21 with this item's own command: **24 `shellcheck disable=` lines
+across 17 files** (every one carrying an inline or immediately preceding explanation;
+see §18.6 bullet 11.5), **0 `# noqa` directive lines** (all 7 former E402 `sys.path.insert`
+path-bootstrap directives were eliminated on 2026-11-21 by `.venv` `.pth` and
+`PYTHONPATH` configuration), and **2 `# type: ignore[arg-type]` directive lines** in
+`tests/test_heavy_job_gate.py:328,347` (for passing `_FakeSession` to a
+`pytest.Session`-typed helper; all 8 frozen-model/monkeypatch `type: ignore` lines
+across `tests/` and `tests/e2e/` were replaced by `setattr`), plus 2 prose comments in
+`tests/tactical-console.bats:486` and `tests/unit/16-swallow-audit.bats:68`.  Every remaining
+shellcheck line's code is structural rather than noise — SC1090/SC1091 (computed source paths:
 the loaders' own module loop, the optional files they source, the tests' run-time
 generated copies), SC2016 (single-quoted pwsh payloads that must reach Windows
 unexpanded), SC2317/SC2329 (functions referenced only from quoted trap strings;
 quoting the trap instead changes when bash expands it, so that fix is not available),
 SC2034 (version headers read by people and by `tools/check-module-versions.sh`),
-SC2086/SC2188/SC2221/SC2222. Two causes were FIXED rather than suppressed on
+SC2086/SC2154/SC2221/SC2222. Two causes were FIXED rather than suppressed on
 2026-09-18: `__bench_cleanup`'s `return $_exit_code` is now quoted (SC2086), and the
 bench status line's `$(<file || echo unknown)` — which never ran its fallback, because
 bash's `$(<file)` takes no trailing command — became a plain assignment (SC2188). Both
@@ -3298,9 +3301,9 @@ A bench stops after 2 consecutive case *errors* (exception, timeout, empty gener
 
 🔍 Graph and wiring health
 
-PYTHONPATH=scripts python3 -m kgraph update --repo .; PYTHONPATH=scripts python3 -m kgraph wiring --repo .
+`.venv/bin/python3 -m kgraph update --repo .; .venv/bin/python3 -m kgraph wiring --repo .`
 
-The update completes with a node/edge count, and wiring reports 0 orphans, 0 broken internal imports, 0 weak-wiring-only-from-tests, 0 unused facades, 0 cross-file call gaps.
+The update completes with a node/edge count, and wiring reports 0 orphans, 0 broken internal imports, 0 unused facades (verified 2026-11-21 after aligning `DEFAULT_ENTRY_DIRS` in `scripts/kgraph/wiring.py` with `pytest.ini`'s `pythonpath`: `scripts`, `tools`, `nas/butler/scripts`, `nas/butler/openclaw/salus-it500`). Note: `weak_wiring` reports test-only helpers (`tests/_paths.py`, `tests/_kgraph_fixtures.py`, `tests/_bats_suites.py`, `tools/vscode-pytest-log/vscode_pytest_log.py`) and `cross_file_call_gaps` reports dynamic/cross-module name collisions across unconnected scripts.
 
 18. Field Notes — the 2026-09-16 pass
 
@@ -3720,5 +3723,16 @@ not evidence.
 One genuine finding is left open rather than carded silently: §6.2's third hit, the
 `cat … | awk` at `scripts/cache-ram-probe-watch.sh:118`, is a real UUOC. It is recorded
 in §6.2 with its replacement and was deliberately not folded into this document commit.
+
+18.8 Field Notes — the 2026-11-21 pass
+
+Re-derived against `docs/inspection.md` and `docs/inspection-audit-2026-11-11.md`:
+
+- **§1.6 & §1.11 (`tools/hooks/` shellcheck & EOF sentinels)**: Added `# shellcheck shell=bash` and `# end of file` to `tools/hooks/_kgraph-auto-rebuild`, and `# end of file` to `tools/hooks/pre-push` (preserving its `GATE_TOTAL=2` structure).
+- **§8.2.1 (per-file function-declaration consistency)**: Normalised `scripts/01-constants.sh` (Module Version 60), `scripts/11b-llm-autotune.sh` (Module Version 49), and `scripts/11d-llm-gpu.sh` (Module Version 58) so 100% of functions in each use `function name() {`. Normalised `tests/tactical-console.bats` (VERSION 1.8), `tests/unit/{01-refresh-keys,17-startup-notice-hold,22-contracts-state,25-claimed-success-witness}.bats`, and `tests/integration/{01-maintenance,05-refresh-keys}.bats` so 100% of shell helpers in each use `name() {`. Zero files in the repo now mix the two forms.
+- **§11.8, §11.12 & §11.13 (Python ruff, `BLE001`/`S110`, `.venv` & `sys.path` hygiene)**: Eliminated all `sys.path.insert` / `sys.path.append` hacks across `tools/` and `scripts/` (removing all 7 `# noqa: E402` directives), narrowed all remaining blind `except Exception` handlers across `tools/` and `scripts/` to specific exception tuples (`.venv/bin/python3 -m ruff check --select BLE001,S110,S112 tools/ scripts/ bin/` now passes with 0 violations), and fixed the hardcoded `#!/opt/bin/python3` shebang in `nas/butler/scripts/mi-scale-subscriber.py`.
+- **§11.10 (Pydantic v2 runtime wiring)**: Wired previously disconnected Pydantic v2 models (`ChatCompletionRequest`, `ChatCompletionResponse`, `UsageInfo`, `ProjectedGraph`, `LifeIndexRecord`, `JsonRpcRequest`, `JsonRpcResponse`, `JsonRpcError`, `WorkloadSpec`, `ManifestWorkloadSpec`, `WorkloadResultRow`) directly into their runtime validation boundaries, and consolidated atomic file persistence on `tools.fsutil.atomic_write_text`.
+- **§17.1 (suppression directive reduction)**: Replaced 8 `# type: ignore` attribute mutations in `tests/` and `tests/e2e/` with `setattr(...)`, leaving 0 `# noqa` lines and only 2 `# type: ignore[arg-type]` lines (`tests/test_heavy_job_gate.py:328,347`) across the repository.
+- **§17.2 & §17.16 (docs-sync & kgraph wiring)**: Updated `scripts/kgraph/wiring.py` (`DEFAULT_ENTRY_DIRS`) to support multi-segment `pythonpath` roots (`scripts`, `tools`, `nas/butler/scripts`, `nas/butler/openclaw/salus-it500`), eliminating the 3 false-positive orphans and 1 false-positive unused facade (`nas/butler/scripts/lib/__init__.py`). Re-synced `README.md` test counts via `tools/docs-sync-check.sh --fix`.
 
 <!-- end of file -->

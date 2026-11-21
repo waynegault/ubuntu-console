@@ -1,32 +1,22 @@
 """Enforce the console's contracts. See the script header for scope per subcommand."""
 
-import importlib
 import os
 import sys
-from typing import TYPE_CHECKING
+
+from tools.contracts_checkers.continuity import run_continuity
+from tools.contracts_checkers.core import (
+    EXIT_CANNOT_RUN,
+    EXIT_CLEAN,
+    SUBCOMMANDS,
+    USAGE,
+    _CheckerOptions,
+)
+from tools.contracts_checkers.derived import run_derived
+from tools.contracts_checkers.modules import run_modules
+from tools.contracts_checkers.state import run_state
+from tools.contracts_checkers.swallows import run_swallows
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
-# Loaded through importlib: a `from tools...` here would be an E402 import after
-# the sys.path bootstrap, and the repo does not carry suppression comments.
-_core = importlib.import_module("tools.contracts_checkers.core")
-EXIT_CANNOT_RUN = _core.EXIT_CANNOT_RUN
-EXIT_CLEAN = _core.EXIT_CLEAN
-SUBCOMMANDS = _core.SUBCOMMANDS
-USAGE = _core.USAGE
-
-if TYPE_CHECKING:
-    # The runtime binding above is a value, not a type, so the checker takes the
-    # real TypedDict from its own module.  A TYPE_CHECKING import is not executed.
-    from tools.contracts_checkers.core import _CheckerOptions
-
-run_continuity = importlib.import_module("tools.contracts_checkers.continuity").run_continuity
-run_derived = importlib.import_module("tools.contracts_checkers.derived").run_derived
-run_modules = importlib.import_module("tools.contracts_checkers.modules").run_modules
-run_state = importlib.import_module("tools.contracts_checkers.state").run_state
-run_swallows = importlib.import_module("tools.contracts_checkers.swallows").run_swallows
 
 
 # ── argument parsing ────────────────────────────────────────────────────────

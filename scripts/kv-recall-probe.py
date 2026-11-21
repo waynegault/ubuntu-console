@@ -42,7 +42,6 @@ REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import logging
 import os
@@ -53,12 +52,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tools import llm_client as _llm
+from tools.fsutil import atomic_write_text
+
 logger = logging.getLogger("kv-recall-probe")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-_llm = importlib.import_module("tools.llm_client")
 
 # Bumping this invalidates nothing, but it IS recorded: a baseline measured by an older
 # probe is not comparable to a newer one, and the version is what makes that visible.
@@ -300,9 +299,8 @@ def record_baseline(path: Path, plan: ProbePlan, results: list[DepthResult]) -> 
     for result in results:
         key = (plan.model, plan.kv_type, f"{result.depth:.2f}")
         existing[key] = _row(plan, result)
-    path.parent.mkdir(parents=True, exist_ok=True)
     body = [BASELINE_HEADER] + [existing[k] for k in sorted(existing)]
-    path.write_text("\n".join(body) + "\n")
+    atomic_write_text(path, "\n".join(body) + "\n")
 
 
 def check_baseline(path: Path, plan: ProbePlan, results: list[DepthResult], tolerance: float) -> list[str]:

@@ -43,6 +43,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+from tools.fsutil import atomic_write_text
+
 # Registry columns (schema v6 + the 2b measurement columns), 1-based as documented
 # in docs/llm.md.  Named here rather than used as bare indexes so a schema move
 # breaks one line instead of every reader.
@@ -175,11 +177,7 @@ def _outcome_files(path: str) -> list[str]:
     across them.  A single file still works for a one-model check.
     """
     if os.path.isdir(path):
-        return sorted(
-            os.path.join(path, name)
-            for name in os.listdir(path)
-            if name.endswith(".json")
-        )
+        return sorted(os.path.join(path, name) for name in os.listdir(path) if name.endswith(".json"))
     return [path]
 
 
@@ -370,10 +368,7 @@ def render_markdown(
             "than inheriting a neighbour's figure."
         )
     lines.append("")
-    header = (
-        "| # | model | workload | tps | ttft ms | meas | "
-        "correct | incorrect | abstain | invalid |"
-    )
+    header = "| # | model | workload | tps | ttft ms | meas | correct | incorrect | abstain | invalid |"
     lines.append(header)
     lines.append("|---|-------|----------|-----|---------|------|" + "---|" * 4)
     for row in rows:
@@ -388,8 +383,7 @@ def render_markdown(
             quality = "no observation | | | "
         tps = row.tps or "-"
         lines.append(
-            f"| {row.num} | {row.name} | {row.workload} | {tps} | {row.ttft_ms} | "
-            f"{row.meas_state} | {quality} |"
+            f"| {row.num} | {row.name} | {row.workload} | {tps} | {row.ttft_ms} | {row.meas_state} | {quality} |"
         )
     lines.append("")
     if fmt:
@@ -492,11 +486,7 @@ def main() -> int:
         printed = markdown
 
     if args.out:
-        directory = os.path.dirname(os.path.abspath(args.out))
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as handle:
-            handle.write(markdown)
+        atomic_write_text(args.out, markdown)
 
     print(printed)
     return 0

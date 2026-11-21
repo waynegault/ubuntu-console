@@ -323,3 +323,5 @@ if (( rc != 0 )); then
     echo "pre-push: fix the gate above and push again, or bypass knowingly with: git push --no-verify" >&2
 fi
 exit "$rc"
+
+# end of file

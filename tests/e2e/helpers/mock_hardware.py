@@ -259,7 +259,7 @@ class MockHardwareEmulator:
         if self.monkeypatch is not None:
             self.monkeypatch.setattr(subprocess, "run", _mock_run)
         else:
-            subprocess.run = _mock_run  # type: ignore
+            setattr(subprocess, "run", _mock_run)
 
         return self
 
@@ -274,7 +274,7 @@ class MockHardwareEmulator:
 
         # Restore subprocess.run
         if self.monkeypatch is None:
-            subprocess.run = self._orig_subprocess_run  # type: ignore
+            setattr(subprocess, "run", self._orig_subprocess_run)
 
     def __enter__(self) -> MockHardwareEmulator:
         return self.start()

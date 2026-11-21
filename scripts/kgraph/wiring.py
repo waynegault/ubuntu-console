@@ -277,15 +277,19 @@ def _build_namespace(scan: _SourceScan, entry_dirs: tuple[str, ...]) -> _Namespa
             package_names.add(".".join(parts[:i]))
     top_packages = {m.split(".")[0] for m in package_names}
 
-    # Modules under an entry dir (e.g. scripts/) are importable by their
-    # name relative to that dir — "kgraph", not "scripts.kgraph" — because
-    # the entry dir sits on sys.path.  Map entry-relative names back to the
-    # path-based module names so imports resolve against the real namespace.
+    # Modules under an entry dir (e.g. scripts/, tools/, nas/butler/scripts)
+    # are importable by their name relative to that dir — "kgraph", not
+    # "scripts.kgraph" — because the entry dir sits on sys.path.  Map
+    # entry-relative names back to the path-based module names so imports
+    # resolve against the real namespace.
+    entry_prefixes = tuple(d.strip("/").replace("/", ".") + "." for d in entry_dirs if d.strip("/"))
     entry_relative: dict[str, str] = {}
     for mod in scan.module_to_path:
-        first, _sep, rest = mod.partition(".")
-        if first in entry_dirs and rest:
-            entry_relative[rest] = mod
+        for prefix in entry_prefixes:
+            if mod.startswith(prefix):
+                rest = mod[len(prefix) :]
+                if rest:
+                    entry_relative[rest] = mod
 
     return _Namespace(package_names=package_names, top_packages=top_packages, entry_relative=entry_relative)
 
@@ -401,6 +405,7 @@ def _find_orphans(
     scan: _SourceScan, root: Path, importers: dict[str, set[str]], imports: _ImportScan, entry_dirs: tuple[str, ...]
 ) -> list[dict[str, Any]]:
     """Pass 1: source modules nobody imports."""
+    norm_entries = tuple(d.strip("/") for d in entry_dirs if d.strip("/"))
     orphans: list[dict[str, Any]] = []
     for m in sorted(scan.module_to_path):
         if m in importers or m.startswith("tests."):
@@ -409,11 +414,12 @@ def _find_orphans(
             continue
         p = scan.module_to_path[m]
         rel = p.relative_to(root)
-        if _is_entry(rel.as_posix(), rel.parts):
+        rel_posix = rel.as_posix()
+        if _is_entry(rel_posix, rel.parts):
             continue
-        if rel.parts and rel.parts[0] in entry_dirs:
+        if any(rel_posix == d or rel_posix.startswith(d + "/") for d in norm_entries):
             continue
-        orphans.append({"module": m, "path": rel.as_posix(), "lines": _line_count(p)})
+        orphans.append({"module": m, "path": rel_posix, "lines": _line_count(p)})
     orphans.sort(key=lambda d: (-d["lines"], d["module"]))
     return orphans
 
@@ -532,8 +538,16 @@ def _find_cross_gaps(
 # ── analysis ───────────────────────────────────────────────────────────
 
 
+DEFAULT_ENTRY_DIRS: tuple[str, ...] = (
+    "scripts",
+    "tools",
+    "nas/butler/scripts",
+    "nas/butler/openclaw/salus-it500",
+)
+
+
 def analyze_wiring(
-    repo_root: str, *, skip_dirs: set[str] | None = None, entry_dirs: tuple[str, ...] = ("scripts",)
+    repo_root: str, *, skip_dirs: set[str] | None = None, entry_dirs: tuple[str, ...] = DEFAULT_ENTRY_DIRS
 ) -> dict[str, Any]:
     """Analyze a Python source tree for wiring anomalies.
 

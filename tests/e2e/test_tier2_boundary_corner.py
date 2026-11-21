@@ -672,7 +672,7 @@ def test_tier2_f8_03_profile_immutability_attribute_mutation_rejected() -> None:
         serving_policy=serving,
     )
     with pytest.raises((ValidationError, AttributeError, TypeError)):
-        profile.profile_id = "mutated-id"  # type: ignore
+        setattr(profile, "profile_id", "mutated-id")
 
 
 def test_tier2_f8_04_dell_thread_cap_protection() -> None:

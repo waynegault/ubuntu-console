@@ -51,9 +51,7 @@ import pytest
 SCHEMA = "vscode-pytest-log/1"
 
 #: One file per run, plus latest.json, per (repo, hash) directory.
-BASE = pathlib.Path(
-    os.environ.get("VSCODE_PYTEST_LOG_DIR", "~/.cache/vscode-pytest")
-).expanduser()
+BASE = pathlib.Path(os.environ.get("VSCODE_PYTEST_LOG_DIR", "~/.cache/vscode-pytest")).expanduser()
 KEEP = int(os.environ.get("VSCODE_PYTEST_LOG_KEEP", "50"))
 #: A failure message is for a human to act on, not a full traceback archive.
 MESSAGE_LIMIT = 4000
@@ -107,11 +105,10 @@ def _write(path: pathlib.Path, payload: dict) -> None:
     below, so a broken logger cannot look like a working one.
     """
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
-        tmp.replace(path)
-    except Exception as exc:
+        from tools.fsutil import atomic_write_text
+
+        atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=False))
+    except (OSError, TypeError, ValueError, ImportError) as exc:
         _report_failure(f"cannot write {path}: {exc!r}")
 
 
@@ -122,7 +119,7 @@ def _report_failure(what: str) -> None:
         BASE.mkdir(parents=True, exist_ok=True)
         with (BASE / "ERRORS.txt").open("a", encoding="utf-8") as handle:
             handle.write(f"{_now()} {what}\n")
-    except Exception as inner:
+    except OSError as inner:
         print(f"Error[vscode-pytest-log]: cannot even record that: {inner!r}")
 
 
@@ -137,7 +134,7 @@ def _prune(run_dir: pathlib.Path) -> None:
         )
         for stale in runs[KEEP:]:
             stale.unlink()
-    except Exception as exc:
+    except OSError as exc:
         _report_failure(f"cannot prune {run_dir}: {exc!r}")
 
 
@@ -204,9 +201,7 @@ def pytest_runtest_logreport(report) -> None:
         entry["outcome"] = report.outcome
     if report.outcome == "failed" and report.when in ("setup", "call"):
         longrepr = str(getattr(report, "longrepr", "") or "")[:MESSAGE_LIMIT]
-        _state.setdefault("failures", []).append(
-            {"nodeid": report.nodeid, "phase": report.when, "message": longrepr}
-        )
+        _state.setdefault("failures", []).append({"nodeid": report.nodeid, "phase": report.when, "message": longrepr})
 
 
 def pytest_collectreport(report) -> None:
@@ -307,6 +302,5 @@ def pytest_sessionfinish(session, exitstatus) -> None:
     _prune(pathlib.Path(run_file).parent)
     failed = counts.get("failed", 0)
     print(
-        f"[vscode-pytest-log] {counts.get('total', 0)} test(s), {failed} failed, "
-        f"exit {int(exitstatus)} -> {run_file}"
+        f"[vscode-pytest-log] {counts.get('total', 0)} test(s), {failed} failed, exit {int(exitstatus)} -> {run_file}"
     )

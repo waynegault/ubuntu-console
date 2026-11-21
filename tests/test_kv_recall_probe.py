@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from _probe_paths import load_probe
+from _test_harness import load_probe
 
 probe = load_probe("kv_recall_probe", "kv-recall-probe.py")
 

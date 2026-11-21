@@ -2,7 +2,9 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 59
+# Module Version: 60
+#   v60 (2026-11-21): normalise __tac_model_store_ready to `function __tac_model_store_ready()`
+#     so the module uses one function declaration style throughout (inspection 8.2.1).
 #   v59 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v58 (2026-11-10): TACTICAL_REPO_ROOT verifies that the directory exists before keeping
@@ -270,7 +272,7 @@ export QUANT_GUIDE
 # __tac_model_store_ready <path> <is_mount 0|1> — is the store usable?
 # Returns only 0 (ready) or 1 (not ready): `mountpoint` exits 32 for "not a
 # mountpoint", and leaking that as a third code makes every arithmetic caller wrong.
-__tac_model_store_ready() {
+function __tac_model_store_ready() {
     local _path="${1:-}" _is_mount="${2:-1}"
     [[ -n "$_path" ]] || return 1
     if [[ "$_is_mount" == "1" ]]

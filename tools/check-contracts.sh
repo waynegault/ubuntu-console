@@ -290,7 +290,10 @@
 #      must not carry one).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 17
+# Module Version: 18
+#   v18 (2026-11-21): export PYTHONPATH="$_repo_root" before exec'ing
+#   tools/contracts_check.py so contracts_check.py imports tools.contracts_checkers
+#   directly without a sys.path.insert(0, REPO_ROOT) hack.
 #   v17 (2026-10-22): the interpreter now comes from the shared resolver
 #   (tools/python-runtime.sh) instead of an inline `.venv` probe.  The inline probe
 #   looked only beside THIS script, so the pre-push hook's materialised worktree (a
@@ -409,6 +412,7 @@ fi
 # The program is a real module now (tools/contracts_check.py) so ruff, mypy and
 # pyright see it; this wrapper only selects the interpreter and forwards the same
 # argv — `python3 -` and `python3 <file>` both expose the arguments at sys.argv[1:].
+export PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}"
 exec "$_python" "$_repo_root/tools/contracts_check.py" "$_repo_root" "$@"
 
 # end of file

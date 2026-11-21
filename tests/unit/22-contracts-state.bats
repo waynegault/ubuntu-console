@@ -33,7 +33,7 @@ _write_other_guards_inputs() {
     cat > "$FIXTURE/scripts/_module-list.sh" <<'SH'
 #!/usr/bin/env bash
 # Fixture load list.
-function __tac_module_list() {
+__tac_module_list() {
     printf '%s\n' \
         02-fixture
 }

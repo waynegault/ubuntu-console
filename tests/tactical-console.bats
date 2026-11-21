@@ -13,7 +13,7 @@
 # shellcheck disable=SC2034  # this file's version header is read by people and by
 #                             # git history, never by the file itself — SC2034 is the
 #                             # one diagnostic that cannot describe a header.
-VERSION="1.7"
+VERSION="1.8"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -171,7 +171,7 @@ _build_test_profile() {
 # Module Version: 1
 mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$LLAMA_DRIVE_ROOT/.llm" 2>/dev/null || true
 __TAC_BG_PIDS=()
-function __tac_exit_cleanup() {
+__tac_exit_cleanup() {
     local pid; for pid in "${__TAC_BG_PIDS[@]}"; do kill "$pid" 2>/dev/null; done
 }
 STUB

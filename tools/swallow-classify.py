@@ -122,7 +122,6 @@ REF: "Towards Spec-Driven Test Automation: Part 1" (Gal Arav, TDS, 2026-09-24) �
 """
 
 import argparse
-import importlib
 import json
 import os
 import random
@@ -130,13 +129,13 @@ import re
 import subprocess
 import sys
 
+from tools import llm_client as _llm
+from tools.fsutil import atomic_write_text
+
 # The site scanner lives in the checker; this tool reads its JSONL dump so the two
 # can never disagree about what a site is (see the module docstring).
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CHECKER = os.path.join(TOOL_DIR, "check-contracts.sh")
-if TOOL_DIR not in sys.path:
-    sys.path.insert(0, TOOL_DIR)
-_llm = importlib.import_module("llm_client")
 DUMP_TIMEOUT = 300.0
 # THIS box's serving port, from the profile (LLM_SERVICE_PORT is exported by
 # tools/host-profile.sh).  The old default was 18084 — the XPS's CPU lane — which names
@@ -868,8 +867,7 @@ def write_report(path, lines):
     if not path:
         sys.stdout.write(text)
         return
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(text)
+    atomic_write_text(path, text)
     sys.stderr.write(f"swallow-classify: report written to {path} ({len(lines)} line(s))\n")
 
 

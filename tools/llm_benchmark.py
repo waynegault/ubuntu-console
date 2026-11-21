@@ -23,12 +23,93 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from tools.fsutil import atomic_write_text
+
 # Loaded through importlib so this file keeps working both as a module and as the
 # script it is invoked as (`python3 tools/llm_benchmark.py`), where only tools/ is
 # on sys.path.
 _llm = (
     importlib.import_module("llm_client") if __package__ in (None, "") else importlib.import_module("tools.llm_client")
 )
+
+
+class WorkloadSpec(BaseModel):
+    """Validated JSONL workload specification row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., min_length=1)
+    prompt: str = Field(..., min_length=1)
+    system: str = ""
+    max_tokens: int = Field(..., ge=1)
+    temperature: float = Field(default=0.0, ge=0.0)
+
+    @field_validator("id", "prompt", "system", mode="before")
+    @classmethod
+    def _ensure_string(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            raise ValueError("must be a string")
+        return v
+
+    @field_validator("id", "prompt")
+    @classmethod
+    def _non_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("max_tokens", mode="before")
+    @classmethod
+    def _reject_bool_int(cls, v: Any) -> int:
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        return v
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def _validate_temp(cls, v: Any) -> float:
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+            raise ValueError("temperature must be a finite number >= 0")
+        return float(v)
+
+
+class ManifestWorkloadSpec(BaseModel):
+    """Validated workload entry inside a benchmark artifact manifest."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(..., min_length=1)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _non_empty_id(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("manifest workload definitions must have non-empty string ids")
+        return v
+
+
+class WorkloadResultRow(BaseModel):
+    """Validated workload result row inside a benchmark artifact."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(..., min_length=1)
+    summary: dict[str, Any]
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _non_empty_id(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("workload rows must have non-empty string ids")
+        return v
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _ensure_summary_dict(cls, v: Any) -> dict[str, Any]:
+        if not isinstance(v, dict):
+            raise ValueError("has no summary object")
+        return v
 
 
 SCHEMA_VERSION = 1
@@ -151,7 +232,7 @@ def _load_workloads(path: Path, default_max_tokens: int) -> list[dict[str, Any]]
             raise BenchmarkError(f"{path}:{line_number}: temperature must be a finite number >= 0")
 
         seen_ids.add(workload_id)
-        workloads.append(
+        validated = WorkloadSpec.model_validate(
             {
                 "id": workload_id,
                 "prompt": prompt,
@@ -160,6 +241,7 @@ def _load_workloads(path: Path, default_max_tokens: int) -> list[dict[str, Any]]
                 "temperature": float(temperature),
             }
         )
+        workloads.append(validated.model_dump())
 
     if not workloads:
         raise BenchmarkError(f"{path}: at least one workload is required")
@@ -423,6 +505,13 @@ def _atomic_json_write(path: Path, payload: dict[str, Any], force: bool) -> None
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not force:
         raise BenchmarkError(f"output already exists (pass --force to replace it): {path}")
+    serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if force:
+        try:
+            atomic_write_text(path, serialized)
+        except OSError as exc:
+            raise BenchmarkError(f"cannot write benchmark artifact {path}: {exc}") from exc
+        return
     temp_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -434,16 +523,12 @@ def _atomic_json_write(path: Path, payload: dict[str, Any], force: bool) -> None
             delete=False,
         ) as target:
             temp_name = target.name
-            json.dump(payload, target, indent=2, sort_keys=True)
-            target.write("\n")
+            target.write(serialized)
             target.flush()
             os.fsync(target.fileno())
-        if force:
-            os.replace(temp_name, path)
-        else:
-            os.link(temp_name, path)
-            os.unlink(temp_name)
-            temp_name = None
+        os.link(temp_name, path)
+        os.unlink(temp_name)
+        temp_name = None
     except FileExistsError as exc:
         if temp_name is not None:
             try:
@@ -639,6 +724,11 @@ def _load_artifact(path: Path) -> dict[str, Any]:
         manifest_ids.add(item["id"])
 
     seen_ids: set[str] = set()
+    for item in manifest_workloads:
+        try:
+            ManifestWorkloadSpec.model_validate(item)
+        except ValidationError as exc:
+            raise BenchmarkError(f"{path}: manifest workload definitions must have non-empty string ids") from exc
     for row in payload["workloads"]:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"].strip():
             raise BenchmarkError(f"{path}: workload rows must have non-empty string ids")
@@ -646,6 +736,7 @@ def _load_artifact(path: Path) -> dict[str, Any]:
             raise BenchmarkError(f"{path}: duplicate workload id {row['id']!r}")
         if not isinstance(row.get("summary"), dict):
             raise BenchmarkError(f"{path}: workload {row['id']!r} has no summary object")
+        WorkloadResultRow.model_validate(row)
         seen_ids.add(row["id"])
     if seen_ids != manifest_ids:
         raise BenchmarkError(f"{path}: workload rows do not match manifest workload definitions")
@@ -912,14 +1003,18 @@ def _nonnegative_int(value: str) -> int:
 
 def _default_concurrency() -> int:
     """Resolve default benchmark concurrency from active box profile if configured, else 1."""
-    active_id = os.environ.get("LLM_HOST_PROFILE", "").strip() or os.environ.get("TAC_HOST_PROFILE_ID", "").strip()
+    active_id = (
+        os.environ.get("LLM_HOST_PROFILE", "").strip()
+        or os.environ.get("TAC_HOST_PROFILE_ID", "").strip()
+        or os.environ.get("TAC_HOST_PROFILE", "").strip()
+    )
     if active_id:
         try:
             from tools.box import get_hardware_profile
 
             return max(1, get_hardware_profile(active_id).serving.parallel_slots)
-        except Exception:
-            pass
+        except ImportError, ValueError, OSError:
+            return 1
     return 1
 
 

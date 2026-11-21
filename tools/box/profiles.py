@@ -1,10 +1,12 @@
 """Target hardware profile definitions for the repository.
 
-Module Version: 4 (2026-11-18)
+Module Version: 5 (2026-11-21)
 Declares profile definitions for:
 - Asus ProArt P16 / RTX Spark N1X (128GB unified memory)
 - Dell XPS 15 (Intel i9 / 4GB discrete CUDA)
 
+v5 (2026-11-21): resolve_profile() delegates to prober.detect_hardware_profile() when no
+    override is configured instead of hardcoding ASUS_RTX_SPARK_PROFILE.
 v4 (2026-11-18): add IQ4_XS and Q4_0 to ASUS_RTX_SPARK_PROFILE.quant_policy acceptable
     quants (matching config/hosts.d/asus-rtx-spark-quant-guide.conf for NVIDIA RTX Spark
     recipes and sidecar MTP draft models).
@@ -358,7 +360,7 @@ def resolve_profile_override(override_id: str | None = None) -> str | None:
 
 
 def resolve_profile(override_id: str | None = None) -> HardwareProfile:
-    """Resolve hardware profile via override or raise ValueError if unknown."""
+    """Resolve hardware profile via override or auto-detect active host hardware."""
     target_id = resolve_profile_override(override_id)
     if target_id:
         profile = get_profile_by_id(target_id)
@@ -367,4 +369,6 @@ def resolve_profile(override_id: str | None = None) -> HardwareProfile:
             raise ValueError(f"Unknown profile '{target_id}' (available: {available})")
         return profile
 
-    return ASUS_RTX_SPARK_PROFILE
+    from tools.box.prober import detect_hardware_profile
+
+    return detect_hardware_profile()

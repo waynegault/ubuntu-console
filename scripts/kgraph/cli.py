@@ -25,6 +25,7 @@ import tempfile
 from collections.abc import Callable
 
 from pydantic import ValidationError
+from tools.fsutil import atomic_write_text
 
 from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
 from .graph_db import load_from_graph_db, resolve_memory_db_path
@@ -124,22 +125,7 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     """
     # ── Mode flags ──
     parser.add_argument("--serve", action="store_true", help="Serve graph viewer in browser")
-    parser.add_argument("--update", action="store_true", help="Incremental rebuild from memory DB + AST")
-    parser.add_argument("--watch", action="store_true", help="Watch files and auto-rebuild")
-    parser.add_argument("--report", action="store_true", help="Generate GRAPH_REPORT.md")
-    parser.add_argument("--ast", action="store_true", help="Extract AST code concepts from a repo")
-    parser.add_argument("--wiring", action="store_true", help="Analyze source-tree wiring (stdlib AST import graph)")
     parser.add_argument("--wiring-all", action="store_true", help="Show full wiring report without truncation")
-    parser.add_argument("--communities", action="store_true", help="Detect communities/clusters")
-    parser.add_argument("--god-nodes", action="store_true", help="List most central nodes")
-    parser.add_argument("--call-flow", action="store_true", help="Generate call-flow HTML/Mermaid")
-    parser.add_argument("--mcp", action="store_true", help="Serve MCP JSON-RPC server")
-    parser.add_argument("--confidence", action="store_true", help="Show confidence stats for edges")
-    parser.add_argument("--pr-dashboard", action="store_true", help="Generate PR dashboard HTML")
-    parser.add_argument("--benchmark", action="store_true", help="Run token-reduction benchmark")
-    parser.add_argument("--audit", action="store_true", help="Show security audit report")
-    parser.add_argument("--install-hook", action="store_true", help="Install git post-commit hook")
-    parser.add_argument("--uninstall-hook", action="store_true", help="Remove git post-commit hook")
 
     # Query tools
     parser.add_argument("--query", help="Search nodes matching a pattern")
@@ -263,8 +249,7 @@ def cmd_ast(args: argparse.Namespace) -> None:
     print(f"Confidence: {s['extracted']} EXTRACTED, {s['inferred']} INFERRED, {s['ambiguous']} AMBIGUOUS")
     out_data = g.to_dict()
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(out_data, f, indent=2)
+        atomic_write_text(args.output, json.dumps(out_data, indent=2))
         print(f"Saved to {args.output}")
     else:
         print(json.dumps(out_data, indent=2))
@@ -414,8 +399,7 @@ def cmd_update(args: argparse.Namespace) -> None:
     print(f"  EXTRACTED: {s['extracted']}, INFERRED: {s['inferred']}, AMBIGUOUS: {s['ambiguous']}")
     if args.output:
         out_data = g.to_dict()
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(out_data, f, indent=2)
+        atomic_write_text(args.output, json.dumps(out_data, indent=2))
 
 
 def cmd_watch(args: argparse.Namespace) -> None:
@@ -538,8 +522,7 @@ def cmd_call_flow(args: argparse.Namespace) -> None:
     graph = _load_graph(args)
     if args.output and args.output.endswith(".html"):
         html = generate_call_flow_html(graph)
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(html)
+        atomic_write_text(args.output, html)
         print(f"Written to {args.output}")
     else:
         print(generate_call_flow_mermaid(graph))

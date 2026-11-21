@@ -69,7 +69,11 @@ def _search_criteria() -> str:
     return " ".join(terms)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return 0
     host = _env("CPAP_MYAIR_OTP_IMAP_HOST", "outlook.office365.com")
     port = int(_env("CPAP_MYAIR_OTP_IMAP_PORT", "993"))
     user = _env("CPAP_MYAIR_OTP_IMAP_USER", "")
@@ -107,6 +111,7 @@ def main() -> int:
                     if not isinstance(part, tuple) or len(part) < 2:
                         continue
                     import email
+
                     msg = email.message_from_bytes(part[1])
                     subj_hdr = msg.get("Subject", "")
                     from_hdr = msg.get("From", "")

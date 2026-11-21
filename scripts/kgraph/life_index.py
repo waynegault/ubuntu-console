@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .constants import (
     LIFE_ROOT_DEFAULT,
@@ -106,16 +106,20 @@ def load_life_index(life_root: str | None = None) -> dict:
                         "Record %r in %s has non-list aliases; ignoring them", record.get("slug"), canonical_json
                     )
                     record_aliases = []
-                rec: dict[str, Any] = {
-                    "slug": str(record.get("slug") or "").strip().lower(),
-                    "title": str(record.get("title") or "").strip(),
-                    "type": str(record.get("type") or "").strip().lower(),
-                    "path": str(record.get("path") or "").strip(),
-                    "aliases": [str(alias) for alias in record_aliases],
-                    "status": str(record.get("status") or "").strip().lower(),
-                }
-                if not rec["slug"]:
+                raw_slug = str(record.get("slug") or "").strip().lower()
+                if not raw_slug:
                     continue
+                validated_rec = LifeIndexRecord.model_validate(
+                    {
+                        "slug": raw_slug,
+                        "title": str(record.get("title") or raw_slug).strip(),
+                        "type": str(record.get("type") or "").strip().lower(),
+                        "path": str(record.get("path") or "").strip(),
+                        "aliases": [str(alias) for alias in record_aliases],
+                        "status": str(record.get("status") or "").strip().lower(),
+                    }
+                )
+                rec: dict[str, Any] = validated_rec.model_dump()
                 index["records"].append(rec)
                 index["by_slug"][rec["slug"]] = rec
                 index["by_type"].setdefault(rec["type"], []).append(rec)
@@ -127,7 +131,7 @@ def load_life_index(life_root: str | None = None) -> dict:
                         index["title_aliases"][norm] = rec["title"]
             if index["records"]:
                 return index
-        except (json.JSONDecodeError, OSError, KeyError, ValueError) as exc:
+        except (json.JSONDecodeError, OSError, KeyError, ValueError, ValidationError) as exc:
             logger.warning("Failed to load canonical concepts from '%s': %s", root, exc)
 
     if not os.path.isdir(root):
@@ -172,14 +176,17 @@ def load_life_index(life_root: str | None = None) -> dict:
                     in_aliases = False
             slug = os.path.splitext(name)[0].strip().lower()
             rec_type = (metadata.get("type") or _singular_type(type_dir)).strip().lower()
-            record = {
-                "slug": slug,
-                "title": title or slug,
-                "type": rec_type,
-                "path": path,
-                "aliases": aliases,
-                "status": (metadata.get("status") or "").strip().lower(),
-            }
+            validated_md = LifeIndexRecord.model_validate(
+                {
+                    "slug": slug,
+                    "title": title or slug,
+                    "type": rec_type,
+                    "path": path,
+                    "aliases": aliases,
+                    "status": (metadata.get("status") or "").strip().lower(),
+                }
+            )
+            record = validated_md.model_dump()
             index["records"].append(record)
             index["by_slug"][slug] = record
             index["by_type"].setdefault(rec_type, []).append(record)

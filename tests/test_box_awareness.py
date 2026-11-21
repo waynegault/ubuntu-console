@@ -45,9 +45,7 @@ def test_hardware_profiles_registry_contains_target_boxes() -> None:
 
 def test_hardware_profile_is_frozen_and_validates_strictly() -> None:
     with pytest.raises(ValidationError):
-        # The ignore below is the point of this case: the assignment is illegal at
-        # run time (frozen model), and it must be attempted to prove that it is.
-        ASUS_RTX_SPARK_PROFILE.id = "mutated"  # type: ignore[misc]
+        setattr(ASUS_RTX_SPARK_PROFILE, "id", "mutated")
 
     with pytest.raises(ValidationError):
         PortAllocation(
@@ -127,6 +125,11 @@ def test_detect_hardware_profile_respects_overrides_and_cpu_markers(
 
     monkeypatch.setenv("TAC_HOST_CPU_OVERRIDE", "12th Gen Intel(R) Core(TM) i9-12900HK")
     assert detect_hardware_profile().id == "intel-xe-cuda"
+    from tools.box.profiles import resolve_profile
+
+    monkeypatch.delenv("TAC_HOST_PROFILE", raising=False)
+    monkeypatch.setenv("TAC_HOST_PROFILE_FILE", "/nonexistent/profile")
+    assert resolve_profile().id == "intel-xe-cuda"
 
 
 def test_compute_effective_vram_mb_for_unified_and_discrete(

@@ -77,7 +77,7 @@ def resolve_total_vram_mb(profile_id: str | None = None) -> int:
         from tools.box import get_hardware_profile
 
         return get_hardware_profile(active_id).total_memory_mb
-    except Exception:
+    except ImportError, ValueError, OSError:
         return TOTAL_VRAM_MB
 
 

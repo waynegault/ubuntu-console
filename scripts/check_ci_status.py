@@ -60,14 +60,11 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from tools.fsutil import atomic_write_text
+
 logger = logging.getLogger("check_ci_status")
 
 REPO_DIR = Path(__file__).resolve().parent.parent
-try:
-    from tools.fsutil import atomic_write_text
-except ModuleNotFoundError:
-    sys.path.append(str(REPO_DIR))
-    from tools.fsutil import atomic_write_text
 #: The baseline lives with the other baselines (tools/*-baseline.*); only the
 #: checker is Python, and Python sources live under scripts/ (pyproject.toml).
 BASELINE_FILE = REPO_DIR / "tools" / "ci-status-baseline.txt"
@@ -627,7 +624,7 @@ def _read_cache_payload() -> dict | None:
     """
     try:
         payload = json.loads(CACHE_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         logger.debug("no usable CI status cache", exc_info=True)
         return None
     return payload if isinstance(payload, dict) else None

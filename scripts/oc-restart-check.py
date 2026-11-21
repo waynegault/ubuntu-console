@@ -125,6 +125,8 @@ def _parent_is_systemd(parent: int) -> bool:
     verdict - so the unreadable case must fall through to comm, which is readable and
     says "systemd".
     """
+    if parent <= 0:
+        return False
     try:
         exe = os.readlink(f"/proc/{parent}/exe")
     except OSError:
@@ -228,7 +230,7 @@ def scan_gpu(report: Report) -> None:
                 exe = os.readlink(f"/proc/{pid}/exe")
             except OSError:
                 exe = ""
-            if "build-opencl" in exe:
+            if "build-opencl" in exe or "build-cpu" in exe:
                 continue
             argv = _argv(pid)
             is_llama = os.path.basename(exe) == "llama-server" or (

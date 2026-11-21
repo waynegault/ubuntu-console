@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .query import (
     PATH_MODE_BFS,
@@ -248,13 +248,12 @@ class MCPHandler(BaseHTTPRequestHandler):
         cutoff = now - 60.0
         type(self)._rl_requests = [t for t in type(self)._rl_requests if t > cutoff]
         if len(type(self)._rl_requests) >= 30:
-            resp = json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32000, "message": "Rate limit exceeded"},
-                    "id": None,
-                }
-            )
+            err_resp = JsonRpcResponse(
+                error=JsonRpcError(code=-32000, message="Rate limit exceeded"),
+                id=None,
+            ).model_dump(exclude_none=True)
+            err_resp["id"] = None
+            resp = json.dumps(err_resp)
             self.send_response(429)
             self.send_header("Content-Type", "application/json")
             self.send_header("Retry-After", "60")
@@ -347,9 +346,26 @@ class MCPHandler(BaseHTTPRequestHandler):
             self._send_error(400, "Invalid JSON")
             return
 
-        method = req.get("method", "")
-        params = req.get("params", {})
+        if not isinstance(req, dict):
+            self._send_error(400, "Invalid JSON-RPC request")
+            return
+
         req_id = req.get("id", 0)
+        try:
+            rpc_req = JsonRpcRequest.model_validate(
+                {
+                    "jsonrpc": req.get("jsonrpc", "2.0"),
+                    "method": req.get("method", ""),
+                    "params": req.get("params") or {},
+                    "id": req_id,
+                }
+            )
+            method = rpc_req.method
+            params = rpc_req.params
+        except ValidationError:
+            method = str(req.get("method", "") or "")
+            raw_params = req.get("params")
+            params = raw_params if isinstance(raw_params, dict) else {}
 
         self._reload_graph()
         try:
@@ -358,19 +374,18 @@ class MCPHandler(BaseHTTPRequestHandler):
             # A tool error must yield a JSON-RPC error, not a dropped
             # connection plus a traceback on the server.
             logger.error("MCP dispatch failed for %s: %s", method, exc, exc_info=True)
-            self._send_json(
-                200,
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "error": {"code": -32603, "message": str(exc)},
-                        "id": req_id,
-                    }
-                ),
-            )
+            err_envelope = JsonRpcResponse(
+                error=JsonRpcError(code=-32603, message=str(exc)),
+                id=req_id,
+            ).model_dump(exclude_none=True)
+            err_envelope["id"] = req_id
+            self._send_json(200, json.dumps(err_envelope))
             return
 
-        self._send_json(200, json.dumps({"jsonrpc": "2.0", "result": result, "id": req_id}))
+        ok_envelope = JsonRpcResponse(result=result, id=req_id).model_dump(exclude_none=True)
+        ok_envelope["result"] = result
+        ok_envelope["id"] = req_id
+        self._send_json(200, json.dumps(ok_envelope))
 
     def do_OPTIONS(self):
         # Cross-origin writes are not supported: never approve a POST

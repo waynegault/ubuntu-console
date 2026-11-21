@@ -494,7 +494,7 @@ _write_fixture() {
     cat > "$fx/scripts/_module-list.sh" <<'SH'
 #!/usr/bin/env bash
 # Fixture load list.
-function __tac_module_list() {
+__tac_module_list() {
     printf '%s\n' \
         01-alpha \
 }

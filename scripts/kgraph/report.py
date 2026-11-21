@@ -13,7 +13,8 @@ Accepts ``Graph`` models or legacy dicts.
 from __future__ import annotations
 
 import logging
-import os
+
+from tools.fsutil import atomic_write_text
 
 from .community import compute_centrality, detect_communities, find_god_nodes
 from .models import Graph, as_graph
@@ -166,9 +167,7 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
 
     # ── Export ──
     if outpath:
-        os.makedirs(os.path.dirname(os.path.abspath(outpath)), exist_ok=True)
-        with open(outpath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+        atomic_write_text(outpath, "\n".join(lines))
         # The caller prints the user-facing "Wrote …" line (cli.cmd_report); this
         # module returns data and never prints.
         logger.info("Wrote %s", outpath)

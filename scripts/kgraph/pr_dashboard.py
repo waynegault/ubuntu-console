@@ -11,6 +11,8 @@ import subprocess
 from datetime import datetime, timezone
 from html import escape
 
+from tools.fsutil import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,9 +56,7 @@ def generate_pr_dashboard(repo_root: str, **kwargs) -> str:
     html = _build_dashboard_html(git_data, graph_correlations, repo_root, days)
 
     if output_path:
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(html)
+        atomic_write_text(output_path, html)
         # The caller prints the user-facing "PR dashboard written to …" line
         # (cli.cmd_pr_dashboard); this module returns data and never prints.
         logger.info("PR dashboard written to %s", output_path)

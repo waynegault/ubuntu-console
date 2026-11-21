@@ -11,6 +11,8 @@ import json
 import logging
 import os
 
+from tools.fsutil import atomic_write_text
+
 from .models import Graph, as_graph, estimate_tokens
 
 logger = logging.getLogger(__name__)
@@ -91,8 +93,7 @@ def benchmark_graph_vs_raw(graph: Graph | dict, source_files: list[str] | None =
 
     output_path = kwargs.get("output_path")
     if output_path:
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2)
+        atomic_write_text(output_path, json.dumps(result, indent=2))
         # The caller prints the user-facing "Benchmark written to …" line
         # (cli.cmd_benchmark); this module returns data and never prints.
         logger.info("Benchmark written to %s", output_path)

@@ -608,6 +608,26 @@ def test_bridge_generates_one_distinct_test_per_bats_case() -> None:
     )
 
 
+def test_resolve_bats_skips_broken_wrapper_missing_libexec(tmp_path, monkeypatch) -> None:
+    """A half-installed ~/.local/bin/bats wrapper whose ../libexec/bats-core/bats is missing must be rejected."""
+    broken_bin = tmp_path / "bin"
+    broken_bin.mkdir(parents=True)
+    wrapper = broken_bin / "bats"
+    wrapper.write_text(
+        '#!/usr/bin/env bash\nexec "$BATS_ROOT/libexec/bats-core/bats" "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    assert _bats_suites._is_usable_bats(wrapper) is False
+
+    libexec = tmp_path / "libexec" / "bats-core"
+    libexec.mkdir(parents=True)
+    real_core = libexec / "bats"
+    real_core.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    real_core.chmod(0o755)
+    assert _bats_suites._is_usable_bats(wrapper) is True
+
+
 def test_bridge_parse_matches_bats_count() -> None:
     """The parser's case count must equal `bats --count` for every suite.
 

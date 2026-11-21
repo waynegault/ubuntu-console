@@ -341,14 +341,14 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     ``args=['tests', 'nas/butler/openclaw/salus-it500/tests']`` (measured), which is why
     the coverage is asked as "are the collector dirs exactly those".
     """
-    config._tac_collected = {item.nodeid for item in items}  # type: ignore[attr-defined]
+    setattr(config, "_tac_collected", {item.nodeid for item in items})
     inipath = config.inipath
     dirs = getattr(session, "_initialpaths", ())
     if inipath is None:
-        config._tac_whole_tree = False  # type: ignore[attr-defined]
+        setattr(config, "_tac_whole_tree", False)
         return
     testpaths = {str(inipath.parent / path) for path in config.getini("testpaths")}
-    config._tac_whole_tree = bool(dirs) and {str(d) for d in dirs} == testpaths  # type: ignore[attr-defined]
+    setattr(config, "_tac_whole_tree", bool(dirs) and {str(d) for d in dirs} == testpaths)
 
 
 def _prune_vanished_nodeids(session: pytest.Session) -> None:

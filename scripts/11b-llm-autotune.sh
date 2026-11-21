@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 48
+# Module Version: 49
+#   v49 (2026-11-21): normalise warn to `function warn()` so the module uses one function
+#     declaration style throughout (inspection 8.2.1).
 #   v48 (2026-11-18): fix positional argument collision in __llm_autotune_profile_save where
 #     threads_override read ${29:-} (colliding with meas_drift_pct) instead of ${34:-} (the
 #     position autotune-model.sh passes $TUNE_THREADS in), and remove the duplicate
@@ -119,7 +121,7 @@ __TAC_MOD_11B_LLM_AUTOTUNE_LOADED=1
 # warn — the module's ONE stderr path, so every warning has the same shape and a caller can
 # grep it (style item 10.7).  Nothing in this module writes to stderr by hand.
 # ---------------------------------------------------------------------------
-warn() { printf '%s\n' "$*" >&2; }
+function warn() { printf '%s\n' "$*" >&2; }
 
 # ---------------------------------------------------------------------------
 # __llm_llama_build_id <binary> — the build the MEASURING binary reports, as it reports it.

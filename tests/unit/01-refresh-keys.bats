@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Unit test for oc-refresh-keys using mocks
 
-function __mock_command_local() {
+__mock_command_local() {
     local cmd="$1"
     local behavior="$2"
     cat > "$MOCK_BIN_DIR/$cmd" << MOCK_EOF

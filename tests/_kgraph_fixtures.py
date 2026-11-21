@@ -11,8 +11,12 @@ kgraph`` working.
 import os
 
 from _paths import SCRIPT_DIR
+from _test_harness import FakeHTTPServer as _FakeHTTPServer
 
 import kgraph
+
+# Re-exported for kgraph server and MCP tests.
+__all__ = ["SCRIPT_DIR", "_AST_GRAPH", "_SMALL_GRAPH", "_SMALL_GRAPH_MODEL", "_FakeHTTPServer", "kgraph"]
 
 # `_paths` puts the repo's scripts/ on sys.path; assert the bootstrap ran rather
 # than letting a later `import kgraph` fail with a confusing ImportError.
@@ -51,22 +55,3 @@ _SMALL_GRAPH = {
 # ``save_to_graph_db`` takes a validated ``Graph``; a JSON caller crosses that
 # boundary itself.  The same fixture, in the form a persistence call needs.
 _SMALL_GRAPH_MODEL = kgraph.Graph.from_dict(_SMALL_GRAPH)
-
-
-class _FakeHTTPServer:
-    """Captures the handler class serve_file builds, without listening."""
-
-    captured: dict = {}
-
-    def __init__(self, addr, handler):
-        _FakeHTTPServer.captured["handler"] = handler
-        self.server_address = (addr[0], addr[1] or 1)
-
-    def serve_forever(self):
-        pass
-
-    def shutdown(self):
-        pass
-
-
-# end of file

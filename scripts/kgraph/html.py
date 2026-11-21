@@ -11,6 +11,8 @@ import json
 import logging
 import os
 
+from tools.fsutil import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 _TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "kgraph.html")
@@ -42,6 +44,4 @@ def generate_html(graph: dict, outpath: str) -> None:
     # the \uXXXX escapes keep the literal valid JSON for the JS parser.
     payload = json.dumps(graph).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     html = HTML_TMPL.replace("%s", payload, 1)
-    ensure_parent_dir(outpath)
-    with open(outpath, "w", encoding="utf-8") as f:
-        f.write(html)
+    atomic_write_text(os.path.expanduser(outpath), html)
