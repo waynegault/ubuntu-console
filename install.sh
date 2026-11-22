@@ -3,6 +3,13 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.19 (2026-11-22, drop-ins are FILES, not links): OpenClaw's service installer
+#   refuses to rewrite a service definition it finds behind a symlink, so
+#   `openclaw gateway install --force` stopped dead on
+#   openclaw-gateway.service.d/50-oom-score.conf (SERVICE_DEFINITION_UNKNOWN:
+#   [symlink], measured on this box). A drop-in destination is now written as a REAL
+#   FILE carrying the same content; `rm -f` runs first, because installing onto the
+#   old link writes THROUGH it into this repo's source. Units are still linked.
 # v1.18 (2026-11-05, arm the patch self-heal): linking a unit starts nothing, and the
 #   patch self-heal was the one timer whose absence is SILENT.  The tick (v14) existed
 #   and install.sh linked it, but nothing scheduled it — the crontab it was designed
@@ -129,6 +136,30 @@ link() {
     mkdir -p "$(dirname "$dest")"
     ln -sf "$src" "$dest"
     echo "  $dest -> $src"
+}
+
+# dropin — install a drop-in destination as a REAL FILE, never a symlink.
+#
+# OpenClaw's service installer refuses to rewrite a service definition it finds
+# behind a link: `openclaw gateway install --force` stopped on
+# openclaw-gateway.service.d/50-oom-score.conf with SERVICE_DEFINITION_UNKNOWN:
+# [symlink] and would not replace the link or its target (measured 2026-11-22).
+# A drop-in is small, static configuration, so the deployment writes the file.
+#
+# rm -f FIRST, every time the destination may be a link: `install`/`cp` onto a
+# symlink writes THROUGH it, which here would edit this repo's own source instead
+# of replacing the box copy.
+dropin() {
+    local src="$REPO/$1" dest="$2"
+    mkdir -p "$(dirname "$dest")"
+    if [[ ! -L "$dest" ]] && cmp -s "$src" "$dest"
+    then
+        echo "  $dest - already current (skipped)"
+        return 0
+    fi
+    rm -f "$dest"
+    install -m 0644 "$src" "$dest"
+    echo "  $dest (copy of $src)"
 }
 
 launcher() {
@@ -526,7 +557,7 @@ unset _stray _stray_tgt
 for _row in "${_dropin_user[@]}"
 do
     IFS='|' read -r _unit _name _src <<< "$_row"
-    link "systemd/$_src" "$HOME/.config/systemd/user/$_unit.d/$_name"
+    dropin "systemd/$_src" "$HOME/.config/systemd/user/$_unit.d/$_name"
 done
 unset _row _unit _name _src
 

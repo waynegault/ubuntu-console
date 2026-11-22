@@ -101,12 +101,19 @@ run_installer() {
     done
     [ "$found" -eq 0 ]
 
-    # The fix: the declared destinations exist, as links into this repo.
-    [ -L "$FAKE_HOME/.config/systemd/user/openclaw-node.service.d/10-stop-budget.conf" ]
-    [ "$(readlink -f "$FAKE_HOME/.config/systemd/user/openclaw-node.service.d/10-stop-budget.conf")" \
-        = "$REPO_ROOT/systemd/openclaw-node-stop-budget.conf" ]
-    [ -L "$FAKE_HOME/.config/systemd/user/graphify-mcp-investigator.service.d/90-cpu-affinity.conf" ]
-    [ -L "$FAKE_HOME/.config/systemd/user/autotune-resume.service.d/quiet-fleet.conf" ]
+    # The fix: the declared destinations exist, as REAL COPIES of the source.
+    # Not links — OpenClaw's service installer refuses to rewrite a service
+    # definition it finds behind one (SERVICE_DEFINITION_UNKNOWN: [symlink],
+    # measured 2026-11-22 on openclaw-gateway.service.d/50-oom-score.conf), so
+    # `openclaw gateway install --force` cannot proceed while a drop-in is a link.
+    [ -f "$FAKE_HOME/.config/systemd/user/openclaw-node.service.d/10-stop-budget.conf" ]
+    [ ! -L "$FAKE_HOME/.config/systemd/user/openclaw-node.service.d/10-stop-budget.conf" ]
+    cmp -s "$REPO_ROOT/systemd/openclaw-node-stop-budget.conf" \
+        "$FAKE_HOME/.config/systemd/user/openclaw-node.service.d/10-stop-budget.conf"
+    [ -f "$FAKE_HOME/.config/systemd/user/graphify-mcp-investigator.service.d/90-cpu-affinity.conf" ]
+    [ ! -L "$FAKE_HOME/.config/systemd/user/graphify-mcp-investigator.service.d/90-cpu-affinity.conf" ]
+    [ -f "$FAKE_HOME/.config/systemd/user/autotune-resume.service.d/quiet-fleet.conf" ]
+    [ ! -L "$FAKE_HOME/.config/systemd/user/autotune-resume.service.d/quiet-fleet.conf" ]
 
     # Units are still linked — the skip must not have swallowed the unit loop.
     [ -L "$FAKE_HOME/.config/systemd/user/openclaw-refresh-keys.service" ]
@@ -130,4 +137,24 @@ run_installer() {
     [ ! -L "$FAKE_HOME/.config/systemd/user/cpu-affinity-0-7.conf" ]
     [[ "$output" == *"removed stray"* ]]
     [ -f "$FAKE_HOME/.config/systemd/user/mine.conf" ]
+}
+
+# The defect this case names (measured 2026-11-22): every earlier install left the
+# gateway's drop-ins as links, and OpenClaw's own installer then refused to proceed
+# at all — so the box could not be re-installed while that link stood. A re-run has
+# to REPLACE a link at the destination with a real file, and must not write through
+# the link into the repo source on the way.
+@test "drop-in install: an existing link at the destination is replaced, not written through" {
+    local dest="$FAKE_HOME/.config/systemd/user/openclaw-node.service.d/10-stop-budget.conf"
+    mkdir -p "$(dirname "$dest")"
+    ln -sfn "$REPO_ROOT/systemd/openclaw-node-stop-budget.conf" "$dest"
+
+    run_installer
+    [ "$status" -eq 0 ]
+
+    # Still a link means the installer wrote THROUGH it: openclaw would refuse the
+    # service definition, and the "copy" would in fact be the repo source.
+    [ ! -L "$dest" ]
+    [ -f "$dest" ]
+    cmp -s "$REPO_ROOT/systemd/openclaw-node-stop-budget.conf" "$dest"
 }
