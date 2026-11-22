@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # standby-keeper.sh — keep this box OUT of Windows Modern Standby (S0ix) while a run is in progress.
+#   v2 (2026-11-22): one sample row now carries the three fields a thermal-soak plateau is judged
+#     from — temperature.gpu, clocks.max.sm and the throttle-reason bitmask — so clocks.log can
+#     explain a damped row (663 vs 2411 MHz) instead of only showing it.  Columns are APPENDED after
+#     the original clocks.sm,power.draw,utilization.gpu,pstate prefix, which stays in place for any
+#     ad-hoc reader of the first four fields.  The sample moved into __keeper_sample so a test can
+#     drive ONE row; the loop itself cannot be run to completion.
 #   v1 (2026-11-04). INSTALLED and LIVE; reached through this repo's bin/ symlink.
 #
 # WHY THIS EXISTS. S0ix clamps the dGPU to 663-942 MHz / ~4 W with no error anywhere. Measured
@@ -28,21 +34,31 @@ NUDGE=${STANDBY_KEEPER_NUDGE_LOG:-/home/wayne/logs/campaign/nudge.log}
 PS=${STANDBY_KEEPER_POWERSHELL:-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe}
 NUDGE_PS=${STANDBY_KEEPER_NUDGE_PS:-C:\\models\\nudge.ps1}
 INTERVAL=${STANDBY_KEEPER_INTERVAL:-30}
+SMI=${STANDBY_KEEPER_SMI:-nvidia-smi}
+# __keeper_sample <smi> — one clocks.log row: UTC timestamp, then the sampled fields.
+# Field order is the log's schema, and it is append-only: clocks.sm,power.draw,utilization.gpu,
+# pstate, then temperature.gpu,clocks.max.sm,clocks_throttle_reasons.active.
+function __keeper_sample() {
+  local smi="${1:-$SMI}" ts s fields
+  fields="clocks.sm,power.draw,utilization.gpu,pstate"
+  fields+=",temperature.gpu,clocks.max.sm,clocks_throttle_reasons.active"
+  ts=$(date -u +%FT%TZ)
+  # A failed probe writes an EMPTY sample rather than aborting, so a missing clock shows as a blank
+  # tail in clocks.log — the absence stays legible instead of killing the defender.
+  # swallow-ok: an unreadable GPU state must not kill the process that is keeping the GPU awake.
+  s=$("$smi" --query-gpu="$fields" --format=csv,noheader 2>/dev/null | tr -d " ")
+  printf '%s,%s\n' "$ts" "$s"
+}
 # Creating the log directory is best-effort by design — on failure the appends below fail loudly in
 # the journal, where a keeper that cannot record is worth reading about.
 # swallow-ok: a directory that cannot be created must not stop the defender before its first sample.
 mkdir -p "$(dirname "$LOG")" "$(dirname "$NUDGE")" 2>/dev/null || true
 while true; do
-  TS=$(date -u +%FT%TZ)
   # A PowerShell failure must not kill the keeper — the nudge log records the rc on the next line, so
   # the failure is visible there, and the loop's job is to keep trying.
   "$PS" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$NUDGE_PS" >/dev/null 2>&1
-  echo "$TS nudge rc=$?" >> "$NUDGE"
-  # A failed probe writes an EMPTY sample rather than aborting, so the missing clock shows as a blank
-  # column in clocks.log — the absence stays legible instead of killing the defender.
-  # swallow-ok: an unreadable GPU state must not kill the process that is keeping the GPU awake.
-  S=$(nvidia-smi --query-gpu=clocks.sm,power.draw,utilization.gpu,pstate --format=csv,noheader 2>/dev/null | tr -d " ")
-  echo "$TS,$S" >> "$LOG"
+  echo "$(date -u +%FT%TZ) nudge rc=$?" >> "$NUDGE"
+  __keeper_sample "$SMI" >> "$LOG"
   sleep "$INTERVAL"
 done
 

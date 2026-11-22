@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 150
+# Module Version: 151
+#   v151 (2026-11-22): the clock-plateau term.  A certified tps is only comparable to another
+#       row when the card held a steady clock; the position-drift and SW-thermal terms catch a
+#       collapse and a FLAGGED throttle, but neither sees a card still ramping — measured
+#       2026-11-21 row 8, a mid-sweep 8.10 -> 3.94 dip that recovered by certification was an
+#       honest reading of a moving clock, and the 2026-11-04 standby measurement showed a 3.3x
+#       swing from clock state alone.  The term compares the MEDIAN SM clock of the window's
+#       first and second half, so oscillation under a power limit passes and a monotonic ramp
+#       does not; a trending card is stamped INDICATIVE, and an unreadable clocks.sm is
+#       skipped rather than demoted (a box with no SM clock cannot be judged by one).
+#       Knobs: AUTOTUNE_PLATEAU_SAMPLES (6), AUTOTUNE_PLATEAU_INTERVAL_S (0.5),
+#       AUTOTUNE_PLATEAU_TOL_PCT (10).
 #   v150 (2026-11-21): two fixes from row 8 live autotune on RTX Spark:
 #   (1) Sticky _meas_collapse false-positive guard: a transient mid-sweep dip (e.g. laptop
 #       thermal/power throttle during beam search) set _meas_collapse=1 and never re-evaluated
@@ -998,6 +1009,49 @@ __autotune_position_drift() {
         }'
     fi
     return 0
+}
+
+# ── 1b: the clock-plateau term ───────────────────────────────────────────────
+# A certified tps is only comparable to another row when the card held a steady clock: the
+# 2026-11-04 standby measurement swung 3.3x at c=1 and 2.3x at c=16 on clock state alone
+# (663-942 MHz asleep vs 2411 awake, identical binary/model/flags).  The position term and
+# the SW-thermal bit catch a collapse and a FLAGGED throttle; neither sees a card still
+# RAMPING — 2026-11-21 row 8 certified 8.05 tps after a mid-sweep 8.10 -> 3.94 dip that was
+# an honest reading of a moving clock.  This term compares the MEDIAN clock of the window's
+# first and second half, so oscillation around a plateau (normal under a power limit) passes
+# while a monotonic ramp does not; a max-min spread would fail the former, which is every
+# healthy run on a laptop.
+AUTOTUNE_PLATEAU_SAMPLES="${AUTOTUNE_PLATEAU_SAMPLES:-6}"
+AUTOTUNE_PLATEAU_INTERVAL_S="${AUTOTUNE_PLATEAU_INTERVAL_S:-0.5}"
+AUTOTUNE_PLATEAU_TOL_PCT="${AUTOTUNE_PLATEAU_TOL_PCT:-10}"
+
+# __autotune_clock_trend <smi> — SM-clock drift between the two halves of a sample window.
+# Prints the drift percentage on stdout.  Exit 0 = plateaued, 1 = still trending (the row is
+# not comparable), 2 = clocks.sm unreadable — no nvidia-smi, or a driver that does not expose
+# it — which is a different fact from a moving clock, so the caller does not demote on it.
+__autotune_clock_trend() {
+    local smi="${1:-nvidia-smi}" n="$AUTOTUNE_PLATEAU_SAMPLES" i value half
+    local -a _clock_samples=()
+    half=$(( n / 2 ))
+    (( half > 0 )) || { printf '0'; return 2; }   # 2 = no window to judge a trend from
+    for (( i = 0; i < n; i++ )); do
+        # swallow-ok: an unreadable clock is reported by the rc-2 branch below, not by the driver's stderr
+        value=$("$smi" --query-gpu=clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        [[ "$value" =~ ^[0-9]+$ ]] || return 2   # 2 = clocks.sm unreadable (no driver, or not exposed)
+        _clock_samples+=("$value")
+        if (( i < n - 1 )); then sleep "$AUTOTUNE_PLATEAU_INTERVAL_S"; fi
+    done
+    local first second hi drift
+    first=$(printf '%s\n' "${_clock_samples[@]:0:half}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
+    second=$(printf '%s\n' "${_clock_samples[@]:half}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
+    [[ "$first" =~ ^[0-9]+$ && "$second" =~ ^[0-9]+$ ]] || return 2   # 2 = medians unreadable
+    hi=$first
+    if (( second > hi )); then hi=$second; fi
+    (( hi > 0 )) || { printf '0'; return 0; }
+    drift=$(( (first > second ? first - second : second - first) * 100 / hi ))
+    printf '%d' "$drift"
+    if (( drift <= AUTOTUNE_PLATEAU_TOL_PCT )); then return 0; fi
+    return 1
 }
 
 echo "============================================="
@@ -3432,6 +3486,17 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 echo "  SW Thermal Slowdown is ACTIVE at certification — stamping this row INDICATIVE"
                 _meas_state="indicative"
             fi
+            # v151: the thermal bit above says the driver FLAGGED a slowdown; this says the
+            # clock was still MOVING, which is the case that produced row 8's 3.94 tps sample.
+            _clock_trend_pct=$(__autotune_clock_trend nvidia-smi)
+            case "$?" in
+                0) ;;
+                1) echo "  SM clock still trending ${_clock_trend_pct}% between the halves of its" \
+                        "sample window (tolerance ${AUTOTUNE_PLATEAU_TOL_PCT}%) — stamping this row"
+                   echo "  INDICATIVE: the card was not at a steady clock, so the number is not comparable."
+                   _meas_state="indicative" ;;
+                *) echo "  clocks.sm could not be read — the clock-plateau term is skipped for this row" ;;
+            esac
         fi
         if ! __autotune_task_quality_check; then
             __autotune_quality_error "task-quality contract was not verified — the winner was NOT saved"
