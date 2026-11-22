@@ -13,7 +13,7 @@
 # shellcheck disable=SC2034  # this file's version header is read by people and by
 #                             # git history, never by the file itself — SC2034 is the
 #                             # one diagnostic that cannot describe a header.
-VERSION="1.8"
+VERSION="1.9"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -889,6 +889,101 @@ EOF
     __strip_ansi "$output" stripped
     [[ "$stripped" == *"Intel Xe: 6%"* ]]
     [[ "$stripped" == *"RTX 3050 Ti: 35%/64°C"* ]]
+}
+
+@test "metrics: a shared-memory box labels the GPU row's memory as carved" {
+    # Measured 2026-11-22: nvidia-smi's memory.total on this box is 8192 MiB, a
+    # per-boot CARVE of a 102401 MiB pool.  The row printed "5495 / 8192 Mb" with no
+    # qualifier, which reads as a nearly full card beside an 88 GiB model budget.
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "RTX Spark N1X,69,22,5495,8192" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "Idle" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    export TAC_HOST_CUDA=1
+    export TAC_HOST_GPU_LABEL="RTX Spark N1X"
+    export TAC_HOST_PROFILE_SHARED_MEMORY=1
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"5495 / 8192 Mb carved"* ]]
+}
+
+@test "metrics: a discrete card's GPU row keeps the plain Mb figure" {
+    # The other side of the condition: on a discrete card memory.total IS the card's
+    # own memory, so the qualifier would be wrong there.
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "RTX 3050 Ti Laptop GPU,64,35,3497,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "Idle" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    export TAC_HOST_CUDA=1
+    export TAC_HOST_GPU_LABEL="RTX 3050 Ti"
+    export TAC_HOST_PROFILE_SHARED_MEMORY=0
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3497 / 4096 Mb"* ]]
+    [[ "$output" != *"carved"* ]]
+}
+
+@test "llm-manager: gpu-status labels a shared-memory carve and names unsupported sensors" {
+    # The stub is the driver's own answer, measured 2026-11-22 on the RTX Spark:
+    # memory.total 8192 MiB (a carve), and the literal [N/A] at rc 0 for power.limit,
+    # fan.speed and clocks.mem.  The command printed "VRAM 5495 / 8192 (2684 free)"
+    # and "Power 19.80 W / [N/A]", both of which read as readings.
+    local stub_dir="$TAC_TEST_TMPDIR/gpu-status-stub"
+    mkdir -p "$stub_dir"
+    cat > "$stub_dir/nvidia-smi" << 'EOF'
+#!/usr/bin/env bash
+case "$*" in
+    *persistence_mode*) printf 'Enabled\n' ;;
+    *name,utilization.gpu*)
+        printf 'RTX Spark N1X,22,5495 MiB,8192 MiB,2684 MiB,69.20,19.80 W,[N/A]\n' ;;
+    *clocks_throttle_reasons.active*)
+        printf '69.20, 22, 0, 19.80 W, [N/A], 2411, 2411, [N/A], P0, [N/A], 3003, 0x400\n' ;;
+    *) exit 2 ;;
+esac
+EOF
+    chmod +x "$stub_dir/nvidia-smi"
+
+    export WSL_NVIDIA_SMI="$stub_dir/nvidia-smi"
+    export TAC_HOST_PROFILE_SHARED_MEMORY=1
+    export LLAMA_FIT_KEEP_RESERVE_MB=12288
+
+    run gpu-status
+    [ "$status" -eq 0 ]
+    local stripped
+    __strip_ansi "$output" stripped
+    [[ "$stripped" == *"5495 MiB / 8192 MiB carved (2684 MiB free)"* ]]
+    [[ "$stripped" == *"Model Memory"* ]]
+    [[ "$stripped" == *"19.80W draw (no enforced limit exposed)"* ]]
+    [[ "$stripped" == *"not exposed by this driver: power.limit, clocks.mem, fan.speed"* ]]
+    [[ "$stripped" != *"[N/A]"* ]]
+}
+
+@test "llm-manager: gpu-status keeps the plain VRAM line on a discrete card" {
+    local stub_dir="$TAC_TEST_TMPDIR/gpu-status-stub"
+    mkdir -p "$stub_dir"
+    cat > "$stub_dir/nvidia-smi" << 'EOF'
+#!/usr/bin/env bash
+case "$*" in
+    *persistence_mode*) printf 'Enabled\n' ;;
+    *name,utilization.gpu*)
+        printf 'RTX 3050 Ti Laptop GPU,35,3497 MiB,4096 MiB,599 MiB,64,31.20 W,60.00 W\n' ;;
+    *clocks_throttle_reasons.active*)
+        printf '64, 35, 0, 31.20 W, 60.00 W, 1500, 1500, 6001, P2, 40, 2100, 0x0\n' ;;
+    *) exit 2 ;;
+esac
+EOF
+    chmod +x "$stub_dir/nvidia-smi"
+
+    export WSL_NVIDIA_SMI="$stub_dir/nvidia-smi"
+    export TAC_HOST_PROFILE_SHARED_MEMORY=0
+
+    run gpu-status
+    [ "$status" -eq 0 ]
+    local stripped
+    __strip_ansi "$output" stripped
+    [[ "$stripped" == *"3497 MiB / 4096 MiB (599 MiB free)"* ]]
+    [[ "$stripped" == *"31.20W / 60.00W"* ]]
+    [[ "$stripped" != *"Model Memory"* ]]
+    [[ "$stripped" != *"carved"* ]]
+    [[ "$stripped" != *"not exposed by this driver"* ]]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

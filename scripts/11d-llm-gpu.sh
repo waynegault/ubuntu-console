@@ -1,7 +1,18 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 58
+# Module Version: 59
+#   v59 (2026-11-22): gpu-status speaks the two facts gpu-check learned in v56.
+#     It printed "VRAM 5495 / 8192 (2684 free)" on a SHARED-MEMORY host, where that
+#     total is a CARVE of one pool and not the model budget, so the row read as a
+#     nearly full card beside an 88 GiB budget; it now routes through __gpu_check_pool
+#     like gpu-check.  It also printed "Power 19.80 W / [N/A]", and any unsupported
+#     sensor as if it were a reading: nvidia-smi answers an unimplemented field with
+#     the literal [N/A] and rc 0 (measured on the RTX Spark for power.limit,
+#     fan.speed, clocks.mem and enforced.power.limit), so a new "Sensors" line names
+#     the absent set once, from one query, instead of leaving a blank to be inferred.
+#     clocks_throttle_reasons.active does answer here (0x400), which is why autotune's
+#     0x20 gate is live on this box.
 #   v58 (2026-11-21): normalise warn to `function warn()` so the module uses one function
 #     declaration style throughout (inspection 8.2.1).
 #   v57 (2026-11-18): __spec_launch_flags honours in-file `draft-mtp` rows where
@@ -1095,6 +1106,41 @@ function wake() {
 }
 
 # ---------------------------------------------------------------------------
+# __gpu_sensor_support <smi> — which of this module's GPU sensors the DRIVER answers.
+# nvidia-smi answers an unimplemented field with the literal "[N/A]" and rc 0, so on a
+# WSL/WDDM-bridged card an unsupported metric is indistinguishable from a zero unless
+# the absence is named (measured 2026-11-22 on the RTX Spark: power.limit, fan.speed,
+# clocks.mem and enforced.power.limit all answer [N/A], while
+# clocks_throttle_reasons.active answers 0x400).  Sets one comma-joined global,
+# _GPU_SENSORS_NA, from ONE query, and returns non-zero when the query itself failed,
+# which is a different fact from "the driver exposes nothing".
+# ---------------------------------------------------------------------------
+function __gpu_sensor_support() {
+    local smi="$1" query raw i=0 field value
+    local -a fields=(
+        temperature.gpu utilization.gpu utilization.memory power.draw power.limit
+        clocks.gr clocks.sm clocks.mem pstate fan.speed clocks.max.sm
+        clocks_throttle_reasons.active
+    )
+    _GPU_SENSORS_NA=""
+    query=$(IFS=,; printf '%s' "${fields[*]}")
+    # swallow-ok: the return status is the failure report — gpu-status prints no Sensors line rather than claim a set it could not read
+    raw=$("$smi" --query-gpu="$query" --format=csv,noheader,nounits 2>/dev/null) || return 1
+    local -a values
+    IFS=',' read -r -a values <<< "$raw"
+    for field in "${fields[@]}"
+    do
+        value="${values[i]:-}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        [[ -z "$value" || "$value" == *"[N/A]"* ]] \
+            && _GPU_SENSORS_NA="${_GPU_SENSORS_NA:+${_GPU_SENSORS_NA}, }${field}"
+        i=$((i + 1))
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # gpu-status — Detailed NVIDIA GPU status (replaces standalone oc-gpu-status).
 # Shows utilisation, VRAM, temperature, power draw, persistence mode.
 # ---------------------------------------------------------------------------
@@ -1122,12 +1168,37 @@ function gpu-status() {
 
         __tac_info "GPU" "${gname}" "$C_Highlight"
         __tac_info "Util" "${color}${gutil}${C_Reset}" "$color"
-        __tac_info "VRAM" "${gmused} / ${gmtotal} (${gmfree} free)" "$C_Text"
+        # The driver answers "5350 MiB"; __gpu_check_pool supplies the unit itself, so
+        # the suffix is stripped here or the line reads "5350MiB MiB" (measured).
+        local mem_used="${gmused%MiB}" mem_total="${gmtotal%MiB}" mem_free="${gmfree%MiB}"
+        if [[ "$mem_used" =~ ^[0-9]+$ && "$mem_total" =~ ^[0-9]+$ ]]
+        then
+            __gpu_check_pool "$mem_used" "$mem_total" "$mem_free"
+        else
+            __tac_info "Memory" "not exposed by this driver (${gmused} / ${gmtotal})" "$C_Dim"
+        fi
         __tac_info "Temp" "${gtemp} C" "$C_Text"
-        __tac_info "Power" "${gpwr} / ${gplim}" "$C_Text"
+        # [N/A] is this driver answering "not implemented", not a reading: name the
+        # absence instead of printing the sentinel beside a real number.
+        local power
+        if [[ "$gpwr" == *"[N/A]"* || -z "$gpwr" ]]
+        then
+            power="n/a (driver exposes no power reading)"
+        elif [[ "$gplim" == *"[N/A]"* || -z "$gplim" ]]
+        then
+            power="${gpwr} draw (no enforced limit exposed)"
+        else
+            power="${gpwr} / ${gplim}"
+        fi
+        __tac_info "Power" "$power" "$C_Text"
     done < <("$smi" \
         --query-gpu=name,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw,power.limit \
         --format=csv,noheader 2>/dev/null)
+
+    if __gpu_sensor_support "$smi" && [[ -n "$_GPU_SENSORS_NA" ]]
+    then
+        __tac_info "Sensors" "not exposed by this driver: ${_GPU_SENSORS_NA}" "$C_Dim"
+    fi
 
     local pm
     pm=$("$smi" --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
@@ -1141,21 +1212,23 @@ function gpu-status() {
 }
 
 # ---------------------------------------------------------------------------
-# __gpu_check_pool <used MiB> <total MiB> — the memory lines for gpu-check.
-# On a SHARED-MEMORY host the card's total is a CARVE of the system's memory, so the
-# card's own figure is not the pool a model is sized against: a single "VRAM used/total"
-# line reads as "the card is full" when it is one of several lanes' budgets, and it
-# contradicted `_llm_gpu_status`, which already separates GPU Buffer from Model Memory on
-# the same box (measured 2026-11-17: gpu-check said 7665/8192 while the model pool was
-# 88 GiB).  A discrete card keeps the single VRAM line, which is accurate there.
+# __gpu_check_pool <used MiB> <total MiB> [free MiB] — the memory lines for gpu-check
+# and gpu-status.  On a SHARED-MEMORY host the card's total is a CARVE of the system's
+# memory, so the card's own figure is not the pool a model is sized against: a single
+# "VRAM used/total" line reads as "the card is full" when it is one of several lanes'
+# budgets, and it contradicted `_llm_gpu_status`, which already separates GPU Buffer from
+# Model Memory on the same box (measured 2026-11-17: gpu-check said 7665/8192 while the
+# model pool was 88 GiB).  A discrete card keeps the single VRAM line, which is accurate
+# there.  The optional free figure is appended when the caller read one.
 function __gpu_check_pool() {
-    local used="$1" total="$2"
+    local used="$1" total="$2" free="${3:-}" suffix=""
+    [[ "$free" =~ ^[0-9]+$ ]] && suffix=" (${free} MiB free)"
     if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" != "1" ]]
     then
-        __tac_info "VRAM" "${used} MiB / ${total} MiB" "$C_Text"
+        __tac_info "VRAM" "${used} MiB / ${total} MiB${suffix}" "$C_Text"
         return 0
     fi
-    __tac_info "GPU Buffer" "${used} MiB / ${total} MiB carved" "$C_Text"
+    __tac_info "GPU Buffer" "${used} MiB / ${total} MiB carved${suffix}" "$C_Text"
     local _mt _ma _reserve _budget _avail
     _reserve="${LLAMA_FIT_KEEP_RESERVE_MB:-12288}"
     [[ "$_reserve" =~ ^[0-9]+$ ]] || _reserve=12288

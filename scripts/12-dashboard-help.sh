@@ -2,7 +2,12 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 36
+# Module Version: 37
+#   v37 (2026-11-22): the GPU row labels a shared-memory host's figure "Mb carved".
+#   nvidia-smi's memory.total is a per-boot CARVE of one pool there, not the model
+#   budget (measured: 5495 / 8192 MiB beside a 102401 MiB pool), so the unlabelled
+#   figure read as a nearly full card.  gpu-check and gpu-status already word it that
+#   way; a discrete card keeps the plain "Mb".
 #   v36 (2026-11-01): `oc ms` lists provider endpoints and keys (it no longer runs the
 #   OpenRouter scan), and `oc sync-models` refreshes the hosted model catalog.
 #   v35 (2026-11-01): oc-plugin-update's help line says the path-installed plugins
@@ -184,7 +189,13 @@ function __dashboard_gpu_rows() {
         then
             g_name="$TAC_HOST_GPU_LABEL"
         fi
-        gpu_display="${g_name} | ${g_util// /}% Load | ${g_temp// /}°C | ${g_mem_u// /} / ${g_mem_t// /} Mb"
+        # On a SHARED-MEMORY host memory.total is a CARVE of one pool, not the budget a
+        # model is sized against: "5495 / 8192 Mb" beside an 88 GiB budget reads as a
+        # nearly full card.  gpu-check (11d v56) and gpu-status (v59) already word it
+        # that way; the row now does too, in the one word that fits.
+        local g_mem_label="Mb"
+        [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] && g_mem_label="Mb carved"
+        gpu_display="${g_name} | ${g_util// /}% Load | ${g_temp// /}°C | ${g_mem_u// /} / ${g_mem_t// /} ${g_mem_label}"
     fi
     # GPU colour: <75% load=green, 75-90%=yellow, >90%=red
     local gpu_color=$C_Highlight
