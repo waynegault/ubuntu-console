@@ -14,6 +14,18 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 33
+#   v33 (2026-11-22): the CI Verdict Gate hands the repo root to its child on PYTHONPATH.
+#   check_ci_status.py imports `tools.fsutil`, and a script-path run puts only the
+#   SCRIPT's directory on sys.path, so the import resolved locally only through
+#   `.venv/.../ubuntu_console.pth` — an artifact nothing in this repo writes.  CI has no
+#   such file, so the gate died with `ModuleNotFoundError: No module named 'tools'` and
+#   failed the two jobs that run this lint (measured 2026-11-22, run 45049591270:
+#   "Lint & Static Analysis" and "Fast Test Suite").  The root is PREFIXED, not
+#   appended, so the pushed tree's own `tools` wins over anything ambient; a linked
+#   worktree therefore imports the worktree, which is the tree the gates are judging.
+#   (The same two jobs also failed on the previous tip 5649ed15 — job list measured, but
+#   that run's logs are gone, so its cause is unattributed and is not claimed here.)
 # Module Version: 32
 #   v32 (2026-11-14): a DIRECTORY is never a shell file.  `bin/*` expands to every
 #   member, including a `__pycache__/` that importing a bin tool leaves behind, so
@@ -879,7 +891,15 @@ else
         _ci_status_args=(--fail --cache-ttl 0)
         echo "  NOTE  CI_STATUS_ALLOW_UNKNOWN=1 — an UNKNOWN verdict will not fail this run"
     fi
-    if "$_ci_status_py" "$REPO_ROOT/scripts/check_ci_status.py" "${_ci_status_args[@]}"
+    # PYTHONPATH carries the repo root for the child.  A script-path run puts only the
+    # SCRIPT's directory (`scripts/`) on sys.path, so `from tools.fsutil import …` in
+    # check_ci_status.py resolves here only when something else supplies the root.  On
+    # this box that something is `.venv/.../ubuntu_console.pth`, which nothing in the
+    # repo writes; CI has no such file, so the gate died with ModuleNotFoundError: No
+    # module named 'tools' and every push went red on the two jobs that run this lint
+    # (measured 2026-11-22: runs 45049591270 and 44927624945).
+    if PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        "$_ci_status_py" "$REPO_ROOT/scripts/check_ci_status.py" "${_ci_status_args[@]}"
     then
         echo "  PASS  CI verdict gate"
     else
