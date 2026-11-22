@@ -21,6 +21,19 @@ permissions:
   contents: read   # actions/checkout
   actions: read    # the CI verdict gate's actions/runs query
 
+# REPO IMPORT RESOLUTION FOR SPAWNED PYTHON.  `pytest.ini` puts `. scripts tools
+# nas/butler/scripts` on sys.path for the TEST process, but a subprocess it starts inherits
+# only the ENVIRONMENT, not sys.path — and on this box that gap was invisible because
+# `.venv/lib/python3.14/site-packages/ubuntu_console.pth` supplies the same four paths
+# (docs/inspection.md describes it; nothing in the repo writes it).  A runner has no such
+# file, so six cases died with `ModuleNotFoundError: No module named 'tools'` under
+# `Run Python tests` (measured 2026-11-22, run 45059479629): three e2e cases that invoke
+# scripts/check_ci_status.py, and three kgraph cases reaching scripts/kgraph/cli.py:28
+# (`from tools.fsutil import atomic_write_text`) through `python -m kgraph`.  Same list as
+# pytest.ini, so the two mechanisms cannot disagree.
+env:
+  PYTHONPATH: "${{ github.workspace }}:${{ github.workspace }}/scripts:${{ github.workspace }}/tools:${{ github.workspace }}/nas/butler/scripts"
+
 # Job timeouts.  NO job here set one, so a hung job was bounded only by GitHub's default
 # job timeout — 360 minutes, as the investigator's unittest.yml records (docs.github.com
 # was unreachable when this was written, so that figure is second-hand and worth

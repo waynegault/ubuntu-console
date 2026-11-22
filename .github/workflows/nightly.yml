@@ -6,6 +6,15 @@ on:
     - cron: '23 3 * * *'
   workflow_dispatch:
 
+# REPO IMPORT RESOLUTION FOR SPAWNED PYTHON — the same block, and the same reason, as
+# ci.yml: this suite's `Run Python tests` step starts `scripts/check_ci_status.py` and
+# `python -m kgraph` as SUBPROCESSES, and a subprocess inherits the environment, not the
+# test process's sys.path.  On the box `.venv/.../ubuntu_console.pth` covered this; a
+# runner has no such file.  Measured red on 2026-11-22 (run 44980816362, step "Run Python
+# tests") and on the push lane.  Keep the list identical to pytest.ini's pythonpath.
+env:
+  PYTHONPATH: "${{ github.workspace }}:${{ github.workspace }}/scripts:${{ github.workspace }}/tools:${{ github.workspace }}/nas/butler/scripts"
+
 # Job timeout, for the same reason ci.yml sets them: nothing here set one, so a hang was
 # bounded only by GitHub's 360-minute default while holding the single self-hosted runner.
 jobs:
