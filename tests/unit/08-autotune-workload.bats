@@ -1119,6 +1119,47 @@ STUB
     [[ "$_meas_collapse" -eq 0 ]] || { echo "a discrete-card ngl drop must not be read as a collapse"; return 1; }
 }
 
+@test "3c: a transient mid-sweep dip that recovers by certification does not abort the row" {
+    # Catches the 2026-11-21 row 8 false-positive exit 3: a mid-sweep thermal dip (8.10 -> 3.94)
+    # set _meas_collapse=1 and never cleared it when certification recovered to 8.05 vs 8.38 peak.
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *'transient mid-sweep tps dip recovered by certification'* ]]
+
+    eval "$(sed -n '/^__autotune_collapse_verdict()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    declare -f __autotune_collapse_verdict >/dev/null
+
+    # Simulate row 8: transient dip set _meas_collapse=1, peak was 8.38, certified recovered to 8.05.
+    _meas_collapse=1
+    _ROW_BEST_QUICK_TPS="8.38"
+    _tps="7.82"
+    BEST_TPS="8.05"
+    if [[ "${_meas_collapse:-0}" == "1" ]] \
+        && ! __autotune_collapse_verdict "${_ROW_BEST_QUICK_TPS:-0}" "${BEST_TPS:-0}" \
+        && ! __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
+        _meas_collapse=0
+    fi
+    [[ "$_meas_collapse" -eq 0 ]] || { echo "recovered certification (8.05 vs 8.38) must clear _meas_collapse"; return 1; }
+
+    # CONTROL: if certification itself is collapsed (2.19 vs 8.38), _meas_collapse must stay 1.
+    _meas_collapse=1
+    BEST_TPS="2.19"
+    if [[ "${_meas_collapse:-0}" == "1" ]] \
+        && ! __autotune_collapse_verdict "${_ROW_BEST_QUICK_TPS:-0}" "${BEST_TPS:-0}" \
+        && ! __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
+        _meas_collapse=0
+    fi
+    [[ "$_meas_collapse" -eq 1 ]] || { echo "truly collapsed certification (2.19 vs 8.38) must keep _meas_collapse=1"; return 1; }
+}
+
+@test "3c: thread baseline lifts legacy rows below LLAMA_CPU_THREADS_BASE" {
+    # Catches legacy rows (threads=6) staying stuck at 6 on the 10-P-core RTX Spark profile.
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *'LLAMA_CPU_THREADS_BASE'* ]]
+    [[ "$src" == *'_thr_init="$LLAMA_CPU_THREADS_BASE"'* ]]
+}
+
 @test "3c: a collapsed row exits 3 BEFORE the profile save" {
     # Catches the shape that let the 2026-11-16 rows be written: the guard warned and
     # the row was saved anyway.  The exit must sit between the guard and the save, and

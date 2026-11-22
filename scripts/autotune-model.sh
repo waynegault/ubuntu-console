@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 149
+# Module Version: 150
+#   v150 (2026-11-21): two fixes from row 8 live autotune on RTX Spark:
+#   (1) Sticky _meas_collapse false-positive guard: a transient mid-sweep dip (e.g. laptop
+#       thermal/power throttle during beam search) set _meas_collapse=1 and never re-evaluated
+#       it when certification recovered (measured: certified 8.05 tps vs 8.38 tps earlier
+#       wrongly exited 3 with "(>=2x drop)"). Now clear _meas_collapse when certified BEST_TPS
+#       itself has recovered (neither >=2x below _ROW_BEST_QUICK_TPS nor recorded _tps),
+#       printing a transient-dip note instead of discarding a healthy certified reading.
+#   (2) Thread baseline honours LLAMA_CPU_THREADS_BASE when a row's stored thread count is
+#       below the box profile's base (e.g. legacy rows carrying threads=6 on the 10-P-core
+#       asus-n1n-rtx-spark profile now start at threads=10 instead of 6).
 #   v149 (2026-11-19): four autotune cycle-budget & waste fixes from row 9 (27.7G dense):
 #   (1) Post-certification floor descent no longer re-walks a row Phase 4 already judged too
 #       slow (_P4_TOO_SLOW), and carries its own flat-curve early stop (_cert_flat).
@@ -189,9 +199,18 @@ SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
 
 # swallow-ok: a missing nproc falls back to the conservative 6-thread default
 CPU_COUNT=$(nproc 2>/dev/null || echo 6)
-# SPEC-DEC-002: the thread count is hard-capped at the i9-12900HK P-core
-if [[ "$_thr" =~ ^[0-9]+$ ]] && [[ $_thr -gt 0 ]] && [[ $_thr -le $CPU_COUNT ]]; then
-    TUNE_THREADS=$(__llm_thread_cap "$_thr")
+# SPEC-DEC-002: the thread count is hard-capped at the box's P-core cap (__llm_thread_cap).
+# On boxes whose host profile declares LLAMA_CPU_THREADS_BASE (e.g. 10 P-cores on
+# asus-n1n-rtx-spark), lift legacy rows whose recorded thread count is below that base so
+# sweeps start on the box's native P-core count instead of an inherited 6-thread default.
+_thr_init="${_thr:-}"
+if [[ "${LLAMA_CPU_THREADS_BASE:-0}" =~ ^[0-9]+$ ]] && (( LLAMA_CPU_THREADS_BASE > 0 )); then
+    if [[ ! "$_thr_init" =~ ^[0-9]+$ ]] || (( _thr_init < LLAMA_CPU_THREADS_BASE )); then
+        _thr_init="$LLAMA_CPU_THREADS_BASE"
+    fi
+fi
+if [[ "$_thr_init" =~ ^[0-9]+$ ]] && [[ $_thr_init -gt 0 ]] && [[ $_thr_init -le $CPU_COUNT ]]; then
+    TUNE_THREADS=$(__llm_thread_cap "$_thr_init")
 else
     TUNE_THREADS=$(__llm_thread_cap "$CPU_COUNT")
 fi
@@ -2739,13 +2758,23 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 
     # tps-collapse guard (WSL2 dxgkrnl degradation).  Two baselines: the row's own best
     # quick probe (v144, works on a fresh row) and the registry's recorded figure (a
-    # re-tune).  A collapse is NOT a measurement, so the row is not saved: exit 3 is the
-    # adapter backstop the bench turns into a wsl-restart.sh call, and the batch halts.
+    # re-tune).  A transient mid-sweep dip that RECOVERED before certification (e.g. thermal
+    # or power throttle during beam search, then certified 8.05 vs 8.38 tps) is NOT a
+    # collapsed certification: clear _meas_collapse when certified BEST_TPS is healthy
+    # against both baselines, and only refuse/exit 3 when certification itself collapsed.
     if [[ "${_meas_collapse:-0}" == "1" ]] \
+        && ! __autotune_collapse_verdict "${_ROW_BEST_QUICK_TPS:-0}" "${BEST_TPS:-0}" \
+        && ! __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
+        echo "  note: transient mid-sweep tps dip recovered by certification" \
+             "(certified ${BEST_TPS} tps vs peak ${_ROW_BEST_QUICK_TPS} tps) — keeping row."
+        _meas_collapse=0
+    fi
+    if [[ "${_meas_collapse:-0}" == "1" ]] \
+        || __autotune_collapse_verdict "${_ROW_BEST_QUICK_TPS:-0}" "${BEST_TPS:-0}" \
         || __autotune_collapse_verdict "${_tps:-}" "${BEST_TPS:-0}"; then
         _meas_collapse=1
         echo ""
-        if [[ "${_ROW_BEST_QUICK_TPS:-0}" != "0" ]]; then
+        if __autotune_collapse_verdict "${_ROW_BEST_QUICK_TPS:-0}" "${BEST_TPS:-0}"; then
             echo "  ⚠ WARN: tps collapse — certified ${BEST_TPS} tps vs" \
                  "${_ROW_BEST_QUICK_TPS} tps earlier in this row (>=2x drop)."
         else
