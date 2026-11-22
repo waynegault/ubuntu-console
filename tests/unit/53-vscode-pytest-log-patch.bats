@@ -155,8 +155,14 @@ PY
 # never touches ~/.cache, and never loads a conftest from the repo (cwd and arg both live in $WORK).
 run_recorder_on() {
     local logdir="$1"; shift
+    # APPEND to any inherited PYTHONPATH, never replace it.  Assigning only the plugin's
+    # directory threw away the repo root the caller provides, and the recorder's _write does
+    # `from tools.fsutil import atomic_write_text` — so on a runner (no .venv, hence no
+    # ubuntu_console.pth) the import failed, the failure was reported and swallowed by
+    # design, and no latest.json appeared: three cases failed on a MISSING file, 2026-11-22
+    # (run 45059479629, tests 768-770).  On the box the .pth masked it.
     env -C "$WORK" VSCODE_PYTEST_LOG_DIR="$logdir" \
-        PYTHONPATH="$REPO_ROOT/tools/vscode-pytest-log" \
+        PYTHONPATH="$REPO_ROOT/tools/vscode-pytest-log${PYTHONPATH:+:$PYTHONPATH}" \
         "$PY" -m pytest -q -p vscode_pytest_log "$@"
 }
 
