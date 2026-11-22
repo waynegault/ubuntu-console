@@ -3,6 +3,14 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.20 (2026-11-22, the repo import shim is INSTALLED, not assumed): docs/inspection.md
+#   states that `.venv/lib/python3.14/site-packages/ubuntu_console.pth` is what gives
+#   `import tools` / `import kgraph` their resolution, and NOTHING WROTE IT — the file
+#   existed only as a hand-made artefact on the boxes.  A fresh venv therefore had no
+#   shim, and every spawned script failed exactly the way CI did on 2026-11-22
+#   (`ModuleNotFoundError: No module named 'tools'`, four separate consumer suites).
+#   install.sh now writes it for each `.venv/lib/python3*/site-packages`, with the same
+#   four paths pytest.ini declares, and rewrites only when the content differs.
 # v1.19 (2026-11-22, drop-ins are FILES, not links): OpenClaw's service installer
 #   refuses to rewrite a service definition it finds behind a symlink, so
 #   `openclaw gateway install --force` stopped dead on
@@ -160,6 +168,42 @@ dropin() {
     rm -f "$dest"
     install -m 0644 "$src" "$dest"
     echo "  $dest (copy of $src)"
+}
+
+# pythonpath_pth <repo> — write the repo's import shim into every venv it finds.
+#
+# `.venv/.../ubuntu_console.pth` is the mechanism docs/inspection.md names for
+# `import tools` resolving outside pytest, and nothing in this repo created it: the
+# file was hand-made per box, so a fresh venv had none and every SPAWNED python died
+# with `ModuleNotFoundError: No module named 'tools'` (measured 2026-11-22 in CI, and
+# the same shape would hit a new box).  The four paths are pytest.ini's `pythonpath`
+# list, so the venv, pytest and the CI workflow env cannot drift apart.
+#
+# Rewritten only when the content differs, so a re-install is silent; a venv-less
+# checkout gets one line saying so rather than a silent skip.
+pythonpath_pth() {
+    local repo="$1" sp pth tmp found=0
+    for sp in "$repo"/.venv/lib/python3*/site-packages
+    do
+        [[ -d "$sp" ]] || continue
+        found=1
+        pth="$sp/ubuntu_console.pth"
+        tmp="$sp/.ubuntu_console.pth.tmp"
+        printf '%s\n' "$repo" "$repo/scripts" "$repo/tools" "$repo/nas/butler/scripts" > "$tmp"
+        if cmp -s "$tmp" "$pth"
+        then
+            rm -f "$tmp"
+            echo "  $pth - already current (skipped)"
+            continue
+        fi
+        mv -f "$tmp" "$pth"
+        echo "  $pth (repo import shim)"
+    done
+    if [[ "$found" == "0" ]]
+    then
+        echo "  no .venv/lib/python3*/site-packages — the repo import shim is skipped"
+    fi
+    return 0
 }
 
 launcher() {
@@ -790,6 +834,12 @@ then
 else
     warn "  WARNING: $REPO/tools/qwen-hooks is missing — the Qwen CLI hooks will NOT be installed"
 fi
+
+# The repo import shim last: it is what makes every script's spawned python able to
+# `import tools`, and it depends only on the venv existing.
+echo ""
+echo "Repo import resolution:"
+pythonpath_pth "$REPO"
 
 echo ""
 echo "Done. Run 'exec bash' to reload the profile."

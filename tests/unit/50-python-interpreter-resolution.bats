@@ -205,3 +205,41 @@ STUB
     [ "$status" -eq 0 ]
     [ -s "$SHIM_LOG" ]
 }
+
+@test "install writes the repo import shim, and leaves an identical one alone" {
+    # docs/inspection.md names `.venv/.../ubuntu_console.pth` as the mechanism that gives
+    # `import tools` its resolution outside pytest, and nothing wrote it: the file existed
+    # only as a hand-made artefact per box.  A fresh venv therefore had no shim, and every
+    # SPAWNED python failed the way CI did on 2026-11-22 (`No module named 'tools'`, four
+    # consumer suites).  The shim must carry pytest.ini's four paths, and a re-install must
+    # not churn the file (the copy is compared by inode, so a rewrite is visible).
+    eval "$(sed -n '/^pythonpath_pth()/,/^}/p' "$REPO_ROOT/install.sh")"
+    declare -f pythonpath_pth >/dev/null
+
+    local repo="$TAC_TEST_TMPDIR/repo" sp="$TAC_TEST_TMPDIR/repo/.venv/lib/python3.14/site-packages"
+    mkdir -p "$sp"
+
+    run pythonpath_pth "$repo"
+    [ "$status" -eq 0 ]
+    [ -f "$sp/ubuntu_console.pth" ]
+    diff -u <(printf '%s\n' "$repo" "$repo/scripts" "$repo/tools" "$repo/nas/butler/scripts") \
+        "$sp/ubuntu_console.pth"
+
+    local inode_before inode_after
+    inode_before="$(stat -c %i "$sp/ubuntu_console.pth")"
+    run pythonpath_pth "$repo"
+    inode_after="$(stat -c %i "$sp/ubuntu_console.pth")"
+    [ "$inode_before" = "$inode_after" ] || { echo "an identical shim was rewritten"; return 1; }
+    [[ "$output" == *"already current (skipped)"* ]]
+
+    # A STALE shim is corrected, not skipped: the comparison is on content.
+    printf '/somewhere/else\n' > "$sp/ubuntu_console.pth"
+    run pythonpath_pth "$repo"
+    grep -qx "$repo/tools" "$sp/ubuntu_console.pth"
+    grep -qx "$repo/nas/butler/scripts" "$sp/ubuntu_console.pth"
+
+    # No venv at all: said out loud rather than skipped in silence.
+    run pythonpath_pth "$TAC_TEST_TMPDIR/nowhere"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the repo import shim is skipped"* ]]
+}
