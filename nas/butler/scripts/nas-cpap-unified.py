@@ -229,7 +229,8 @@ def _fetch_cpap_data(bearer: str) -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if "-h" in args or "--help" in args:
-        print(__doc__.strip())
+        # `__doc__` is typed `str | None` even for a module that plainly has one.
+        print((__doc__ or "").strip())
         return 0
     if not USERNAME or not PASSWORD:
         print("CPAP_MYAIR_USERNAME and CPAP_MYAIR_PASSWORD required", file=sys.stderr)

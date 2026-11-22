@@ -61,7 +61,8 @@ def env_value(name, cache_path):
 
 def main(argv):
     if "-h" in argv[1:] or "--help" in argv[1:]:
-        print(__doc__.strip())
+        # `__doc__` is typed `str | None` even for a module that plainly has one.
+        print((__doc__ or "").strip())
         return 0
     if len(argv) != 5:
         sys.stderr.write("usage: %s <config.json> <state-db> <gateway-state> <cache-file>\n" % argv[0])

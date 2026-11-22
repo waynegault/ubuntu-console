@@ -72,7 +72,8 @@ def _search_criteria() -> str:
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if "-h" in args or "--help" in args:
-        print(__doc__.strip())
+        # `__doc__` is typed `str | None` even for a module that plainly has one.
+        print((__doc__ or "").strip())
         return 0
     host = _env("CPAP_MYAIR_OTP_IMAP_HOST", "outlook.office365.com")
     port = int(_env("CPAP_MYAIR_OTP_IMAP_PORT", "993"))

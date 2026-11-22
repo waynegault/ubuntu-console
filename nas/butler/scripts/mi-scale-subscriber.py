@@ -84,7 +84,8 @@ def main(argv: list[str] | None = None) -> None:
     """Connect, subscribe and loop until SIGTERM/SIGINT."""
     args = sys.argv[1:] if argv is None else argv
     if "-h" in args or "--help" in args:
-        print(__doc__.strip())
+        # `__doc__` is typed `str | None` even for a module that plainly has one.
+        print((__doc__ or "").strip())
         return
     # Deferred from module scope so importing this file has no side effect (the NAS
     # path is unwritable elsewhere), and so write_shared's directory exists first.
