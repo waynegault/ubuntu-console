@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 151
+# Module Version: 152
+#   v152 (2026-11-22): the clock term gains its LEVEL half, and both thresholds are calibrated
+#       from this chassis's own clocks.log (3525 loaded samples: util>=50%, pwr>=15W; 30 s
+#       cadence over 18 days).  Steadiness alone passes the Modern Standby clamp, which holds a
+#       perfectly steady 663-942 MHz — and this box's idle card really does read 656 of 3003 MHz
+#       (state 0,21), so a trend-only term would certify a third of the throughput as comparable.
+#       The level is median SM clock as a percentage of median clocks.max.sm, with a 60% floor:
+#       loaded rows sit at p50 79% / p95 84% of max, the clamp at 22-31%, and 60% is the elbow
+#       (3.1% of loaded samples below it; 65% would demote 17.9%, 70% would demote 30.1%).
+#       The 10% drift tolerance is likewise just above the measured p95 of 9.2% at a 3-minute
+#       window — looser still at this term's 2.5 s one.  Medians are now TRUE medians (the
+#       middle pair averaged for an even count), matching the statistics the bounds came from.
+#       Both bounds are inclusive, and `floor` outranks `trend`.
 #   v151 (2026-11-22): the clock-plateau term.  A certified tps is only comparable to another
 #       row when the card held a steady clock; the position-drift and SW-thermal terms catch a
 #       collapse and a FLAGGED throttle, but neither sees a card still ramping — measured
@@ -10,8 +22,13 @@
 #       first and second half, so oscillation under a power limit passes and a monotonic ramp
 #       does not; a trending card is stamped INDICATIVE, and an unreadable clocks.sm is
 #       skipped rather than demoted (a box with no SM clock cannot be judged by one).
+#       A SECOND term from the same window is the LEVEL: steadiness alone passes the Modern
+#       Standby clamp, which holds a perfectly steady 663-942 MHz while certifying a third of
+#       the throughput.  Both thresholds were calibrated from this chassis's own clocks.log
+#       (3525 loaded samples, 18 days): loaded level p50 79% of max, standby 22-31%; half-median
+#       drift p50 1.4%, p95 9.2%.
 #       Knobs: AUTOTUNE_PLATEAU_SAMPLES (6), AUTOTUNE_PLATEAU_INTERVAL_S (0.5),
-#       AUTOTUNE_PLATEAU_TOL_PCT (10).
+#       AUTOTUNE_PLATEAU_TOL_PCT (10), AUTOTUNE_CLOCK_FLOOR_PCT (60).
 #   v150 (2026-11-21): two fixes from row 8 live autotune on RTX Spark:
 #   (1) Sticky _meas_collapse false-positive guard: a transient mid-sweep dip (e.g. laptop
 #       thermal/power throttle during beam search) set _meas_collapse=1 and never re-evaluated
@@ -1021,37 +1038,68 @@ __autotune_position_drift() {
 # first and second half, so oscillation around a plateau (normal under a power limit) passes
 # while a monotonic ramp does not; a max-min spread would fail the former, which is every
 # healthy run on a laptop.
+#
+# TWO facts are read from one window, because steadiness and LEVEL fail differently: a card
+# clamped by Modern Standby holds a perfectly steady 663-942 MHz and would pass a trend-only
+# term while certifying a third of its throughput.  Both thresholds are calibrated from this
+# chassis's own clocks.log (3525 loaded samples: util>=50%, pwr>=15W; 30 s cadence, 18 days):
+#   level   p50 2385 MHz of 3003 max = 79%, p95 84%, and the standby clamp 22-31%;
+#   drift   half-median over 6 loaded samples p50 1.4%, p90 6.6%, p95 9.2%.
+# 10% drift is just above normal oscillation at a 3-MINUTE window and looser at this term's
+# 2.5 s one; a 60% floor sits at the elbow of the level distribution (3.1% of loaded samples
+# fall below it, where 65% demotes 17.9% and 70% demotes 30.1%).
 AUTOTUNE_PLATEAU_SAMPLES="${AUTOTUNE_PLATEAU_SAMPLES:-6}"
 AUTOTUNE_PLATEAU_INTERVAL_S="${AUTOTUNE_PLATEAU_INTERVAL_S:-0.5}"
 AUTOTUNE_PLATEAU_TOL_PCT="${AUTOTUNE_PLATEAU_TOL_PCT:-10}"
+AUTOTUNE_CLOCK_FLOOR_PCT="${AUTOTUNE_CLOCK_FLOOR_PCT:-60}"
 
-# __autotune_clock_trend <smi> — SM-clock drift between the two halves of a sample window.
-# Prints the drift percentage on stdout.  Exit 0 = plateaued, 1 = still trending (the row is
-# not comparable), 2 = clocks.sm unreadable — no nvidia-smi, or a driver that does not expose
-# it — which is a different fact from a moving clock, so the caller does not demote on it.
-__autotune_clock_trend() {
-    local smi="${1:-nvidia-smi}" n="$AUTOTUNE_PLATEAU_SAMPLES" i value half
-    local -a _clock_samples=()
+# __autotune_clock_state <smi> — the two clock facts a certification needs, from ONE window.
+# Prints "<half-median drift pct>,<median SM clock as pct of median max>" on stdout.  Exit 0
+# when readable, 2 when clocks.sm/clocks.max.sm are not (no driver, or the field is unexposed)
+# — a different fact from either a trend or a clamp, so the caller demotes on neither.
+__autotune_clock_state() {
+    local smi="${1:-nvidia-smi}" n="$AUTOTUNE_PLATEAU_SAMPLES" i value sm maxv half
+    local -a _clock_sm=() _clock_max=()
     half=$(( n / 2 ))
-    (( half > 0 )) || { printf '0'; return 2; }   # 2 = no window to judge a trend from
+    (( half > 0 )) || { printf '0,0'; return 2; }   # 2 = no window to judge from
     for (( i = 0; i < n; i++ )); do
         # swallow-ok: an unreadable clock is reported by the rc-2 branch below, not by the driver's stderr
-        value=$("$smi" --query-gpu=clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-        [[ "$value" =~ ^[0-9]+$ ]] || return 2   # 2 = clocks.sm unreadable (no driver, or not exposed)
-        _clock_samples+=("$value")
+        value=$("$smi" --query-gpu=clocks.sm,clocks.max.sm --format=csv,noheader,nounits 2>/dev/null \
+            | head -1 | tr -d ' ')
+        sm="${value%%,*}"; maxv="${value#*,}"
+        [[ "$sm" =~ ^[0-9]+$ && "$maxv" =~ ^[0-9]+$ ]] || return 2   # 2 = clocks unreadable
+        _clock_sm+=("$sm"); _clock_max+=("$maxv")
         if (( i < n - 1 )); then sleep "$AUTOTUNE_PLATEAU_INTERVAL_S"; fi
     done
-    local first second hi drift
-    first=$(printf '%s\n' "${_clock_samples[@]:0:half}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
-    second=$(printf '%s\n' "${_clock_samples[@]:half}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
+    local first second hi drift sm_med max_med pct
+    # True median (the middle pair averaged for an even count), matching the statistics the
+    # thresholds were calibrated from — a lower-median would read a 6-sample window ~2% low.
+    local med_awk='{a[NR]=$1} END{n=NR; print int(n%2 ? a[(n+1)/2] : (a[n/2]+a[n/2+1])/2)}'
+    first=$(printf '%s\n' "${_clock_sm[@]:0:half}" | sort -n | awk "$med_awk")
+    second=$(printf '%s\n' "${_clock_sm[@]:half}" | sort -n | awk "$med_awk")
     [[ "$first" =~ ^[0-9]+$ && "$second" =~ ^[0-9]+$ ]] || return 2   # 2 = medians unreadable
     hi=$first
     if (( second > hi )); then hi=$second; fi
-    (( hi > 0 )) || { printf '0'; return 0; }
-    drift=$(( (first > second ? first - second : second - first) * 100 / hi ))
-    printf '%d' "$drift"
-    if (( drift <= AUTOTUNE_PLATEAU_TOL_PCT )); then return 0; fi
-    return 1
+    drift=0
+    if (( hi > 0 )); then drift=$(( (first > second ? first - second : second - first) * 100 / hi )); fi
+    sm_med=$(printf '%s\n' "${_clock_sm[@]}" | sort -n | awk "$med_awk")
+    max_med=$(printf '%s\n' "${_clock_max[@]}" | sort -n | awk "$med_awk")
+    pct=0
+    if [[ "$max_med" =~ ^[0-9]+$ ]] && (( max_med > 0 )); then pct=$(( sm_med * 100 / max_med )); fi
+    printf '%d,%d' "$drift" "$pct"
+}
+
+# __autotune_clock_verdict <drift pct> <pct of max> — the certification's clock verdict.
+# `floor` outranks `trend`: a card at a third of its clock is the more useful fact, and it is
+# what the 2026-11-04 standby rows looked like (663-942 MHz, 3.3x slower at c=1).  A floor
+# pct of exactly the bound PASSES, as does a drift of exactly the tolerance — the bounds are
+# inclusive, so a boundary value never demotes a row on rounding alone.
+__autotune_clock_verdict() {
+    local drift="${1:-}" ofmax="${2:-}"
+    if [[ ! "$drift" =~ ^[0-9]+$ || ! "$ofmax" =~ ^[0-9]+$ ]]; then printf 'unknown'; return 0; fi
+    if (( ofmax < AUTOTUNE_CLOCK_FLOOR_PCT )); then printf 'floor'; return 0; fi
+    if (( drift > AUTOTUNE_PLATEAU_TOL_PCT )); then printf 'trend'; return 0; fi
+    printf 'ok'
 }
 
 echo "============================================="
@@ -3486,17 +3534,29 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 echo "  SW Thermal Slowdown is ACTIVE at certification — stamping this row INDICATIVE"
                 _meas_state="indicative"
             fi
-            # v151: the thermal bit above says the driver FLAGGED a slowdown; this says the
-            # clock was still MOVING, which is the case that produced row 8's 3.94 tps sample.
-            _clock_trend_pct=$(__autotune_clock_trend nvidia-smi)
-            case "$?" in
-                0) ;;
-                1) echo "  SM clock still trending ${_clock_trend_pct}% between the halves of its" \
-                        "sample window (tolerance ${AUTOTUNE_PLATEAU_TOL_PCT}%) — stamping this row"
-                   echo "  INDICATIVE: the card was not at a steady clock, so the number is not comparable."
-                   _meas_state="indicative" ;;
-                *) echo "  clocks.sm could not be read — the clock-plateau term is skipped for this row" ;;
-            esac
+            # v151: the thermal bit above says the driver FLAGGED a slowdown; these say the clock
+            # was MOVING (row 8's 3.94 tps sample) or far below its own maximum (the Modern
+            # Standby clamp, which is perfectly steady at 663-942 MHz and 3.3x slower at c=1).
+            _clock_state=$(__autotune_clock_state nvidia-smi)
+            if [[ $? -eq 0 ]]
+            then
+                IFS=, read -r _clock_trend_pct _clock_of_max <<< "$_clock_state"
+                case "$(__autotune_clock_verdict "$_clock_trend_pct" "$_clock_of_max")" in
+                    floor) echo "  SM clock is ${_clock_of_max}% of its maximum — below the" \
+                                "${AUTOTUNE_CLOCK_FLOOR_PCT}% floor — stamping this row INDICATIVE:"
+                           echo "  the card was clamped, so the number is a measurement of the clamp,"
+                           echo "  not of the configuration."
+                           _meas_state="indicative" ;;
+                    trend) echo "  SM clock still trending ${_clock_trend_pct}% between the halves of its sample"
+                           echo "  window (tolerance ${AUTOTUNE_PLATEAU_TOL_PCT}%) — stamping this row INDICATIVE:"
+                           echo "  the card was not at a steady clock, so the number is not comparable."
+                           _meas_state="indicative" ;;
+                    # ok, and unknown (the rc-2 path already reported an unreadable clock)
+                    *) ;;
+                esac
+            else
+                echo "  clocks.sm could not be read — the clock terms are skipped for this row"
+            fi
         fi
         if ! __autotune_task_quality_check; then
             __autotune_quality_error "task-quality contract was not verified — the winner was NOT saved"

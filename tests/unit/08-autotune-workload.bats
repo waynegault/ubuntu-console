@@ -1160,62 +1160,98 @@ STUB
     [[ "$src" == *'_thr_init="$LLAMA_CPU_THREADS_BASE"'* ]]
 }
 
-@test "3c: the clock-plateau term passes a steady card and demotes a trending one" {
+@test "3c: the clock terms pass a steady loaded card and demote a trending or clamped one" {
     # v151.  Row 8's mid-sweep 8.10 -> 3.94 dip was an honest reading of a MOVING clock, and
-    # neither the position term nor the SW-thermal bit saw it (the bit was clear at 8.05).
-    # The term compares half-window MEDIANS, because oscillation under a power limit is normal
-    # and a max-min spread would demote every healthy laptop run.
-    eval "$(sed -n '/^__autotune_clock_trend()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
-    declare -f __autotune_clock_trend >/dev/null
+    # neither the position term nor the SW-thermal bit saw it (the bit was clear at 8.05).  A
+    # second term reads the LEVEL, because the Modern Standby clamp is perfectly steady and
+    # would pass a trend-only gate at a third of the throughput (2026-11-04 rows A3 vs A3R).
+    # Drift compares half-window MEDIANS: oscillation under a power limit is normal and a
+    # max-min spread would demote every healthy laptop run.
+    eval "$(sed -n '/^__autotune_clock_state()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    eval "$(sed -n '/^__autotune_clock_verdict()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    declare -f __autotune_clock_state >/dev/null
+    declare -f __autotune_clock_verdict >/dev/null
 
     AUTOTUNE_PLATEAU_SAMPLES=6
     AUTOTUNE_PLATEAU_INTERVAL_S=0
     AUTOTUNE_PLATEAU_TOL_PCT=10
+    AUTOTUNE_CLOCK_FLOOR_PCT=60
 
     local stub="$BATS_TEST_TMPDIR/smi"
     cat > "$stub" <<'EOF'
 #!/usr/bin/env bash
-printf '2411\n'
+printf '2400, 3003\n'
 EOF
     chmod +x "$stub"
-    run __autotune_clock_trend "$stub"
-    [[ "$status" -eq 0 ]] || { echo "a steady 2411 MHz card must pass (rc=$status out=$output)"; return 1; }
-    [[ "$output" == "0" ]] || { echo "a steady card's drift must be 0, got $output"; return 1; }
+    run __autotune_clock_state "$stub"
+    [[ "$status" -eq 0 ]] || { echo "a steady loaded card must be readable (rc=$status out=$output)"; return 1; }
+    [[ "$output" == "0,79" ]] || { echo "steady 2400 of 3003 must read drift 0 / level 79, got $output"; return 1; }
+    [[ "$(__autotune_clock_verdict 0 79)" == "ok" ]] || { echo "0/79 must certify"; return 1; }
 
-    # A monotonic ramp: halves 900 vs 1500 MHz = 40% drift.
+    # THE OBSERVED CLAMP, as it actually reads on this box: steady at 656 of 3003 (level 21).
+    # A trend-only term passes this; the level term is what stops it.
+    cat > "$stub" <<'EOF'
+#!/usr/bin/env bash
+printf '656, 3003\n'
+EOF
+    chmod +x "$stub"
+    run __autotune_clock_state "$stub"
+    [[ "$output" == "0,21" ]] || { echo "a clamped 656 of 3003 must read 0,21, got $output"; return 1; }
+    [[ "$(__autotune_clock_verdict 0 21)" == "floor" ]] || { echo "level 21 must be demoted as floor"; return 1; }
+
+    # A monotonic ramp from the clamp upward: halves 900 vs 1500 MHz = 40% drift, level median
+    # 1200/3003 = 39%.  BOTH terms fire, and `floor` outranks `trend` — the clamp is the better
+    # explanation of a row at a third of its clock than "the clock moved".
     cat > "$stub" <<'EOF'
 #!/usr/bin/env bash
 n=$(cat "$SEQ_N" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$SEQ_N"
-sed -n "${n}p" "$SEQ_FILE"
+clk=$(sed -n "${n}p" "$SEQ_FILE")
+printf '%s, 3003\n' "$clk"
 EOF
     chmod +x "$stub"
     export SEQ_N="$BATS_TEST_TMPDIR/n" SEQ_FILE="$BATS_TEST_TMPDIR/seq"
     printf '700\n900\n1100\n1300\n1500\n1700\n' > "$SEQ_FILE"
-    run __autotune_clock_trend "$stub"
-    [[ "$status" -eq 1 ]] || { echo "a 700->1700 ramp must be demoted (rc=$status out=$output)"; return 1; }
-    [[ "$output" == "40" ]] || { echo "the ramp's half-median drift must read 40, got $output"; return 1; }
+    run __autotune_clock_state "$stub"
+    [[ "$status" -eq 0 ]] || { echo "a readable ramp must return 0 (rc=$status out=$output)"; return 1; }
+    [[ "$output" == "40,39" ]] || { echo "the ramp must read drift 40 / level 39, got $output"; return 1; }
+    [[ "$(__autotune_clock_verdict 40 39)" == "floor" ]] || { echo "level 39 must outrank the trend as floor"; return 1; }
+
+    # The row-8 shape: a card LOSING clock to heat while still well above the floor
+    # (2700 -> 2200, halves 2650 vs 2300 = 13%, level 2500/3003 = 83%).
+    printf '2700\n2650\n2600\n2400\n2300\n2200\n' > "$SEQ_FILE"
+    : > "$SEQ_N"
+    run __autotune_clock_state "$stub"
+    [[ "$output" == "13,83" ]] || { echo "a 2700->2200 ramp must read 13,83, got $output"; return 1; }
+    [[ "$(__autotune_clock_verdict 13 83)" == "trend" ]] || { echo "drift 13 at level 83 must be a trend"; return 1; }
 
     # Oscillation around a plateau is NOT a trend (2300/2500/2400 in both halves).
     printf '2300\n2500\n2400\n2400\n2500\n2300\n' > "$SEQ_FILE"
     : > "$SEQ_N"
-    run __autotune_clock_trend "$stub"
-    [[ "$status" -eq 0 ]] || { echo "oscillation around a plateau must pass (rc=$status out=$output)"; return 1; }
-    [[ "$output" == "0" ]] || { echo "oscillation drift must be 0, got $output"; return 1; }
+    run __autotune_clock_state "$stub"
+    [[ "$output" == "0,79" ]] || { echo "oscillation around a plateau must read 0,79, got $output"; return 1; }
 
-    # A driver that does not expose clocks.sm is a DIFFERENT fact from a moving clock.
+    # The bounds are INCLUSIVE: exactly 10% drift and exactly 60% level both certify, so a
+    # boundary value cannot demote a row on rounding.
+    [[ "$(__autotune_clock_verdict 10 60)" == "ok" ]] || { echo "the bounds must be inclusive"; return 1; }
+    [[ "$(__autotune_clock_verdict 11 60)" == "trend" ]]
+    [[ "$(__autotune_clock_verdict 0 59)" == "floor" ]]
+    [[ "$(__autotune_clock_verdict '' 79)" == "unknown" ]]
+
+    # A driver that does not expose the clocks is a DIFFERENT fact from a moving or clamped one.
     cat > "$stub" <<'EOF'
 #!/usr/bin/env bash
-printf '[N/A]\n'
+printf '[N/A], [N/A]\n'
 EOF
     chmod +x "$stub"
-    run __autotune_clock_trend "$stub"
+    run __autotune_clock_state "$stub"
     [[ "$status" -eq 2 ]] || { echo "an unreadable clock must return 2, not demote (rc=$status)"; return 1; }
 
-    # WIRING: the term runs at certification, and only a trend demotes the row.
+    # WIRING: both terms run at certification and both demote the row.
     local src
     src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
-    [[ "$src" == *'__autotune_clock_trend nvidia-smi'* ]]
-    [[ "$src" == *'the card was not at a steady clock'* ]]
+    [[ "$src" == *'__autotune_clock_state nvidia-smi'* ]]
+    [[ "$src" == *'was not at a steady clock'* ]]
+    [[ "$src" == *'the card was clamped'* ]]
 }
 
 @test "3c: a collapsed row exits 3 BEFORE the profile save" {
