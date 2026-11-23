@@ -13,7 +13,7 @@
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # version header, as in tactical-console.bats: read by
 #                             # people and by git history, not by the file.
-VERSION="1.1"
+VERSION="1.2"
 
 # ==============================================================================
 # SETUP — File-level constants only
@@ -81,6 +81,25 @@ __fast_member_shellcheck() {
     return "$(cat "$rc_file")"
 }
 
+# __require_population <label> <path...> — fail when a case's population is empty.
+#
+# A glob that matches nothing stays LITERAL, so `[[ -f "$f" ]] || continue` turns a case into
+# zero assertions and a pass. Measured 2026-11-23: a copy of this suite run outside its repo
+# reported 18 cases green, every one of them a loop that never iterated, a grep that could not
+# read its target, or a ceiling-only ratchet reading 0. The guard in setup_file stops the
+# tree-less copy; this stops the same shape when a directory is renamed or emptied while the
+# tree is otherwise present, which is the case a green suite would otherwise hide.
+__require_population() {
+    local label="$1"
+    shift
+    local p
+    for p in "$@"; do
+        [[ -e "$p" ]] && return 0
+    done
+    echo "no population for '$label': none of $* exists" >&3
+    return 1
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. SUITE SELF-CHECK
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,6 +138,7 @@ __fast_member_shellcheck() {
 }
 
 @test "bash -n: all bin/*.sh scripts parse without syntax errors" {
+    __require_population "bin scripts" "$REPO_ROOT"/bin/*.sh
     for f in "$REPO_ROOT"/bin/*.sh; do
         [[ -f "$f" ]] || continue
         run bash -n "$f"
@@ -127,6 +147,7 @@ __fast_member_shellcheck() {
 }
 
 @test "bash -n: all scripts/*.sh parse without syntax errors" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
         run bash -n "$f"
@@ -244,6 +265,12 @@ __fast_member_shellcheck() {
     # The pattern is bracketed (`disabl[e]=`) ON PURPOSE: written literally, this
     # test's own grep arguments match themselves and inflate every count — which is
     # exactly what the first version did (7 bats, not 4).
+    #
+    # A ceiling alone cannot fail on an empty population: with no tree both counts read 0 and
+    # the ratchet passes, which is how this case was one of the 18 green in a tree-less copy
+    # (measured 2026-11-23). The floors below make the count a measurement of something.
+    __require_population "shell files" "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/bin/*.sh
+    __require_population "bats suites" "$REPO_ROOT"/tests/*.bats
     local shell_count bats_count bare
     shell_count=$(grep -r --include='*.sh' --include='*.bashrc' '# shellcheck disabl[e]=' \
         "$REPO_ROOT"/scripts "$REPO_ROOT"/bin "$REPO_ROOT"/tools "$REPO_ROOT"/install.sh 2>/dev/null | wc -l)
@@ -388,6 +415,7 @@ __fast_member_shellcheck() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "hygiene: all scripts end with # end of file marker" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
@@ -403,6 +431,7 @@ __fast_member_shellcheck() {
 }
 
 @test "hygiene: no carriage returns in any script" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
@@ -416,6 +445,7 @@ __fast_member_shellcheck() {
 }
 
 @test "hygiene: no tabs in core scripts" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
@@ -429,6 +459,7 @@ __fast_member_shellcheck() {
 }
 
 @test "hygiene: no lines exceed 200 characters in core scripts" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     # Advisory check: reports long lines but deliberately does NOT fail the
     # suite. UI formatting lines (box-drawing, tabular output) and complex jq
     # pipelines are display-oriented and intentionally exceed the limit.
@@ -448,6 +479,7 @@ __fast_member_shellcheck() {
 }
 
 @test "hygiene: no UTF-8 BOM in any script" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
@@ -461,6 +493,7 @@ __fast_member_shellcheck() {
 }
 
 @test "hygiene: each module has # shellcheck shell=bash at line 1" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
         # Utility scripts (16+) are standalone executables with shebangs; skip
@@ -474,6 +507,7 @@ __fast_member_shellcheck() {
 }
 
 @test "hygiene: all modules have a Module Version comment" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     local missing=0
     local f
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/09b-gog.sh; do
@@ -487,6 +521,7 @@ __fast_member_shellcheck() {
 }
 
 @test "hygiene: module versions follow # Module Version: N pattern" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
         grep -qP '^# Module Version: \d+' "$f"
@@ -495,14 +530,18 @@ __fast_member_shellcheck() {
 
 @test "hygiene: no TODO or FIXME in core modules (or explicitly tracked)" {
     # Allow explicit TODO markers that are documented in inspection.md
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     run grep -rn 'TODO\|FIXME' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
         "$REPO_ROOT"/bin/*.sh \
         "$PROFILE_PATH"
-    [ "$status" -ne 0 ]
+    # 1 is "no match", which is the pass condition. 2 is "could not read a target" and must
+    # NOT read as clean: `-ne 0` accepted both, so a missing tree passed this case.
+    [ "$status" -eq 1 ]
 }
 
 @test "hygiene: no shell scripts use echo -e outside comments" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$PROFILE_PATH"; do
@@ -518,6 +557,7 @@ __fast_member_shellcheck() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "cross-script: all scripts have VERSION variable or Module Version comment" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
         grep -qE 'VERSION=|^# Module Version:' "$f"
@@ -525,6 +565,7 @@ __fast_member_shellcheck() {
 }
 
 @test "cross-script: all scripts have AI INSTRUCTION comment" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
         grep -q 'AI INSTRUCTION' "$f"
@@ -546,6 +587,7 @@ __fast_member_shellcheck() {
 }
 
 @test "loader: shared list covers every numbered module (drift guard)" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     # A numbered module added to scripts/ but missing from _module-list.sh
     # would load in neither the profile nor env.sh — catch that here.
     # 18-lint.sh is a standalone utility, not a profile module.
@@ -617,6 +659,7 @@ __fast_member_shellcheck() {
 }
 
 @test "bin: all oc-* wrappers use tac-exec" {
+    __require_population "oc-* wrappers" "$REPO_ROOT"/bin/oc-*
     for f in "$REPO_ROOT"/bin/oc-*; do
         [[ -f "$f" ]] || continue
         grep -q 'tac-exec' "$f"
@@ -635,6 +678,7 @@ __fast_member_shellcheck() {
 }
 
 @test "bin: all oc-* wrappers resolve tac-exec relative to the wrapper path" {
+    __require_population "oc-* wrappers" "$REPO_ROOT"/bin/oc-*
     local f
     for f in "$REPO_ROOT"/bin/oc-*; do
         [[ -f "$f" ]] || continue
