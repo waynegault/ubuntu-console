@@ -10,6 +10,15 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 10
+#   v10 (2026-11-23): the store's 150-char index line is now ENFORCED here, not asked for in the
+#   writer's prompt.  The extractor chooses a note's `name:` without ever seeing the line it will
+#   occupy, and the budget is per note (116 - len(rel)), so payload v8 clause (8)'s flat "under 60
+#   characters" is both too strict for a short path and too loose for a long one -- measured
+#   2026-11-23, 44 over-budget names in one wave and one more written after the repair pass.  The
+#   fixer calls tools/shorten-note-names.py, which already owns the arithmetic, the word-boundary
+#   cut, the uniqueness rule and the index re-render, and runs BEFORE the lint so MD041's H1 is
+#   taken from the shortened name rather than the old one.
 # Module Version: 9
 #   v9 (2026-11-09): the §18.3 rises v8 added are cleared at source, not re-baselined — the two
 #   MD047 read-back tests are `[[ … ]]` (6.7 107 -> 107) and the awk invocation's swallow marker
@@ -123,6 +132,14 @@ STAMP_DIR="$QWEN_DIR/tmp"
 STAMP="$STAMP_DIR/memory-markdownlint.stamp"
 LIST="$STAMP_DIR/.memory-markdownlint.files.$$"
 MAX_LINES=20
+
+# The name-budget fixer shells out to the store's own shortener; resolved rather than assumed so a
+# box without python3 on PATH says so instead of reporting a clean tree (same shape as LINTER).
+# No `|| true`: `command -v` is silent when it finds nothing and the `if` tests its status, which is
+# the pattern the LINTER block above already uses to avoid a swallow at the site.
+if ! PYTHON="$(command -v python3)"; then
+    PYTHON=""
+fi
 
 if [[ ! -x "$LINTER" ]]; then
     echo "memory-markdownlint: $LINTER is missing or not executable — the memory notes were NOT checked."
@@ -432,7 +449,52 @@ fix_final_newline() {
         done
 }
 
-# collect_all — every note in scope, used when there is no stamp yet.
+# -- the name-budget fixer (the store's 150-char index line) ---------------------------------
+# The extractor CHOOSES a note's frontmatter `name:`, and every index line is `- [name](rel) -- ...`
+# under a 150-char cap with a 25-char description reserve, so the name's own budget is
+# 116 - len(rel) -- a number the writer cannot know, because it never sees the line it will occupy.
+# Measured 2026-11-23: 44 over-budget names arrived in one wave (16 + 12 + 8 + 3 + 5 across five
+# stores) and one more was written after that repair pass, while payload v8 clause (8) asks the
+# model for "under 60 characters" and did not hold -- the same exhaustion that moved MD049, MD041,
+# MD032 and MD047 into the fixers above.  A flat clause cannot express this rule either: 60 is too
+# strict for a short path and too loose for a long one.
+#
+# tools/shorten-note-names.py already owns the arithmetic, the word-boundary cut with its dangling
+# connective rule, the uniqueness collision handling and the index re-render, so this calls it
+# rather than re-deriving any of the four in shell.  It is idempotent: a clean store costs one scan
+# and prints nothing.
+fix_name_budget() {
+    if [[ -z "$PYTHON" ]] || [[ ! -x "$PYTHON" ]]; then
+        echo "memory-markdownlint: python3 is missing from PATH -- note names were NOT held to" \
+            "their budget."
+        return
+    fi
+    if [[ ! -f "$QWEN_DIR/tools/shorten-note-names.py" ]]; then
+        echo "memory-markdownlint: tools/shorten-note-names.py is missing -- note names were NOT" \
+            "held to their budget."
+        return
+    fi
+    local store out rc
+    for store in memories projects/*/memory; do
+        [[ -f "$store/MEMORY.md" ]] || continue
+        # Only stores with a changed note: the tool scans the whole store, and most turns touch none.
+        grep -qF "$store/" "$LIST.keep" || continue
+        out="$(cd "$QWEN_DIR" && PYTHONPATH="$QWEN_DIR" "$PYTHON" \
+            tools/shorten-note-names.py --store "$store" --apply 2>&1)"
+        rc=$?
+        if [[ "$rc" -ne 0 ]]; then
+            echo "memory-markdownlint: REFUSED to enforce the name budget in $store --" \
+                "the shortener exited $rc:"
+            printf '%s\n' "$out" | head -n 5
+        elif printf '%s\n' "$out" | grep -q '^rewrote '; then
+            # The tool's own count is the evidence, quoted rather than restated.
+            echo "memory-markdownlint: FIXED the name budget in $store -- $(printf '%s\n' "$out" |
+                grep '^rewrote ' | tail -n 1)"
+        fi
+    done
+}
+
+# collect_all -- every note in scope, used when there is no stamp yet.
 collect_all() {
     find memories -type f -name '*.md' -not -name 'MEMORY.md'
     find projects -type f -name '*.md' -path '*/memory/*' -not -name 'MEMORY.md' \
@@ -472,6 +534,10 @@ if [[ "$checked" -eq 0 ]]; then
     rm -f "$LIST.keep"
     exit 0
 fi
+
+# Before the lint, not after it: MD041 takes its H1 from the frontmatter name, so a name shortened
+# after the shape fixers ran would leave an H1 built from the old one.
+fix_name_budget
 
 report="$(xargs -d '\n' -a "$LIST.keep" "$LINTER" --config "$CONFIG" 2>&1)"
 status=$?

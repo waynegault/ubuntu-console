@@ -34,7 +34,16 @@ setup() {
         skip "markdownlint is not installed on this box, so the hook cannot be exercised"
     fi
     FIX="$BATS_TEST_TMPDIR/home"
-    mkdir -p "$FIX/.qwen/memories" "$FIX/.qwen/tmp"
+    mkdir -p "$FIX/.qwen/memories" "$FIX/.qwen/tmp" "$FIX/.qwen/tools"
+    # v10: the hook enforces the store's name budget through the store's own shortener, so the
+    # fixture needs those two files.  They live with the store (~/.qwen/tools), not in this repo,
+    # so a box without them cannot exercise the hook at all -- say that rather than pass.
+    for tool in note_name_budget.py shorten-note-names.py; do
+        if [[ ! -f "$HOME/.qwen/tools/$tool" ]]; then
+            skip "the store's tools/$tool is not installed, so the hook cannot be exercised"
+        fi
+        cp "$HOME/.qwen/tools/$tool" "$FIX/.qwen/tools/$tool"
+    done
     # MD049 for the emphasis fixer, plus the two shape rules its v5 fixers claim (MD041/MD032).  The
     # set stays explicit so a failure here cannot be some other rule's fix leaking in.
     cat > "$FIX/.qwen/.markdownlint.jsonc" <<'JSONC'
@@ -187,6 +196,54 @@ fail_mv() {
     [[ "$output" == *"REFUSED to fix emphasis"* ]]
     [[ "$output" != *"FIXED emphasis"* ]]
     [ "$(sha256sum "$FIX/.qwen/memories/note.md")" = "$before" ]
+}
+
+# ── v10: the name budget (the store's 150-char index line) ───────────────────────────────────
+# The expectation comes from the store's own rule, not from the fixer: an index line is
+# `- [name](rel) — description` under 150 chars with a 25-char description reserve, so the name's
+# budget is 116 - len(rel).  The fixture's path is 58 chars, so its budget is 58 and a 73-char name
+# overflows it by 15 -- the exact shape measured 2026-11-23.
+LONG_REL="memories/reference/qwen-gate-read-head-not-the-worktree-2.md"
+LONG_NAME="The store gate reds on HEAD, so a run before the commit is a false green"
+
+write_long_note() {
+    mkdir -p "$FIX/.qwen/memories/reference"
+    printf -- '---\nname: %s\ndescription: Measured in the test.\ntype: reference\ncategory: common_pitfall\nkeywords:\n  - "a keyword"\nusage_scenarios:\n  - "a scenario"\n---\n\n# %s\n\nBody.\n' \
+        "$LONG_NAME" "$LONG_NAME" > "$FIX/.qwen/$LONG_REL"
+    printf -- '- [%s](reference/qwen-gate-read-head-not-the-worktree-2.md) — Measured in the test.\n' \
+        "$LONG_NAME" > "$FIX/.qwen/memories/MEMORY.md"
+}
+
+@test "memory lint hook: an over-budget name is SHORTENED and its index line re-rendered" {
+    write_long_note
+    # The fixture really is over budget before the fix: 73 chars against 116 - 58 = 58.
+    [ "${#LONG_NAME}" -gt 58 ]
+
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"FIXED the name budget in memories"* ]]
+
+    new_name="$(sed -n 's/^name:[[:space:]]*//p' "$FIX/.qwen/$LONG_REL" | head -n 1)"
+    [ "${#new_name}" -le 58 ]
+    # The index line follows the note: a shortened name with a stale index line is the defect the
+    # store's own cap case reports, so the fix is only done when both moved.
+    grep -qF "](${LONG_REL#memories/})" "$FIX/.qwen/memories/MEMORY.md"
+    grep -qF "[$new_name]" "$FIX/.qwen/memories/MEMORY.md"
+    ! grep -qF "[$LONG_NAME]" "$FIX/.qwen/memories/MEMORY.md"
+}
+
+@test "memory lint hook: a name inside its budget is left alone" {
+    write_long_note
+    short_name="A short name"
+    sed -i "s/^name: .*/name: $short_name/" "$FIX/.qwen/$LONG_REL"
+    printf -- '- [%s](reference/qwen-gate-read-head-not-the-worktree-2.md) — Measured in the test.\n' \
+        "$short_name" > "$FIX/.qwen/memories/MEMORY.md"
+    before="$(sha256sum "$FIX/.qwen/$LONG_REL")"
+
+    run run_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"FIXED the name budget"* ]]
+    [ "$(sha256sum "$FIX/.qwen/$LONG_REL")" = "$before" ]
 }
 
 # end of file
