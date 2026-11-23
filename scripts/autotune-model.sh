@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 155
+#   v155 (2026-11-23): the OOM descent is GPU FIRST.  An explicit -ngl equal to the layer
+#   count pins every layer to the card and disables --fit's adjustment, so the first remedy
+#   releases the pin to 'auto' and lets llama.cpp keep on the GPU every layer that fits.
+#   Only then does an MoE row with no placement take --n-cpu-moe 8/16/32/64/999 — partial
+#   first, because --cpu-moe is all-or-nothing.  Wayne's constraint: the row must keep
+#   working through the GPU, not slide onto the CPU.
+# Module Version: 154
+#   v154 (2026-11-23): an OOM on an MoE row with no expert placement now buys --n-cpu-moe
+#   (8 -> 16 -> 32 -> 64 -> 999) before the context descends, because a weights allocation
+#   is independent of ctx.  Row 4 (73.3 GiB NVFP4) failed cudaMalloc of 72114 MiB while the
+#   pool arithmetic called it a fit; --cpu-moe there would have been all-or-nothing, so the
+#   ladder starts partial.  Dense rows and rows already carrying --cpu-moe are untouched.
 # Module Version: 153
 #   v153 (2026-11-23): _startup_fail_type asks for an OOM witness FIRST.  A failed
 #   cudaMalloc also matches the load-failure signature, so `load_fail` won and the FA
@@ -833,6 +846,31 @@ elif (( HAS_MOE == 1 )) || [[ "${_arch,,}" == *moe* ]]; then
         echo "  placement: ${MODEL_MB} MiB MoE exceeds ${EFFECTIVE_POOL_MB} MiB pool — using --cpu-moe"
     fi
 fi
+# ── MoE expert-placement descent (row 4, 2026-11-23) ────────────────────────────
+# The placement rule above decides ONCE, from pool arithmetic.  On a shared-memory box that
+# arithmetic calls a 73.3 GiB MoE "fits" an 83 GiB host-derived pool, while the single
+# cudaMalloc for its weights is capped by the carve and fails:
+#   allocating 72114.70 MiB on device 0: cudaMalloc failed: out of memory
+# So an OOM on an MoE row that carries NO expert placement now buys one: --n-cpu-moe N, rising.
+# A dense row never reaches this, and a row already carrying --cpu-moe keeps it, so no other
+# model's measurement changes — the ladder is a fallback, not a new dimension in the sweep.
+BENCH_N_CPU_MOE=""
+# _moe_descent_next — the next --n-cpu-moe step, or non-zero when the ladder is spent.
+_moe_descent_next() {
+    local step
+    if [[ -z "$BENCH_N_CPU_MOE" ]]; then
+        step=8
+    else
+        case "$BENCH_N_CPU_MOE" in
+            8)  step=16 ;;
+            16) step=32 ;;
+            32) step=64 ;;
+            64) step=999 ;;
+            *)  return 1 ;;
+        esac
+    fi
+    printf '%s\n' "$step"
+}
 if [[ "$_HOST_AVAIL_MB" =~ ^[0-9]+$ ]]
 then
     echo "  pools: gpu ${VRAM_TOTAL} MiB (free ${FREE_VRAM}) | host avail ${_HOST_AVAIL_MB} MiB | model ${MODEL_MB} MiB"
@@ -1524,6 +1562,38 @@ _bench_spawn() {
                 _launch_server || true
                 ;;
             descend)
+                # GPU FIRST.  The row is launched with an explicit -ngl equal to its layer count,
+                # which PINS every layer to the card and stops --fit from adjusting anything, so a
+                # weights allocation larger than the carve fails outright.  Releasing the pin lets
+                # llama.cpp keep on the GPU every layer that fits and put only the remainder on the
+                # host — the GPU-heavy split, chosen by the code that knows the carve, before a
+                # single expert tensor is moved to the CPU.
+                if [[ "${BENCH_NGL:-}" != "auto" && -z "${BENCH_NGL_RELEASED:-}" ]]; then
+                    BENCH_NGL_RELEASED="${BENCH_NGL:-999}"
+                    BENCH_NGL="auto"
+                    warn "  OOM — releasing the pinned -ngl ${BENCH_NGL_RELEASED} to 'auto'" \
+                         "so the GPU keeps every layer it can"
+                    _bench_stop "$_BENCH_PID"
+                    # swallow-ok: a relaunch that fails is classified by the pass this returns into
+                    _launch_server || true
+                    return 0
+                fi
+                # ONLY THEN, and only for an MoE row with no placement yet: move experts, partial
+                # first, because --cpu-moe is all-or-nothing and would give up GPU bandwidth the
+                # row can still use.  A weights allocation does not care how large the ctx is, so
+                # this precedes the ctx descent.
+                if (( HAS_MOE == 1 )) && (( ${#BENCH_MOE_FLAG[@]} == 0 )); then
+                    local _moe_n
+                    if _moe_n="$(_moe_descent_next)"; then
+                        BENCH_N_CPU_MOE="$_moe_n"
+                        BENCH_MOE_FLAG=(--n-cpu-moe "$_moe_n")
+                        warn "  OOM — moving ${_moe_n} layers of experts to the CPU (--n-cpu-moe) and relaunching"
+                        _bench_stop "$_BENCH_PID"
+                        # swallow-ok: a relaunch that fails is classified by the pass this returns into
+                        _launch_server || true
+                        return 0
+                    fi
+                fi
                 warn "  OOM at this ctx — NOT retrying with --flash-attn off (that needs more memory); descending"
                 _bench_stop "$_BENCH_PID"
                 ;;
