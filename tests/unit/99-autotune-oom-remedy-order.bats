@@ -42,6 +42,15 @@ remedy() {
         _ "$HARness" "$1" "$2" "$3"
 }
 
+# _dflash_branch — the dflash argv branch only, ending before the next elif.
+_dflash_branch() {
+    local start next
+    start="$(grep -n 'BENCH_SPEC_TYPE:-off}" == "draft-dflash"' "$SCRIPT" | cut -d: -f1)"
+    next="$(awk -v s="$start" 'NR > s && /^        elif/ {print NR; exit}' "$SCRIPT")"
+    [[ -n "$start" && -n "$next" ]] || return 1
+    sed -n "${start},$((next - 1))p" "$SCRIPT"
+}
+
 @test "a pinned row earns a release first — the GPU keeps the layers it can" {
     [ "$(remedy 89 0 1)" = "release" ]
     # even with the expert ladder available: placement is not the first answer
@@ -72,6 +81,46 @@ remedy() {
         _ "$HARness"
     [ "$status" -eq 0 ]
     [ "$output" = "8 16 32 64 999 " ]
+}
+
+@test "draft-dflash is reachable through all four seams, or not at all" {
+    # Catches the cross-seam gap measured 2026-11-23: the argv builder emitted
+    # --spec-draft-* in exactly ONE branch (draft-mtp), and the sweep's type list
+    # named only ngram and draft-mtp, so adding the argv branch alone would have
+    # been unreachable code that still looked like a feature.
+    #
+    # The four seams a declared dflash draft must pass through:
+    #   1. the capability probe discovers it and sets HAS_DFLASH
+    #   2. the sweep's type list offers it when HAS_DFLASH=1
+    #   3. the sweep selects DFLASH_DRAFT_PATH for it, on the device
+    #   4. the argv builder emits --spec-type draft-dflash WITHOUT --spec-draft-device none
+    [ "$(grep -c 'HAS_DFLASH=1' "$SCRIPT")" -eq 1 ]
+    [ "$(grep -c 'HAS_DFLASH:-0}" == "1" ]] && _sb_types' "$SCRIPT")" -eq 1 ]
+    [ "$(grep -c '_sb_type" == "draft-dflash" &&' "$SCRIPT")" -eq 1 ]
+    [ "$(grep -c 'BENCH_SPEC_TYPE:-off}" == "draft-dflash"' "$SCRIPT")" -eq 1 ]
+    # and the dflash branch must NOT hand the draft to the CPU
+    local block
+    block="$(_dflash_branch)"
+    [ -n "$block" ]
+    # COMMENTS STRIPPED: the branch explains that it does NOT use --spec-draft-device none,
+    # and a comment is not argv.  Checking the raw block reds on the prose, not the flags.
+    ! grep -vE '^[[:space:]]*#' <<< "$block" | grep -q 'spec-draft-device none'
+}
+
+@test "a CPU draft is never emitted for a dflash row" {
+    # Wayne's standing rule: no part of a model runs on the CPU.  The generic
+    # draft branch forces --spec-draft-device none, so dflash must not fall into it.
+    local dflash_block _code
+    dflash_block="$(_dflash_branch)"
+    [ -n "$dflash_block" ]
+    # COMMENTS OUT, because a comment mentioning a flag is not a flag.
+    _code="$(grep -vE '^[[:space:]]*#' <<< "$dflash_block")"
+    # The draft goes to the DEVICE ...
+    grep -q 'spec-draft-ngl' <<< "$_code"
+    # ... and never to the CPU.  Measured 2026-11-23: the first version of this case
+    # asserted only that the branch CONTAINED spec-draft-ngl, so it passed while the
+    # branch also emitted --spec-draft-device none — a test that could not disagree.
+    ! grep -q 'spec-draft-device none' <<< "$_code"
 }
 
 @test "a rung that dies on its allocation is not a held rung" {

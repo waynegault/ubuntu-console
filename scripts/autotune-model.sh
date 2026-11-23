@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 158
+#   v158 (2026-11-23): draft-dflash is a DECLARED per-row spec type (Wayne's decision),
+#   matched to the row by NAME: "<main basename>-LiLiCorr.gguf" beside the weights, or
+#   LLM_AUTOTUNE_DFLASH_DRAFT_MODEL.  Four seams are joined — the capability probe sets
+#   HAS_DFLASH/DFLASH_DRAFT_PATH, the sweep's type list offers draft-dflash, the sweep
+#   selects it with --spec-draft-ngl 999, and the argv builder emits it.  The type was
+#   previously UNREACHABLE: --spec-draft-* was emitted in one branch only (draft-mtp) and
+#   the type list named only ngram/draft-mtp.  The dflash branch never emits
+#   --spec-draft-device none, because no part of a model may run on the CPU.
 # Module Version: 157
 #   v157 (2026-11-23): a remedy rung must SURVIVE to count.  The v156 arm tested
 #   `_launch_server && ! _startup_load_fail`, so a rung that launched, reported no load
@@ -785,6 +794,34 @@ __autotune_file_capabilities() {
             fi
         fi
     fi
+    # ── dflash: DECLARED per row, matched to the row by NAME (2026-11-23) ────────
+    # Wayne's decision: declared per row, matching draft only.  A dflash draft is a
+    # SEPARATE GGUF beside the main file, conventionally "<main basename>-LiLiCorr.gguf",
+    # held on the DEVICE at --spec-draft-ngl 999 (1.26 GiB for the 120B).  It is offered
+    # only where the row's own file has that sidecar -- never to a row that merely has
+    # some draft lying around, because the flags change every measurement of that row.
+    HAS_DFLASH=0
+    DFLASH_DRAFT_PATH=""
+    local _df_cand="${LLM_AUTOTUNE_DFLASH_DRAFT_MODEL:-}"
+    if [[ -z "$_df_cand" ]]; then
+        case "$file" in
+            *.gguf) _df_cand="${file%.gguf}-LiLiCorr.gguf" ;;
+            *)      _df_cand="" ;;
+        esac
+    fi
+    if [[ -n "$_df_cand" ]]; then
+        local _df_path=""
+        if [[ "$_df_cand" == /* ]]; then
+            _df_path="$_df_cand"
+        elif [[ -n "${LLAMA_MODEL_DIR:-}" && -f "$LLAMA_MODEL_DIR/$_df_cand" ]]; then
+            _df_path="$LLAMA_MODEL_DIR/$_df_cand"
+        fi
+        if [[ -n "$_df_path" && -f "$_df_path" ]]; then
+            HAS_DFLASH=1
+            DFLASH_DRAFT_PATH="$_df_path"
+        fi
+    fi
+
     local _probe="$_SELF_DIR/gguf_metadata_add.py"
     if [[ ! -f "$_probe" ]]
     then
@@ -1501,6 +1538,20 @@ _bench_spawn() {
                     spec_args+=(--spec-draft-ngl "$BENCH_SPEC_NGL")
                 else
                     spec_args+=(--spec-draft-device none)
+                fi
+            fi
+        elif [[ "${BENCH_SPEC_TYPE:-off}" == "draft-dflash" ]]; then
+            # DECLARED per row (Wayne, 2026-11-23): the draft is a SEPARATE GGUF held ON THE
+            # DEVICE at --spec-draft-ngl 999.  It is never given --spec-draft-device none:
+            # Wayne's rule is that no part of a model runs on the CPU, and a CPU draft would
+            # also defeat the point at ~1 GiB of weights per draft step.
+            spec_args=(--spec-type draft-dflash --spec-draft-n-max "${BENCH_SPEC_N_MAX:-5}")
+            if [[ -n "${BENCH_SPEC_DRAFT_MODEL:-}" ]]; then
+                spec_args+=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL")
+                if [[ "${BENCH_SPEC_NGL:-0}" =~ ^[0-9]+$ ]] && (( BENCH_SPEC_NGL > 0 )); then
+                    spec_args+=(--spec-draft-ngl "$BENCH_SPEC_NGL")
+                else
+                    spec_args+=(--spec-draft-ngl 999)
                 fi
             fi
         elif [[ -n "${BENCH_SPEC_DRAFT_MODEL:-}" ]]; then
@@ -3091,6 +3142,11 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # mtp-*.gguf draft file (HAS_MTP), so a launch is never a guess.
     _sb_types="ngram"
     [[ "${HAS_MTP:-0}" == "1" ]] && _sb_types="ngram draft-mtp"
+    # dflash is a DECLARED row's own draft, so when one is present it is compared against
+    # the ngram baseline (and draft-mtp where the row also has that head) rather than
+    # assumed.  Cross-seam gap measured 2026-11-23: the argv branch alone was unreachable
+    # because this list never named the type.
+    [[ "${HAS_DFLASH:-0}" == "1" ]] && _sb_types="${_sb_types} draft-dflash"
     echo "  spec-decode sweep (${_sb_types// /, })"
     echo "  -------------------------------------"
     _sb_best_tps="0"
@@ -3130,6 +3186,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             if [[ "$_sb_type" == "draft-mtp" && -n "${MTP_DRAFT_PATH:-}" ]]; then
                 BENCH_SPEC_DRAFT_MODEL="$MTP_DRAFT_PATH"
                 BENCH_SPEC_NGL="${MTP_DRAFT_NGL:-}"
+            elif [[ "$_sb_type" == "draft-dflash" && "${HAS_DFLASH:-0}" == "1" ]]; then
+                BENCH_SPEC_DRAFT_MODEL="$DFLASH_DRAFT_PATH"
+                BENCH_SPEC_NGL="999"
             else
                 BENCH_SPEC_DRAFT_MODEL=""
                 BENCH_SPEC_NGL=""
