@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 153
+#   v153 (2026-11-23): _startup_fail_type asks for an OOM witness FIRST.  A failed
+#   cudaMalloc also matches the load-failure signature, so `load_fail` won and the FA
+#   retry ran where a descent belonged; with a quantised V that printed "a quantised V
+#   needs flash-attn; not retrying" (FA was on) and killed row 4, which then read
+#   "unsupported model".  Evidence: /tmp/at-4-c44032-b1024.log, cudaMalloc of 72114 MiB.
 # Module Version: 152
 #   v152 (2026-11-22): the clock term gains its LEVEL half, and both thresholds are calibrated
 #       from this chassis's own clocks.log (3525 loaded samples: util>=50%, pwr>=15W; 30 s
@@ -1474,10 +1480,20 @@ _bench_spawn() {
     }
     # _startup_fail_type <quiet> — load_fail | oom | loader_crash_unknown, from the log and the kernel.
     _startup_fail_type() {
-        if _startup_load_fail "${1:-}"; then
-            printf 'load_fail'
-        elif _oom_witness_present; then
+        # OOM OUTRANKS the load-failure signature, because a failed allocation IS one.
+        # Measured 2026-11-23 on row 4 (NVFP4 120B, 73.3 GiB): llama.cpp printed
+        #   allocating 72114.70 MiB on device 0: cudaMalloc failed: out of memory
+        #   llama_model_load: error loading model: unable to allocate CUDA0 buffer
+        # so `load_fail` matched FIRST, `oom` was never consulted, and the FA retry ran
+        # instead of a descent.  With a quantised V that path prints "a quantised V needs
+        # flash-attn; not retrying" — a CAUSE THAT WAS NEVER ESTABLISHED, since the argv
+        # carried --flash-attn on — and kills the row, which then reads "unsupported model
+        # - model cannot run at any ctx".  A row that ran before was declared unrunnable by
+        # a message about the wrong subsystem.
+        if _oom_witness_present; then
             printf 'oom'
+        elif _startup_load_fail "${1:-}"; then
+            printf 'load_fail'
         else
             printf 'loader_crash_unknown'
         fi
