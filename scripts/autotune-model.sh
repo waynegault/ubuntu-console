@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 157
+#   v157 (2026-11-23): a remedy rung must SURVIVE to count.  The v156 arm tested
+#   `_launch_server && ! _startup_load_fail`, so a rung that launched, reported no load
+#   failure and then died on `CUDA error: out of memory` inside
+#   ggml_backend_cuda_buffer_set_tensor was credited as working — the caller halved ctx and
+#   the next rung was never earned (the 120B row, measured tonight).  _arm_rung_held requires
+#   the process still to be alive; both arms consult it, and suite 99 pins both.
 # Module Version: 156
 #   v156 (2026-11-23): the measured row-4 failure, fixed.  A remedy inside the `descend` arm
 #   could never be classified by its caller — the arm falls through to
@@ -1540,6 +1547,22 @@ _bench_spawn() {
         declare -f __autotune_oom_evidence &>/dev/null \
             && __autotune_oom_evidence "$_BENCH_LOG" "${_BENCH_PID:-}"
     }
+    # _arm_rung_held — did the rung just relaunched actually HOLD?
+    #
+    # `_launch_server && ! _startup_load_fail` was not enough, measured 2026-11-23: the Nemotron
+    # 120B row launched, reported no load failure, and was handed back as a working rung — then the
+    # server died on `CUDA error: out of memory` inside ggml_backend_cuda_buffer_set_tensor while a
+    # tensor was being copied, ~80 s later.  The caller saw the death, halved ctx, and the OOM
+    # remedy never earned its second rung.  A rung holds only if the process is STILL ALIVE after
+    # the readiness window: that is the same signal the row itself is judged by.
+    _arm_rung_held() {
+        local _pid="${_BENCH_PID:-}"
+        [[ -n "$_pid" ]] || return 1
+        # swallow-ok: a dead pid IS the answer this helper exists to give
+        kill -0 "$_pid" 2>/dev/null || return 1
+        return 0
+    }
+
     # _startup_fail_type <quiet> — load_fail | oom | loader_crash_unknown, from the log and the kernel.
     _startup_fail_type() {
         # OOM OUTRANKS the load-failure signature, because a failed allocation IS one.
@@ -1610,7 +1633,7 @@ _bench_spawn() {
                         _relaunch_try=$(( _relaunch_try + 1 ))
                         # _startup_load_fail reports by status: non-zero means the relaunch died
                         # on a load failure, so the next remedy is earned.
-                        if _launch_server && ! _startup_load_fail quiet; then
+                        if _launch_server && ! _startup_load_fail quiet && _arm_rung_held; then
                             return 0
                         fi
                         _bench_stop "$_BENCH_PID"
@@ -1629,7 +1652,7 @@ _bench_spawn() {
                         _bench_stop "$_BENCH_PID"
                         # Same rule as the release above: classify HERE, because the caller only
                         # sees this arm's failure as "the launch failed" and halves ctx for it.
-                        if _launch_server && ! _startup_load_fail quiet; then
+                        if _launch_server && ! _startup_load_fail quiet && _arm_rung_held; then
                             return 0
                         fi
                         _bench_stop "$_BENCH_PID"

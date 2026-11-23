@@ -74,6 +74,23 @@ remedy() {
     [ "$output" = "8 16 32 64 999 " ]
 }
 
+@test "a rung that dies on its allocation is not a held rung" {
+    # Catches the defect measured 2026-11-23: the 120B launched, reported no load
+    # failure, was credited as a working rung, and the server then died on
+    # `CUDA error: out of memory` inside ggml_backend_cuda_buffer_set_tensor.  The
+    # caller halved ctx and the next rung was never earned.  A rung holds only if
+    # the process is STILL ALIVE.
+    local block
+    block="$(awk '/^    _arm_rung_held\(\) \{/,/^    \}/' "$SCRIPT")"
+    [ -n "$block" ]
+    # it must test liveness, not just the launch's exit status
+    grep -q 'kill -0' <<< "$block"
+    # and BOTH remedy arms must consult it
+    local n
+    n="$(grep -c '_arm_rung_held; then' "$SCRIPT")"
+    [ "$n" -eq 2 ]
+}
+
 @test "the OOM witness outranks the load-failure signature" {
     # The ordering that produced "unsupported model".  Read as text because the
     # classifier is nested inside _bench_spawn and cannot be extracted; this is a
