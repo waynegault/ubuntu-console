@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 156
+#   v156 (2026-11-23): the measured row-4 failure, fixed.  A remedy inside the `descend` arm
+#   could never be classified by its caller — the arm falls through to
+#   `_launch_or_record_failure || return 1`, which ends the spawn before the failure is read,
+#   so the release fired, still OOMed, and ctx halved for three tests with the ladder never
+#   reached.  Both remedies now relaunch and classify IN PLACE, and the order lives in
+#   __autotune_oom_remedy (top-level, so suite 99 can prove it): release, then experts.
 # Module Version: 155
 #   v155 (2026-11-23): the OOM descent is GPU FIRST.  An explicit -ngl equal to the layer
 #   count pins every layer to the card and disables --fit's adjustment, so the first remedy
@@ -855,6 +862,23 @@ fi
 # A dense row never reaches this, and a row already carrying --cpu-moe keeps it, so no other
 # model's measurement changes — the ladder is a fallback, not a new dimension in the sweep.
 BENCH_N_CPU_MOE=""
+# __autotune_oom_remedy <ngl> <moe_flag_count> <has_moe> — which remedy an OOM earns, or `none`.
+# Top-level and pure so a suite can prove the ORDER without launching a 73 GiB model: GPU first
+# (release the -ngl pin so llama.cpp splits weights itself), then partial expert offload, whose
+# ladder is _moe_descent_next.  Returns `release`, `experts` or `none`.
+function __autotune_oom_remedy() {
+    local ngl="${1:-}" moe_flags="${2:-0}" has_moe="${3:-0}"
+    if [[ "$ngl" != "auto" ]]; then
+        printf 'release\n'
+        return 0
+    fi
+    if [[ "$has_moe" == "1" ]] && (( moe_flags == 0 )) && _moe_descent_next >/dev/null; then
+        printf 'experts\n'
+        return 0
+    fi
+    printf 'none\n'
+}
+
 # _moe_descent_next — the next --n-cpu-moe step, or non-zero when the ladder is spent.
 _moe_descent_next() {
     local step
@@ -1568,30 +1592,48 @@ _bench_spawn() {
                 # llama.cpp keep on the GPU every layer that fits and put only the remainder on the
                 # host — the GPU-heavy split, chosen by the code that knows the carve, before a
                 # single expert tensor is moved to the CPU.
-                if [[ "${BENCH_NGL:-}" != "auto" && -z "${BENCH_NGL_RELEASED:-}" ]]; then
+                local _remedy
+                _remedy="$(__autotune_oom_remedy "${BENCH_NGL:-}" "${#BENCH_MOE_FLAG[@]}" "${HAS_MOE:-0}")"
+                if [[ "$_remedy" == "release" ]]; then
                     BENCH_NGL_RELEASED="${BENCH_NGL:-999}"
                     BENCH_NGL="auto"
                     warn "  OOM — releasing the pinned -ngl ${BENCH_NGL_RELEASED} to 'auto'" \
                          "so the GPU keeps every layer it can"
                     _bench_stop "$_BENCH_PID"
-                    # swallow-ok: a relaunch that fails is classified by the pass this returns into
-                    _launch_server || true
-                    return 0
+                    # A relaunch here CANNOT be classified by the caller: this arm falls through to
+                    # `_launch_or_record_failure || return 1`, and that return ends the spawn before
+                    # the failure is read — measured 2026-11-23, where the release fired, still
+                    # OOMed, and the caller halved ctx for three tests without the ladder being
+                    # reached once.  So the arm relaunches in place until the launch holds.
+                    local _relaunch_try=0
+                    while (( _relaunch_try < 2 )); do
+                        _relaunch_try=$(( _relaunch_try + 1 ))
+                        # _startup_load_fail reports by status: non-zero means the relaunch died
+                        # on a load failure, so the next remedy is earned.
+                        if _launch_server && ! _startup_load_fail quiet; then
+                            return 0
+                        fi
+                        _bench_stop "$_BENCH_PID"
+                    done
                 fi
                 # ONLY THEN, and only for an MoE row with no placement yet: move experts, partial
                 # first, because --cpu-moe is all-or-nothing and would give up GPU bandwidth the
                 # row can still use.  A weights allocation does not care how large the ctx is, so
                 # this precedes the ctx descent.
-                if (( HAS_MOE == 1 )) && (( ${#BENCH_MOE_FLAG[@]} == 0 )); then
+                if [[ "$_remedy" == "experts" ]]; then
                     local _moe_n
                     if _moe_n="$(_moe_descent_next)"; then
                         BENCH_N_CPU_MOE="$_moe_n"
                         BENCH_MOE_FLAG=(--n-cpu-moe "$_moe_n")
                         warn "  OOM — moving ${_moe_n} layers of experts to the CPU (--n-cpu-moe) and relaunching"
                         _bench_stop "$_BENCH_PID"
-                        # swallow-ok: a relaunch that fails is classified by the pass this returns into
-                        _launch_server || true
-                        return 0
+                        # Same rule as the release above: classify HERE, because the caller only
+                        # sees this arm's failure as "the launch failed" and halves ctx for it.
+                        if _launch_server && ! _startup_load_fail quiet; then
+                            return 0
+                        fi
+                        _bench_stop "$_BENCH_PID"
+                        # the step failed; the next OOM earns the next rung
                     fi
                 fi
                 warn "  OOM at this ctx — NOT retrying with --flash-attn off (that needs more memory); descending"
