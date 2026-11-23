@@ -136,8 +136,11 @@ teardown() {
     [ "$status" -eq 0 ]
 
     # Absent (no longer mapped) credential -> no ref written for that path.
+    # 1 is "no match", which is the pass condition; 2 is "could not read a file", which must
+    # not read as absent-on-purpose (measured 2026-11-23: the same shape let 18 cases in the
+    # fast suite pass with nothing to look at).
     run grep -F 'qwen-token-plan' "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 1 ]
 }
 
 @test "oc-refresh-keys preserves digits in the canonical key-name set" {
@@ -156,7 +159,7 @@ teardown() {
 
     # The truncated name must not appear.
     run grep -Fx "CONTEXT" "$TAC_CACHE_DIR/tac_win_api_key_names"
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 1 ]
 }
 
 @test "oc-refresh-keys issues the restart through systemd and reports the unit state" {

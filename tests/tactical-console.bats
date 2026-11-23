@@ -13,7 +13,7 @@
 # shellcheck disable=SC2034  # this file's version header is read by people and by
 #                             # git history, never by the file itself — SC2034 is the
 #                             # one diagnostic that cannot describe a header.
-VERSION="1.9"
+VERSION="1.10"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -84,6 +84,24 @@ EOF
     # Build patched profile files ONCE.  The actual source happens per-test
     # in setup() because aliases don't survive BATS's per-test subshell fork.
     _build_test_profile
+}
+
+# __require_population <label> <path...> — fail when a case's population is empty.
+#
+# A glob that matches nothing stays LITERAL, so `[[ -f "$f" ]] || continue` turns a case into
+# zero assertions and a pass. Measured 2026-11-23 in the sibling fast suite: a copy run outside
+# its repo reported 18 cases green, each a loop that never iterated or a ceiling that read 0.
+# setup_file here already refuses a tree-less copy; this covers the shape it cannot see — a
+# directory renamed or emptied while the tree is otherwise present.
+__require_population() {
+    local label="$1"
+    shift
+    local p
+    for p in "$@"; do
+        [[ -e "$p" ]] && return 0
+    done
+    echo "no population for '$label': none of $* exists" >&3
+    return 1
 }
 
 teardown_file() {
@@ -408,6 +426,7 @@ EOF
 }
 
 @test "bash -n: all bin/*.sh scripts parse without syntax errors" {
+    __require_population "bin scripts" "$REPO_ROOT"/bin/*.sh
     for f in "$REPO_ROOT"/bin/*.sh; do
         [[ -f "$f" ]] || continue
         run bash -n "$f"
@@ -416,6 +435,7 @@ EOF
 }
 
 @test "bash -n: all scripts/*.sh parse without syntax errors" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
         run bash -n "$f"
@@ -495,6 +515,7 @@ EOF
 }
 
 @test "bash -n: all tools/*.sh scripts parse without syntax errors" {
+    __require_population "tools scripts" "$REPO_ROOT"/tools/*.sh
     for f in "$REPO_ROOT"/tools/*.sh; do
         [[ -f "$f" ]] || continue
         run bash -n "$f"
@@ -1367,6 +1388,7 @@ EOF
 }
 
 @test "cross-script: all scripts have VERSION variable or Module Version comment" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
         grep -qE 'VERSION=|^# Module Version:' "$f"
@@ -1374,6 +1396,7 @@ EOF
 }
 
 @test "cross-script: all scripts have AI INSTRUCTION comment" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
         grep -q 'AI INSTRUCTION' "$f"
@@ -1385,6 +1408,7 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "hygiene: all scripts end with # end of file marker" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/*.sh \
              "$REPO_ROOT"/bin/*.sh \
@@ -1399,6 +1423,7 @@ EOF
 }
 
 @test "hygiene: tools/*.sh scripts end with # end of file marker" {
+    __require_population "tools scripts" "$REPO_ROOT"/tools/*.sh
     for f in "$REPO_ROOT"/tools/*.sh "$REPO_ROOT"/tools/qwen-hooks/*.sh; do
         [[ -f "$f" ]] || continue
         local last
@@ -1408,6 +1433,7 @@ EOF
 }
 
 @test "hygiene: no carriage returns in any script" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
@@ -1421,6 +1447,7 @@ EOF
 }
 
 @test "hygiene: no trailing whitespace in core scripts" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
@@ -1433,6 +1460,7 @@ EOF
 }
 
 @test "hygiene: no tabs in core scripts" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
@@ -1445,6 +1473,7 @@ EOF
 }
 
 @test "hygiene: no lines exceed 200 characters in core scripts" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     # Advisory check: reports long lines but deliberately does NOT fail the
     # suite. UI formatting lines (box-drawing, tabular output) and complex jq
     # pipelines are display-oriented and intentionally exceed the limit.
@@ -1463,6 +1492,7 @@ EOF
 }
 
 @test "hygiene: no UTF-8 BOM in any script" {
+    __require_population "scripts" "$REPO_ROOT"/scripts/*.sh
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
@@ -1476,6 +1506,7 @@ EOF
 }
 
 @test "hygiene: each module has # shellcheck shell=bash at line 1" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh; do
         [[ -f "$f" ]] || continue
         # Utility scripts (16+) are standalone executables with shebangs; skip
@@ -1489,6 +1520,7 @@ EOF
 }
 
 @test "hygiene: all modules have a Module Version comment" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     local missing=0
     local f
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh; do
@@ -1502,6 +1534,7 @@ EOF
 }
 
 @test "hygiene: module versions follow # Module Version: N pattern" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
         grep -qP '^# Module Version: \d+' "$f"
@@ -2625,6 +2658,7 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "cross-script: all @exports in modules are actually defined as functions or variables" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     local missing=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
@@ -2652,6 +2686,7 @@ EOF
 }
 
 @test "cross-script: module numbering — every module has a section header" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
         # Every module must have at least one '# ===' or '# ---' banner line
@@ -2679,6 +2714,7 @@ EOF
 }
 
 @test "bin: all oc-* wrappers use tac-exec" {
+    __require_population "oc-* wrappers" "$REPO_ROOT"/bin/oc-*
     for f in "$REPO_ROOT"/bin/oc-*; do
         [[ -f "$f" ]] || continue
         grep -q 'tac-exec' "$f"
@@ -2900,6 +2936,7 @@ EOF
 }
 
 @test "bin: all oc-* wrappers resolve tac-exec relative to the wrapper path" {
+    __require_population "oc-* wrappers" "$REPO_ROOT"/bin/oc-*
     local f
     for f in "$REPO_ROOT"/bin/oc-*; do
         [[ -f "$f" ]] || continue
@@ -3025,6 +3062,7 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "hygiene: no TODO or FIXME in core modules (or explicitly tracked)" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     local count=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
@@ -3037,6 +3075,7 @@ EOF
 }
 
 @test "hygiene: no shell scripts use echo -e outside comments" {
+    __require_population "numbered modules" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     local violations=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue

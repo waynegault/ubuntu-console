@@ -36,6 +36,14 @@ setup_file() {
         -e '/^[[:space:]]*((.*__tac_preexec_fired/s/^/# /'
         -e 's/^declare -ri //'
     )
+    # A glob that matches nothing stays LITERAL, so the loop below would build an EMPTY patched
+    # tree and every case would then assert against a stub-only profile. Measured 2026-11-23 in
+    # the sibling fast suite: 18 cases passed on exactly that shape.
+    local _modules=("$REPO_ROOT"/scripts/[0-9][0-9]-*.sh)
+    [[ -f "${_modules[0]}" ]] || {
+        echo "no numbered modules under $REPO_ROOT/scripts" >&3
+        return 1
+    }
     for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$_f" ]] || continue
         sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
