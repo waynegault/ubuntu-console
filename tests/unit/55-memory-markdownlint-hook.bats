@@ -214,17 +214,50 @@ write_long_note() {
         "$LONG_NAME" > "$FIX/.qwen/memories/MEMORY.md"
 }
 
+# The budget this fixture must exceed, asked of the STORE's own arithmetic rather than restated
+# here.  The criterion is tools/note_name_budget.py -- setup() copies it into the fixture, so this
+# is the same code the hook itself shells out to.  A hardcoded copy has already drifted: this case
+# read "116 - 58 = 58" while the live tool answers 56 for the 60-char link below, so the number in
+# the file was no longer the rule it claimed to be quoting.
+name_budget() {
+    (cd "$FIX/.qwen" && PYTHONPATH="$FIX/.qwen" python3 -c '
+import sys
+
+sys.path.insert(0, "tools")
+import note_name_budget as n
+
+print(n.budget_for(sys.argv[1]))
+' "$LONG_REL")
+}
+
 @test "memory lint hook: an over-budget name is SHORTENED and its index line re-rendered" {
+    if ! command -v python3 >/dev/null; then
+        skip "python3 is not on PATH, so the store's name budget cannot be computed"
+    fi
     write_long_note
-    # The fixture really is over budget before the fix: 73 chars against 116 - 58 = 58.
-    [ "${#LONG_NAME}" -gt 58 ]
+    budget="$(name_budget)"
+    # Refuse a fixture that cannot exercise the fixer: a budget of 0 is a broken reading, not a
+    # clean note, and an in-budget name would let this case pass while testing nothing.
+    [ "$budget" -gt 0 ]
+    [ "${#LONG_NAME}" -gt "$budget" ]
 
     run run_hook
     [ "$status" -eq 0 ]
-    [[ "$output" == *"FIXED the name budget in memories"* ]]
+    if [[ "$output" != *"FIXED the name budget in memories"* ]]; then
+        # Name the cause rather than only the expectation.  Without this the red read as "a string
+        # was absent", which is a failure message and not a diagnosis: the hook's own output plus
+        # the shortener's verdict when asked directly says whether the fixer was skipped, refused,
+        # or found nothing to shorten.
+        printf 'budget=%s name_len=%s\n' "$budget" "${#LONG_NAME}"
+        printf 'hook output:\n%s\n' "$output"
+        printf 'shortener, asked directly:\n'
+        (cd "$FIX/.qwen" && PYTHONPATH="$FIX/.qwen" python3 tools/shorten-note-names.py \
+            --store memories --apply 2>&1)
+        return 1
+    fi
 
     new_name="$(sed -n 's/^name:[[:space:]]*//p' "$FIX/.qwen/$LONG_REL" | head -n 1)"
-    [ "${#new_name}" -le 58 ]
+    [ "${#new_name}" -le "$budget" ]
     # The index line follows the note: a shortened name with a stale index line is the defect the
     # store's own cap case reports, so the fix is only done when both moved.
     grep -qF "](${LONG_REL#memories/})" "$FIX/.qwen/memories/MEMORY.md"
