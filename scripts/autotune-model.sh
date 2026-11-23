@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 159
+# Module Version: 160
+#   v160 (2026-11-23): the consecutive-stall chain resets at the start of each ROW.
+#   The counter file is boot-scoped, so a row that ended with its chain full left the next
+#   row refused before its first launch: measured 2026-11-23, the 120B's three readiness
+#   timeouts made Calme-4x7B (13.6G) exit 3 at 8/60 with no load attempted and the ledger
+#   unmoved.  "Consecutive" is one row's launch sequence; a degraded adapter still halts
+#   the campaign, because the first row that stalls trips this guard and the batch stops.
 #   v159 (2026-11-23): a DRAFT ARCH refuses before the heavy-job lock.  An arch in
 #   LLM_DRAFT_ARCHS (`dflash`, `eagle3`) is a draft head passed beside its target as
 #   --spec-draft-model, so measuring it alone can only fail.  Measured: row 7 is a 1.26 GiB
@@ -545,6 +551,15 @@ _cuda_stalls() {
 
 _cuda_stall_bump() { printf '%s\n' "$(( $(_cuda_stalls) + 1 ))" > "$_CUDA_STALL_FILE" 2>/dev/null; }
 _cuda_stall_reset() { : > "$_CUDA_STALL_FILE" 2>/dev/null; }
+
+# The stall chain is PER ROW, not per boot.  The counter file is boot-scoped, so a row
+# that ended with its chain still full left the NEXT row refused before its first launch:
+# measured 2026-11-23, the 120B's three readiness timeouts made Calme-4x7B (13.6G, a small
+# row never tried) exit 3 at 8/60 with no load attempted and the ledger unmoved.  Clearing
+# here — at the start of this process, before any row work — is what makes a new row a new
+# chain.  A genuinely degraded adapter still halts the campaign: the first row that stalls
+# fills the chain again, trips the guard, and the batch stops on that row's exit 3.
+_cuda_stall_reset
 
 _bump_cuda_cycle() {
     printf '%s\n' "$(( $(_cuda_cycles) + 1 ))" > "$_CUDA_CYCLE_FILE" 2>/dev/null
