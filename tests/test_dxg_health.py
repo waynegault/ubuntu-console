@@ -12,19 +12,43 @@ TAC_BIN_LIB = REPO_ROOT / "bin" / "_tac-bin-lib.sh"
 WSL_RESTART = REPO_ROOT / "bin" / "wsl-restart.sh"
 
 
+def _fake_bin(tmp_path: Path, name: str, body: str) -> Path:
+    path = tmp_path / name
+    path.write_text(f"#!/bin/sh\n{body}", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _fake_dmesg(tmp_path: Path, *lines: str) -> Path:
+    return _fake_bin(tmp_path, "fake_dmesg", "".join(f"echo '{line}'\n" for line in lines))
+
+
+def _fake_journalctl(tmp_path: Path, load_monotonic: str | None) -> Path:
+    """A journalctl stand-in. `None` writes no `model loaded` line at all."""
+    body = ""
+    if load_monotonic is not None:
+        body = f"echo '[{load_monotonic}] host llama-cuda-server[1]: 0.00.1 I srv  server_run_i: model loaded'\n"
+    return _fake_bin(tmp_path, "fake_journalctl", body)
+
+
+def _run_gate(dmesg: Path, journalctl: Path) -> subprocess.CompletedProcess[str]:
+    cmd = (
+        f"source '{TAC_BIN_LIB}'"
+        f" && TAC_DMESG_BIN='{dmesg}'"
+        f" && TAC_JOURNALCTL_BIN='{journalctl}'"
+        " && _tac_dxg_health_check"
+    )
+    return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False)
+
+
 def test_tac_dxg_health_check_healthy(tmp_path: Path) -> None:
     """_tac_dxg_health_check returns 0 when dmesg reports no critical errors or benign EINVAL."""
-    fake_dmesg = tmp_path / "fake_dmesg"
-    fake_dmesg.write_text(
-        "#!/bin/sh\n"
-        "echo '[   12.345] dxgkrnl: query adapter info failed: -22'\n"
-        "echo '[   12.346] Normal kernel log line'\n",
-        encoding="utf-8",
+    dmesg = _fake_dmesg(
+        tmp_path,
+        "[   12.345] dxgkrnl: query adapter info failed: -22",
+        "[   12.346] Normal kernel log line",
     )
-    fake_dmesg.chmod(0o755)
-
-    cmd = f"source '{TAC_BIN_LIB}' && TAC_DMESG_BIN='{fake_dmesg}' _tac_dxg_health_check"
-    res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False)
+    res = _run_gate(dmesg, _fake_journalctl(tmp_path, None))
     assert res.returncode == 0
     assert res.stdout.strip() == ""
 
@@ -47,16 +71,17 @@ def test_tac_dxg_health_check_healthy(tmp_path: Path) -> None:
     ],
 )
 def test_tac_dxg_health_check_flags_critical_errors(tmp_path: Path, log_line: str, expected_pat: str) -> None:
-    """_tac_dxg_health_check returns 1 and prints critical dxgkrnl bridge failures."""
-    fake_dmesg = tmp_path / "fake_dmesg"
-    fake_dmesg.write_text(
-        f"#!/bin/sh\necho '[   12.345] dxgkrnl: query adapter info failed: -22'\necho '{log_line}'\n",
-        encoding="utf-8",
-    )
-    fake_dmesg.chmod(0o755)
+    """A critical line NEWER than the last successful load is still refused.
 
-    cmd = f"source '{TAC_BIN_LIB}' && TAC_DMESG_BIN='{fake_dmesg}' _tac_dxg_health_check"
-    res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False)
+    The load stamp is 10.0, so the 124.789 failure is current — the case this gate
+    exists for.
+    """
+    dmesg = _fake_dmesg(
+        tmp_path,
+        "[   12.345] dxgkrnl: query adapter info failed: -22",
+        log_line,
+    )
+    res = _run_gate(dmesg, _fake_journalctl(tmp_path, "10.000000"))
     assert res.returncode == 1
     assert expected_pat in res.stdout
 
@@ -64,9 +89,43 @@ def test_tac_dxg_health_check_flags_critical_errors(tmp_path: Path, log_line: st
 def test_tac_dxg_health_check_missing_binary(tmp_path: Path) -> None:
     """When the dmesg binary is absent, _tac_dxg_health_check gracefully returns 0."""
     nonexistent = tmp_path / "no_such_dmesg"
-    cmd = f"source '{TAC_BIN_LIB}' && TAC_DMESG_BIN='{nonexistent}' _tac_dxg_health_check"
-    res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, check=False)
+    res = _run_gate(nonexistent, _fake_journalctl(tmp_path, None))
     assert res.returncode == 0
+
+
+def test_a_critical_line_superseded_by_a_later_load_is_not_current(tmp_path: Path) -> None:
+    """A -12 older than a successful load does not describe the adapter's state now.
+
+    Catches the 2026-11-23 halt: one `create_allocation: -12` from 16:47 refused the
+    whole 17:39 sweep at preflight — nothing was attempted — while two lanes loaded
+    cleanly at 17:41.  On the pre-fix gate this returned 1 and printed the stale line.
+    """
+    dmesg = _fake_dmesg(
+        tmp_path,
+        "[13909.570765] misc dxg: dxgk: dxgkio_create_allocation: Ioctl failed: -12",
+    )
+    res = _run_gate(dmesg, _fake_journalctl(tmp_path, "17120.975292"))
+    assert res.returncode == 0, res.stdout
+    assert res.stdout.strip() == ""
+
+
+def test_a_critical_line_with_no_known_load_is_still_refused(tmp_path: Path) -> None:
+    """No load in the journal supersedes nothing: refuse rather than assume healthy."""
+    dmesg = _fake_dmesg(
+        tmp_path,
+        "[13909.570765] misc dxg: dxgk: dxgkio_create_allocation: Ioctl failed: -12",
+    )
+    res = _run_gate(dmesg, _fake_journalctl(tmp_path, None))
+    assert res.returncode == 1
+    assert "create_allocation" in res.stdout
+
+
+def test_a_critical_line_with_an_unreadable_stamp_is_refused(tmp_path: Path) -> None:
+    """A stamp that cannot be parsed must not be silently promoted to 'stale'."""
+    dmesg = _fake_dmesg(tmp_path, "misc dxg: dxgkio_create_allocation: Ioctl failed: -12")
+    res = _run_gate(dmesg, _fake_journalctl(tmp_path, "17120.975292"))
+    assert res.returncode == 1
+    assert "-12" in res.stdout
 
 
 def test_wsl_restart_dry_run_includes_vmmem_poll() -> None:

@@ -16,7 +16,13 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 36
+# Module Version: 37
+#   v37 (2026-11-23): _tac_dxg_health_check treats a critical dxg line OLDER than the
+#     newest successful model load as superseded, not current.  One stale
+#     `dxgkio_create_allocation: -12` from 16:47 refused the 17:39 sweep at preflight —
+#     nothing was attempted — while two lanes loaded cleanly at 17:41, and the batch
+#     reported "the adapter stalled" for a run that never launched.  A line still newer
+#     than the last load, or any line whose stamp cannot be read, is refused as before.
 #   v36 (2026-11-18): the VRAM baseline reads EVERY card, not the first one.  It used
 #     `memory.free | head -1` and `memory.total | head -1`, so on a box with more than one
 #     NVML device it judged card 0 and ignored the rest — the XPS's discrete RTX 3050 Ti is
@@ -1132,10 +1138,36 @@ _tac_heavy_job_busy() {
     _tac_heavy_job_busy_from "$out"
 }
 
+# _tac_last_model_load_monotonic — boot-relative seconds of the newest successful
+# model load in this boot's journal, or empty when the journal names none.
+#
+# dmesg stamps a line with seconds since boot and `journalctl -o short-monotonic`
+# stamps it the same way, so the two are directly comparable.  The marker is
+# llama.cpp's own `srv server_run_i: model loaded` line: a model that reached
+# `model loaded` proves the adapter allocated and served AFTER that instant.
+_tac_last_model_load_monotonic() {
+    local jb="${TAC_JOURNALCTL_BIN:-journalctl}"
+    command -v "$jb" >/dev/null 2>&1 || return 0
+    local line
+    # swallow-ok: an unreadable journal reads as "no load known"; the caller keeps the error and refuses.
+    line=$("$jb" --user -q -b -o short-monotonic --no-pager 2>/dev/null | grep -F 'model loaded' | tail -1) || line=""
+    [[ -n "$line" ]] || return 0
+    printf '%s\n' "$line" | sed -n 's/^\[ *\([0-9][0-9]*\.[0-9][0-9]*\)\].*/\1/p'
+}
+
 # _tac_dxg_health_check — inspect dmesg for critical WSL2 dxgkrnl bridge failures.
 #
 # Flags critical errors (-12 ENOMEM, -75 EOVERFLOW, wait_for_completion timeouts).
 # Deliberately ignores -22 (EINVAL), which is common and benign telemetry queries rejected by WDDM.
+#
+# A critical line OLDER than the newest successful model load is SUPERSEDED evidence:
+# the adapter has allocated and served since it was written, so it does not describe
+# the adapter's state now.  Measured 2026-11-23: one `dxgkio_create_allocation: -12`
+# at 16:47 refused the whole 17:39 sweep at preflight — nothing was attempted — while
+# two lanes loaded cleanly at 17:41.  The gate read a boot-old line as current, and the
+# batch then reported "the adapter stalled" for a run that never launched.
+# What this proves is that the adapter still allocates, NOT that every model size fits:
+# a fresh failure writes a newer line and is refused again, so a retry is bounded.
 #
 # @returns 0 when healthy, 1 when critical kernel GPU errors are present (and prints reason on stdout).
 _tac_dxg_health_check() {
@@ -1143,12 +1175,21 @@ _tac_dxg_health_check() {
     command -v "$dmesg_bin" >/dev/null 2>&1 || return 0
     local errs pat='dxg.*(failed: -(12|75)|wait_for_completion.*timeout)'
     # swallow-ok: restricted dmesg read permissions read as clean rather than failing the check
-    errs=$("$dmesg_bin" 2>/dev/null | grep -iE "$pat" | tail -5) || errs=""
-    if [[ -n "$errs" ]]; then
-        printf '%s\n' "$errs"
-        return 1
+    errs=$("$dmesg_bin" 2>/dev/null | grep -iE "$pat") || errs=""
+    [[ -n "$errs" ]] || return 0
+    local loaded_at
+    loaded_at=$(_tac_last_model_load_monotonic)
+    if [[ -n "$loaded_at" ]]; then
+        # Keep a line NEWER than the load, and any line whose stamp cannot be read:
+        # an unparsable stamp must not be silently promoted to "stale".
+        errs=$(printf '%s\n' "$errs" | awk -v t="$loaded_at" '
+            { ts = $1; gsub(/[^0-9.]/, "", ts) }
+            ts + 0 <= 0 || ts + 0 > t + 0 { print }
+        ')
     fi
-    return 0
+    [[ -n "$errs" ]] || return 0
+    printf '%s\n' "$errs" | tail -5
+    return 1
 }
 
 # _tac_cuda_cycle_check [budget] — is the WSL2 CUDA context cycle ledger past its budget?
