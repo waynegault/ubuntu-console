@@ -29,6 +29,13 @@ setup() {
     # Override AFTER sourcing — 01-constants.sh sets the model registry path.
     export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
     export LLAMA_MODEL_DIR="$TAC_TEST_TMPDIR/models"
+    # `model scan` backs the registry up under $LLM_STATE_DIR/backups, and 01-constants
+    # derives that from an INHERITED export, so pinning HOME and the registry was not
+    # enough: this suite's "Curated Name"/"Newly-Added" fixtures reached
+    # ~/models/.llm/backups on 11-20 and 11-22 (measured 2026-11-23).  The constants file
+    # now refuses an inherited state dir under BATS; this pin means the suite also holds
+    # when it is sourced by something that does not go through 01-constants.
+    export LLM_STATE_DIR="$TAC_TEST_TMPDIR/state"
     # Hermetic box-wide heavy-job lock: a case must never queue behind (or hold off) a
     # real heavy job — see tests/unit/38-heavy-job.bats for why this is a test's own file.
     export HEAVY_JOB_LOCK="$TAC_TEST_TMPDIR/heavy-job.lock"

@@ -2,7 +2,13 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 60
+# Module Version: 61
+#   v61 (2026-11-23): under BATS, LLM_STATE_DIR no longer accepts the operator's inherited
+#     value.  ${LLM_STATE_DIR:-…} TAKEs what the shell exports, so a suite that pinned
+#     HOME/LLM_REGISTRY/LLAMA_MODEL_DIR still wrote the live store through the scan backup
+#     (11e follows LLM_STATE_DIR): 28 fixture registries reached ~/models/.llm/backups on
+#     11-20 and 11-22, from tests/integration/02-model-lifecycle.bats.  16 suites source
+#     env.sh, so the fix is here at the derivation, not per suite.
 #   v60 (2026-11-21): normalise __tac_model_store_ready to `function __tac_model_store_ready()`
 #     so the module uses one function declaration style throughout (inspection 8.2.1).
 #   v59 (2026-11-11): one canonical version line; the historical entries below
@@ -406,7 +412,25 @@ export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|
 # beside the model store.  LLM_REGISTRY and LLM_DEFAULT_FILE derive from it, except
 # where a profile names the registry explicitly — a registry that lists the ACTIVE
 # models may sit beside them rather than in the state dir (asus does exactly that).
-export LLM_STATE_DIR="${LLM_STATE_DIR:-$HOME/.llm}"
+#
+# A BATS run NEVER inherits the operator's state dir (measured 2026-11-23).  The
+# operator's shell exports LLM_STATE_DIR=~/models/.llm, and ${LLM_STATE_DIR:-…}
+# TAKES the inherited value — so a suite that pins HOME, LLM_REGISTRY and
+# LLAMA_MODEL_DIR still wrote the live store, because the scan backup follows
+# LLM_STATE_DIR (scripts/11e-llm-model.sh).  That is how 28 fixture registries
+# ("Curated Name", "Model One") landed in ~/models/.llm/backups on 11-20 and 11-22:
+# tests/integration/02-model-lifecycle.bats pins the other three and not this one.
+# 16 suites source env.sh, so pinning each is the treadmill tools/test-state-sandbox.sh
+# warns about; the chokepoint is HERE, where the value is derived.  Under BATS the
+# state dir is per-run temp, and a suite that genuinely needs a state dir sets it
+# to its own temp path after sourcing, which still wins.
+if [[ -n "${BATS_RUN_TMPDIR:-}" ]]; then
+    export LLM_STATE_DIR="$BATS_RUN_TMPDIR/test-state/.llm"
+    # No mkdir here: every consumer creates its own subdirectory before writing (11e
+    # does for backups), so this file creates nothing and takes no error to suppress.
+else
+    export LLM_STATE_DIR="${LLM_STATE_DIR:-$HOME/.llm}"
+fi
 export LLM_REGISTRY="${LLM_REGISTRY:-$LLM_STATE_DIR/models.conf}"
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLM_STATE_DIR/default_model.conf}"
 export ACTIVE_LLM_FILE="${ACTIVE_LLM_FILE:-/dev/shm/active_llm}"

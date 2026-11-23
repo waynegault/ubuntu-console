@@ -22,6 +22,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "tools" / "test-state-sandbox.sh"
 RUNNER = REPO_ROOT / "tools" / "run-tests.sh"
+CONSTANTS = REPO_ROOT / "scripts" / "01-constants.sh"
 
 # The paths a suite can write through.  LLM_STATE_DIR carries the backups and the
 # log/ledger trees, LLM_REGISTRY and LLM_DEFAULT_FILE the registry sidecars,
@@ -97,3 +98,48 @@ def test_the_runner_hands_every_suite_the_sandbox() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     assert 'source "$REPO_ROOT/tools/test-state-sandbox.sh"' in source
     assert 'tac_test_state_sandbox "$TAP_DIR/llm"' in source
+
+
+def _constants_state_dir(env: dict[str, str]) -> str:
+    res = subprocess.run(
+        ["bash", "-c", 'source "$1" && printf "%s\\n" "$LLM_STATE_DIR"', "_", str(CONSTANTS)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert res.returncode == 0, res.stderr
+    return res.stdout.strip()
+
+
+def test_constants_ignores_an_inherited_state_dir_under_bats(tmp_path: Path) -> None:
+    """A direct `bats <suite>` run must not follow the operator's live LLM_STATE_DIR.
+
+    Catches the 2026-11-23 leak: 01-constants read `${LLM_STATE_DIR:-…}`, which TAKEs
+    the exported live value, so a suite that pinned HOME/LLM_REGISTRY/LLAMA_MODEL_DIR
+    still wrote ~/models/.llm/backups through 11e's scan backup.  A direct run has no
+    sandbox beside it, so this guard is the only thing between it and the store.
+    """
+    run_dir = tmp_path / "run"
+    got = _constants_state_dir(
+        {
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "BATS_RUN_TMPDIR": str(run_dir),
+            "LLM_STATE_DIR": "/home/wayne/models/.llm",  # the operator's export, verbatim
+        }
+    )
+    assert got != "/home/wayne/models/.llm", "an inherited live state dir was accepted under BATS"
+    assert Path(got).is_relative_to(run_dir), f"the BATS state dir escaped the run: {got}"
+
+
+def test_constants_keeps_the_exported_state_dir_outside_bats(tmp_path: Path) -> None:
+    """Production is unchanged: an exported state dir still wins.
+
+    Catches a guard written too broadly — one that redirected every caller rather than
+    the test run, which would move the operator's backups somewhere else.
+    """
+    live = tmp_path / "live"
+    got = _constants_state_dir({"PATH": os.environ["PATH"], "HOME": str(tmp_path), "LLM_STATE_DIR": str(live)})
+    assert got == str(live)
