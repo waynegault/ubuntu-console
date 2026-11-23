@@ -13,7 +13,7 @@
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # version header, as in tactical-console.bats: read by
 #                             # people and by git history, not by the file.
-VERSION="1.0"
+VERSION="1.1"
 
 # ==============================================================================
 # SETUP — File-level constants only
@@ -23,6 +23,28 @@ setup_file() {
     export REPO_ROOT
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
     export PROFILE_PATH="$REPO_ROOT/tactical-console.bashrc"
+
+    # NAME THE POPULATION THIS FILE CAN SEE, or refuse. REPO_ROOT is derived from where THIS
+    # file lies, so a copy of it in a directory without the tree reports every case's absence
+    # with a `command not found` that reads like 47 code defects: measured 2026-11-23, an
+    # attachment scratch dir held this file alone and bash exits 127 for a script it cannot
+    # open, tools/lint.sh was absent so __fast_member_shellcheck returned that same 127, and the
+    # run was indistinguishable from a broken checkout. A failing setup_file reports ONE
+    # `setup_file failed` naming the cause instead.
+    local missing=()
+    local member
+    for member in tactical-console.bashrc tools/lint.sh bin env.sh install.sh
+    do
+        [[ -e "$REPO_ROOT/$member" ]] || missing+=("$member")
+    done
+    if (( ${#missing[@]} > 0 ))
+    then
+        echo "cannot verify: this suite is running outside its repo" >&2
+        echo "  REPO_ROOT=$REPO_ROOT" >&2
+        echo "  absent: ${missing[*]}" >&2
+        echo "  run it from the checkout: bats tests/tactical-console-fast.bats" >&2
+        return 1
+    fi
 }
 
 # __fast_member_shellcheck — the ONE graph pass every member-listing case asserts.
@@ -57,6 +79,34 @@ __fast_member_shellcheck() {
     fi
     cat "$out"
     return "$(cat "$rc_file")"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. SUITE SELF-CHECK
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "guard: a copy outside its repo reports ONE cause, not one red per case" {
+    # The precondition in setup_file is only worth having if it fires, so build the 2026-11-23
+    # shape here: this file alone, in a directory with no tree beside it. The failure this
+    # catches is a guard that is present but never reached -- a copy that still reports one
+    # `command not found` per case, which is what made 47 absences read as 47 defects.
+    #
+    # The probe marker stops this case from recursing into itself in the recursive run: with the
+    # guard REMOVED the copy gets past setup_file, so without the marker it would copy itself
+    # again for ever and the falsifier arm would hang instead of reporting reds (measured while
+    # building this case, 2026-11-23: 60 s and no verdict).
+    [[ -n "${QWEN_SUITE_GUARD_PROBE:-}" ]] && skip "inside the guard probe"
+
+    local isolated="$BATS_TEST_TMPDIR/isolated"
+    mkdir -p "$isolated/tests"
+    cp "$BATS_TEST_FILENAME" "$isolated/tests/"
+
+    run timeout 120 env QWEN_SUITE_GUARD_PROBE=1 \
+        bats "$isolated/tests/tactical-console-fast.bats"
+    [ "$status" -ne 0 ]
+    grep -q 'cannot verify: this suite is running outside its repo' <<<"$output"
+    # ONE failing line: the setup_file, not one per case.
+    [ "$(grep -c '^not ok' <<<"$output")" -eq 1 ]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
