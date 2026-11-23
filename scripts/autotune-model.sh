@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 158
+# Module Version: 159
+#   v159 (2026-11-23): a DRAFT ARCH refuses before the heavy-job lock.  An arch in
+#   LLM_DRAFT_ARCHS (`dflash`, `eagle3`) is a draft head passed beside its target as
+#   --spec-draft-model, so measuring it alone can only fail.  Measured: row 7 is a 1.26 GiB
+#   `dflash` draft, and --all-but-done would have swept it.  The derived scopes drop it too
+#   (autotune-rows v31); this is the chokepoint that also covers an explicit row number.
 #   v158 (2026-11-23): draft-dflash is a DECLARED per-row spec type (Wayne's decision),
 #   matched to the row by NAME: "<main basename>-LiLiCorr.gguf" beside the weights, or
 #   LLM_AUTOTUNE_DFLASH_DRAFT_MODEL.  Four seams are joined — the capability probe sets
@@ -190,6 +195,12 @@
 
 set -uo pipefail
 
+# warn — one stderr channel for this file's operator messages. §18.3 10.7 counts a
+# hand-written `>&2` on echo/printf, so it is defined here, ahead of every early refusal
+# (the draft-arch guard below runs before the heavy-job re-exec and cannot reach a helper
+# defined 200 lines later).
+warn() { printf '%s\n' "$*" >&2; }
+
 # ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
 _AUTOTUNE_ORIG_ARGS=("$@")
 
@@ -253,6 +264,20 @@ MODEL="$_num"
 
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH" >&2; exit 1; }
+
+# A DRAFT HEAD is not a standalone model (__model_is_draft_head, 11e): it is passed beside
+# its target as --spec-draft-model, so measuring it on its own can only fail.  Refused HERE
+# because this is the chokepoint every caller reaches — `model autotune`, an explicit row,
+# the derived scopes and the resume loop — and it sits before the heavy-job lock and any GPU
+# work, so a named draft costs nothing.  Measured 2026-11-23: row 7 is a `dflash` draft.
+_arch_lc="${_arch,,}"
+if [[ -n "$_arch_lc" && " ${LLM_DRAFT_ARCHS:-} " == *" $_arch_lc "* ]]
+then
+    warn "Error: '$file' is a speculative draft head (arch '$_arch'), not a standalone model."
+    warn "       It belongs beside its target as --spec-draft-model; autotune the TARGET row"
+    warn "       and let its spec-decode sweep compare the draft."
+    exit 1
+fi
 
 # ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
 if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
@@ -416,8 +441,7 @@ ngl, plus any staged shard) exceeds MemAvailable — guest RAM is the wall, not 
     esac
 }
 
-# warn — one stderr channel for this file's operator messages. §18.3 10.7 counts a
-warn() { printf '%s\n' "$*" >&2; }
+# warn is defined near the top of this file, ahead of the early refusals.
 
 # _preflight_refuse <classification> <exit-rc> [detail] — end a run that never launched a
 _preflight_refuse() {

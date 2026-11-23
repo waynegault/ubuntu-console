@@ -542,6 +542,45 @@ __row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
     [ "$status" -eq 1 ]
 }
 
+@test "model scan: a draft head whose NAME says nothing is caught by its ARCH" {
+    # Measured 2026-11-23: NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf is a
+    # 1.26 GiB `dflash` draft whose basename carries neither `mtp-` nor `dflash`, so the
+    # name-only predicate let it register as row 7 — a chat row that can never load, and one
+    # `--all-but-done` would have swept.  The second argument is what catches it.
+    run __model_is_draft_head "NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf" "dflash"
+    [ "$status" -eq 0 ]
+    # EAGLE-3 drafts are a draft architecture too, and their basename need not say so either.
+    run __model_is_draft_head "Qwen3-4B-4bit.gguf" "eagle3"
+    [ "$status" -eq 0 ]
+    # Controls: a chat model's arch is not a draft arch, and an EMPTY arch must not match.
+    run __model_is_draft_head "Qwen3.8-27B-UD-Q4_K_M.gguf" "qwen35"
+    [ "$status" -eq 1 ]
+    run __model_is_draft_head "Qwen3.8-27B-UD-Q4_K_M.gguf" ""
+    [ "$status" -eq 1 ]
+}
+
+@test "model scan: a draft head recognised only by its ARCH does not become a row" {
+    # The call-site half of the case above.  `__model_is_draft_head` gaining an arch arm is a
+    # claim until the scan passes the arch through, which is why this drives `__model_scan`.
+    truncate -s 400M "$LLAMA_MODEL_DIR/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf"
+    truncate -s 400M "$LLAMA_MODEL_DIR/Qwen3.8-27B-UD-Q4_K_M.gguf"
+    __gguf_metadata() {
+        case "$1" in
+            *LiLiCorr*) printf 'NVIDIA Nemotron 3.5 Super VL 120B A12B NVFP4 LiLiCorr|dflash|1|4096|32\n' ;;
+            *)          printf 'Qwen3.8-27B|qwen35|65|262144|32\n' ;;
+        esac
+    }
+
+    run __model_scan
+    [ "$status" -eq 0 ] || { echo "scan failed: $output"; return 1; }
+
+    # Exactly one row: the chat model.  The draft head is not a model.
+    [ "$(awk -F'|' '$1 ~ /^[0-9]+$/ {n++} END {print n+0}' "$LLM_REGISTRY")" -eq 1 ] \
+        || { echo "expected one row, got:"; grep -v '^#' "$LLM_REGISTRY"; return 1; }
+    [ "$(awk -F'|' '$3 ~ /LiLiCorr/ {n++} END {print n+0}' "$LLM_REGISTRY")" -eq 0 ] \
+        || { echo "the draft head registered as a model:"; grep -F 'LiLiCorr' "$LLM_REGISTRY"; return 1; }
+}
+
 @test "model scan: a projector beside its weights does not become a row" {
     truncate -s 400M "$LLAMA_MODEL_DIR/Qwen3.8-27B-BF16-00001-of-00002.gguf"
     truncate -s 400M "$LLAMA_MODEL_DIR/Qwen3.8-27B-BF16-00002-of-00002.gguf"

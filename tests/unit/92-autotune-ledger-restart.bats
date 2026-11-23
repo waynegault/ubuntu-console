@@ -120,6 +120,27 @@ run_wrapper() {
         bash "$REPO_ROOT/bin/autotune-rows.sh" --force-live-fleet 999 2>&1
 }
 
+# run_scope <ledger> <registry> — drive the wrapper with a DERIVED scope (--all-but-done)
+# against a fixture registry.  A spent ledger stops the run at the pre-flight, AFTER the row
+# list has been printed, so what the scope SELECTED is observable without launching a row.
+# LLM_REGISTRY is exported because 01-constants derives it as ${LLM_REGISTRY:-…}.
+run_scope() {
+    local ledger="$1" reg="$2"
+    local ledger_file="$SANDBOX/ledger"
+    printf '%s\n' "$ledger" > "$ledger_file"
+    env PATH="$SANDBOX/bin:$PATH" \
+        HEAVY_JOB_HELD=1 \
+        LLM_STATE_DIR="$SANDBOX/.llm" \
+        TAC_STATE_DIR="$SANDBOX/tac-state" \
+        LLM_REGISTRY="$reg" \
+        RESTART_CALLS="$CALLS" \
+        TAC_RESUME_RESTART_TOOL="$RECORDER" \
+        CUDA_CYCLE_FILE="$ledger_file" \
+        LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$SANDBOX/suspend" \
+        AUTOTUNE_RESTART_DELAY=3 \
+        bash "$REPO_ROOT/bin/autotune-rows.sh" --force-live-fleet --all-but-done 2>&1
+}
+
 @test "ledger: a spent count ARMS the restart instead of only refusing" {
     # The measured fault: three runs refused and armed nothing, so the box stayed on a
     # boot that could not measure.  The arm is the whole point.
@@ -226,4 +247,24 @@ EOS
     [[ "$output" == *"reached-the-stop"* ]]
     grep -q ' stop ' "$SYSTEMCTL_LOG" \
         || { echo "the ALLOW arm did not reach the stop - the guard refuses everything"; return 1; }
+}
+
+@test "scope: --all-but-done does not offer a draft head for a sweep" {
+    # Measured 2026-11-23: row 7 of the live registry is
+    # NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf — a 1.26 GiB `dflash` DRAFT
+    # — and `--all-but-done` selected it as a chat model, because the scope skipped only
+    # `embedding`.  A draft is passed beside its target as --spec-draft-model, so a sweep for
+    # it can only fail.  Its basename carries neither `mtp-` nor `dflash`, so the ARCH is the
+    # only signal; LLM_DRAFT_ARCHS is where it is declared.
+    local reg="$SANDBOX/models.conf"
+    cat > "$reg" <<'EOF'
+1|Chat Model|chat.gguf|10G|Q4_K_M/q8_0/q8_0|qwen35|999|8192|6|1024|256|1|256|native|auto|on|0|no|no|no||||||||||||||||||1.1|256|||||||||
+2|Draft Head|draft-LiLiCorr.gguf|1.3G|unknown/q8_0/q8_0|dflash|999|262144|10|1024|256|1|1024|llama_server|auto|on|0|no|no|no||||||||||||||||||1.1|256|||||||||
+EOF
+    run run_scope 63 "$reg"
+    # The list is printed before the pre-flight refuses, so the selection is observable.
+    [[ "$output" == *"=== autotune 1 row(s): chat.gguf"* ]] \
+        || { echo "expected only the chat row; output:"; printf '%s\n' "$output"; return 1; }
+    [[ "$output" != *"draft-LiLiCorr.gguf"* ]] \
+        || { echo "the draft head was offered for a sweep"; return 1; }
 }

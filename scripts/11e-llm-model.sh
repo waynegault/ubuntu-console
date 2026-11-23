@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 147
+# Module Version: 148
+#   v148 (2026-11-23): `__model_is_draft_head` reads the ARCH as its second signal, and the
+#   scan calls it after the metadata read.  The basename arms (`mtp-*`, `*dflash*`) could not
+#   see NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf — a `dflash` draft whose
+#   name says nothing — so it registered as row 7 and `--all-but-done` would have autotuned
+#   it as a chat model that can never serve.  The arch list is LLM_DRAFT_ARCHS (01-constants).
 #   v147 (2026-11-20, rebased from AUTOTUNE-CARD-ATTR-003): the CARD DISCIPLINE note in
 #   __model_use_claim_cuda_card stopped calling the spared embedding lane an Xe lane.  It named
 #   llama-xe-embeddinggemma-embed (:18080) as a lane that "keeps serving throughout", but :18080
@@ -699,13 +704,23 @@ function __model_is_projector() {
     [[ "${_base,,}" == *mmproj* ]]
 }
 
-# __model_is_draft_head <path> — true when a GGUF is a speculative-decoding draft head
-# (`mtp-*.gguf` or `*dflash*.gguf`), which is passed via `--spec-draft-model` beside its
+# __model_is_draft_head <path> [arch] — true when a GGUF is a speculative-decoding draft
+# head (`mtp-*.gguf` or `*dflash*.gguf`), which is passed via `--spec-draft-model` beside its
 # target model and must never register as a standalone chat row in `models.conf`.
+#
+# TWO signals, like `__model_is_embedding` beside it.  The BASENAME arms come first and need
+# no metadata: an exporter may name a draft `mtp-*` or `*dflash*` while its arch is its
+# target's (an MTP head shares the target's architecture).  The ARCH arm catches a draft
+# that names itself neither way — measured 2026-11-23: NVIDIA-Nemotron-3.5-Super-VL-120B-
+# A12B-NVFP4-LiLiCorr.gguf is a `dflash` draft and reached the registry as a chat row,
+# because this function looked only at the basename.
 function __model_is_draft_head() {
     local _base="${1##*/}"
     local _lc="${_base,,}"
-    [[ "$_lc" == mtp-* || "$_lc" == *dflash* ]]
+    local _arch_lc="${2,,}"
+    [[ "$_lc" == mtp-* || "$_lc" == *dflash* ]] && return 0
+    [[ -n "$_arch_lc" && " ${LLM_DRAFT_ARCHS:-} " == *" $_arch_lc "* ]] && return 0
+    return 1
 }
 
 # __model_split_shard_walk <dir> — every split-GGUF shard under the store, excluding the
@@ -870,16 +885,21 @@ function __model_scan() {
             __tac_info "Skipping" "multimodal projector $rel — a projector is not a model" "$C_Dim"
             continue
         fi
-        if __model_is_draft_head "$fname"
-        then
-            __tac_info "Skipping" "speculative draft head $rel — a draft head is not a standalone model" "$C_Dim"
-            continue
-        fi
 
         local meta
         meta=$(__gguf_metadata "$gguf")
         local _mname march mblocks mctx mftype
         IFS='|' read -r _mname march mblocks mctx mftype <<< "$meta"
+
+        # A draft head is not a model either, but this one is checked AFTER the metadata
+        # read: a draft named neither `mtp-` nor `*dflash*` is only recognisable from its
+        # arch, and a basename-only check let a `dflash` draft register as a chat row
+        # (measured 2026-11-23).
+        if __model_is_draft_head "$fname" "$march"
+        then
+            __tac_info "Skipping" "speculative draft head $rel — a draft head is not a standalone model" "$C_Dim"
+            continue
+        fi
 
         # The registry is the CHAT registry. An embedding lane declares its own model in its
         # unit, so a row here is unused — and it is a re-add hazard for the very row Wayne had

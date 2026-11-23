@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-11-23): the derived scopes (--all / --all-but-done) drop DRAFT HEADS.  Row 7
+#     is a 1.26 GiB `dflash` draft (arch `dflash`), not a chat model, and both scopes offered
+#     it for a sweep that can only fail — it is passed beside its target as
+#     --spec-draft-model.  The arch list is LLM_DRAFT_ARCHS (01-constants v62); the basename
+#     is no signal here, because this draft's name carries neither `mtp-` nor `dflash`.
 #   v30 (2026-11-19): derive REPO and bin/heavy-job from this script's realpath instead of
 #     hardcoding /home/wayne/github-wsl/ubuntu-console, and invoke "$REPO/scripts/run-autotune-batch.sh"
 #     explicitly so worktree and secondary-clone invocations never run another checkout's code.
@@ -234,17 +239,24 @@ case "${1:-}" in
     # re-selecting it every sweep re-spends a full descent for a verdict that cannot
     # change (measured: 5.5-6.2 tps across 4096..131072, 13 probes, then "too slow").
     # --all still re-measures everything, which is the deliberate re-validation sweep.
+    # A DRAFT HEAD (arch in LLM_DRAFT_ARCHS, e.g. `dflash`) is not a standalone model: it is
+    # passed beside its target as --spec-draft-model, so a sweep for one can only fail.
+    # Measured 2026-11-23: row 7 is NVIDIA-...-LiLiCorr.gguf, a 1.26 GiB `dflash` draft, and
+    # --all-but-done selected it as a chat model.  The basename says nothing, so the ARCH is
+    # what both scopes test, from the one declaration in 01-constants.sh.
     --all-but-done)
         shift
-        mapfile -t ROWS < <(awk -F'|' '
-            $1 ~ /^[0-9]+$/ && $18 != "yes" && $18 != "slow" && tolower($6) !~ /embedding/ {print $3}
+        mapfile -t ROWS < <(awk -F'|' -v draft_archs="${LLM_DRAFT_ARCHS:-}" '
+            $1 ~ /^[0-9]+$/ && $18 != "yes" && $18 != "slow" && tolower($6) !~ /embedding/ \
+                && index(" " draft_archs " ", " " tolower($6) " ") == 0 {print $3}
         ' "$REGISTRY" | sort)
         DERIVED=1
         ;;
     --all)
         shift
-        mapfile -t ROWS < <(awk -F'|' '
-            $1 ~ /^[0-9]+$/ && tolower($6) !~ /embedding/ {print $3}
+        mapfile -t ROWS < <(awk -F'|' -v draft_archs="${LLM_DRAFT_ARCHS:-}" '
+            $1 ~ /^[0-9]+$/ && tolower($6) !~ /embedding/ \
+                && index(" " draft_archs " ", " " tolower($6) " ") == 0 {print $3}
         ' "$REGISTRY" | sort)
         DERIVED=1
         ;;

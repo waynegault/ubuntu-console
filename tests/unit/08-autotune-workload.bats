@@ -211,6 +211,62 @@ EOF
     fi
 }
 
+@test "autotune-draft: a draft head is refused before the lock, naming why" {
+    # Measured 2026-11-23: row 7 of the live registry is
+    # NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf — a 1.26 GiB `dflash` DRAFT.
+    # A draft is passed beside its target as --spec-draft-model, so measuring it alone can
+    # only fail.  Catches: a sweep that launches a draft and certifies a row for a model that
+    # can never serve; and a refusal placed AFTER bin/heavy-job, which would queue behind the
+    # box-wide lock to deliver a message that needed no lock at all.
+    local sandbox="$BATS_TEST_TMPDIR/draft"
+    # The box profile re-derives LLAMA_MODEL_DIR as $HOME/models/active (config/hosts.d/
+    # asus-n1n-rtx-spark.conf:95), so an exported LLAMA_MODEL_DIR is discarded and the
+    # fixture has to live where the profile looks.
+    mkdir -p "$sandbox/home/models/active" "$sandbox/bin"
+    truncate -s 400M "$sandbox/home/models/active/draft-LiLiCorr.gguf"
+    # A systemctl that records and changes nothing, and AUTOTUNE_SELFTEST=1 so 11d's
+    # process reaper refuses to run.  This case asserts a refusal that comes BEFORE the lane
+    # stand-down, but the guard is a claim until something proves it: 11d's
+    # `__llm_stop_lanes_for_baseline` has no TAC_TEST_TMPDIR predicate, and the reaper kills
+    # by PROCESS, so a systemctl stub alone is not enough — measured under this case's own
+    # mutation, 2026-11-23, which stopped the live chat and measure lanes.  The stub plus the
+    # selftest guard make "no production unit was touched" an assertion.
+    local syslog="$sandbox/systemctl.log"
+    : > "$syslog"
+    cat > "$sandbox/bin/systemctl" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$syslog"
+case "\$*" in *is-active*) exit 1 ;; esac
+exit 0
+EOS
+    chmod +x "$sandbox/bin/systemctl"
+    {
+        printf '%s\n' "$LLM_REGISTRY_HEADER"
+        printf '%s\n' '1|Draft Head|draft-LiLiCorr.gguf|0.4G|unknown/q8_0/q8_0|dflash|999|4096|6|1024|256|1|256|native|auto|on|0|no|no|no'
+    } > "$sandbox/models.conf"
+
+    run env -u VIRTUAL_ENV -u HEAVY_JOB_HELD HOME="$sandbox/home" \
+        PATH="$sandbox/bin:$PATH" TAC_TEST_TMPDIR="$sandbox" \
+        AUTOTUNE_SELFTEST=1 \
+        LLM_REGISTRY="$sandbox/models.conf" \
+        LLM_STATE_DIR="$sandbox/.llm" TAC_STATE_DIR="$sandbox/tac-state" \
+        HEAVY_JOB_LOCK="$sandbox/heavy-job.lock" \
+        bash "$REPO_ROOT/scripts/autotune-model.sh" draft-LiLiCorr.gguf 2>&1
+
+    [ "$status" -eq 1 ] || { echo "expected a refusal, got rc=$status:"; printf '%s\n' "$output"; return 1; }
+    [[ "$output" == *"speculative draft head"* ]] \
+        || { echo "the refusal did not name the reason:"; printf '%s\n' "$output"; return 1; }
+    [[ "$output" == *"--spec-draft-model"* ]] \
+        || { echo "the refusal did not say what to do instead"; return 1; }
+    # The lock file is created by bin/heavy-job.  Its absence is what makes "before the
+    # lock" an observation rather than a claim.
+    [ ! -e "$sandbox/heavy-job.lock" ] \
+        || { echo "the refusal ran AFTER the heavy-job lock was taken"; return 1; }
+    # And the lane stand-down was never reached.
+    ! grep -q ' stop ' "$syslog" \
+        || { echo "a refused draft still stood a lane down:"; grep ' stop ' "$syslog"; return 1; }
+}
+
 @test "autotune-001: autotune-model.sh accepts --workload and env default chat" {
     local src
     src=$(< "$REPO_ROOT/scripts/autotune-model.sh")

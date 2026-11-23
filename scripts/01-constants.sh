@@ -2,7 +2,13 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 61
+# Module Version: 62
+#   v62 (2026-11-23): LLM_DRAFT_ARCHS declares the architectures that are speculative
+#     DRAFT HEADS rather than standalone chat models.  `__model_is_draft_head` matched the
+#     BASENAME only, so NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf (arch
+#     `dflash`, 1.26 GiB) registered as a row and `--all-but-done` would have autotuned it
+#     as a model that can never serve.  The ARCH is the reliable signal; declared once here
+#     for the scan predicate, the sweep's row selection and the autotuner's refusal.
 #   v61 (2026-11-23): under BATS, LLM_STATE_DIR no longer accepts the operator's inherited
 #     value.  ${LLM_STATE_DIR:-…} TAKEs what the shell exports, so a suite that pinned
 #     HOME/LLM_REGISTRY/LLAMA_MODEL_DIR still wrote the live store through the scan backup
@@ -402,6 +408,15 @@ fi
 # measurement would assert a pool the new number was not taken in.  Empty means the row was
 # never measured by an autotune run, not that the carve was zero.
 export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy|llama_build|llama_build_prev|gpu_carve'
+# A DRAFT HEAD is a GGUF architecture in its own right, passed beside its target as
+# --spec-draft-model (docs/speculative.md: `--spec-type draft-dflash` / `draft-eagle3`).
+# It is not a standalone chat model, so a registry row or an autotune sweep for one can
+# only fail.  Measured 2026-11-23: NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr
+# .gguf (arch `dflash`, 1.26 GiB) was registered as row 7, because the scan's
+# `__model_is_draft_head` matched the BASENAME (`mtp-*` / `*dflash*`) and this draft's
+# name carries neither.  The ARCH is the reliable signal; one declaration, read by the
+# scan predicate, the sweep's row selection and the autotuner's refusal.
+export LLM_DRAFT_ARCHS="${LLM_DRAFT_ARCHS:-dflash eagle3}"
 # Overridable, like everything else in this file: a test, or a box whose models live
 # somewhere other than the home directory, has to be able to point at its own registry.
 # Measured 2026-10-30: the assignment ignored a pre-set LLM_REGISTRY, so a fixture
