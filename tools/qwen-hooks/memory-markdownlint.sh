@@ -10,6 +10,9 @@
 # `bash -n` parse it; it runs under the bash named in the shebang.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 11
+#   v11 (2026-11-23): pass `-S` to python3 in fix_name_budget() so an active project `.venv`'s
+#   `.pth` regular `tools` package cannot shadow `$QWEN_DIR/tools` (PEP 420 namespace package).
 # Module Version: 10
 #   v10 (2026-11-23): the store's 150-char index line is now ENFORCED here, not asked for in the
 #   writer's prompt.  The extractor chooses a note's `name:` without ever seeing the line it will
@@ -479,7 +482,8 @@ fix_name_budget() {
         [[ -f "$store/MEMORY.md" ]] || continue
         # Only stores with a changed note: the tool scans the whole store, and most turns touch none.
         grep -qF "$store/" "$LIST.keep" || continue
-        out="$(cd "$QWEN_DIR" && PYTHONPATH="$QWEN_DIR" "$PYTHON" \
+        # -S skips site.py/.pth so an active project .venv's regular `tools` package cannot shadow $QWEN_DIR/tools.
+        out="$(cd "$QWEN_DIR" && PYTHONPATH="$QWEN_DIR" "$PYTHON" -S \
             tools/shorten-note-names.py --store "$store" --apply 2>&1)"
         rc=$?
         if [[ "$rc" -ne 0 ]]; then

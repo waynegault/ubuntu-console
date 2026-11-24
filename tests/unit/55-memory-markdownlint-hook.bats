@@ -251,7 +251,7 @@ print(n.budget_for(sys.argv[1]))
         printf 'budget=%s name_len=%s\n' "$budget" "${#LONG_NAME}"
         printf 'hook output:\n%s\n' "$output"
         printf 'shortener, asked directly:\n'
-        (cd "$FIX/.qwen" && PYTHONPATH="$FIX/.qwen" python3 tools/shorten-note-names.py \
+        (cd "$FIX/.qwen" && PYTHONPATH="$FIX/.qwen" python3 -S tools/shorten-note-names.py \
             --store memories --apply 2>&1)
         return 1
     fi
