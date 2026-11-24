@@ -428,6 +428,7 @@ jobs:
                tests/unit/97-test-state-sandbox.bats \
                tests/unit/98-lane-certification.bats \
                tests/unit/99-autotune-oom-remedy-order.bats \
+               tests/unit/100-autotune-review-fixes.bats \
             2>&1 | tee "$RUNNER_TEMP/unit-tests.tap"
 
       - name: Upload the unit suite's output
