@@ -364,3 +364,37 @@ EOF
     grep -q '/tmp/at-spread-vals-\$\$' "$REPO_ROOT/scripts/autotune-model.sh"
     grep -q 'echo "    samples:' "$REPO_ROOT/scripts/autotune-model.sh"
 }
+
+@test "autotune: winning spec-decode promotes BEST_TPS and applies WIN_SPEC across post probes" {
+    local fn="$SANDBOX/spec_helpers.sh"
+    {
+        sed -n '/^_apply_win_spec()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh"
+        sed -n '/^_clear_bench_spec()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh"
+    } > "$fn"
+    # shellcheck source=/dev/null
+    source "$fn"
+
+    WIN_SPEC_TYPE="draft-mtp"
+    WIN_SPEC_N_MAX="4"
+    WIN_SPEC_DRAFT_PATH="/models/mtp.gguf"
+    WIN_SPEC_NGL="999"
+    _apply_win_spec
+    [ "$BENCH_SPEC_TYPE" = "draft-mtp" ]
+    [ "$BENCH_SPEC_N_MAX" = "4" ]
+    [ "$BENCH_SPEC_DRAFT_MODEL" = "/models/mtp.gguf" ]
+    [ "$BENCH_SPEC_NGL" = "999" ]
+
+    _clear_bench_spec
+    [ "$BENCH_SPEC_TYPE" = "off" ]
+    [ -z "$BENCH_SPEC_N_MAX" ]
+    [ -z "$BENCH_SPEC_DRAFT_MODEL" ]
+    [ -z "$BENCH_SPEC_NGL" ]
+
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *'BEST_TPS="$_sb_best_tps"'* ]]
+    [[ "$src" == *'if [[ "${P2_CTX:-0}" == "${BEST_CTX:-0}" ]]; then'* ]]
+    [[ "$src" == *'P2_TPS="$BEST_TPS"'* ]]
+    [[ "$src" == *$'_apply_win_spec\n            for _th_cand'* ]]
+    [[ "$src" == *$'_apply_win_spec\n        _meas_pos2='* ]]
+}

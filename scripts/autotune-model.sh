@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 163
+#   v163 (2026-11-24): promote BEST_TPS (and matching P2_TPS) when spec-decode wins, and apply
+#   winning spec flags across threads probe and _meas_pos2 via _apply_win_spec/_clear_bench_spec.
+#   Both helpers are defined above the sweep block: they were first written after it, where bash
+#   had not defined them yet when the threads probe called them (shellcheck SC2218).
 # Module Version: 162
 #   v162 (2026-11-24): refresh stale/unknown quant prefix via __quant_label on save; record and log
 #   per-sample TPS values when sample spread exceeds AUTOTUNE_SPREAD_WARN_PCT.
@@ -3369,6 +3374,30 @@ DFLASH_N_MAX_LIST=${LLM_AUTOTUNE_DFLASH_N_MAX_LIST:-"4 5 8 16"}
 # default in llama.cpp and NVIDIA's RTX Spark recipe is 3.
 MTP_N_MAX_LIST=${LLM_AUTOTUNE_MTP_N_MAX_LIST:-"2 3 4 8"}
 SPEC_MIN_GAIN_PCT=${LLM_AUTOTUNE_SPEC_MIN_GAIN_PCT:-5}
+
+# _apply_win_spec — activate winning spec-decode globals for post-sweep probes.
+# Defined before the sweep block below: the threads probe calls it, and bash resolves a
+# function at call time, so a definition placed after the sweep is not yet defined there
+# (shellcheck SC2218, and `command not found` at the first sweep).
+_apply_win_spec() {
+    if [[ -n "${WIN_SPEC_N_MAX:-}" ]]; then
+        BENCH_SPEC_TYPE="${WIN_SPEC_TYPE:-off}"
+        BENCH_SPEC_N_MAX="$WIN_SPEC_N_MAX"
+        BENCH_SPEC_DRAFT_MODEL="${WIN_SPEC_DRAFT_PATH:-}"
+        BENCH_SPEC_NGL="${WIN_SPEC_NGL:-}"
+    else
+        _clear_bench_spec
+    fi
+}
+
+# _clear_bench_spec — reset spec-decode globals after a spec-aware probe.
+_clear_bench_spec() {
+    BENCH_SPEC_TYPE="off"
+    BENCH_SPEC_N_MAX=""
+    BENCH_SPEC_DRAFT_MODEL=""
+    BENCH_SPEC_NGL=""
+}
+
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r _sb_b _sb_u <<< "$BEST_COMBO"
     echo ""
@@ -3484,6 +3513,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     done
     BENCH_SPEC_TYPE="off"; BENCH_SPEC_N_MAX=""; BENCH_SPEC_DRAFT_MODEL=""; BENCH_SPEC_NGL=""
     if [[ -n "$WIN_SPEC_N_MAX" ]]; then
+        BEST_TPS="$_sb_best_tps"
+        if [[ "${P2_CTX:-0}" == "${BEST_CTX:-0}" ]]; then
+            P2_TPS="$BEST_TPS"
+        fi
         echo "  spec-decode winner: ${WIN_SPEC_TYPE} block ${WIN_SPEC_N_MAX}" \
              "(${_sb_best_tps} tps, accept len ${WIN_SPEC_ACCEPT_LEN:-0})"
         echo "  spec-decode is LOSSLESS (rejects preserve the target distribution) — preferred over"
@@ -3530,6 +3563,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO && "${AUTOTUNE_THREAD_SWEEP:-1}" != "0" 
             echo "  -------------------------------------"
             _th_best_threads="$RECORDED_THREADS"
             _th_best_tps="${BEST_TPS:-0}"
+            _apply_win_spec
             for _th_cand in "${_th_candidates[@]}"; do
                 _th_wide=$(__autotune_thread_probe "$_th_cand" "$_th_best_tps")
                 if [[ "$_th_wide" =~ ^[0-9] ]] && (( ${_th_wide%%.*} > 0 ))
@@ -3538,6 +3572,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO && "${AUTOTUNE_THREAD_SWEEP:-1}" != "0" 
                     _th_best_tps="$_th_wide"
                 fi
             done
+            _clear_bench_spec
             TUNE_THREADS="$_th_best_threads"
             if (( TUNE_THREADS != RECORDED_THREADS ))
             then
@@ -3560,9 +3595,6 @@ fi
 # FA-off arm would fail its launch on nearly every row and spend a cycle proving a fact we
 # already know.  The arm becomes meaningful only when the KV sweep has chosen f16 — then
 # flash-off is loadable, and f16/f16 measured recall 1.00 at every depth.
-
-
-
 
 # ttft_probe — time-to-first-token at a config (AUTOTUNE-003).
 ttft_probe() {
@@ -3983,8 +4015,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # 1a — the POSITION term.  The winner above is a median of 5 taken at ONE point in
         _meas_drift_pct=""
         rm -f "/tmp/at-clock-$$" "/tmp/at-clock-raw-$$"
+        _apply_win_spec
         _meas_pos2=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" \
             "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _meas_pos2=""
+        _clear_bench_spec
         [[ -n "$_meas_pos2" ]] \
             && _meas_drift_pct=$(__autotune_position_drift "${BEST_TPS:-0}" "$_meas_pos2")
         if [[ -z "$_meas_drift_pct" ]]; then
