@@ -63,7 +63,7 @@ EOF
         sed -n '/^__autotune_clock_state_from_samples()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh"
         sed -n '/^__autotune_clock_verdict()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh"
     } > "$fn"
-    # shellcheck disable=SC1090
+    # shellcheck source=/dev/null
     source "$fn"
 
     printf '2400,3003,62\n2450,3003,63\n2420,3003,64\n2410,3003,64\n' > "$SANDBOX/ok.csv"
@@ -193,9 +193,9 @@ EOF
 }
 
 @test "card5: NVFP4 quant label, non-*moe* MoE detection, and batch draft filter" {
-    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/01-constants.sh"
-    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
 
     [ "$(__quant_label 39 "model.gguf")" = "NVFP4" ]
@@ -232,11 +232,11 @@ EOF
 }
 
 @test "card6: __llm_llama_build_id reads stderr version and profile_save persists mmap and flash_attn" {
-    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/01-constants.sh"
-    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/11a-llm-registry.sh"
-    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
 
     local bin="$SANDBOX/llama-server"
@@ -267,9 +267,9 @@ EOF
 }
 
 @test "card8: __llm_kill_cuda_llama_servers and __llm_stand_down_cuda_lanes refuse under TAC_TEST_TMPDIR" {
-    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/01-constants.sh"
-    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
 
     AUTOTUNE_SELFTEST=0 TAC_TEST_TMPDIR="$SANDBOX" run __llm_kill_cuda_llama_servers
