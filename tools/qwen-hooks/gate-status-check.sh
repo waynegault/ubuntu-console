@@ -7,7 +7,11 @@
 # clears the marker itself — only a real PASS does that.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-11-24): name the forbidden shortcut beside the instruction. Measured the same
+#   day: a peer session cleared a size-ratchet red by raising the note's allowance in
+#   tests/store-budget.json instead of trimming the note, because the marker said only
+#   "fix the failing case". A raise is a decision for Wayne, never a way to clear the marker.
 #   v3 (2026-11-04): end with the repo's `# end of file` sentinel; the hygiene case over
 #   tools/qwen-hooks/*.sh was red because this file stopped on code.
 #   v2 (2026-11-01): `[ -f ]` -> `[[ -f ]]`, clearing the §18.3 6.7 rise.
@@ -23,5 +27,7 @@ marker="$HOME/.qwen/debug/qwen-gate-FAILED"
 echo "qwen-gate FAILED — the store suite is red."
 sed -n '1,12p' "$marker"
 echo "Fix the failing case; the next PASS removes the marker."
+echo "A size or name red is fixed by trimming the note (and lowering its baseline); raising"
+echo "tests/store-budget.json is Wayne's decision, never a way to clear this marker."
 
 # end of file
