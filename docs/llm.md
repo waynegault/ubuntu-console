@@ -1319,7 +1319,7 @@ one (`model autotune N --workload agentic`).
 | `~/llama.cpp/` | llama.cpp installation root (`$LLAMA_ROOT`) — upstream: [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). See [Building llama.cpp](#building-llamacpp) below for CUDA compilation instructions. |
 | `/mnt/m/active/` | Active GGUF model files (`$LLAMA_MODEL_DIR`) — `/mnt/m` is the `intel-xe-cuda` profile's `$LLAMA_DRIVE_ROOT`; each box has its own |
 | `/mnt/m/archive/` | Archived/discouraged models (`$LLAMA_ARCHIVE_DIR`) |
-| `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) — custom-tuned CUDA build (see [Building llama.cpp](#building-llamacpp) below) |
+| `${LLAMA_BUILD_DIR}/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) — custom-tuned CUDA build; the tree is the profile's (`build-cuda/` here, `build/` on the x86 box) (see [Building llama.cpp](#building-llamacpp) below) |
 | `$LLM_REGISTRY` | Model registry — 45-column format (schema v7: v6 + the 2b measurement columns 40-44 + `ctx_policy` 45) — per box (default `~/.llm/models.conf`; a profile may point it beside the store) |
 | `~/.llm/host-profile` | This box's host-profile id (optional, machine-local; `LLM_HOST_PROFILE` overrides it) |
 | `config/hosts.d/<id>.conf` | Host profile — the machine's cards, lanes, tuning, model store and quant policy |
@@ -2016,9 +2016,13 @@ ls -lh build/libggml-cuda.so
 ## Installing the Built Binary
 
 The Tactical Console's `LLAMA_CUDA_SERVER_BIN` points at the CUDA tree that exists:
-`scripts/01-constants.sh` resolves `~/llama.cpp/build-cuda` first and falls back to
-`~/llama.cpp/build`, and `llm-build` writes into `${LLAMA_BUILD_DIR}` — which each host
-profile sets to that same tree, so a rebuild replaces the binary the lane launches.
+`scripts/01-constants.sh` prefers `${LLAMA_BUILD_DIR}` — the tree `llm-build` writes, which
+each host profile declares (`build-cuda/` here, `build/` on the x86 box) — then falls back to
+`~/llama.cpp/build-cuda` and `~/llama.cpp/build` when no binary is there. A rebuild renames
+its tree to `<tree>.prev-<commit>` for the compile, and the constants name that moved-aside
+tree rather than reporting nothing (`.failed-*` is never named: that build did not succeed).
+`LLAMA_BUILD_DIR` is a profile fact, so the applier clears it before sourcing the profile —
+a parent shell's tree cannot outvote the box's own.
 The CUDA architecture is the card's, read from `nvidia-smi`; the profile's
 `LLAMA_CUDA_ARCH` answers a card that cannot be read. The CUDA lane's launcher
 `~/.local/bin/llama-cuda-server` resolves the binary. No installation step is

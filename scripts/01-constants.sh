@@ -2,7 +2,19 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 62
+# Module Version: 63
+#   v63 (2026-11-24): the build paths derive from the tree `llm-build` WRITES, not from a
+#     literal probe.  LLAMA_ROOT becomes overridable like every other path here (it was
+#     assigned unconditionally, so an inherited LLAMA_ROOT was discarded on source);
+#     LLAMA_BUILD_DIR is exported from `${LLAMA_BUILD_DIR:-$LLAMA_ROOT/build}` — the same
+#     default 11e applies at its build site; LLAMA_SERVER_BIN prefers that tree; and
+#     LLAMA_XE_SERVER_BIN derives from the profile's LLAMA_OPENCL_DIR.  Then the one window
+#     that made a literal probe wrong: llm-build and bin/llm-rebuild-monthly.sh rename the
+#     tree to <tree>.prev-<commit> for the 40-60 min compile, so a shell started then found
+#     no build-cuda/, fell back to build/ (absent here) and computed "Native llama-server
+#     binary not found" from an otherwise healthy box.  The moved-aside tree IS the serving
+#     build, so it is named instead.  `<tree>.failed-*` is deliberately NOT: that is a tree
+#     that did not build.  The "# Build:" line now names `llm-build`.
 #   v62 (2026-11-23): LLM_DRAFT_ARCHS declares the architectures that are speculative
 #     DRAFT HEADS rather than standalone chat models.  `__model_is_draft_head` matched the
 #     BASENAME only, so NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf (arch
@@ -235,8 +247,12 @@ export OC_TMP_LOG="/tmp/openclaw/openclaw.log"
 
 # ---- LLM / llama.cpp ----
 # Upstream: https://github.com/ggml-org/llama.cpp
-# Build:    cmake -B build -DGGML_CUDA=ON && cmake --build build --target llama-server
-export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
+# Build:    llm-build            (scripts/11e-llm-model.sh) — checkout, CUDA cmake, tree
+#           The recipe this comment used to carry (`cmake -B build -DGGML_CUDA=ON`) named
+#           a tree no launcher reads on either box; the live path is llm-build, which reads
+#           the arch from the driver, takes LLAMA_BUILD_DIR from the host profile, and
+#           builds llama-server plus llama-tokenize/llama-cli/llama-bench.
+export LLAMA_ROOT="${LLAMA_ROOT:-$AI_STORAGE_ROOT/llama.cpp}"
 # LLAMA_DRIVE_ROOT is user-configurable at the top of this file.
 # A HOST PROFILE may name the store's directories directly, because a store is not
 # necessarily <root>/active on every box (measured 2026-10-30: the arm64 box keeps a
@@ -325,20 +341,50 @@ export LLAMA_DRIVE_SIZE
 # that EXISTS: measured 2026-11-01, build/ held nothing while build-cuda/ served
 # the card, so every consumer without LLAMA_CUDA_SERVER_BIN set — autotune, the
 # spec-dec crossover, cache-ram-probe — pointed at a path with no binary in it.
-_LLAMA_CUDA_TREE="$LLAMA_ROOT/build-cuda"
-[[ -x "$_LLAMA_CUDA_TREE/bin/llama-server" ]] || _LLAMA_CUDA_TREE="$LLAMA_ROOT/build"
-export LLAMA_SERVER_BIN="$_LLAMA_CUDA_TREE/bin/llama-server"
-unset _LLAMA_CUDA_TREE
+#
+# The FIRST candidate is the tree llm-build writes, not a literal: the host profile
+# declares LLAMA_BUILD_DIR (build-cuda/ here, unset => build/ on the x86 box), and a
+# build path that disagrees with the builder is how a 40-60 min rebuild landed in a tree
+# no launcher reads.  Exported under the same default 11e applies at its build site, so
+# a child shell and the builder name the same tree.
+_LLAMA_CUDA_TREE=""
+for _llama_tree in "$LLAMA_BUILD_DIR" "$LLAMA_ROOT/build-cuda" "$LLAMA_ROOT/build"; do
+    [[ -x "$_llama_tree/bin/llama-server" ]] && { _LLAMA_CUDA_TREE="$_llama_tree"; break; }
+done
+if [[ -z "$_LLAMA_CUDA_TREE" ]]; then
+    # A glob that matches nothing yields its own pattern, which `-x` then rejects — so
+    # asking "is any .prev tree here?" needs no `ls` and swallows no error.  The list is
+    # sorted, so the highest commit suffix wins: the newest tree that was serving.
+    for _llama_prev in "$LLAMA_BUILD_DIR".prev-* "$LLAMA_ROOT/build-cuda".prev-*; do
+        [[ -x "$_llama_prev/bin/llama-server" ]] && _LLAMA_CUDA_TREE="$_llama_prev"
+    done
+fi
+# No command substitution in this export: a `$(...)` there masks the exit status, and the
+# value is built in a plain variable first so shellcheck's SC2155 stays clear.
+_llama_tree_bin=""
+if [[ -n "$_LLAMA_CUDA_TREE" ]]
+then
+    _llama_tree_bin="$_LLAMA_CUDA_TREE/bin/llama-server"
+else
+    # Nothing built anywhere: name the checkout's default tree anyway, so the consumer's
+    # "binary not found" (11e:1781 refuses a launch on this value) names a tree under
+    # LLAMA_ROOT rather than an empty string.
+    _llama_tree_bin="$LLAMA_ROOT/build/bin/llama-server"
+fi
+export LLAMA_SERVER_BIN="$_llama_tree_bin"
+unset _LLAMA_CUDA_TREE _llama_tree _llama_prev _llama_tree_bin
 # The launcher builds.  This is the single place that answers "which build serves
 # which card": bin/llama-cuda-server, bin/llama-xe-server and bin/llama-cpu-server
 # read these, and their own fallbacks name this file.  CUDA derives from
-# LLAMA_SERVER_BIN so there is one source for it; the Xe tree is a separate
-# OpenCL build and had no constant before.  The CPU tree is CPU-only and is kept
-# OUTSIDE build/ and build-cuda*/ deliberately — bin/llama-gpu-clear.sh reaps GPU
-# servers by executable path, so a CPU tier built there would be killed by the
-# next bench or autotune drain.
+# LLAMA_SERVER_BIN so there is one source for it; the Xe tree derives from the
+# profile's LLAMA_OPENCL_DIR, which is the tree llm-build configures and the launcher
+# resolves (it agreed with the old literal only because both spell build-opencl).
+# The CPU tree is CPU-only and is kept OUTSIDE build/ and build-cuda*/ deliberately —
+# bin/llama-gpu-clear.sh reaps GPU servers by executable path, so a CPU tier built
+# there would be killed by the next bench or autotune drain.  Nothing builds it
+# automatically: docs/llm.md "Building the CPU tier" is the recipe.
 export LLAMA_CUDA_SERVER_BIN="${LLAMA_CUDA_SERVER_BIN:-$LLAMA_SERVER_BIN}"
-export LLAMA_XE_SERVER_BIN="${LLAMA_XE_SERVER_BIN:-$LLAMA_ROOT/build-opencl/bin/llama-server}"
+export LLAMA_XE_SERVER_BIN="${LLAMA_XE_SERVER_BIN:-${LLAMA_OPENCL_DIR:-$LLAMA_ROOT/build-opencl}/bin/llama-server}"
 export LLAMA_CPU_SERVER_BIN="${LLAMA_CPU_SERVER_BIN:-$LLAMA_ROOT/build-cpu/bin/llama-server}"
 export LLAMA_BUILD_VERSION
 if [[ -d "$LLAMA_ROOT" ]]; then

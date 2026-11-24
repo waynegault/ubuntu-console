@@ -609,6 +609,78 @@ EOS
         || { echo "FAIL: a box built at build/ must keep LLAMA_SERVER_BIN there, got '$output'"; return 1; }
 }
 
+# A rebuild RENAMES its tree to <tree>.prev-<commit> for the whole compile (measured
+# 2026-11-14: build-cuda -> build-cuda.prev-2cbe0ec42 while both lanes kept executing from
+# it), so for 40-60 minutes there is no build-cuda/ on disk.  A shell started in that
+# window probed build-cuda/, then build/ (absent on this box), and computed
+# "Native llama-server binary not found" — 11e:1781 refuses a launch on that value — from
+# a box whose serving build was intact at the .prev path.  The moved-aside tree IS the
+# serving build, so it is named.  Criterion: a mid-rebuild shell resolves to the build
+# that was serving.
+@test "gpu-exclusivity: 01-constants names the moved-aside tree while a rebuild runs" {
+    local root="$TAC_TEST_TMPDIR/home-rebuild"
+    mkdir -p "$root/llama.cpp/build-cuda.prev-2cbe0ec42/bin"
+    : > "$root/llama.cpp/build-cuda.prev-2cbe0ec42/bin/llama-server"
+    chmod +x "$root/llama.cpp/build-cuda.prev-2cbe0ec42/bin/llama-server"
+
+    run env -i HOME="$root" PATH="$PATH" bash -c \
+        'source "$1"; printf "%s" "$LLAMA_SERVER_BIN"' _ "$REPO_ROOT/scripts/01-constants.sh"
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "$root/llama.cpp/build-cuda.prev-2cbe0ec42/bin/llama-server" ] \
+        || { echo "FAIL: mid-rebuild LLAMA_SERVER_BIN is '$output', not the moved-aside tree"; return 1; }
+}
+
+# Control: `.failed-<ts>` is a tree whose build DID NOT succeed (11e's OpenCL restore keeps
+# it), so it must never be named as the serving binary — a stale failed tree is not a build.
+@test "gpu-exclusivity: 01-constants never names a .failed tree" {
+    local root="$TAC_TEST_TMPDIR/home-failed"
+    mkdir -p "$root/llama.cpp/build-cuda.failed-20261118T120000Z/bin"
+    : > "$root/llama.cpp/build-cuda.failed-20261118T120000Z/bin/llama-server"
+    chmod +x "$root/llama.cpp/build-cuda.failed-20261118T120000Z/bin/llama-server"
+
+    run env -i HOME="$root" PATH="$PATH" bash -c \
+        'source "$1"; printf "%s" "$LLAMA_SERVER_BIN"' _ "$REPO_ROOT/scripts/01-constants.sh"
+
+    [ "$status" -eq 0 ]
+    # What matters is the EXCLUSION: with no serving tree anywhere the name may be empty
+    # or the checkout's own default, but it must never be a tree that did not build.
+    [[ "$output" != *".failed"* ]] \
+        || { echo "FAIL: a .failed tree was named as the serving build ('$output')"; return 1; }
+}
+
+# The tree the builder writes wins.  The profile declares LLAMA_BUILD_DIR to keep a
+# rebuild out of a tree no launcher reads; the reverse leak is the same fault, so a shell
+# that inherits a declared tree must not be redirected by a leftover build-cuda/.  An
+# inherited LLAMA_BUILD_DIR here is standalone scripting state (external input), which the
+# profile applier would clear and re-derive when the full env is loaded.
+# The profile's declaration is the tree; an INHERITED LLAMA_BUILD_DIR cannot redirect it.
+# Two facts make this the right contract: the profile applier clears LLAMA_BUILD_DIR before
+# sourcing the conf (tools/host-profile.sh v19), and a build path that disagrees with the
+# builder is how a rebuild landed in a tree no launcher reads.  Catches both a regression
+# that lets a parent shell's path win and one that probes a leftover tree instead.
+# LLAMA_ROOT is pinned for the same reason as the cases around it: this profile declares an
+# absolute tree, so a fixture must supply its own root.
+@test "gpu-exclusivity: 01-constants resolves the PROFILE's build tree, not an inherited one" {
+    local root="$TAC_TEST_TMPDIR/home-declared"
+    mkdir -p "$root/llama.cpp/build-cuda/bin" "$root/tree-inherited/bin"
+    : > "$root/llama.cpp/build-cuda/bin/llama-server"
+    chmod +x "$root/llama.cpp/build-cuda/bin/llama-server"
+    : > "$root/tree-inherited/bin/llama-server"
+    chmod +x "$root/tree-inherited/bin/llama-server"
+
+    run env -i HOME="$root" PATH="$PATH" LLAMA_ROOT="$root/llama.cpp" \
+        LLAMA_BUILD_DIR="$root/tree-inherited" bash -c \
+        'source "$1"; printf "%s|%s" "$LLAMA_SERVER_BIN" "$LLAMA_BUILD_DIR"' \
+        _ "$REPO_ROOT/scripts/01-constants.sh"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"tree-inherited"* ]] \
+        || { echo "FAIL: an inherited LLAMA_BUILD_DIR redirected the serving binary ('$output')"; return 1; }
+    [ "$output" = "$root/llama.cpp/build-cuda/bin/llama-server|$root/llama.cpp/build-cuda" ] \
+        || { echo "FAIL: expected the profile's build-cuda tree, got '$output'"; return 1; }
+}
+
 # A lane that named a historical forwarding shim (or the other card's launcher)
 # would still start, and the card map would then describe something other than what
 # runs — which is how "which build serves this card?" became unanswerable before.

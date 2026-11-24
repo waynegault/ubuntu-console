@@ -73,7 +73,11 @@ make_tree() {
 }
 
 # Echo what _sanctioned_exes resolves, with HOME pointed at the fake tree and the
-# two override variables out of the picture (they take precedence by design).
+# three override variables out of the picture (they take precedence by design).
+# LLAMA_BUILD_DIR is stripped too, and that is the point: an operator shell that sourced
+# the console exports it, so leaving it in made the probe read the REAL checkout while
+# constants_exe (below) read the sandbox — a one-sided comparison that fails on a
+# developer's box and passes on a bare runner.  Measured 2026-11-24.
 resolved_exes() {
     env -u LLAMA_CUDA_SERVER_BIN -u LLAMA_XE_SERVER_BIN HOME="$FAKE_HOME" \
         bash -c 'source "$1"; _sanctioned_exes' _ "$TAC_TEST_TMPDIR/probe.sh"
@@ -205,6 +209,36 @@ prev_exe() {
     esac
 }
 
+@test "the standalone copy agrees with 01-constants.sh on a DECLARED build tree" {
+    # The profile names the tree llm-build writes (build-cuda/ here, build/ on the x86
+    # box).  A box that builds build/ and still has a build-cuda/ left over was the leak:
+    # the copy preferred build-cuda/ unconditionally, so it sanctioned a tree nobody
+    # maintains while the constants named the declared one.
+    #
+    # The oracle is 01-constants' own probe ORDER, read off the shipped source.  Not its
+    # runtime output: sourcing it loads the host profile, which supplies its own declared
+    # tree, so an output comparison would test the profile's answer rather than the order.
+    # Read as a regex, a reordered probe list fails, which is the failure that matters.
+    #
+    # The probe half drives the real helper through this suite's own `both` fixture with
+    # both binary variables cleared.  It is a one-line revert check: put build-cuda/ back
+    # at the head of the candidate list and this line goes red.
+    make_tree both
+    run env -u LLAMA_CUDA_SERVER_BIN HOME="$FAKE_HOME" \
+        LLAMA_BUILD_DIR="$FAKE_HOME/llama.cpp/build" \
+        bash -c 'source "$1"; _sanctioned_exes' _ "$TAC_TEST_TMPDIR/probe.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$FAKE_HOME/llama.cpp/build/bin/llama-server" ] || {
+        echo "gpu-busy.sh resolved '$output', not the declared build/ tree" >&2
+        return 1
+    }
+    run grep -E '^for _llama_tree in "\$LLAMA_BUILD_DIR"' "$REPO_ROOT/scripts/01-constants.sh"
+    [ "$status" -eq 0 ] || {
+        echo "01-constants.sh does not probe \$LLAMA_BUILD_DIR FIRST" >&2
+        return 1
+    }
+}
+
 # ==============================================================================
 # THE DRIFT GUARD (2026-11-02, Rook's proposed durable repair)
 # ==============================================================================
@@ -221,7 +255,11 @@ prev_exe() {
 # change to the constants that gpu-busy does not follow now fails a suite instead of
 # killing a serving lane.
 constants_exe() {
-    env -u LLAMA_CUDA_SERVER_BIN -u LLAMA_XE_SERVER_BIN HOME="$FAKE_HOME" \
+    # The same three variables cleared as resolved_exes: an operator shell has sourced
+    # the console, so an inherited LLAMA_BUILD_DIR (the profile's own tree) points the
+    # constants at the REAL checkout while the probe reads the sandbox — a one-sided
+    # comparison that reddens on a developer's box and passes on a bare runner.
+    env -u LLAMA_CUDA_SERVER_BIN -u LLAMA_XE_SERVER_BIN -u LLAMA_BUILD_DIR HOME="$FAKE_HOME" \
         bash -c 'source "$1" >/dev/null 2>&1; printf %s "$LLAMA_SERVER_BIN"' \
         _ "$REPO_ROOT/scripts/01-constants.sh"
 }
@@ -242,12 +280,26 @@ constants_exe() {
     fi
 }
 
+# A box whose profile declares NO build tree is the only state in which the legacy
+# literal is the answer: the x86 box's profile leaves LLAMA_BUILD_DIR unset, and the
+# constants then default it to $LLAMA_ROOT/build.  Stated here by matching no profile at
+# all (facts + an empty override file), because a matching profile now re-declares its own
+# tree — which is the intended contract, not a legacy fallback.
+constants_exe_no_profile() {
+    env -u LLAMA_CUDA_SERVER_BIN -u LLAMA_XE_SERVER_BIN -u LLAMA_BUILD_DIR \
+        HOME="$FAKE_HOME" LLAMA_ROOT="$FAKE_HOME/llama.cpp" \
+        TAC_HOST_FACTS_OVERRIDE="x86_64 0 0" \
+        TAC_HOST_PROFILE_FILE="$BATS_TEST_TMPDIR/no-profile" \
+        bash -c 'source "$1" >/dev/null 2>&1; printf %s "$LLAMA_SERVER_BIN"' \
+        _ "$REPO_ROOT/scripts/01-constants.sh"
+}
+
 @test "the standalone copy agrees with 01-constants.sh on the legacy tree" {
     make_tree legacy
     run resolved_exes
     [ "$status" -eq 0 ]
     probe_exe="$output"
-    run constants_exe
+    run constants_exe_no_profile
     [ "$status" -eq 0 ]
     [ "$output" = "$probe_exe" ]
 }

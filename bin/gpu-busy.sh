@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.20.0 (2026-11-24, the declared build tree): _sanctioned_exes() now prefers
+#          ${LLAMA_BUILD_DIR}/bin/llama-server — the tree `llm-build` writes, which the host
+#          profile declares — and keeps build-cuda/ then build/ as the fallbacks.  Before
+#          this the copy preferred build-cuda/ unconditionally, so a box that builds build/
+#          and still carries a build-cuda/ would sanction a tree nobody maintains.  The
+#          declared candidate is trusted only when it sits inside the caller's HOME (an
+#          inherited value names the shell's own checkout, not a sandboxed one) and only
+#          when its binary exists (an absent declaration leaves the literals to decide).
 # Version: 1.19.0 (2026-11-18, one line per card): the utilisation arm read the whole
 #          `--query-gpu` output through `tr -dc '0-9'`, which CONCATENATES a line per GPU —
 #          two cards reading 0 and 25 became "025".  The peak is now taken per line and
@@ -189,6 +197,11 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
+# Module Version: 29
+#   v29 (2026-11-24): the sanctioned-exe list prefers the profile's declared build tree — see
+#     the 1.20.0 entry at the top of this file.  A box that builds build/ and still carries a
+#     build-cuda/ was sanctioning the tree nobody maintains: the same disagreement the
+#     2026-11-02 incident recorded below, from the other side.
 # Module Version: 28
 #   v28 (2026-11-18): the utilisation arm reads a line per card — see the 1.19.0 entry at the
 #     top of this file.  `tr -dc '0-9'` over the whole output concatenated a multi-GPU table
@@ -521,8 +534,39 @@ _sanctioned_exes() {
     # existing tree keeps the copy honest without importing the console.
     _cuda="${LLAMA_CUDA_SERVER_BIN:-}"
     if [[ -z "$_cuda" ]]; then
-        _cuda="$HOME/llama.cpp/build-cuda/bin/llama-server"
-        [[ -x "$_cuda" ]] || _cuda="$HOME/llama.cpp/build/bin/llama-server"
+        local _cand
+        local -a _cands=()
+        # The declared tree must sit INSIDE the caller's HOME to be trusted.  An inherited
+        # LLAMA_BUILD_DIR names the shell's own checkout, while the sanctioned-tree cases
+        # and llm-build's fixtures point HOME at a synthetic tree — preferring the inherited
+        # path made the probe sanction a binary outside the sandbox.  A declared tree with
+        # NO binary is an absent declaration, not a candidate: the literals then carry the
+        # whole probe, as they did before this list led with it.
+        if [[ -n "${LLAMA_BUILD_DIR:-}" ]]
+        then
+            local _declared="${LLAMA_BUILD_DIR%/}"
+            [[ "$_declared" == */bin ]] && _declared="${_declared%/bin}"
+            [[ "$_declared" != "$HOME/llama.cpp" ]] \
+                && _cands+=("$_declared/bin/llama-server")
+        fi
+        _cands+=("$HOME/llama.cpp/build-cuda/bin/llama-server"
+                 "$HOME/llama.cpp/build/bin/llama-server")
+        for _cand in "${_cands[@]}"
+        do
+            [[ "$_cand" == "$HOME"/* ]] || continue
+            if [[ -x "$_cand" ]]
+            then
+                _cuda="$_cand"
+                break
+            fi
+        done
+        # Nothing sanctioned inside HOME: keep the legacy answer, whose absence
+        # _is_sanctioned_exe already reports by resolving it to nothing.
+        if [[ -z "$_cuda" ]]
+        then
+            _cuda="$HOME/llama.cpp/build-cuda/bin/llama-server"
+            [[ -x "$_cuda" ]] || _cuda="$HOME/llama.cpp/build/bin/llama-server"
+        fi
     fi
     for _a in "$_cuda" \
               "${LLAMA_XE_SERVER_BIN:-$HOME/llama.cpp/build-opencl/bin/llama-server}"

@@ -28,6 +28,13 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 19
+#   v19 (2026-11-24): LLAMA_BUILD_DIR joins the CLEARED set.  v12 exported it but never
+#   cleared it, so a parent shell's tree won the profile's `:=` and this file cleared the
+#   very knobs it documents as profile facts.  The tree is the path that goes MISSING on
+#   purpose: llm-build (and the monthly rebuild) rename build-cuda/ to
+#   build-cuda.prev-<commit> for the 40-60 min compile, so a child shell started in that
+#   window inherited a tree that was not there and could serve a build nobody is maintaining.
 # Module Version: 18
 #   v18 (2026-11-18): the OpenCL (Xe) build lane joins the cleared+exported set —
 #   LLAMA_OPENCL_ENABLE / _DIR / _ADRENO / _TARGET.  llm-build now builds that tree after
@@ -500,7 +507,8 @@ tac_host_profile_apply() {
           LLAMA_OPENCL_ENABLE LLAMA_OPENCL_DIR LLAMA_OPENCL_ADRENO LLAMA_OPENCL_TARGET \
           LLAMA_GPU_FREE_THRESHOLD_MIB \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
-          LLAMA_THREAD_CAP LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT TAC_HOST_PRIMARY_LANE \
+          LLAMA_THREAD_CAP LLAMA_BUILD_DIR LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
+          TAC_HOST_PRIMARY_LANE \
           VRAM_TOTAL_BYTES_FALLBACK TAC_HOST_GPU_LABEL TAC_HOST_IGPU_LABEL \
           TAC_HOST_PROFILE_XE TAC_HOST_PROFILE_DESCRIPTION \
           TAC_HOST_PROFILE_SHARED_MEMORY TAC_HOST_PROFILE_MODEL_STORE_IS_MOUNT \
