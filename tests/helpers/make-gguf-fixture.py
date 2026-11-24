@@ -15,7 +15,15 @@ test time rather than committed.
 
 Usage: make-gguf-fixture.py <case> <out-path>
 Cases: both-keys | rope-only | general-ctx | plain-ctx | no-ctx | junk-name |
-       kv-geometry | kv-array | no-kv
+       kv-geometry | kv-array | hybrid-kv | no-kv |
+       layout-complete | layout-short | layout-split
+
+A case may name a `tensors:` entry: block_count = the number of blk.<N>.attn_q.weight
+tensors to write (so a census has something to count), plus any extra (name, type, dims)
+rows.  The tensor table is written after the metadata exactly as llama.cpp's loader
+expects to read it — name, n_dims, dims, ggml type, data offset — because that layout is
+what `__gguf_metadata`'s census walk parses, and a fixture that aped it from memory
+could not disagree with the parser (measured 2026-11-15 in ~/.openclaw).
 """
 
 import struct
@@ -25,6 +33,11 @@ TYPE_U32 = 4
 TYPE_U64 = 10
 TYPE_STRING = 8
 TYPE_ARRAY = 9
+TYPE_F32 = 6
+
+# ggml tensor type ids the fixtures use: F32 = 0, F16 = 1.
+GGML_F32 = 0
+GGML_F16 = 1
 
 CASES = {
     # The 2026-09-16 bug: the real window AND the rope-scaling original.  The parser
@@ -106,6 +119,38 @@ CASES = {
         ("nemotron_h_moe.attention.head_count_kv", TYPE_ARRAY, [0, 0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 2]),
         ("nemotron_h_moe.attention.key_length", TYPE_U32, 128),
     ],
+    # LAYOUT CENSUS (2026-11-24).  Inkling-2-Mini's measured shape: five blocks declared,
+    # five physical blocks present, one complete model.
+    "layout-complete": [
+        ("general.architecture", TYPE_STRING, "llama"),
+        ("llama.block_count", TYPE_U32, 5),
+        ("llama.context_length", TYPE_U32, 8192),
+    ],
+    # The Inkling-2-Mini failure as measured: eight blocks DECLARED
+    # (inkling2.block_count=48 over physical blocks 0..23, 24 -> 8 here), only five
+    # carrying tensors.  A census reading block_count against the highest physical block
+    # index must call this SHORT; the loader only ever said
+    # "check_tensor_dims: tensor 'blk.5.attn_q.weight' not found".
+    "layout-short": [
+        ("general.architecture", TYPE_STRING, "llama"),
+        ("llama.block_count", TYPE_U32, 8),
+        ("llama.context_length", TYPE_U32, 8192),
+    ],
+    # One shard of a split model: split.count > 1 with the declared blocks all present.
+    # It is COMPLETE by the block census and still cannot load alone.
+    "layout-split": [
+        ("general.architecture", TYPE_STRING, "llama"),
+        ("llama.block_count", TYPE_U32, 5),
+        ("llama.context_length", TYPE_U32, 8192),
+        ("split.count", TYPE_U32, 3),
+    ],
+}
+
+# How many physical blk.<N>.attn_q.weight tensors each layout case actually writes.
+LAYOUT_TENSORS = {
+    "layout-complete": 5,
+    "layout-short": 5,
+    "layout-split": 5,
 }
 
 
@@ -119,6 +164,8 @@ def encode(key, vtype, value):
         out += struct.pack("<I", value)
     elif vtype == TYPE_U64:
         out += struct.pack("<Q", value)
+    elif vtype == TYPE_F32:
+        out += struct.pack("<f", float(value))
     elif vtype == TYPE_ARRAY:
         # GGUF array: element type (u32), count (u64), then the elements.  The parser reads
         # element 0 for the KV geometry and skips the rest by element width.
@@ -129,14 +176,34 @@ def encode(key, vtype, value):
     return out
 
 
+def encode_tensor(name, dims, ggml_type, offset):
+    """One tensor-table row, in the order llama.cpp's loader reads it."""
+    name_b = name.encode()
+    out = struct.pack("<Q", len(name_b)) + name_b
+    out += struct.pack("<I", len(dims))
+    out += b"".join(struct.pack("<Q", d) for d in dims)
+    out += struct.pack("<I", ggml_type)
+    out += struct.pack("<Q", offset)
+    return out
+
+
 def main():
     case, out_path = sys.argv[1], sys.argv[2]
     if case not in CASES:
         sys.exit(f"unknown case {case!r}; known: {', '.join(CASES)}")
+    n_blocks = LAYOUT_TENSORS.get(case, 0)
+    tensors = []
+    for n in range(n_blocks):
+        tensors.append((f"blk.{n}.attn_q.weight", (16, 16), GGML_F16, n * 512))
+    # A file that carries blocks always carries unblocked tensors too, so the census
+    # walk meets names it must not mistake for blocks.
+    if n_blocks:
+        tensors.append(("token_embd.weight", (16, 16), GGML_F16, n_blocks * 512))
     body = b"".join(encode(k, t, v) for k, t, v in CASES[case])
-    header = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 0) + struct.pack("<Q", len(CASES[case]))
+    header = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", len(tensors)) + struct.pack("<Q", len(CASES[case]))
+    table = b"".join(encode_tensor(n, d, t, o) for n, d, t, o in tensors)
     with open(out_path, "wb") as fh:
-        fh.write(header + body)
+        fh.write(header + body + table)
     print(out_path)
 
 

@@ -1,7 +1,24 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 50
+# Module Version: 51
+#   v51 (2026-11-24): the GGUF layout census, and what it cost to write.  Two autotune
+#     rows failed on load-time tensor checks that their own headers decided: Calme-4x7B-MoE
+#     (row 1) was a pre-2024 per-expert conversion — hash-perfect, per the Hub LFS oid, so
+#     re-fetching it could never help — and Inkling-2-Mini (row 4) declared
+#     block_count=48 over physical blocks 0..23, where 24 physical blocks looped over
+#     [6,18) three times IS its 48 cache slots.  __gguf_layout_census reads the header in
+#     its own 128 MB window and reports declared blocks, split.count, the highest physical
+#     blk.<N> and the tensor count; __gguf_layout_verdict turns that into ok/short/split/
+#     unknown.  Deliberately a SEPARATE reader, not a mode on __gguf_metadata: that is every
+#     row's hot path (256 KB, ~47 ms), and threading the census through its awk walk broke
+#     the program three times in one session.
+#     Two awk traps are recorded here because each cost a debugging round: `split` is an awk
+#     BUILTIN, so assigning it is a syntax error (the variable is n_split); and a line of the
+#     form `function u32(p) {` is read by the §18.3 9.5 ratchet as a SHELL definition with no
+#     comment above it, so the awk helper carries a comment line directly above its definition.
+#     max_blk -1/-2 mean "not measured"/"walk stopped", and the verdict maps both to unknown,
+#     never to a pass.
 #   v50 (2026-11-23): capture --version stderr in __llm_llama_build_id (build 667 logs on stderr);
 #     accept float accept_len values in __autotune_spec_worth_keeping; add optional slots 35/36
 #     (mmap_mode, flash_attn) to __llm_autotune_profile_save.
@@ -1146,6 +1163,165 @@ function __kv_geometry_known() {
     [[ "$kv_heads" =~ ^[0-9]+$ ]] && (( kv_heads > 0 )) || return 1
     [[ "$head_dim" =~ ^[0-9]+$ ]] && (( head_dim > 0 )) || return 1
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# __gguf_layout_verdict — is this file ONE model this build can load?
+#   args: block_count split_count max_blk   stdout: ok | short | split | unknown
+# A PURE predicate, like __kv_geometry_known, so the caller owns the wording.
+#
+#   short   — the header declares N blocks and the highest physical block index is
+#             below N-1, i.e. the file is missing its tail.  Measured 2026-11-24 on
+#             Inkling-2-Mini (declared 48, physical 0..23): the loader reports
+#             "check_tensor_dims: tensor 'blk.24.attn_q.weight' not found", which names
+#             the FIRST absent layer and never says the file is short.  It also reads
+#             as a loader/build problem, so the operator re-downloads the same revision
+#             or rebuilds llama.cpp — neither of which can fix a truncated file.
+#   split   — split.count > 1, so this file is one shard of a multi-part model.  It can
+#             only load beside its siblings; alone it looks exactly like `short`.
+#   unknown — max_blk is not a measurement (-1 = the census never reached the tensor
+#             table, -2 = it stopped part-way).  A LOW maximum would read as a pass, so
+#             an absent measurement must never be reported as one.
+#
+# Why declared-vs-physical and not tensor NAMES: this is the check that needs no table
+# of what llama.cpp currently calls a tensor, so it cannot itself go stale.  It catches
+# the Inkling class (geometry disagreeing with the file).  It does NOT catch a
+# same-geometry, different-layout conversion such as Calme-4x7B-MoE's per-expert vs
+# _exps naming — that class is only decidable by loading, and the loader_vintage message
+# carries the diagnosis.
+# ---------------------------------------------------------------------------
+function __gguf_layout_verdict() {
+    local blocks="${1:-}" split="${2:-}" max_blk="${3:-}"
+    [[ "$blocks"  =~ ^[0-9]+$ ]] || blocks=0
+    [[ "$split"   =~ ^[0-9]+$ ]] || split=0
+    [[ "$max_blk" =~ ^-?[0-9]+$ ]] || max_blk=-1
+    if (( split > 1 )); then
+        printf 'split\n'
+        return 0
+    fi
+    if (( blocks <= 0 || max_blk < 0 )); then
+        printf 'unknown\n'
+        return 0
+    fi
+    if (( max_blk < blocks - 1 )); then
+        printf 'short\n'
+    else
+        printf 'ok\n'
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __gguf_layout_census <file> — the compatibility census, one line:
+#   block_count|split_count|max_blk|n_tensors
+# max_blk is the highest physical `blk.<N>` index found in the tensor table:
+#   -1  the census could not read the header at all (no measurement)
+#   -2  the metadata or the table could not be walked to the end (incomplete)
+# Neither is ever reported as a number, because a low maximum reads as a pass.
+#
+# A PURPOSE-BUILT reader rather than a mode on __gguf_metadata, because that function
+# is the estimator's hot path (every row pays for it, and its 256 KB window costs ~47 ms
+# while a 128 MB one cost ~25 s) and a threaded mode through its awk walk proved
+# fragile: three separate splices broke the program.  Here the whole program is one
+# function's own body, so a parse error is immediate and local.
+#
+# Why a tensor-table walk at all: the loader reports an absent LAYER, never an incomplete
+# file.  Measured 2026-11-24, Inkling-2-Mini declared inkling2.block_count=48 over
+# physical blocks 0..23 and llama.cpp said only
+# "check_tensor_dims: tensor 'blk.24.attn_q.weight' not found" — which reads as a stale
+# build and sends the operator to rebuild llama.cpp against a file that cannot load.
+# It deliberately does NOT try to catch a same-geometry layout change (Calme-4x7B-MoE's
+# per-expert tensors vs llama.cpp's `_exps` naming): that is only decidable by loading.
+# ---------------------------------------------------------------------------
+function __gguf_layout_census() {
+    local fpath="${1:-}"
+    if [[ -z "$fpath" || ! -r "$fpath" ]]; then
+        printf '0|0|-1|0\n'
+        return 0
+    fi
+    # A file shorter than 128 MB makes dd exit 1 after copying all it can, which is the
+    # normal case for every model under 128 MB; the bytes are what matter, and an
+    # unreadable file yields an empty stream that the END block reports as `0|0|-1|0`.
+    # swallow-ok: dd exits 1 on a short read; the header bytes are what matter and an empty stream becomes an explicit "no measurement".
+    dd if="$fpath" bs=1048576 count=128 2>/dev/null | od -A n -vt u1 -v | LC_ALL=C awk '
+        # Little-endian u32 at byte offset p.  Deliberately NOT `function u32(p) {...}`:
+        # §18.3 9.5 reads a line of that shape as a SHELL definition with no comment above
+        # it, because awk and shell spell a function the same way at line start.  The
+        # leading comment line above this one is what satisfies 9.5, and the `function`
+        # keyword is required for awk to accept a definition here at all.
+        function rd_u32(p) { return b[p] + b[p+1]*256 + b[p+2]*65536 + b[p+3]*16777216 }
+        { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
+        END {
+            if (n < 24 || b[0] != 71 || b[1] != 71 || b[2] != 85 || b[3] != 70) {
+                print "0|0|-1|0"; exit
+            }
+            nten = rd_u32(8)
+            nkv  = rd_u32(16)
+            blocks = 0; n_split = 0
+            off = 24
+            # ---- metadata, EVERY pair consumed ----
+            for (k = 0; k < nkv; k++) {
+                if (off + 8 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                kl = rd_u32(off); off += 8
+                if (kl < 0 || kl > 4096 || off + kl + 4 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                key = ""
+                for (i = 0; i < kl; i++) key = key sprintf("%c", b[off+i])
+                off += kl
+                vt = rd_u32(off); off += 4
+                if (vt == 8) {
+                    if (off + 8 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                    sl = rd_u32(off); off += 8 + sl
+                } else if (vt == 4 || vt == 5 || vt == 6) {
+                    val = rd_u32(off); off += 4
+                    if (key == "general.architecture") arch = "seen"
+                    if (key == "split.count") n_split = val
+                    if (key ~ /^[A-Za-z0-9_.-]+\.block_count$/) blocks = val
+                } else if (vt == 0 || vt == 1 || vt == 7) {
+                    off += 1
+                } else if (vt == 2 || vt == 3) {
+                    off += 2
+                } else if (vt == 10 || vt == 11 || vt == 12) {
+                    val = rd_u32(off); off += 8
+                    if (key == "split.count") n_split = val
+                    if (key ~ /^[A-Za-z0-9_.-]+\.block_count$/) blocks = val
+                } else if (vt == 9) {
+                    if (off + 12 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                    at = rd_u32(off); off += 4
+                    al = rd_u32(off); off += 8
+                    if      (at == 0 || at == 1 || at == 7)    off += al
+                    else if (at == 2 || at == 3)               off += al * 2
+                    else if (at == 4 || at == 5 || at == 6)    off += al * 4
+                    else if (at == 10 || at == 11 || at == 12) off += al * 8
+                    else if (at == 8) {
+                        for (a = 0; a < al; a++) {
+                            if (off + 8 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                            es = rd_u32(off); off += 8 + es
+                        }
+                    }
+                    else { print blocks "|" n_split "|-2|" nten; exit }
+                } else {
+                    print blocks "|" n_split "|-2|" nten; exit
+                }
+            }
+            # ---- tensor table ----
+            maxb = -1
+            for (t = 0; t < nten; t++) {
+                if (off + 8 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                tl = rd_u32(off); off += 8
+                if (tl < 0 || tl > 512 || off + tl > n) { print blocks "|" n_split "|-2|" nten; exit }
+                tn = ""
+                for (i = 0; i < tl; i++) tn = tn sprintf("%c", b[off+i])
+                off += tl
+                if (off + 4 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                nd = rd_u32(off); off += 4
+                if (nd > 16 || off + nd * 8 + 12 > n) { print blocks "|" n_split "|-2|" nten; exit }
+                off += nd * 8 + 4 + 8
+                if (match(tn, /^blk\.[0-9]+\./)) {
+                    bn = substr(tn, 5) + 0
+                    if (bn > maxb) maxb = bn
+                }
+            }
+            print blocks "|" n_split "|" maxb "|" nten
+        }'
 }
 
 # ---------------------------------------------------------------------------

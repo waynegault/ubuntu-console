@@ -631,3 +631,91 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     declare -f __autotune_staged_shard_bytes >/dev/null
     declare -f __autotune_staging_fits >/dev/null
 }
+
+# --- TENSOR-TABLE CENSUS and the file-layout verdict (2026-11-24) ------------
+# Criterion, from the two rows measured that day:
+#  * Inkling-2-Mini (row 4) declared `inkling2.block_count=48` over physical blocks
+#    0..23.  llama.cpp said only "check_tensor_dims: tensor 'blk.24.attn_q.weight' not
+#    found", which names the FIRST absent layer and reads as a stale build.
+#  * Calme-4x7B-MoE (row 1) was a hash-perfect download whose tensor LAYOUT was old.
+#    The census deliberately does NOT claim to catch that one — see the note on
+#    __gguf_layout_verdict.  These cases pin what it does catch, and the "unknown"
+#    direction that would otherwise read as a pass.
+
+@test "layout-census: the census reports block_count, split and the PHYSICAL maximum" {
+    # Fails if: the walk reuses the estimator's offset (its metadata walk BREAKS early —
+    # on the real Inkling header it stopped at 11,931,826 while the tensor table starts
+    # at 11,978,691), or miscounts tensor rows.  Either way max_blk is not the highest
+    # blk.<N> present, and the verdict built on it is wrong.
+    local f; f="$(__fixture layout-complete)"
+    [ "$(__gguf_layout_census "$f")" = "5|0|4|6" ]   # 5 blk.* rows + token_embd
+}
+
+@test "layout-census: the estimator's own read is untouched by the census" {
+    # Fails if: the census is bolted onto __gguf_metadata.  That function is every row's
+    # hot path (256 KB, ~47 ms; a 128 MB window measured ~25 s), and its field 6/7 are
+    # what the KV estimate reads — a census field shifting those columns would silently
+    # misprice every model on the box.
+    local f; f="$(__fixture kv-geometry)"
+    local row; row="$(__gguf_metadata "$f")"
+    [ "$(awk -F'|' '{print NF}' <<< "$row")" = "7" ]
+    [ "$(cut -d'|' -f6 <<< "$row")" = "4" ]
+    [ "$(cut -d'|' -f7 <<< "$row")" = "128" ]
+}
+
+@test "layout-verdict: a file declaring 8 blocks but carrying 5 is SHORT" {
+    # The Inkling-2-Mini shape.  Fails if: the verdict reads the declared count as the
+    # measurement (then a truncated file passes), or only checks that block 0 exists.
+    local f; f="$(__fixture layout-short)"
+    local blocks split maxb _nt
+    IFS='|' read -r blocks split maxb _nt <<< "$(__gguf_layout_census "$f")"
+    [ "$blocks" = "8" ]
+    [ "$maxb" = "4" ]
+    [ "$(__gguf_layout_verdict "$blocks" "$split" "$maxb")" = "short" ]
+}
+
+@test "layout-verdict: a complete file is OK, and the boundary is inclusive" {
+    # Fails if: the comparison is exclusive at the boundary — max_blk == blocks-1 is a
+    # COMPLETE model (blocks 0..N-1), and a `-lt blocks` test would reject every
+    # healthy file in the store.
+    [ "$(__gguf_layout_verdict 5 0 4)" = "ok" ]
+    [ "$(__gguf_layout_verdict 48 0 47)" = "ok" ]
+    [ "$(__gguf_layout_verdict 48 0 23)" = "short" ]
+    [ "$(__gguf_layout_verdict 1 0 0)" = "ok" ]
+}
+
+@test "layout-verdict: one shard of a split model is SPLIT, not OK" {
+    # Fails if: split.count is ignored.  A shard carries its declared blocks in full, so
+    # the block census calls it complete while it cannot load alone.
+    local f; f="$(__fixture layout-split)"
+    local blocks split maxb _nt
+    IFS='|' read -r blocks split maxb _nt <<< "$(__gguf_layout_census "$f")"
+    [ "$split" = "3" ]
+    [ "$(__gguf_layout_verdict "$blocks" "$split" "$maxb")" = "split" ]
+}
+
+@test "layout-verdict: an ABSENT measurement is unknown, never a pass" {
+    # Fails if: -1 (the window never reached the tensor table) or -2 (the walk stopped
+    # part-way) is treated as a maximum.  A low maximum would read as a healthy file,
+    # which is the silent-failure shape this check exists to avoid.
+    [ "$(__gguf_layout_verdict 48 0 -1)" = "unknown" ]
+    [ "$(__gguf_layout_verdict 48 0 -2)" = "unknown" ]
+    [ "$(__gguf_layout_verdict 0 0 31)" = "unknown" ]
+    [ "$(__gguf_layout_verdict "" "" "")" = "unknown" ]
+    [ "$(__gguf_layout_verdict 48 0 "garbage")" = "unknown" ]
+}
+
+@test "layout-verdict: the refusal REASON names the repository check, not a rebuild" {
+    # Fails if: the loader_vintage text reverts to claiming a hash-perfect file is
+    # "incomplete or misnamed".  Measured 2026-11-24: row 1's sha256 equalled the Hub
+    # LFS oid, so re-fetching that repo could never fix it, yet the message invited
+    # exactly that — and the row had already failed three times.
+    eval "$(sed -n '/^__autotune_failure_label()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    local label
+    label="$(__autotune_failure_label loader_vintage)"
+    [[ "$label" == *"sha256"* ]]
+    [[ "$label" == *"oid"* ]]
+    [[ "$label" == *"LAYOUT mismatch"* ]]
+    [[ "$label" == *"STALE BUILD"* ]]
+    [[ "$label" != *"incomplete or misnamed"* ]]
+}

@@ -1,5 +1,24 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 164
+#   v164 (2026-11-24): a file-layout preflight, and a loader_vintage message that does not
+#   send the operator in a circle.  Two rows failed on load-time tensor checks that the
+#   header decided: Calme-4x7B-MoE (row 1) was a hash-perfect download of a pre-2024
+#   per-expert conversion, and Inkling-2-Mini (row 4) declared block_count=48 over
+#   physical blocks 0..23.  The estimate path's five fields cannot see either, so a new
+#   preflight runs __gguf_layout_census (scripts/11b) — a purpose-built header reader
+#   with a 128 MB window — and refuses a SHORT file (declared blocks above the highest
+#   physical block) or a split SHARD before the VRAM baseline is spent.  It is a
+#   SEPARATE reader, not a mode on __gguf_metadata: that function is every row's hot
+#   path, and threading a census through its awk walk broke the program three times
+#   before the reader was split out.  The refusal is a DECLARED one and names the
+#   numbers, because the loader's own message ("blk.24.attn_q.weight not found") names
+#   the first absent layer and reads as a stale llama.cpp.  The census reports -1/-2
+#   when it could not measure, and that reads as "no verdict", never as a pass.
+#   loader_vintage now separates a LAYOUT mismatch from a TRUNCATED file and says to
+#   compare the file's sha256 with the repository's LFS oid BEFORE re-downloading: the
+#   old text called a hash-perfect file "incomplete or misnamed", which is exactly the
+#   loop row 1 was stuck in (three recorded failures, three identical re-fetches).
 # Module Version: 163
 #   v163 (2026-11-24): promote BEST_TPS (and matching P2_TPS) when spec-decode wins, and apply
 #   winning spec flags across threads probe and _meas_pos2 via _apply_win_spec/_clear_bench_spec.
@@ -442,11 +461,25 @@ __autotune_failure_label() {
         unsupported_arch)   printf 'unsupported architecture / non-generative model' ;;
         launch_error)       printf "launch or flag error, or a model the server could not load \
 (the server rejected its invocation)" ;;
+        # v164 (2026-11-24): the old text ended "if the installed build knows the name the file
+        # is incomplete or misnamed (re-convert or obtain a matching GGUF)".  A hash-perfect
+        # download reads as "incomplete" and sends the operator to re-fetch a repo that cannot
+        # ever work — measured on Calme-4x7B-MoE, whose sha256 equalled the Hub LFS oid and
+        # whose failure had already been recorded three times.  A LAYOUT mismatch and a
+        # TRUNCATED file are now named separately, with the check that tells them apart.
         loader_vintage)     printf "the FILE and the LOADER disagree about a required GGUF key \
 or tensor (a key is absent or mistyped, or a tensor the loader names is absent; the weights are \
-not at fault).  Which side is stale is not knowable from the message — check whether the \
-installed build knows the name (strings <libllama.so> | grep <name>): if it does, the file is \
-incomplete or misnamed (re-convert or obtain a matching GGUF); if it does not, rebuild llama.cpp" ;;
+not at fault).  Two causes, and the download is usually NOT one of them: (a) a LAYOUT mismatch \
+— the file was converted before llama.cpp renamed the tensor (an MoE converted before 2024 \
+writes blk.N.ffn_down.0.weight where the loader now names ffn_down_exps); (b) a STALE BUILD — \
+the file is newer than llama.cpp.  Identify your side first: compare the file's sha256 with the \
+repository's LFS oid (https://huggingface.co/api/models/<repo>/tree/main) — if they MATCH the \
+file is exactly what that repo publishes and re-downloading it can never help, so obtain a \
+differently-converted GGUF from another uploader, and range-read the candidate's header \
+(curl -r 0-1048575) to see its tensor names before pulling the whole file; if they DIFFER your \
+copy is stale or truncated and a re-fetch fixes it.  Then check the build: strings \
+<libllama.so> | grep <the name the error reported> — present means the loader is current and \
+the FILE's layout is the problem; absent means rebuild llama.cpp" ;;
         insufficient_host_staging) printf "the largest shard cannot be staged in host memory \
 (split GGUFs stage one shard; guest RAM is the wall, not VRAM)" ;;
         insufficient_host_ram) printf "the row's HOST footprint (weights not offloaded at this \
@@ -1146,6 +1179,45 @@ fi
 START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [[ $START_CTX -lt $MIN_CTX ]] && START_CTX=$MIN_CTX
 [[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
+
+# ── FILE-LAYOUT preflight (2026-11-24) ─────────────────────────────────────────
+# A file that is SHORT (its header declares more blocks than it carries) or is one
+# SHARD of a split model cannot load, and the loader's own message hides both facts:
+# it names the first absent tensor ("blk.24.attn_q.weight not found") and leaves the
+# operator to conclude that llama.cpp is stale.  Measured on row 4 (Inkling-2-Mini):
+# `inkling2.block_count=48` over physical blocks 0..23, where 24 blocks looped over
+# [6,18) three times IS the model's 48 cache slots — 734 tensors present, every eighth
+# one absent.  __gguf_layout_census is a separate reader (128 MB window) rather than a
+# mode on __gguf_metadata, whose 256 KB read every row already pays ~47 ms for.
+if declare -f __gguf_layout_census &>/dev/null && declare -f __gguf_layout_verdict &>/dev/null; then
+    _layout_row=$(__gguf_layout_census "$MODEL_PATH")
+    IFS='|' read -r _l_blocks _l_split _l_maxblk _l_ntensors <<< "$_layout_row"
+    _layout_verdict=$(__gguf_layout_verdict "$_l_blocks" "$_l_split" "$_l_maxblk")
+    case "$_layout_verdict" in
+        short)
+            echo "  layout: header declares block_count=${_l_blocks}, highest physical block is" \
+                 "${_l_maxblk} — the file is MISSING ITS TAIL (${_l_ntensors} tensors present)"
+            _preflight_refuse loader_vintage 1 \
+                "the file is SHORT: block_count=${_l_blocks} declared, blocks present" \
+                "0..${_l_maxblk} of ${_l_ntensors} tensors. The download is incomplete or a stale" \
+                "revision — re-fetch it, and compare its sha256 against the repo's LFS oid first"
+            ;;
+        split)
+            echo "  layout: split.count=${_l_split} — this file is ONE SHARD of a split model"
+            _preflight_refuse insufficient_host_staging 1 \
+                "the row is shard 1 of ${_l_split}: a shard cannot load alone. Place every" \
+                "shard in the store (the staging preflight then prices the largest) or fetch" \
+                "the single-file build"
+            ;;
+        unknown)
+            warn "  layout: census UNREADABLE (blocks=${_l_blocks}, split=${_l_split}," \
+                 "max_blk=${_l_maxblk}) — no file-layout verdict this run; the first launch decides"
+            ;;
+        *)
+            echo "  layout: ${_l_blocks} blocks, ${_l_ntensors} tensors, split=${_l_split} — one complete model"
+            ;;
+    esac
+fi
 
 # Probe bounds — floor AND ceiling — come from __autotune_ctx_bounds in
 if ! declare -f __autotune_ctx_bounds &>/dev/null || ! declare -f __autotune_descent_candidates &>/dev/null; then
