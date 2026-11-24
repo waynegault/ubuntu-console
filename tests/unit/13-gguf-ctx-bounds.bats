@@ -434,6 +434,15 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     __kv_geometry_known 8 128
 }
 
+@test "kv-geometry: hybrid SSM/attention array yields non-zero effective KV heads instead of 0 fallback" {
+    local f; f="$(__fixture hybrid-kv)"
+    [[ "$(__meta_field "$f" 2)" == "nemotron_h_moe" ]]
+    [[ "$(__meta_field "$f" 5)" == "39" ]]
+    [[ "$(__meta_field "$f" 6)" == "1" ]]
+    [[ "$(__meta_field "$f" 7)" == "128" ]]
+    __kv_geometry_known 1 128
+}
+
 @test "kv-geometry: a header with NO KV keys still yields the old constant, and says so" {
     # Both directions of the same acceptance: absent geometry is a FALLBACK, not a zero.
     # The caller's warning is pinned by the predicate here; the number is the old constant.
@@ -506,6 +515,10 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     # Fails if: the gate becomes blanket and a real spec win is discarded.
     __autotune_spec_worth_keeping 3 0.75
     __autotune_spec_worth_keeping 1
+    # Float mean len values from llama-server (e.g. draft-mtp mean len = 2.26) must pass.
+    __autotune_spec_worth_keeping 2.26 0.42
+    ! __autotune_spec_worth_keeping 0.00 0.00000
+    ! __autotune_spec_worth_keeping 2.00 0.00000
 }
 
 @test "spec-decode: a missing or unparsable metric is not evidence of a win" {

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
+#   v32 (2026-11-23): truncate pre-flight boot_id to 12 chars to match batch/row ledger files;
+#     re-select indicative slow rows in --all-but-done; default AUTOTUNE_AUTO_RESTART=0 on
+#     interactive TTYs; clarify unspent-budget exit-3 summary line.
 #   v31 (2026-11-23): the derived scopes (--all / --all-but-done) drop DRAFT HEADS.  Row 7
 #     is a 1.26 GiB `dflash` draft (arch `dflash`), not a chat model, and both scopes offered
 #     it for a sweep that can only fail — it is passed beside its target as
@@ -247,7 +250,8 @@ case "${1:-}" in
     --all-but-done)
         shift
         mapfile -t ROWS < <(awk -F'|' -v draft_archs="${LLM_DRAFT_ARCHS:-}" '
-            $1 ~ /^[0-9]+$/ && $18 != "yes" && $18 != "slow" && tolower($6) !~ /embedding/ \
+            $1 ~ /^[0-9]+$/ && $18 != "yes" && !($18 == "slow" && $44 != "indicative") \
+                && tolower($6) !~ /embedding/ \
                 && index(" " draft_archs " ", " " tolower($6) " ") == 0 {print $3}
         ' "$REGISTRY" | sort)
         DERIVED=1
@@ -363,8 +367,8 @@ fi
 # it here means a doomed run costs nothing and the restart it needs is armed at once.
 # `CUDA_CYCLE_BUDGET` must match scripts/run-autotune-batch.sh's default (60); the
 # ledger file is boot-scoped, named the same way by both.
-_boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id)"
 # swallow-ok: an unreadable boot_id names an "unknown" ledger, which reads 0 and only reports
+_boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
 # The override is HONOURED: scripts/autotune-model.sh and run-autotune-batch.sh both read
 # CUDA_CYCLE_FILE, so a wrapper that computed its own path would report a different ledger
 # from the one the batch it launches halts on — and no test could seed one.
@@ -489,7 +493,8 @@ fi   # end: _autotune_preflight_ok (a pre-flight refusal skips the batch, not th
 {
     case "$rc" in
         4) echo "=== batch exited 4 (cycle budget spent — one boot's measuring is done)" ;;
-        3) echo "=== batch exited 3 (adapter stalled with the budget UNSPENT — look, do not reboot)" ;;
+        3) echo "=== batch exited 3 (row halted with cycle budget UNSPENT —" \
+                "inspect halt reason above before rebooting)" ;;
         129|130|137|143)
             # A KILLED run says so.  Without this, a run stopped by an operator (or by the
             # OOM killer) ended on a bare "batch exited N" or, when the WRAPPER itself was
@@ -522,7 +527,14 @@ fi   # end: _autotune_preflight_ok (a pre-flight refusal skips the batch, not th
 # because a restart is a reboot: it ends this process, so the box must be handed back
 # first or the lanes would come up under a stale hold.
 if (( rc == 4 )); then
-    if [[ "${AUTOTUNE_AUTO_RESTART:-1}" != "1" ]]; then
+    _auto_restart_def=1
+    if [[ -z "${AUTOTUNE_AUTO_RESTART+x}" && -t 0 && -t 1 ]]; then
+        _auto_restart_def=0
+    fi
+    if [[ -z "${AUTOTUNE_AUTO_RESTART+x}" && "$_auto_restart_def" == "0" ]]; then
+        echo "=== restart NOT armed: interactive terminal" \
+             "(pass AUTOTUNE_AUTO_RESTART=1 to auto-restart)" | tee -a "$LOG"
+    elif [[ "${AUTOTUNE_AUTO_RESTART:-$_auto_restart_def}" != "1" ]]; then
         echo "=== restart NOT armed: AUTOTUNE_AUTO_RESTART=0 (spent ledger; restart by hand)" | tee -a "$LOG"
     # -x is the right test for an absolute path; `command -v` only finds things on PATH,
     # and this is a full path by default — requiring BOTH failed the arm even when the

@@ -96,6 +96,16 @@ CASES = {
         ("qwen2.context_length", TYPE_U32, 32768),
         ("qwen2.block_count", TYPE_U32, 28),
     ],
+    # Hybrid SSM/attention MoE (Nemotron-H / LFM3 style): layer 0 is SSM with 0 KV heads
+    # while later attention layers have 2 KV heads, and file_type=39 is NVFP4.
+    "hybrid-kv": [
+        ("general.architecture", TYPE_STRING, "nemotron_h_moe"),
+        ("general.file_type", TYPE_U32, 39),
+        ("nemotron_h_moe.block_count", TYPE_U32, 89),
+        ("nemotron_h_moe.context_length", TYPE_U32, 131072),
+        ("nemotron_h_moe.attention.head_count_kv", TYPE_ARRAY, [0, 0, 2, 0, 0, 2, 0, 0, 2, 0, 0, 2]),
+        ("nemotron_h_moe.attention.key_length", TYPE_U32, 128),
+    ],
 }
 
 

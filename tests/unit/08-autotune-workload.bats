@@ -227,7 +227,7 @@ EOF
     # A systemctl that records and changes nothing, and AUTOTUNE_SELFTEST=1 so 11d's
     # process reaper refuses to run.  This case asserts a refusal that comes BEFORE the lane
     # stand-down, but the guard is a claim until something proves it: 11d's
-    # `__llm_stop_lanes_for_baseline` has no TAC_TEST_TMPDIR predicate, and the reaper kills
+    # `__llm_stand_down_cuda_lanes` now guards on TAC_TEST_TMPDIR as well, and the reaper kills
     # by PROCESS, so a systemctl stub alone is not enough — measured under this case's own
     # mutation, 2026-11-23, which stopped the live chat and measure lanes.  The stub plus the
     # selftest guard make "no production unit was touched" an assertion.
@@ -743,9 +743,26 @@ _selftest_run() {
 @test "autotune-dxg: consecutive launch stalls halt as the degradation signature" {
     local sb="$BATS_TEST_TMPDIR/stalled"
     mkdir -p "$sb"
+    # v160 resets a prior row's stall file at row start; verify the clean start first...
     printf '12\n' > "$sb/cycles"
     printf '2\n' > "$sb/stalls"
     run _selftest_run "$sb" CUDA_CYCLE_FILE="$sb/cycles" CUDA_STALL_FILE="$sb/stalls"
+    [[ "$status" -eq 0 ]]
+    # ...and verify _cuda_guard_or_exit still halts with exit 3 when stalls hit the bound mid-row.
+    printf '12\n' > "$sb/cycles"
+    printf '2\n' > "$sb/stalls"
+    run bash -c '
+        _cuda_cycles() { cat "'"$sb"'/cycles"; }
+        _cuda_stalls() { cat "'"$sb"'/stalls"; }
+        _preflight_refuse() { echo "REFUSE:$1:$2:$3"; exit "$2"; }
+        warn() { printf "%s\n" "$*" >&2; }
+        CUDA_CYCLE_BUDGET=60
+        CUDA_DEGRADE_CONSECUTIVE_STALLS=2
+        AUTOTUNE_SELFTEST=1
+        _VRAM_BOOT_BASELINE_FILE="'"$sb"'/none"
+        eval "$(awk "/^_cuda_guard_or_exit\(\) \{/,/^\}/" "'"$REPO_ROOT"'/scripts/autotune-model.sh")"
+        _cuda_guard_or_exit
+    '
     [[ "$status" -eq 3 ]]
     [[ "$output" == *"consecutive launches stalled"* ]]
 }

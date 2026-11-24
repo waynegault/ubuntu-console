@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 59
+# Module Version: 60
+#   v60 (2026-11-23): guard kill/stand-down paths with TAC_TEST_TMPDIR and spare .service
+#     cgroups in __llm_kill_cuda_llama_servers; honour shared-memory GPU-only draft placement in
+#     __spec_launch_flags; parse hybrid SSM/attention head_count_kv arrays in __gguf_metadata;
+#     add NVFP4/MXFP4 to __quant_label; broaden MoE detection via __llm_arch_is_moe.
 #   v59 (2026-11-22): gpu-status speaks the two facts gpu-check learned in v56.
 #     It printed "VRAM 5495 / 8192 (2684 free)" on a SHARED-MEMORY host, where that
 #     total is a CARVE of one pool and not the model budget, so the row read as a
@@ -693,6 +697,11 @@ function __llm_kill_cuda_llama_servers() {
     then
         warn "[llm-kill] selftest — not touching live CUDA servers"
         return 0
+    elif [[ -n "${TAC_TEST_TMPDIR:-}" && "${TAC_ALLOW_TEST_STANDDOWN:-0}" != "1" ]]
+    then
+        declare -F warn >/dev/null 2>&1 \
+            && warn "[llm-kill] test environment — not touching live CUDA servers"
+        return 0
     fi
 
     # Never evict another agent's in-flight run.  When the investigator holds
@@ -757,6 +766,12 @@ function __llm_kill_cuda_llama_servers() {
     for _pid in "${_cuda_pids[@]}"
     do
         _skip=0
+        # Unit-first sparing: never SIGTERM/SIGKILL a PID inside a llama-*.service cgroup.
+        # swallow-ok: a pid that exited before cgroup check is harmlessly handled by the loop
+        if grep -qE '/llama-[^/]+\.service' "/proc/$_pid/cgroup" 2>/dev/null
+        then
+            _skip=1
+        fi
         for _p in "${_protected[@]:-}"
         do
             [[ "$_pid" == "$_p" ]] && { _skip=1; break; }
@@ -878,6 +893,11 @@ function __llm_stand_down_cuda_lanes() {
     if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]
     then
         warn "[lanes] selftest — not standing any lane down"
+        return 0
+    elif [[ -n "${TAC_TEST_TMPDIR:-}" && "${TAC_ALLOW_TEST_STANDDOWN:-0}" != "1" ]]
+    then
+        declare -F warn >/dev/null 2>&1 \
+            && warn "[lanes] test environment — not standing any lane down"
         return 0
     fi
     local _unit _port _pid _waited _smi _mib _keep _cpid
@@ -1389,27 +1409,22 @@ function __gguf_metadata() {
     function u32(p) {
         return b[p] + b[p+1]*256 + b[p+2]*65536 + b[p+3]*16777216
     }
-
     # Phase 1: Load all bytes into array b[0..n-1].
     { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
-
     END {
         # --- Validate GGUF magic bytes ---
         if (n < 24 || b[0] != 71 || b[1] != 71 || b[2] != 85 || b[3] != 70) {
             print fname "|unknown|0|4096|0"
             exit
         }
-
         # --- Read metadata KV count (u64, but only lower 32 bits matter) ---
         nkv = u32(16)
-
         # Sanity check: no valid GGUF has more than 10000 metadata keys.
         # Corrupted/truncated files could have garbage nkv causing out-of-bounds reads.
         if (nkv > 10000 || nkv < 0) {
             print fname "|unknown|0|4096|0"
             exit
         }
-
         # --- Defaults (overwritten if keys are found) ---
         name   = fname
         arch   = "unknown"
@@ -1422,12 +1437,10 @@ function __gguf_metadata() {
         kvh    = 0
         kdim   = 0
         found  = 0
-
         # --- Walk KV pairs ---
         # Offset starts after the 24-byte header (magic + version + counts).
         off = 24
         for (kv = 0; kv < nkv && off < n - 8; kv++) {
-
             # -- Read key: length (u64, lower 32) then UTF-8 bytes --
             klen = u32(off); off += 8
             if (klen < 0 || klen > 1000 || off + klen > n) break
@@ -1435,7 +1448,6 @@ function __gguf_metadata() {
             for (i = 0; i < klen; i++)
                 key = key sprintf("%c", b[off + i])
             off += klen
-
             # -- Read value type (u32) --
             if (off + 4 > n) break
             vt = u32(off); off += 4
@@ -1496,31 +1508,32 @@ function __gguf_metadata() {
                 # GGUF seen on this box, and a per-layer divergence only moves the
                 # estimate, never a correctness decision.
                 if (al > 0 && (at == 4 || at == 5 || at == 10 || at == 11)) {
-                    if (key ~ /\.attention\.head_count_kv$/) kvh  = u32(off)
-                    if (key ~ /\.attention\.key_length$/)    kdim = u32(off)
+                    ew = (at == 10 || at == 11) ? 8 : 4
+                    if (key ~ /\.attention\.head_count_kv$/) {
+                        sk = 0; nz = 0
+                        for (a = 0; a < al && (off + (a + 1) * ew) <= n; a++) {
+                            ev = u32(off + a * ew); if (ev > 0) { sk += ev; nz++ }
+                        }
+                        if (sk > 0) { kvh = (nz == al) ? u32(off) : int((sk + al - 1) / al); if (kvh < 1) kvh = 1 }
+                    }
+                    if (key ~ /\.attention\.key_length$/) {
+                        for (a = 0; a < al && (off + (a + 1) * ew) <= n; a++) {
+                            ev = u32(off + a * ew); if (ev > 0) { kdim = ev; break }
+                        }
+                    }
                 }
-                # Skip array contents based on element type
                 if      (at == 0 || at == 1 || at == 7)          off += al
                 else if (at == 2 || at == 3)                     off += al * 2
                 else if (at == 4 || at == 5 || at == 6)          off += al * 4
                 else if (at == 10 || at == 11 || at == 12)       off += al * 8
                 else if (at == 8) {
-                    # Array of strings: each has u64 len + bytes
-                    for (a = 0; a < al && off < n; a++) {
-                        sl = u32(off)
-                        off += 8 + sl
-                    }
+                    for (a = 0; a < al && off < n; a++) { sl = u32(off); off += 8 + sl }
                 }
                 else break  # unknown element type - bail
             }
             else break  # unknown value type - bail
-
-            # Early exit once all 5 target keys are found AND the KV geometry was seen —
-            # the geometry can appear after any of them, and a model whose header omits
-            # it simply walks the remaining keys (bounded by nkv).
             if (found >= 5 && kvh > 0 && kdim > 0) break
         }
-
         print name "|" arch "|" blocks "|" ctx "|" ftype "|" kvh "|" kdim
     }'
 }
@@ -1629,6 +1642,31 @@ function __tac_vram_total_bytes() {
 # the hybrid path when the model doesn't fit in VRAM.
 # Args: file_size_bytes total_layers [arch]
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
+
+# __llm_arch_is_moe <arch> [model_path] — return 0 when model/arch is MoE.
+# Covers both arch names containing "moe" and MoE archs without "moe" in the name
+# (gpt-oss, flint, inkling2, deepseek2, mixtral) or _exps. tensors in the GGUF.
+function __llm_arch_is_moe() {
+    local _arch="${1:-}" _path="${2:-}"
+    case "${_arch,,}" in
+        *moe*|gpt-oss|flint|inkling2|deepseek2|mixtral) return 0 ;;
+        *) ;;
+    esac
+    if [[ -n "$_path" && -r "$_path" ]]
+    then
+        local _probe
+        _probe="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gguf_metadata_add.py"
+        if [[ -f "$_probe" && -n "${TAC_PYTHON:-}" ]]
+        then
+            # swallow-ok: an unreadable or non-GGUF stub falls back to the arch verdict above
+            "$TAC_PYTHON" "$_probe" --src "$_path" --has-tensor-prefix _exps. >/dev/null 2>&1 \
+                && return 0
+        fi
+    fi
+    return 1
+}
+
+# __calc_gpu_layers — pick GPU layers based on model size, VRAM, and arch.
 function __calc_gpu_layers() {
     local _mem_total
     # swallow-ok: /proc/meminfo may be absent in a minimal test environment; empty falls back to usable_vram
@@ -1649,9 +1687,19 @@ function __gpu_layers_fit() {
     local usable_vram=$(( ${_vram_total:-0} * VRAM_USABLE_PCT / 100 ))
 
     # MoE: the layer count is returned WITHOUT a VRAM comparison (the caller decides
-    # placement — see __model_use_fit_preflight in 11e, which adds --cpu-moe when the
-    # weights do not fit the card).  It is not a claim that experts are on the CPU.
-    if [[ "${_arch,,}" == *moe* ]]
+    # placement — see __model_use_fit_preflight in 11e).  It is not a claim that experts
+    # are on the CPU.
+    local _is_moe=0
+    if declare -F __llm_arch_is_moe >/dev/null 2>&1
+    then
+        __llm_arch_is_moe "$_arch" && _is_moe=1
+    else
+        case "${_arch,,}" in
+            *moe*|gpt-oss|flint|inkling2|deepseek2|mixtral) _is_moe=1 ;;
+            *) ;;
+        esac
+    fi
+    if (( _is_moe == 1 ))
     then
         echo "${_total_layers:-0}"
         return
@@ -1703,7 +1751,7 @@ function __calc_ctx_size() {
     local _vram_total
     _vram_total="$(__tac_vram_total_bytes)"
     # MoE models use a stable conservative context regardless of size.
-    if [[ "${_arch,,}" == *moe* ]]
+    if __llm_arch_is_moe "$_arch"
     then
         echo "$MOE_DEFAULT_CTX"
         return
@@ -1968,7 +2016,13 @@ function __spec_launch_flags() {
     local _ngram="${LLM_SPECULATIVE_NGRAM:-0}"
     [[ "$_ngram" =~ ^[0-9]+$ ]] || _ngram=0
 
-    [[ -n "$_draft" || "$_type" == "ngram" || "$_type" == "draft-mtp" || $_ngram -gt 0 ]] || return 0
+    [[ -n "$_draft" || "$_type" == "ngram" || "$_type" == "draft-mtp" \
+        || "$_type" == "draft-dflash" || $_ngram -gt 0 ]] || return 0
+    if [[ "$_type" == "draft-dflash" && -z "$_draft" ]]
+    then
+        warn "spec-decode: draft-dflash requires spec_draft_model — ignoring"
+        return 0
+    fi
 
     if [[ -n "$_draft" ]]
     then
@@ -1979,8 +2033,12 @@ function __spec_launch_flags() {
         elif (( _ngl > 0 ))
         then
             printf '%s\n' "--spec-draft-ngl" "$_ngl"
+        elif [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
+        then
+            # GPU-only hard rule on shared-memory host: keep draft off CPU.
+            printf '%s\n' "--spec-draft-ngl" "999"
         else
-            # CPU-only draft: never steal VRAM from the target on 4 GB.
+            # CPU-only draft: never steal VRAM from the target on 4 GB discrete card.
             printf '%s\n' "--spec-draft-device" "none"
         fi
     fi
@@ -2067,15 +2125,16 @@ function __quant_label() {
         17) label="Q5_K_M";; 18) label="Q6_K";;  19) label="IQ2_XXS";;
         20) label="IQ2_XS";; 21) label="IQ3_XXS";; 26) label="IQ3_M";;
         28) label="Q4_0_4_4";; 29) label="Q4_0_4_8";; 30) label="Q4_0_8_8";;
+        38) label="MXFP4";; 39) label="NVFP4";;
         *) ;;
     esac
     # Regex matches GGUF quantization naming patterns:
     #   IQ variants (IQ2_XXS, IQ3_M, etc.), standard K-quants (Q4_K_S, Q5_K_M),
-    #   base quants (Q4_0, Q8_0), split formats (Q4_0_4_4), and float types (F16, BF16).
+    #   base quants (Q4_0, Q8_0), split formats (Q4_0_4_4), FP4 (NVFP4/MXFP4), and floats.
     if [[ -z "$label" || "$ftype" == "0" ]] && [[ -n "$fname" ]]
     then
         local quant_pat='(IQ[0-9]_[A-Z]+|Q[0-9]+_K_[SML]'
-        quant_pat+='|Q[0-9]+_K|Q[0-9]+_[0-9]+|Q[0-9]+|F16|F32|BF16)'
+        quant_pat+='|Q[0-9]+_K|Q[0-9]+_[0-9]+|Q[0-9]+|NVFP4|MXFP4|F16|F32|BF16)'
         local extracted
         extracted=$(echo "$fname" \
             | grep -oiE "$quant_pat" | head -1 \

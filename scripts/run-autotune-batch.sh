@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-11-23): filter LLM_DRAFT_ARCHS and keep indicative slow rows eligible in default
+#       scope; inspect per-row exit3_reason/detail to distinguish budget, stall, collapse, and drift.
 #   v34 (2026-11-19): the per-row header shows a bare row NUMBER as itself and '?' for an
 #       empty lookup; "(row , cyc 33/60)" was printed for `autotune-rows.sh 8 9`.
 #   v33 (2026-11-18): classify all remaining swallow sites so run-autotune-batch.sh has zero
@@ -141,8 +143,10 @@ if [ $# -eq 0 ]; then
     # "slow" is TERMINAL (a row measured below the floor at every ctx) and the
     # tombstone retires a row by name — the same two rules autotune-rows.sh applies.
     # Without them this default re-selected the archived 70B and the 88 GiB artefact.
-    mapfile -t MODEL_ARRAY < <(awk -F'|' '
-        $1 ~ /^[0-9]+$/ && $18 != "yes" && $18 != "slow" && tolower($6) !~ /embedding/ {print $3}
+    mapfile -t MODEL_ARRAY < <(awk -F'|' -v draft_archs="${LLM_DRAFT_ARCHS:-}" '
+        $1 ~ /^[0-9]+$/ && $18 != "yes" && !($18 == "slow" && $44 != "indicative") \
+            && tolower($6) !~ /embedding/ \
+            && index(" " draft_archs " ", " " tolower($6) " ") == 0 {print $3}
     ' "$LLM_REGISTRY" | sort)
     if [[ "${TAC_RESUME_INCLUDE_RETIRED:-0}" != "1" ]]; then
         _kept=()
@@ -428,7 +432,17 @@ for ((i = 0; i < TOTAL; i++)); do
         _contended=(--allow-contended)
         printf "CONTENDED RUN: measuring %s while CI is live - the row is stamped indicative\n" "$m"
     fi
-    bash "$_SELF_DIR/autotune-model.sh" "$m" "${_contended[@]}" 2>&1 || _row_rc=$?
+    _row_res="$(mktemp "${TMPDIR:-/tmp}/autotune-row-result.XXXXXX")"
+    LLM_AUTOTUNE_RESULT_FILE="$_row_res" bash "$_SELF_DIR/autotune-model.sh" "$m" "${_contended[@]}" 2>&1 || _row_rc=$?
+    _e3_reason=""; _e3_detail=""
+    if (( _row_rc == 3 )) && [[ -r "$_row_res" ]]; then
+        # swallow-ok: an absent or partial result file leaves _e3_reason empty and uses the ledger check below
+        _e3_reason=$(sed -n 's/^exit3_reason=//p' "$_row_res" 2>/dev/null | head -1) || _e3_reason=""
+        # swallow-ok: missing detail line simply falls back to a generic description
+        _e3_detail=$(sed -n 's/^detail=//p' "$_row_res" 2>/dev/null | head -1) || _e3_detail=""
+    fi
+    # swallow-ok: best-effort cleanup of per-row temp result file
+    rm -f "$_row_res" 2>/dev/null || true
     if (( _row_rc == 0 )); then
         printf 'done\n'
         TUNED_COUNT=$((TUNED_COUNT + 1))
@@ -437,28 +451,38 @@ for ((i = 0; i < TOTAL; i++)); do
         printf 'failed (exit %s)\n' "$_row_rc"
         FAILED_ROWS+=("$m")
         CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
-        # autotune-model.sh exits 3 for the ADAPTER backstops (the cycle budget, or
-        # CUDA_DEGRADE_CONSECUTIVE_STALLS launches alive but never healthy).  One row
-        # carrying that signature is enough to stop — it names the adapter, not the
-        # model, and a WSL restart is the only fix.  docs/llm.md states this as a
-        # contract ("both ... halt (exit 3)"); the batch used to swallow the code and
-        # count the row as an ordinary failure.
+        # autotune-model.sh exits 3 for the ADAPTER backstops (the cycle budget,
+        # consecutive stalls, tps collapse, or VRAM drift). Read the actual exit3_reason
+        # before blaming the adapter or telling the operator to reboot.
         if (( _row_rc == 3 )); then
-            # WHICH adapter backstop?  Ask the LEDGER rather than guess: a row that
-            # spent the budget and a row that stalled both exit 3, and the two want
-            # opposite handling — the first resumes after a restart, the second
-            # needs a person to look at the adapter.
             _cyc_now=$(cuda_cycles)
-            if [[ "$_cyc_now" =~ ^[0-9]+$ ]] && (( _cyc_now >= CUDA_CYCLE_BUDGET )); then
+            if [[ "$_e3_reason" == "cycle_budget" ]] || \
+               { [[ "$_cyc_now" =~ ^[0-9]+$ ]] && (( _cyc_now >= CUDA_CYCLE_BUDGET )); }; then
                 HALT_REASON="model #${m} exited 3 with the cycle budget spent"
-                HALT_REASON+=" (${_cyc_now} >= ${CUDA_CYCLE_BUDGET}) — one boot's measuring is done"
+                HALT_REASON+=" (${_cyc_now:-?} >= ${CUDA_CYCLE_BUDGET}) — one boot's measuring is done"
                 HALT_EXIT="$EXIT_BUDGET"
-            else
-                HALT_REASON="model #${m} exited 3 with the budget UNSPENT"
-                HALT_REASON+=" (${_cyc_now:-?}/${CUDA_CYCLE_BUDGET}) — the adapter stalled"
+                HALT_NEEDS_WSL_RESTART=1
+            elif [[ "$_e3_reason" == "readiness_stall" ]]; then
+                HALT_REASON="model #${m} halted (exit 3) at ${_cyc_now:-?}/${CUDA_CYCLE_BUDGET}"
+                HALT_REASON+=": readiness stall${_e3_detail:+ — $_e3_detail}"
                 HALT_EXIT="$EXIT_ADAPTER"
+                HALT_NEEDS_WSL_RESTART=0
+            elif [[ "$_e3_reason" == "tps_collapse" ]]; then
+                HALT_REASON="model #${m} halted (exit 3) at ${_cyc_now:-?}/${CUDA_CYCLE_BUDGET}"
+                HALT_REASON+=": tps collapse${_e3_detail:+ — $_e3_detail}"
+                HALT_EXIT="$EXIT_ADAPTER"
+                HALT_NEEDS_WSL_RESTART=1
+            elif [[ "$_e3_reason" == "vram_drift" ]]; then
+                HALT_REASON="model #${m} halted (exit 3) at ${_cyc_now:-?}/${CUDA_CYCLE_BUDGET}"
+                HALT_REASON+=": VRAM drift${_e3_detail:+ — $_e3_detail}"
+                HALT_EXIT="$EXIT_ADAPTER"
+                HALT_NEEDS_WSL_RESTART=1
+            else
+                HALT_REASON="model #${m} exited 3 with budget UNSPENT"
+                HALT_REASON+=" (${_cyc_now:-?}/${CUDA_CYCLE_BUDGET})${_e3_detail:+: $_e3_detail}"
+                HALT_EXIT="$EXIT_ADAPTER"
+                HALT_NEEDS_WSL_RESTART=0
             fi
-            HALT_NEEDS_WSL_RESTART=1
             break
         fi
     fi

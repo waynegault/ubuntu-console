@@ -1463,6 +1463,7 @@ __llm_stand_down_cuda_lanes
 EOS
 
     run env PATH="$sb/bin:$PATH" STOP_LOG="$sb/stopped" \
+        TAC_ALLOW_TEST_STANDDOWN=1 \
         LLAMA_LANE_SPECS=$'llama-cuda-qwen3coder-30b-chat.service|18087\nllama-xe-embeddinggemma-embed.service|18080' \
         bash "$sb/probe.sh" "$sb/lane.sh"
     [[ "$status" -eq 0 ]] || { echo "status=$status out=$output"; return 1; }

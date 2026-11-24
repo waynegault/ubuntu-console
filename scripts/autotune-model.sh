@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 161
+#   v161 (2026-11-23): sample SM clocks/thermals during bench_once_multi load; gate high
+#   meas_spread_pct and always populate __AUTOTUNE_VERDICT_REASON; accept float accept_len in
+#   spec sweep, compare against BEST_TPS, preserve draft-dflash fields/TTFT/n_max=5; enforce
+#   GPU-only rule on shared-memory hosts and fix discrete subshell OOM ladder; separate exit-3
+#   reasons, guard NGL/KV loops, fix fa_required message; pass compatible --mmproj; keep
+#   gpu_carve=VRAM_TOTAL and persist EFFECTIVE_MMAP/flash_attn; guard pkill block on
+#   TAC_TEST_TMPDIR.
 # Module Version: 160
 #   v160 (2026-11-23): the consecutive-stall chain resets at the start of each ROW.
 #   The counter file is boot-scoped, so a row that ended with its chain full left the next
@@ -486,6 +494,9 @@ __autotune_write_result() {
         elif [[ -n "${_COLLAPSE_DETAIL:-}" ]]; then
             printf 'detail=%s\n' "$_COLLAPSE_DETAIL"
         fi
+        if [[ -n "${_EXIT3_REASON:-}" ]]; then
+            printf 'exit3_reason=%s\n' "$_EXIT3_REASON"
+        fi
         printf 'exit_rc=%s\n' "$_rc"
         printf 'model=%s\n' "${MODEL_FILE:-}"
         printf 'row=%s\n' "${MODEL:-}"
@@ -532,6 +543,8 @@ __autotune_exit_trap() {
     fi
     # swallow-ok: the result file is a report; a run that cannot write it has already reported on stderr
     __autotune_write_result "$_rc" 2>/dev/null || true
+    # swallow-ok: temp per-run state cleanup is best-effort
+    rm -f "/tmp/at-clock-$$" "/tmp/at-clock-raw-$$" "/tmp/at-remedy-$$" "/tmp/at-fa-$$" 2>/dev/null || true
     exit "$_rc"
 }
 
@@ -573,6 +586,7 @@ _cuda_guard_or_exit() {
     if (( c >= CUDA_CYCLE_BUDGET )); then
         echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
         echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
+        _EXIT3_REASON="cycle_budget"
         # DEF-024: a refused pre-flight is not a failed configuration list.  The class is
         _preflight_refuse adapter_degraded 3 \
             "CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}); restart WSL"
@@ -582,6 +596,7 @@ _cuda_guard_or_exit() {
         if (( s >= CUDA_DEGRADE_CONSECUTIVE_STALLS )); then
             echo "ERROR: ${s} consecutive launches stalled (health never ready while the process stayed alive) — the dxgkrnl degradation signature, at ${c}/${CUDA_CYCLE_BUDGET} cycles." >&2
             echo "       Restart WSL from Windows ('wsl --shutdown'); nothing was certified this run." >&2
+            _EXIT3_REASON="readiness_stall"
             _preflight_refuse adapter_degraded 3 \
                 "${s} consecutive launches stalled (dxgkrnl degradation); restart WSL"
         fi
@@ -599,6 +614,7 @@ _cuda_guard_or_exit() {
             warn "ERROR: WSL2 dxgkrnl reported critical kernel GPU errors (-12/-75/wait timeout):"
             while IFS= read -r _l; do warn "  $_l"; done <<< "$_dxg_err"
             warn "       Restart WSL from Windows ('wsl --shutdown') to clear adapter state."
+            _EXIT3_REASON="dxg_kernel"
             _preflight_refuse adapter_degraded 3 \
                 "WSL2 dxgkrnl kernel GPU errors in dmesg (-12/-75/wait timeout); restart WSL"
         fi
@@ -616,6 +632,7 @@ _cuda_guard_or_exit() {
                     warn "ERROR: Cumulative post-boot VRAM drift (${_vram_drift} MiB" \
                          ">= ${LLM_AUTOTUNE_MAX_DRIFT_MIB} MiB)."
                     warn "       WSL2 dxgkrnl GPU VA fragmentation limit reached. Restart WSL ('wsl --shutdown')."
+                    _EXIT3_REASON="vram_drift"
                     _preflight_refuse adapter_degraded 3 \
                         "cumulative post-boot VRAM drift ${_vram_drift} MiB >= ${LLM_AUTOTUNE_MAX_DRIFT_MIB} MiB; restart WSL"
                 fi
@@ -670,28 +687,32 @@ if [[ -z "${_TAC_SUSPEND_HELD:-}" ]] && declare -f _tac_suspend_acquire &>/dev/n
 fi
 # ONE exit handler, installed on every path: it releases the lane hold when this run
 trap '__autotune_exit_trap' EXIT
-# The OpenClaw gateway's local embedding workers each hold ~430 MiB VRAM
-pkill -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
-_ew_wait=0
-while pgrep -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" >/dev/null 2>&1 && [[ $_ew_wait -lt 10 ]]; do
-    sleep 1; _ew_wait=$((_ew_wait + 1))
-done
-pkill -9 -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
-sleep 1
-if declare -f __gpu_clear_stale_processes &>/dev/null; then
-    __gpu_clear_stale_processes || true
+if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" && -z "${TAC_TEST_TMPDIR:-}" ]]; then
+    # The OpenClaw gateway's local embedding workers each hold ~430 MiB VRAM
+    pkill -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
+    _ew_wait=0
+    _ew_pat="memory-core-local-embedding-worker[.]js"
+    # swallow-ok: background pgrep poll ignores non-zero when no workers remain
+    while pgrep -u "$(id -un)" -f "$_ew_pat" >/dev/null 2>&1 && [[ $_ew_wait -lt 10 ]]; do
+        sleep 1; _ew_wait=$((_ew_wait + 1))
+    done
+    pkill -9 -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
+    sleep 1
+    if declare -f __gpu_clear_stale_processes &>/dev/null; then
+        __gpu_clear_stale_processes || true
+    fi
+    # WSL2 ghost-VRAM release — same double-kill trick cleanup_gpu uses later.
+    pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
+    sleep 1
+    sync 2>/dev/null || true
+    if [[ -w /proc/sys/vm/drop_caches ]]; then
+        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+    fi
+    timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
+        nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+    pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
+    sleep 1
 fi
-# WSL2 ghost-VRAM release — same double-kill trick cleanup_gpu uses later.
-pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
-sleep 1
-sync 2>/dev/null || true
-if [[ -w /proc/sys/vm/drop_caches ]]; then
-    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-fi
-timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
-    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
-pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
-sleep 1
 # BOUNDED RETRY (2026-10-24): the run above forces kills and a cache drop, and a
 for _vram_attempt in 1 2 3; do
     VRAM_TOTAL=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
@@ -888,10 +909,34 @@ __autotune_file_capabilities
 
 # Scale readiness window for large multi-shard models (>40 GiB) when AT_WINDOW_S wasn't pinned.
 if [[ -z "${_AT_WINDOW_USER_SET:-}" ]] && (( MODEL_MB >= 40960 )); then
-    _scaled_window=$(( 300 + ((MODEL_MB - 40960) / 1024) * 12 ))
-    (( _scaled_window > 1200 )) && _scaled_window=1200
+    _scaled_window=$(( 300 + ((MODEL_MB - 40960) / 1024) * 20 ))
+    (( _scaled_window > 1500 )) && _scaled_window=1500
     (( _scaled_window > AT_WINDOW_S )) && AT_WINDOW_S="$_scaled_window"
 fi
+
+# _detect_mmproj_flag — detect compatible sibling mmproj*.gguf for VL models.
+_detect_mmproj_flag() {
+    BENCH_MMPROJ_FLAG=()
+    local _mmproj="${LLAMA_MMPROJ:-}" _mmdir _cand
+    if [[ -z "$_mmproj" ]]; then
+        _mmdir="$(dirname "$MODEL_PATH")"
+        for _cand in "$_mmdir"/mmproj-F16.gguf "$_mmdir"/mmproj-BF16.gguf \
+            "$_mmdir"/mmproj*.gguf; do
+            if [[ -f "$_cand" ]] && {
+                ! declare -F __model_mmproj_compatible >/dev/null 2>&1 \
+                || __model_mmproj_compatible "$MODEL_PATH" "$_cand"
+            }; then
+                _mmproj="$_cand"
+                break
+            fi
+        done
+    fi
+    if [[ -n "$_mmproj" && -f "$_mmproj" ]]; then
+        BENCH_MMPROJ_FLAG=(--mmproj "$_mmproj")
+        echo "  mmproj: $(basename "$_mmproj")"
+    fi
+}
+_detect_mmproj_flag
 
 # Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
 if [[ $MODEL_MB -lt 1000 ]]; then
@@ -929,28 +974,36 @@ BUDGET=$(( EFFECTIVE_POOL_MB - MODEL_MB - 200 ))
 BENCH_MOE_FLAG=()
 if [[ "${LLM_AUTOTUNE_CPU_MOE:-0}" == "1" ]]; then
     BENCH_MOE_FLAG=(--cpu-moe)
-elif (( HAS_MOE == 1 )) || [[ "${_arch,,}" == *moe* ]]; then
+elif (( HAS_MOE == 1 )) \
+    || { declare -F __llm_arch_is_moe >/dev/null 2>&1 && __llm_arch_is_moe "$_arch"; } \
+    || [[ "${_arch,,}" == *moe* ]]; then
+    HAS_MOE=1
     if (( MODEL_MB + 200 > EFFECTIVE_POOL_MB )) \
         && (( ${_HOST_AVAIL_MB:-0} == 0 || MODEL_MB <= _HOST_AVAIL_MB )); then
-        BENCH_MOE_FLAG=(--cpu-moe)
-        echo "  placement: ${MODEL_MB} MiB MoE exceeds ${EFFECTIVE_POOL_MB} MiB pool — using --cpu-moe"
+        if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]; then
+            echo "  placement: ${MODEL_MB} MiB MoE exceeds ${EFFECTIVE_POOL_MB} MiB pool" \
+                 "(GPU-only policy forbids --cpu-moe)"
+        else
+            BENCH_MOE_FLAG=(--cpu-moe)
+            echo "  placement: ${MODEL_MB} MiB MoE exceeds ${EFFECTIVE_POOL_MB} MiB pool — using --cpu-moe"
+        fi
     fi
 fi
 # ── MoE expert-placement descent (row 4, 2026-11-23) ────────────────────────────
-# The placement rule above decides ONCE, from pool arithmetic.  On a shared-memory box that
-# arithmetic calls a 73.3 GiB MoE "fits" an 83 GiB host-derived pool, while the single
-# cudaMalloc for its weights is capped by the carve and fails:
-#   allocating 72114.70 MiB on device 0: cudaMalloc failed: out of memory
-# So an OOM on an MoE row that carries NO expert placement now buys one: --n-cpu-moe N, rising.
-# A dense row never reaches this, and a row already carrying --cpu-moe keeps it, so no other
-# model's measurement changes — the ladder is a fallback, not a new dimension in the sweep.
+# The placement rule above decides ONCE, from pool arithmetic.  On a discrete card an OOM
+# on an MoE row that carries NO expert placement earns -ngl release first, then --n-cpu-moe.
+# On shared-memory hosts (TAC_HOST_PROFILE_SHARED_MEMORY=1 / full_only), owner policy forbids
+# CPU offload, so OOM descends ctx or fails cleanly instead.
 BENCH_N_CPU_MOE=""
-# __autotune_oom_remedy <ngl> <moe_flag_count> <has_moe> — which remedy an OOM earns, or `none`.
-# Top-level and pure so a suite can prove the ORDER without launching a 73 GiB model: GPU first
-# (release the -ngl pin so llama.cpp splits weights itself), then partial expert offload, whose
-# ladder is _moe_descent_next.  Returns `release`, `experts` or `none`.
+# __autotune_oom_remedy <ngl> <moe_flag_count> <has_moe> [shared] — remedy on OOM, or `none`.
+# Top-level and pure so a suite can prove the ORDER without launching a 73 GiB model.
 function __autotune_oom_remedy() {
     local ngl="${1:-}" moe_flags="${2:-0}" has_moe="${3:-0}"
+    local shared="${4:-${TAC_HOST_PROFILE_SHARED_MEMORY:-0}}"
+    if [[ "$shared" == "1" ]]; then
+        printf 'none\n'
+        return 0
+    fi
     if [[ "$ngl" != "auto" ]]; then
         printf 'release\n'
         return 0
@@ -1203,6 +1256,7 @@ AUTOTUNE_PLATEAU_SAMPLES="${AUTOTUNE_PLATEAU_SAMPLES:-6}"
 AUTOTUNE_PLATEAU_INTERVAL_S="${AUTOTUNE_PLATEAU_INTERVAL_S:-0.5}"
 AUTOTUNE_PLATEAU_TOL_PCT="${AUTOTUNE_PLATEAU_TOL_PCT:-10}"
 AUTOTUNE_CLOCK_FLOOR_PCT="${AUTOTUNE_CLOCK_FLOOR_PCT:-60}"
+AUTOTUNE_SPREAD_WARN_PCT="${AUTOTUNE_SPREAD_WARN_PCT:-25}"
 
 # __autotune_clock_state <smi> — the two clock facts a certification needs, from ONE window.
 # Prints "<half-median drift pct>,<median SM clock as pct of median max>" on stdout.  Exit 0
@@ -1251,6 +1305,75 @@ __autotune_clock_verdict() {
     if (( ofmax < AUTOTUNE_CLOCK_FLOOR_PCT )); then printf 'floor'; return 0; fi
     if (( drift > AUTOTUNE_PLATEAU_TOL_PCT )); then printf 'trend'; return 0; fi
     printf 'ok'
+}
+
+# _append_verdict_reason <msg> — record every indicative/refuse reason in __AUTOTUNE_VERDICT_REASON.
+_append_verdict_reason() {
+    local _r="${1:-}"
+    [[ -n "$_r" ]] || return 0
+    if [[ -n "${__AUTOTUNE_VERDICT_REASON:-}" ]]; then
+        __AUTOTUNE_VERDICT_REASON="${__AUTOTUNE_VERDICT_REASON}; ${_r}"
+    else
+        __AUTOTUNE_VERDICT_REASON="$_r"
+    fi
+}
+
+# _bench_clock_sampler <smi> <out_file> — sample clocks.sm, clocks.max.sm, temperature.gpu under load.
+_bench_clock_sampler() {
+    local _smi="${1:-nvidia-smi}" _out="${2:-}" _line
+    [[ -n "$_out" ]] || return 0
+    : > "$_out"
+    while :; do
+        _line=$("$_smi" --query-gpu=clocks.sm,clocks.max.sm,temperature.gpu \
+            --format=csv,noheader,nounits \
+            2>/dev/null | head -1 | tr -d ' ') # swallow-ok: background sampler ignores transient smi miss
+        [[ -n "$_line" ]] && printf '%s\n' "$_line" >> "$_out"
+        sleep "${AUTOTUNE_PLATEAU_INTERVAL_S:-0.5}"
+    done
+}
+
+# __autotune_clock_state_from_samples <file> — compute drift,pct_of_max,temp_med,sm_med from CSV rows.
+# Prints "<drift>,<pct_of_max>,<temp_med>,<sm_med>" and exits 0 when >=2 valid rows exist, else 2.
+__autotune_clock_state_from_samples() {
+    local _file="${1:-}"
+    # 2 = unreadable sample log (distinct from clamped or trending)
+    [[ -r "$_file" ]] || return 2
+    awk -F',' '
+        $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $2 + 0 > 0 {
+            n++; sm[n] = $1 + 0; mx[n] = $2 + 0
+            if ($3 ~ /^[0-9]+$/) { tn++; tp[tn] = $3 + 0 }
+        }
+        END {
+            # 2 = fewer than 2 valid clock samples
+            if (n < 2) exit 2
+            half = int(n / 2)
+            for (i = 1; i <= half; i++) a1[i] = sm[i]
+            for (i = 1; i <= half; i++) for (j = i + 1; j <= half; j++) \
+                if (a1[j] < a1[i]) { t = a1[i]; a1[i] = a1[j]; a1[j] = t }
+            first = (half % 2) ? a1[int((half + 1) / 2)] : int((a1[half / 2] + a1[half / 2 + 1]) / 2)
+            n2 = n - half
+            for (i = 1; i <= n2; i++) a2[i] = sm[half + i]
+            for (i = 1; i <= n2; i++) for (j = i + 1; j <= n2; j++) \
+                if (a2[j] < a2[i]) { t = a2[i]; a2[i] = a2[j]; a2[j] = t }
+            second = (n2 % 2) ? a2[int((n2 + 1) / 2)] : int((a2[n2 / 2] + a2[n2 / 2 + 1]) / 2)
+            hi = (second > first) ? second : first
+            drift = (hi > 0) ? int(((first > second) ? (first - second) : (second - first)) * 100 / hi) : 0
+            for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) {
+                if (sm[j] < sm[i]) { t = sm[i]; sm[i] = sm[j]; sm[j] = t }
+                if (mx[j] < mx[i]) { t = mx[i]; mx[i] = mx[j]; mx[j] = t }
+            }
+            sm_med = (n % 2) ? sm[int((n + 1) / 2)] : int((sm[n / 2] + sm[n / 2 + 1]) / 2)
+            max_med = (n % 2) ? mx[int((n + 1) / 2)] : int((mx[n / 2] + mx[n / 2 + 1]) / 2)
+            pct = (max_med > 0) ? int(sm_med * 100 / max_med) : 0
+            temp_med = 0
+            if (tn > 0) {
+                for (i = 1; i <= tn; i++) for (j = i + 1; j <= tn; j++) \
+                    if (tp[j] < tp[i]) { t = tp[i]; tp[i] = tp[j]; tp[j] = t }
+                temp_med = (tn % 2) ? tp[int((tn + 1) / 2)] : int((tp[tn / 2] + tp[tn / 2 + 1]) / 2)
+            }
+            printf "%d,%d,%d,%d\n", drift, pct, temp_med, sm_med
+        }
+    ' "$_file"
 }
 
 echo "============================================="
@@ -1538,10 +1661,30 @@ _bench_record_failure() {
 }
 
 
+# _bench_sync_remedy_state — load persisted discrete-card OOM remedy state into parent/child.
+_bench_sync_remedy_state() {
+    [[ -r "/tmp/at-remedy-$$" ]] || return 0
+    local _rk _rv
+    while IFS='=' read -r _rk _rv; do
+        case "$_rk" in
+            BENCH_NGL) BENCH_NGL="$_rv" ;;
+            BENCH_N_CPU_MOE)
+                BENCH_N_CPU_MOE="$_rv"
+                BENCH_MOE_FLAG=(--n-cpu-moe "$_rv")
+                ;;
+            _FIT_ON) _BENCH_FIT_MODE="on" ;;
+            *) ;;
+        esac
+    done < "/tmp/at-remedy-$$"
+}
+
 # sampler flags sit next to the launch sites that use them.
 _bench_spawn() {
+    _bench_sync_remedy_state
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}" kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
     local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
+    local _fit_arg="${_BENCH_FIT_MODE:-off}"
+    [[ "$effective_ngl" == "auto" ]] && _fit_arg="on"
     local autotune_port="${AUTOTUNE_PORT:-18082}"
     local health_url="http://127.0.0.1:$autotune_port"
     _BENCH_PID="" _BENCH_HEALTH_URL="$health_url" _BENCH_LOG="/tmp/at-${MODEL}-c${c}-b${b}.log"
@@ -1575,6 +1718,8 @@ _bench_spawn() {
                 spec_args+=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-backend-sampling)
                 if [[ "${BENCH_SPEC_NGL:-0}" =~ ^[0-9]+$ ]] && (( BENCH_SPEC_NGL > 0 )); then
                     spec_args+=(--spec-draft-ngl "$BENCH_SPEC_NGL")
+                elif [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]; then
+                    spec_args+=(--spec-draft-ngl 999)
                 else
                     spec_args+=(--spec-draft-device none)
                 fi
@@ -1594,14 +1739,18 @@ _bench_spawn() {
                 fi
             fi
         elif [[ -n "${BENCH_SPEC_DRAFT_MODEL:-}" ]]; then
-            spec_args=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-device none)
+            if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]; then
+                spec_args=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-ngl 999)
+            else
+                spec_args=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-device none)
+            fi
             [[ -n "${BENCH_SPEC_N_MAX:-}" ]] && spec_args+=(--spec-draft-n-max "$BENCH_SPEC_N_MAX")
         fi
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
-            "${BENCH_MOE_FLAG[@]}" \
-            --parallel "${BENCH_PARALLEL:-1}" --fit off "${fa_args[@]}" --kv-offload \
+            "${BENCH_MOE_FLAG[@]}" "${BENCH_MMPROJ_FLAG[@]}" \
+            --parallel "${BENCH_PARALLEL:-1}" --fit "$_fit_arg" "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
             "${spec_args[@]}" "${sampler_args[@]}" \
             > "$_BENCH_LOG" 2>&1 &
@@ -1696,65 +1845,55 @@ _bench_spawn() {
                 echo "  ${_fa_label} — retrying once with --flash-attn off" >&2
                 _bench_stop "$_BENCH_PID"
                 flash_attn="off"
+                # swallow-ok: failure of the one FA-off retry is handled by the post-launch readiness check below
                 _launch_server || true
                 ;;
             descend)
-                # GPU FIRST.  The row is launched with an explicit -ngl equal to its layer count,
-                # which PINS every layer to the card and stops --fit from adjusting anything, so a
-                # weights allocation larger than the carve fails outright.  Releasing the pin lets
-                # llama.cpp keep on the GPU every layer that fits and put only the remainder on the
-                # host — the GPU-heavy split, chosen by the code that knows the carve, before a
-                # single expert tensor is moved to the CPU.
+                # GPU FIRST (discrete cards only; __autotune_oom_remedy returns none on shared_memory=1).
                 local _remedy
                 _remedy="$(__autotune_oom_remedy "${BENCH_NGL:-}" "${#BENCH_MOE_FLAG[@]}" "${HAS_MOE:-0}")"
                 if [[ "$_remedy" == "release" ]]; then
                     BENCH_NGL_RELEASED="${BENCH_NGL:-999}"
                     BENCH_NGL="auto"
+                    effective_ngl="auto"
+                    _fit_arg="on"
                     warn "  OOM — releasing the pinned -ngl ${BENCH_NGL_RELEASED} to 'auto'" \
-                         "so the GPU keeps every layer it can"
+                         "with --fit on so the GPU keeps every layer it can"
                     _bench_stop "$_BENCH_PID"
-                    # A relaunch here CANNOT be classified by the caller: this arm falls through to
-                    # `_launch_or_record_failure || return 1`, and that return ends the spawn before
-                    # the failure is read — measured 2026-11-23, where the release fired, still
-                    # OOMed, and the caller halved ctx for three tests without the ladder being
-                    # reached once.  So the arm relaunches in place until the launch holds.
                     local _relaunch_try=0
                     while (( _relaunch_try < 2 )); do
                         _relaunch_try=$(( _relaunch_try + 1 ))
-                        # _startup_load_fail reports by status: non-zero means the relaunch died
-                        # on a load failure, so the next remedy is earned.
                         if _launch_server && ! _startup_load_fail quiet && _arm_rung_held; then
+                            printf 'BENCH_NGL=auto\n_FIT_ON=1\n' > "/tmp/at-remedy-$$"
                             return 0
                         fi
                         _bench_stop "$_BENCH_PID"
                     done
                 fi
-                # ONLY THEN, and only for an MoE row with no placement yet: move experts, partial
-                # first, because --cpu-moe is all-or-nothing and would give up GPU bandwidth the
-                # row can still use.  A weights allocation does not care how large the ctx is, so
-                # this precedes the ctx descent.
+                # ONLY THEN, on discrete cards for MoE with no placement yet: --n-cpu-moe N.
                 if [[ "$_remedy" == "experts" ]]; then
                     local _moe_n
                     if _moe_n="$(_moe_descent_next)"; then
-                        BENCH_N_CPU_MOE="$_moe_n"
-                        BENCH_MOE_FLAG=(--n-cpu-moe "$_moe_n")
-                        warn "  OOM — moving ${_moe_n} layers of experts to the CPU (--n-cpu-moe) and relaunching"
+                        BENCH_N_CPU_MOE="$_moe_n"; BENCH_MOE_FLAG=(--n-cpu-moe "$_moe_n")
+                        warn "  OOM — moving ${_moe_n} layers of experts to CPU (--n-cpu-moe)"
                         _bench_stop "$_BENCH_PID"
-                        # Same rule as the release above: classify HERE, because the caller only
-                        # sees this arm's failure as "the launch failed" and halves ctx for it.
                         if _launch_server && ! _startup_load_fail quiet && _arm_rung_held; then
+                            printf 'BENCH_NGL=%s\nBENCH_N_CPU_MOE=%s\n_FIT_ON=1\n' \
+                                "${BENCH_NGL:-auto}" "$_moe_n" > "/tmp/at-remedy-$$"
                             return 0
                         fi
                         _bench_stop "$_BENCH_PID"
-                        # the step failed; the next OOM earns the next rung
                     fi
                 fi
-                warn "  OOM at this ctx — NOT retrying with --flash-attn off (that needs more memory); descending"
+                warn "  OOM at this ctx — NOT retrying with --flash-attn off; descending"
                 _bench_stop "$_BENCH_PID"
                 ;;
             fa_required)
-                # llama.cpp refuses a quantised V cache with flash attention off, so the
-                warn "  ${_fa_cause} with cache-type-v ${kv_v}: a quantised V needs flash-attn; not retrying"
+                # llama.cpp refuses a quantised V cache with flash attention off, so skip FA-off retry
+                # while naming the actual startup cause from the server log.
+                warn "  ${_fa_cause} (with --flash-attn on); skipping --flash-attn off retry" \
+                     "because cache-type-v ${kv_v} requires flash-attn"
+                [[ "$_fa_cause" == "load_fail" ]] && { _startup_load_fail || :; }
                 _bench_stop "$_BENCH_PID"
                 _bench_record_failure "$c" "$b" "$u" "$effective_ngl" "$kv_k/$kv_v"
                 echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"
@@ -1861,6 +2000,7 @@ _bench_spawn() {
         -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Warmup\"}],\"max_tokens\":${warmup_tokens},\"temperature\":0}" \
         > /dev/null 2>&1 || true
 
+    printf '%s\n' "$flash_attn" > "/tmp/at-fa-$$"
     _cuda_stall_reset   # a healthy launch breaks the consecutive-stall chain
     return 0
 }
@@ -2122,7 +2262,11 @@ bench_once_multi() {
     }
 
     local -a vals=()
-    local _i _v _cold_metrics=""
+    local _i _v _cold_metrics="" _clk_pid="" _clk_stat=""
+    if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+        _bench_clock_sampler nvidia-smi "/tmp/at-clock-raw-$$" &
+        _clk_pid=$!
+    fi
     for ((_i = 0; _i < samples; _i++)); do
         _v=$(_bench_request_once "$mode" "$payload_file" "$bench_timeout") || _v=""
         # Sample 1 is the only COLD one.  llama.cpp caches the prompt prefix, so
@@ -2134,6 +2278,15 @@ bench_once_multi() {
             vals+=("$_v")
         fi
     done
+    if [[ -n "$_clk_pid" ]]; then
+        # swallow-ok: background clock sampler may have already exited
+        kill "$_clk_pid" 2>/dev/null || true
+        # swallow-ok: reap sampler before reading raw clock samples
+        wait "$_clk_pid" 2>/dev/null || true
+        # swallow-ok: missing/insufficient samples simply fall back to post-run smi query
+        _clk_stat=$(__autotune_clock_state_from_samples "/tmp/at-clock-raw-$$" 2>/dev/null) || _clk_stat=""
+        [[ -n "$_clk_stat" ]] && printf '%s\n' "$_clk_stat" > "/tmp/at-clock-$$"
+    fi
     _bench_stop "$_BENCH_PID"
     # Restore the cold sample's metrics (decode|prefill|accept...) for the callers.
     [[ -n "$_cold_metrics" ]] && printf '%s\n' "$_cold_metrics" > "/tmp/at-metrics-$$"
@@ -2859,30 +3012,53 @@ fi
 _cuda_guard_or_exit
 
 # --- n_gpu_layers / KV-quant sweep (the "almost fits" band) ---
+# Sync discrete-card OOM remedy state from subshell spawns into parent state before Phase 3/4.
+if [[ -r "/tmp/at-remedy-$$" ]]; then
+    while IFS='=' read -r _rk _rv; do
+        case "$_rk" in
+            BENCH_NGL) BENCH_NGL="$_rv" ;;
+            BENCH_N_CPU_MOE)
+                BENCH_N_CPU_MOE="$_rv"
+                BENCH_MOE_FLAG=(--n-cpu-moe "$_rv")
+                ;;
+            *) ;;
+        esac
+    done < "/tmp/at-remedy-$$"
+fi
 WIN_NGL="$BENCH_NGL"; WIN_KVK="q8_0"; WIN_KVV="q8_0"
 BAND_MIN_MB=$(awk -v f="$EFFECTIVE_POOL_MB" -v fr="$NGL_BAND_FRAC" 'BEGIN{printf "%d", f*fr}')
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
-    # ngl candidates: runtime-max offload (999) plus a short ladder down the
+    # ngl candidates: skip completely on shared-memory hosts (full_only) and when
+    # BENCH_NGL already covers all layers (llama.cpp clamps -ngl 999 to _n_layers).
     NGL_CANDIDATES=()
-    [[ "$BENCH_NGL" != "999" ]] && NGL_CANDIDATES+=("999")
     # SHARED-MEMORY HOSTS GET NO LADDER (2026-11-03).  The ladder exists for a discrete
     if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
     then
         echo "  • Layer offload: Keeping full offload (unified memory detected)"
-    elif [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
-        for _frac in 3 1; do
-            _ngl_cand=$(( _n_layers * _frac / 4 ))
-            [[ $_ngl_cand -lt 1 ]] && _ngl_cand=1
-            [[ "$_ngl_cand" != "$BENCH_NGL" ]] || continue
-            _dup=0
-            for _existing in "${NGL_CANDIDATES[@]:-}"; do
-                [[ "$_existing" == "$_ngl_cand" ]] && _dup=1 && break
+    else
+        _nl_ok=0
+        if [[ "${_n_layers:-}" =~ ^[0-9]+$ ]] && [[ "$BENCH_NGL" =~ ^[0-9]+$ ]] \
+            && (( BENCH_NGL >= _n_layers )); then
+            _nl_ok=1
+        fi
+        if [[ "$BENCH_NGL" != "999" ]] && (( _nl_ok == 0 )); then
+            NGL_CANDIDATES+=("999")
+        fi
+        if [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
+            for _frac in 3 1; do
+                _ngl_cand=$(( _n_layers * _frac / 4 ))
+                [[ $_ngl_cand -lt 1 ]] && _ngl_cand=1
+                [[ "$_ngl_cand" != "$BENCH_NGL" ]] || continue
+                _dup=0
+                for _existing in "${NGL_CANDIDATES[@]:-}"; do
+                    [[ "$_existing" == "$_ngl_cand" ]] && _dup=1 && break
+                done
+                (( _dup )) || NGL_CANDIDATES+=("$_ngl_cand")
             done
-            (( _dup )) || NGL_CANDIDATES+=("$_ngl_cand")
-        done
-        unset _frac _ngl_cand _dup _existing
+            unset _frac _ngl_cand _dup _existing
+        fi
     fi
 
     if [[ ${#NGL_CANDIDATES[@]} -gt 0 ]]; then
@@ -2891,6 +3067,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
         echo "  ---------------------"
         _ngl=""
         for _ngl in "${NGL_CANDIDATES[@]}"; do
+            _cuda_guard_or_exit
             _before="$BEST_CTX|$BEST_TPS"
             echo "  ngl=$_ngl:"
             probe_upward "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP" "$_ngl" "q8_0" "q8_0" || true
@@ -2925,6 +3102,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
         echo "  ---------------------"
         _pair=""
         for _pair in "${KV_PAIRS[@]}"; do
+            _cuda_guard_or_exit
             _kk="${_pair%%/*}"; _kv="${_pair##*/}"
             _before="$BEST_CTX|$BEST_TPS"
             echo "  cache k=$_kk v=$_kv:"
@@ -3092,12 +3270,21 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             fi
         done < <(__autotune_descent_candidates "$_cert_from" "$MIN_CTX" "$PREV_CERT_CTX")
     fi
-    # Record GPU thermal/clock state alongside the certified number — heat
-    if command -v nvidia-smi >/dev/null 2>&1; then
+    # Record GPU thermal/clock state from loaded samples (prefer under-load over post-stop idle).
+    _gpu_thermal=""
+    if [[ -r "/tmp/at-clock-$$" ]]; then
+        if IFS=, read -r _tc_d _tc_p _tc_t _tc_sm < "/tmp/at-clock-$$"; then
+            if [[ "${_tc_t:-0}" =~ ^[0-9]+$ && "${_tc_sm:-0}" =~ ^[0-9]+$ ]] && (( _tc_sm > 0 )); then
+                _gpu_thermal="${_tc_t},${_tc_sm}"
+            fi
+        fi
+    fi
+    if [[ -z "$_gpu_thermal" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+        # swallow-ok: fallback thermal read when loaded clock sample was not captured
         _gpu_thermal=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
             nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-        echo "  thermal at certification: GPU ${_gpu_thermal:-n/a} (temp °C, SM MHz)"
     fi
+    echo "  thermal at certification: GPU ${_gpu_thermal:-n/a} (temp °C, SM MHz)"
 
     # tps-collapse guard (WSL2 dxgkrnl degradation).  Two baselines: the row's own best
     # quick probe (v144, works on a fresh row) and the registry's recorded figure (a
@@ -3126,6 +3313,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fi
         echo "           GPU may be degraded (WSL2 dxgkrnl leak); the re-certified numbers are untrustworthy."
         echo "           Restart WSL (bin/wsl-restart.sh --restart --now) before trusting this re-tune."
+        _EXIT3_REASON="tps_collapse"
         echo ""
         echo "  ⚠ NOT SAVING this row: a collapsed measurement is not a measurement."
         _COLLAPSE_DETAIL="certified ${BEST_TPS} tps vs"
@@ -3169,9 +3357,11 @@ fi
 WIN_SPEC_TYPE=""; WIN_SPEC_DRAFT_MODEL=""; WIN_SPEC_DRAFT_PATH=""
 WIN_SPEC_N_MAX=""; WIN_SPEC_NGL=""; WIN_SPEC_ACCEPT_LEN=""
 SPEC_N_MAX_LIST=${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-"4 8 16 32"}
+DFLASH_N_MAX_LIST=${LLM_AUTOTUNE_DFLASH_N_MAX_LIST:-"4 5 8 16"}
 # MTP's ladder is 2/3/4/8, not 4/8/16/32: the head proposes a few tokens ahead, and its
 # default in llama.cpp and NVIDIA's RTX Spark recipe is 3.
 MTP_N_MAX_LIST=${LLM_AUTOTUNE_MTP_N_MAX_LIST:-"2 3 4 8"}
+SPEC_MIN_GAIN_PCT=${LLM_AUTOTUNE_SPEC_MIN_GAIN_PCT:-5}
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r _sb_b _sb_u <<< "$BEST_COMBO"
     echo ""
@@ -3188,7 +3378,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     [[ "${HAS_DFLASH:-0}" == "1" ]] && _sb_types="${_sb_types} draft-dflash"
     echo "  spec-decode sweep (${_sb_types// /, })"
     echo "  -------------------------------------"
-    _sb_best_tps="0"
+    _sb_best_tps=$(awk -v b="${BEST_TPS:-0}" -v g="${SPEC_MIN_GAIN_PCT:-5}" 'BEGIN{
+        if (b + 0 > 0) printf "%.4f", b * (1.0 + g / 100.0); else print "0"
+    }')
     # AUTOTUNE_SPEC_SWEEP=0 skips the sweep: it is SEVERAL launches per row and its
     _sb_skip=0
     if [[ "${AUTOTUNE_SPEC_SWEEP:-1}" == "0" ]]; then
@@ -3198,12 +3390,17 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         _sb_skip=1
         echo "  (budget tight ($(_cuda_cycles)/${CUDA_CYCLE_BUDGET}) —" \
              "skipping spec-decode sweep to preserve certification save)"
+    elif [[ "${_P4_TOO_SLOW:-0}" == "1" && "${HAS_MTP:-0}" != "1" && "${HAS_DFLASH:-0}" != "1" ]]; then
+        _sb_skip=1
+        echo "  (row is below floor with no MTP/dflash head — skipping ngram-only spec sweep to save CUDA cycles)"
     fi
     for _sb_type in $_sb_types
     do
         (( _sb_skip == 0 )) || break
         if [[ "$_sb_type" == "draft-mtp" ]]; then
             _sb_list="$MTP_N_MAX_LIST"
+        elif [[ "$_sb_type" == "draft-dflash" ]]; then
+            _sb_list="$DFLASH_N_MAX_LIST"
         else
             _sb_list="$SPEC_N_MAX_LIST"
         fi
@@ -3239,7 +3436,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
             echo "  ${_sb_type} block ${_sb_block}: ${_sb_t} tps (accept len ${_sb_al:-0}, rate ${_sb_ar:-0})"
             # ECONOMY (2026-11-03): two consecutive blocks that accepted nothing is enough
-            if [[ "${_sb_al:-0}" =~ ^[0-9]+$ ]] && (( _sb_al == 0 ))
+            if ! __autotune_spec_worth_keeping "${_sb_al:-0}" "${_sb_ar:-0}"
             then
                 _sb_zero=$((_sb_zero + 1))
             else
@@ -3260,6 +3457,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                         WIN_SPEC_DRAFT_MODEL="$MTP_DRAFT_FILE"
                         WIN_SPEC_DRAFT_PATH="$MTP_DRAFT_PATH"
                         WIN_SPEC_NGL="${MTP_DRAFT_NGL:-}"
+                    elif [[ "$_sb_type" == "draft-dflash" ]]; then
+                        if [[ -n "${DFLASH_DRAFT_PATH:-}" ]]; then
+                            WIN_SPEC_DRAFT_MODEL="$(basename "$DFLASH_DRAFT_PATH")"
+                            WIN_SPEC_DRAFT_PATH="$DFLASH_DRAFT_PATH"
+                            WIN_SPEC_NGL="999"
+                        fi
                     else
                         WIN_SPEC_DRAFT_MODEL=""
                         WIN_SPEC_DRAFT_PATH=""
@@ -3386,15 +3589,23 @@ ttft_probe() {
                 spec_args+=(--spec-draft-model "$WIN_SPEC_DRAFT_PATH" --spec-draft-backend-sampling)
                 if [[ "${WIN_SPEC_NGL:-0}" =~ ^[0-9]+$ ]] && (( WIN_SPEC_NGL > 0 )); then
                     spec_args+=(--spec-draft-ngl "$WIN_SPEC_NGL")
+                elif [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]; then
+                    spec_args+=(--spec-draft-ngl 999)
                 else
                     spec_args+=(--spec-draft-device none)
                 fi
+            fi
+        elif [[ "${WIN_SPEC_TYPE:-}" == "draft-dflash" ]]; then
+            spec_args=(--spec-type draft-dflash --spec-draft-n-max "${WIN_SPEC_N_MAX:-5}")
+            if [[ -n "${WIN_SPEC_DRAFT_PATH:-}" ]]; then
+                spec_args+=(--spec-draft-model "$WIN_SPEC_DRAFT_PATH" --spec-draft-backend-sampling)
+                spec_args+=(--spec-draft-ngl "${WIN_SPEC_NGL:-999}")
             fi
         fi
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
-            "${BENCH_MOE_FLAG[@]}" \
+            "${BENCH_MOE_FLAG[@]}" "${BENCH_MMPROJ_FLAG[@]}" \
             --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
             "${spec_args[@]}" "${sampler_args[@]}" \
@@ -3759,6 +3970,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # remaining terms, not the load alone.
         # 1a — the POSITION term.  The winner above is a median of 5 taken at ONE point in
         _meas_drift_pct=""
+        rm -f "/tmp/at-clock-$$" "/tmp/at-clock-raw-$$"
         _meas_pos2=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" \
             "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _meas_pos2=""
         [[ -n "$_meas_pos2" ]] \
@@ -3767,10 +3979,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             # FAIL CLOSED (v85): an unmeasurable second position is not evidence of stability.
             echo "  the second-position re-measurement produced no figure — stamping this row INDICATIVE"
             _meas_state="indicative"
+            _append_verdict_reason "second-position re-measurement failed"
         elif awk -v d="$_meas_drift_pct" -v w="$AUTOTUNE_DRIFT_WARN_PCT" 'BEGIN{exit !(d > w)}'; then
             echo "  position drift ${_meas_drift_pct}% (p1=${BEST_TPS} p2=${_meas_pos2}) exceeds" \
                  "the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound — stamping this row INDICATIVE"
             _meas_state="indicative"
+            _append_verdict_reason "position drift ${_meas_drift_pct}% > ${AUTOTUNE_DRIFT_WARN_PCT}%"
         else
             echo "  position drift ${_meas_drift_pct}% (p1=${BEST_TPS} p2=${_meas_pos2}) —" \
                  "within the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound"
@@ -3782,24 +3996,39 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             if [[ "$_throttle" =~ ^0x[0-9a-fA-F]+$ ]] && (( _throttle & 0x20 )); then
                 echo "  SW Thermal Slowdown is ACTIVE at certification — stamping this row INDICATIVE"
                 _meas_state="indicative"
+                _append_verdict_reason "SW Thermal Slowdown active"
             fi
-            # v151: the thermal bit above says the driver FLAGGED a slowdown; these say the clock
-            # was MOVING (row 8's 3.94 tps sample) or far below its own maximum (the Modern
-            # Standby clamp, which is perfectly steady at 663-942 MHz and 3.3x slower at c=1).
-            _clock_state=$(__autotune_clock_state nvidia-smi)
-            if [[ $? -eq 0 ]]
-            then
+            # Sample clocks DURING _meas_pos2 (saved in /tmp/at-clock-$$); fall back to
+            # __autotune_clock_state nvidia-smi only when loaded samples are absent.
+            _clock_state=""
+            _clock_rc=2
+            if [[ -r "/tmp/at-clock-$$" ]]; then
+                if IFS=, read -r _cs_d _cs_p _cs_rest < "/tmp/at-clock-$$"; then
+                    if [[ "${_cs_d:-}" =~ ^[0-9]+$ && "${_cs_p:-}" =~ ^[0-9]+$ ]]; then
+                        _clock_state="${_cs_d},${_cs_p}"
+                        _clock_rc=0
+                    fi
+                fi
+            fi
+            if (( _clock_rc != 0 )); then
+                _clock_state=$(__autotune_clock_state nvidia-smi)
+                _clock_rc=$?
+            fi
+            if (( _clock_rc == 0 )); then
                 IFS=, read -r _clock_trend_pct _clock_of_max <<< "$_clock_state"
                 case "$(__autotune_clock_verdict "$_clock_trend_pct" "$_clock_of_max")" in
                     floor) echo "  SM clock is ${_clock_of_max}% of its maximum — below the" \
                                 "${AUTOTUNE_CLOCK_FLOOR_PCT}% floor — stamping this row INDICATIVE:"
                            echo "  the card was clamped, so the number is a measurement of the clamp,"
                            echo "  not of the configuration."
-                           _meas_state="indicative" ;;
+                           _meas_state="indicative"
+                           _append_verdict_reason "SM clock ${_clock_of_max}% < ${AUTOTUNE_CLOCK_FLOOR_PCT}% floor" ;;
                     trend) echo "  SM clock still trending ${_clock_trend_pct}% between the halves of its sample"
                            echo "  window (tolerance ${AUTOTUNE_PLATEAU_TOL_PCT}%) — stamping this row INDICATIVE:"
                            echo "  the card was not at a steady clock, so the number is not comparable."
-                           _meas_state="indicative" ;;
+                           _meas_state="indicative"
+                           _tr_msg="SM clock trend ${_clock_trend_pct}% > ${AUTOTUNE_PLATEAU_TOL_PCT}%"
+                           _append_verdict_reason "$_tr_msg" ;;
                     # ok, and unknown (the rc-2 path already reported an unreadable clock)
                     *) ;;
                 esac
@@ -3826,12 +4055,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             *)
                 echo "  WARNING: window policy returned an unexpected verdict '${_ctx_policy}'" ;;
         esac
-        # v85: the REAL sample count and spread written by the last bench_once_multi (the
+        # v85: the REAL sample count and spread written by the last bench_once_multi
         _meas_n=5
         [[ -r "/tmp/at-samples-$$" ]] && _meas_n=$(< "/tmp/at-samples-$$")
         [[ "$_meas_n" =~ ^[0-9]+$ ]] || _meas_n=5
         _meas_spread=""
         [[ -r "/tmp/at-spread-$$" ]] && _meas_spread=$(< "/tmp/at-spread-$$")
+        if [[ "$_meas_spread" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+            && awk -v s="$_meas_spread" -v w="$AUTOTUNE_SPREAD_WARN_PCT" 'BEGIN{exit !(s > w)}'; then
+            echo "  sample spread ${_meas_spread}% exceeds ${AUTOTUNE_SPREAD_WARN_PCT}% — stamping INDICATIVE"
+            _meas_state="indicative"
+            _append_verdict_reason "sample spread ${_meas_spread}% > ${AUTOTUNE_SPREAD_WARN_PCT}%"
+        fi
         # A below-floor verdict is saved as autotuned=slow, not "yes" and not "no":
         # swallow-ok: an unusable bc is the below-floor branch, which records "slow" — the safe side
         if [[ $(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]
@@ -3842,18 +4077,15 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fi
         export AUTOTUNE_SAVE_STATE
         _save_carve="$VRAM_TOTAL"
-        if [[ "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]] \
-            && [[ "${EFFECTIVE_POOL_MB:-0}" =~ ^[0-9]+$ ]] \
-            && (( EFFECTIVE_POOL_MB > _save_carve )); then
-            _save_carve="$EFFECTIVE_POOL_MB"
-        fi
+        _win_flash_attn="on"
+        [[ -r "/tmp/at-fa-$$" ]] && _win_flash_attn=$(< "/tmp/at-fa-$$")
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "$WIN_SPEC_DRAFT_MODEL" "$WIN_SPEC_N_MAX" "$WIN_SPEC_NGL" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
             "$_row_load" "$_meas_n" "$_meas_spread" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
             "$LLAMA_BUILD_ID" "$_save_carve" \
-            "$TUNE_THREADS" \
+            "$TUNE_THREADS" "$EFFECTIVE_MMAP" "$_win_flash_attn" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the

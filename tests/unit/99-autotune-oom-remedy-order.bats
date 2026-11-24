@@ -38,7 +38,7 @@ setup() {
 # remedy <ngl> <moe_flags> <has_moe> — the arm's decision, with the ladder reset.
 remedy() {
     BENCH_N_CPU_MOE=""
-    bash -c 'source "$1"; BENCH_N_CPU_MOE=""; __autotune_oom_remedy "$2" "$3" "$4"' \
+    bash -c 'source "$1"; BENCH_N_CPU_MOE=""; TAC_HOST_PROFILE_SHARED_MEMORY=0 __autotune_oom_remedy "$2" "$3" "$4"' \
         _ "$HARness" "$1" "$2" "$3"
 }
 
@@ -71,6 +71,15 @@ _dflash_branch() {
     # Catches the ladder overriding a placement the profile or the existing rule made:
     # a second, partial placement on top of an all-or-nothing one is not a remedy.
     [ "$(remedy auto 1 1)" = "none" ]
+}
+
+@test "on shared-memory hosts, OOM earns 'none' — GPU-only policy forbids CPU offload" {
+    run bash -c 'source "$1"; BENCH_N_CPU_MOE=""; __autotune_oom_remedy 89 0 1 1' _ "$HARness"
+    [ "$status" -eq 0 ]
+    [ "$output" = "none" ]
+    run bash -c 'source "$1"; BENCH_N_CPU_MOE=""; TAC_HOST_PROFILE_SHARED_MEMORY=1 __autotune_oom_remedy auto 0 1' _ "$HARness"
+    [ "$status" -eq 0 ]
+    [ "$output" = "none" ]
 }
 
 @test "the ladder rises and then admits it is spent" {

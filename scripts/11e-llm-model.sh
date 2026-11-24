@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 148
+# Module Version: 149
+#   v149 (2026-11-23): honour GPU-only rule on shared-memory hosts in __model_use_fit_verdict
+#   (never emit cpu-moe on shared=1) and broaden MoE arch detection beyond *moe*.
 #   v148 (2026-11-23): `__model_is_draft_head` reads the ARCH as its second signal, and the
 #   scan calls it after the metadata read.  The basename arms (`mtp-*`, `*dflash*`) could not
 #   see NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr.gguf — a `dflash` draft whose
@@ -2275,21 +2277,25 @@ function __model_use_fit_verdict() {
         return 0
     fi
 
-    if [[ "${arch,,}" == *moe* ]]
+    local _is_moe=0
+    case "${arch,,}" in *moe*|gpt-oss|flint|inkling2|deepseek2|mixtral) _is_moe=1 ;; esac
+    if (( _is_moe == 0 )) && declare -F __llm_arch_is_moe >/dev/null 2>&1; then
+        __llm_arch_is_moe "$arch" "${model_path:-}" && _is_moe=1
+    fi
+    if (( _is_moe == 1 ))
     then
-        # Experts to the CPU leaves the non-expert tensors on the card; without
-        # per-tensor sizes the HOST side is bounded by the whole file, which is the
-        # conservative direction (the rows this protects load with mmap off).
+        if [[ "$shared" == "1" ]]
+        then
+            printf 'refuse:MoE weights (%s MiB) exceed %s MiB of %s MiB RAM (%s MiB pool; GPU-only)\n' \
+                "$gpu_mb" "$budget" "$avail" "$vram"
+            return 0
+        fi
+        # Experts to the CPU leaves non-expert tensors on the card; host side is bounded by the whole file.
         if [[ "$avail" =~ ^[0-9]+$ ]] && (( avail > 0 )) && (( model_mb > avail ))
         then
             host_mb=$model_mb
-            local _where="${vram} MiB card"
-            [[ "$shared" == "1" ]] && _where="${budget} MiB of host RAM the guest can back"
-            local _refusal="refuse:MoE needs ${host_mb} MiB of expert weights in host RAM and"
-            _refusal+=" ${avail} MiB is available, while ${gpu_mb} MiB of weights does not"
-            _refusal+=" fit the ${_where} — use a smaller quant, or give the guest more RAM"
-            _refusal+=" (a smaller GPU carve) and reboot"
-            printf '%s\n' "$_refusal"
+            printf 'refuse:MoE needs %s MiB in RAM (%s MiB free); %s MiB misses %s MiB card\n' \
+                "$host_mb" "$avail" "$gpu_mb" "$vram"
             return 0
         fi
         printf 'cpu-moe\n'

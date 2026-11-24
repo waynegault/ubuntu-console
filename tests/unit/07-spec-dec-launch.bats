@@ -50,11 +50,17 @@ teardown() {
 @test "spec-dec-004: __spec_launch_flags CPU-places a draft model by default" {
     run bash -c '
         source "$1/scripts/11d-llm-gpu.sh"
-        LLM_SPEC_DRAFT_MODEL=/models/draft.gguf __spec_launch_flags
+        TAC_HOST_PROFILE_SHARED_MEMORY=0 LLM_SPEC_DRAFT_MODEL=/models/draft.gguf __spec_launch_flags
     ' _ "$REPO_ROOT"
     [[ "$output" == *"--spec-draft-model"* ]]
     [[ "$output" == *"--spec-draft-device"* ]]
     [[ "$output" == *"none"* ]]
+    run bash -c '
+        source "$1/scripts/11d-llm-gpu.sh"
+        TAC_HOST_PROFILE_SHARED_MEMORY=1 LLM_SPEC_DRAFT_MODEL=/models/draft.gguf __spec_launch_flags
+    ' _ "$REPO_ROOT"
+    [[ "$output" == *"--spec-draft-ngl"* ]]
+    [[ "$output" != *"--spec-draft-device"* ]]
 }
 
 @test "spec-dec-004: __spec_launch_flags honours ngl and disabled knobs" {

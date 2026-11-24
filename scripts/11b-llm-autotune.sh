@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 49
+# Module Version: 50
+#   v50 (2026-11-23): capture --version stderr in __llm_llama_build_id (build 667 logs on stderr);
+#     accept float accept_len values in __autotune_spec_worth_keeping; add optional slots 35/36
+#     (mmap_mode, flash_attn) to __llm_autotune_profile_save.
 #   v49 (2026-11-21): normalise warn to `function warn()` so the module uses one function
 #     declaration style throughout (inspection 8.2.1).
 #   v48 (2026-11-18): fix positional argument collision in __llm_autotune_profile_save where
@@ -142,7 +145,7 @@ function __llm_llama_build_id() {
     [[ -n "$bin" ]] || return 0
     # A binary that cannot report its version yields an empty id; a guess is worse than empty.
     # swallow-ok: an unreadable or non-versioned binary leaves out empty, which records no build id
-    out="$("$bin" --version 2>/dev/null | sed -n '1s/^version: *//p')" || out=""
+    out="$("$bin" --version 2>&1 | sed -n 's/^version: *//p' | head -n 1)" || out=""
     printf '%s\n' "$out"
 }
 
@@ -441,11 +444,11 @@ function __autotune_oom_evidence() {
 # ---------------------------------------------------------------------------
 function __autotune_spec_worth_keeping() {
     local accept_len="${1:-0}" accept_rate="${2:-}"
-    [[ "$accept_len" =~ ^[0-9]+$ ]] || return 1
-    (( accept_len > 0 )) || return 1
-    if [[ -n "$accept_rate" ]] && [[ "$accept_rate" =~ ^[0-9]+([.][0-9]+)?$ ]]
-    then
-        [[ "$accept_rate" != "0" && "$accept_rate" != "0.0" ]] || return 1
+    [[ "$accept_len" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+    awk -v al="$accept_len" 'BEGIN{exit !(al + 0 > 0)}' || return 1
+    if [[ -n "$accept_rate" ]]; then
+        [[ "$accept_rate" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+        awk -v ar="$accept_rate" 'BEGIN{exit !(ar + 0 > 0)}' || return 1
     fi
     return 0
 }
@@ -604,11 +607,21 @@ function __llm_autotune_profile_save() {
     # had, and what a skipped probe must do rather than silently resetting the column.
     # Slot 34 (after gpu_carve at 33); slot 29 is meas_drift_pct.
     local threads_override="${34:-}"
+    local mmap_mode_override="${35:-}"
+    local flash_attn_override="${36:-}"
     if [[ -n "$threads_override" ]] && [[ ! "$threads_override" =~ ^[1-9][0-9]*$ ]]
     then
         warn "  ERROR: threads must be a positive integer (got '$threads_override')"
         return 1
     fi
+    case "$mmap_mode_override" in
+        ""|auto|on|off) ;;
+        *) mmap_mode_override="" ;;
+    esac
+    case "$flash_attn_override" in
+        ""|on|off) ;;
+        *) flash_attn_override="" ;;
+    esac
     local profile_file="$LLM_REGISTRY"
 
     # $1 is a row NUMBER or a model FILE name; both are accepted so existing callers
@@ -753,6 +766,8 @@ function __llm_autotune_profile_save() {
         -v gpu_carve_val="$gpu_carve" \
         -v thread_cap="$_thread_cap" \
         -v threads_override="$_threads_override" \
+        -v mmap_val="$mmap_mode_override" \
+        -v fa_val="$flash_attn_override" \
         -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
@@ -772,7 +787,8 @@ function __llm_autotune_profile_save() {
             if ($3 == f) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
                 $13 = fit; $14 = backend
-                if ($16 == "") $16 = "on"
+                if (mmap_val != "") $15 = mmap_val
+                if (fa_val != "") { $16 = fa_val } else if ($16 == "") { $16 = "on" }
                 $17 = tps_val
                 # Field 18 is the SCOPE key, not merely a flag: the --all-but-done
                 # selector in bin/autotune-rows.sh takes rows whose field 18 is neither
