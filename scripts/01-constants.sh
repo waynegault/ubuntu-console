@@ -2,7 +2,19 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 63
+# Module Version: 64
+#   v64 (2026-11-24): v63's own documentation did not match its code, and CI caught it.
+#     The v63 entry above says LLAMA_BUILD_DIR "is exported from
+#     `${LLAMA_BUILD_DIR:-$LLAMA_ROOT/build}`", but the file only ever READ it
+#     (`for _llama_tree in "$LLAMA_BUILD_DIR" …`).  On a box whose host profile exports
+#     the variable that is invisible — which is every interactive shell here — and under
+#     `set -u` with it unset it is a hard error: CI run 45437439560 failed two cases in
+#     tests/unit/68-llm-lane-cache-sample.bats with
+#     "line 351: LLAMA_BUILD_DIR: unbound variable" (8 passed, 2 failed; reproduced
+#     locally with `env -u LLAMA_BUILD_DIR`, 10/10 after this change).  The documented
+#     default is now applied and exported, so the declaration and the code agree, and the
+#     `<tree>.prev-*` glob can no longer expand against the CURRENT DIRECTORY when the
+#     variable is empty.
 #   v63 (2026-11-24): the build paths derive from the tree `llm-build` WRITES, not from a
 #     literal probe.  LLAMA_ROOT becomes overridable like every other path here (it was
 #     assigned unconditionally, so an inherited LLAMA_ROOT was discarded on source);
@@ -347,6 +359,14 @@ export LLAMA_DRIVE_SIZE
 # build path that disagrees with the builder is how a 40-60 min rebuild landed in a tree
 # no launcher reads.  Exported under the same default 11e applies at its build site, so
 # a child shell and the builder name the same tree.
+# A profile that declares no build tree leaves this UNSET, and `set -u` then turns every
+# reference below into a hard error — measured 2026-11-24 in CI, where two cases in
+# tests/unit/68-llm-lane-cache-sample.bats died on `line 351: LLAMA_BUILD_DIR: unbound
+# variable`, while every interactive shell on this box had it exported by the profile.
+# The default v63 documents above is applied here so the declaration and the code agree:
+# unset => $LLAMA_ROOT/build, which is also the last literal candidate below.
+LLAMA_BUILD_DIR="${LLAMA_BUILD_DIR:-$LLAMA_ROOT/build}"
+export LLAMA_BUILD_DIR
 _LLAMA_CUDA_TREE=""
 for _llama_tree in "$LLAMA_BUILD_DIR" "$LLAMA_ROOT/build-cuda" "$LLAMA_ROOT/build"; do
     [[ -x "$_llama_tree/bin/llama-server" ]] && { _LLAMA_CUDA_TREE="$_llama_tree"; break; }
