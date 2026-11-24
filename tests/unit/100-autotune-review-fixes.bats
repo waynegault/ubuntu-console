@@ -43,16 +43,36 @@ export LLM_REGISTRY="$reg"
 export LLM_DRAFT_ARCHS="dflash eagle3"
 export LLM_STATE_DIR="$SANDBOX/.llm"
 export TAC_STATE_DIR="$SANDBOX/tac"
+# Bound the probe's own timeout too: without this each read is capped at 10s, so a stub
+# that wedges costs more than the poll window it was meant to remove.
+export TAC_SMI_TIMEOUT=2
 __llm_gpu_foreign_owner() { return 1; }
 __llm_kill_cuda_llama_servers() { :; }
 _tac_dxg_health_check() { return 0; }
 _tac_gpu_free_mib() { echo 80000; }
 EOF
-    cat > "$SANDBOX/nvidia-smi" <<'EOF'
+    # drain_vram breaks only on a STRICT drop, so a constant reading makes it burn all 15
+    # one-second polls -- and it runs once before the loop AND once per row, which is why
+    # cards 4/5 cost 30.7s/30.9s (two drains) and case 11 cost 107.4s (eight). Report a
+    # lower figure on every call so the first poll breaks on iteration 1.
+    cat > "$SANDBOX/nvidia-smi" <<EOF
 #!/usr/bin/env bash
-echo "0"
+_n_file="$SANDBOX/smi-calls"
+_n=\$(cat "\$_n_file" 2>/dev/null) || _n=0
+# Decrement by ONE, never by a step: the reading must stay a positive integer for the
+# batch's ^[0-9]+\$ test, and a negative figure would read as "no VRAM reading" and force
+# the full drain window this stub exists to avoid. One is also still a strict drop.
+printf '%s\n' "\$(( 20000 - _n ))"
+printf '%s\n' "\$(( _n + 1 ))" > "\$_n_file"
 EOF
     chmod +x "$SANDBOX/nvidia-smi"
+    # Prove the stub wins the lookup the batch will make. A PATH stub has lost to a live
+    # tool on this box before; if that happened here the suite would poll the real card
+    # and pay the wait it exists to remove.
+    if [[ "$(PATH="$SANDBOX:$PATH" command -v nvidia-smi)" != "$SANDBOX/nvidia-smi" ]]; then
+        echo "STUB NOT RESOLVED: nvidia-smi resolves to $(PATH="$SANDBOX:$PATH" command -v nvidia-smi), not $SANDBOX/nvidia-smi" >&2
+        return 1
+    fi
 }
 
 @test "card1: __autotune_clock_state_from_samples evaluates loaded samples accurately" {
@@ -279,4 +299,68 @@ EOF
     AUTOTUNE_SELFTEST=0 TAC_TEST_TMPDIR="$SANDBOX" run __llm_stand_down_cuda_lanes
     [ "$status" -eq 0 ]
     [[ "$output" == *"test environment"* ]]
+}
+
+@test "batch: consecutive loader_vintage failures do not trip CONSECUTIVE_FAILURES halt" {
+    local root="$SANDBOX/tree_lv"
+    _setup_batch_sandbox "$root" "$SANDBOX/missing.conf"
+    cat > "$root/scripts/autotune-model.sh" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+    lv1.gguf|lv2.gguf)
+        printf 'classification=loader_vintage\n' > "$LLM_AUTOTUNE_RESULT_FILE"
+        exit 1 ;;
+    ok.gguf)
+        echo "OK:$1"
+        exit 0 ;;
+    sys1.gguf|sys2.gguf)
+        printf 'classification=unclassified\n' > "$LLM_AUTOTUNE_RESULT_FILE"
+        exit 1 ;;
+esac
+EOF
+    chmod +x "$root/scripts/autotune-model.sh"
+    printf '0\n' > "$SANDBOX/cycles_lv"
+
+    # Two consecutive loader_vintage rows must NOT halt; row 3 (ok.gguf) must run and batch exits 1 for FAILED_ROWS.
+    run env PATH="$SANDBOX:$PATH" HEAVY_JOB_HELD=1 \
+        CUDA_CYCLE_FILE="$SANDBOX/cycles_lv" CUDA_CYCLE_BUDGET=60 \
+        LLM_REGISTRY="$SANDBOX/missing.conf" \
+        TAC_HOST_PRIMARY_LANE="llama-cuda-test.service" \
+        bash "$root/scripts/run-autotune-batch.sh" lv1.gguf lv2.gguf ok.gguf
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"per-model, continuing"* ]]
+    [[ "$output" == *"OK:ok.gguf"* ]]
+    [[ "$output" == *"finished: 1/3 tuned, 2 failed"* ]]
+    [[ "$output" != *"HALTED:"* ]]
+    [[ "$output" == *"FAILED"* ]] && [[ "$output" == *"lv1.gguf"* ]] && [[ "$output" == *"lv2.gguf"* ]]
+
+    # Two consecutive systemic failures still halt as designed.
+    run env PATH="$SANDBOX:$PATH" HEAVY_JOB_HELD=1 \
+        CUDA_CYCLE_FILE="$SANDBOX/cycles_lv" CUDA_CYCLE_BUDGET=60 \
+        LLM_REGISTRY="$SANDBOX/missing.conf" \
+        TAC_HOST_PRIMARY_LANE="llama-cuda-test.service" \
+        bash "$root/scripts/run-autotune-batch.sh" sys1.gguf sys2.gguf ok.gguf
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"2 consecutive row failures"* ]]
+    [[ "$output" != *"OK:ok.gguf"* ]]
+}
+
+@test "autotune: unknown quant prefix refreshes via __quant_label and spread logs samples" {
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/scripts/01-constants.sh"
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+
+    local _qc="unknown/q8_0/q8_0" _gguf_ftype="39" MODEL_FILE="flint-nvfp4.gguf"
+    local WIN_KVK="q8_0" WIN_KVV="q8_0" KV_QUANT_SAVE="" _quant_prefix="${_qc%%/*}"
+    if [[ -z "$_quant_prefix" || "$_quant_prefix" == "unknown" ]] && declare -f __quant_label >/dev/null 2>&1; then
+        local _q_derived
+        _q_derived=$(__quant_label "${_gguf_ftype:-}" "$MODEL_FILE")
+        [[ -n "$_q_derived" && "$_q_derived" != "unknown" ]] && _quant_prefix="$_q_derived"
+    fi
+    [[ -n "$_quant_prefix" ]] && KV_QUANT_SAVE="${_quant_prefix}/${WIN_KVK}/${WIN_KVV}"
+    [ "$KV_QUANT_SAVE" = "NVFP4/q8_0/q8_0" ]
+
+    grep -q '/tmp/at-spread-vals-\$\$' "$REPO_ROOT/scripts/autotune-model.sh"
+    grep -q 'echo "    samples:' "$REPO_ROOT/scripts/autotune-model.sh"
 }

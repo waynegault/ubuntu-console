@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 162
+#   v162 (2026-11-24): refresh stale/unknown quant prefix via __quant_label on save; record and log
+#   per-sample TPS values when sample spread exceeds AUTOTUNE_SPREAD_WARN_PCT.
 # Module Version: 161
 #   v161 (2026-11-23): sample SM clocks/thermals during bench_once_multi load; gate high
 #   meas_spread_pct and always populate __AUTOTUNE_VERDICT_REASON; accept float accept_len in
@@ -545,6 +548,8 @@ __autotune_exit_trap() {
     __autotune_write_result "$_rc" 2>/dev/null || true
     # swallow-ok: temp per-run state cleanup is best-effort
     rm -f "/tmp/at-clock-$$" "/tmp/at-clock-raw-$$" "/tmp/at-remedy-$$" "/tmp/at-fa-$$" 2>/dev/null || true
+    # swallow-ok: temp spread sample list cleanup is best-effort
+    rm -f "/tmp/at-spread-vals-$$" 2>/dev/null || true
     exit "$_rc"
 }
 
@@ -1063,6 +1068,7 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
     if [[ -n "$_meta" ]]; then
         _n_layers=$(cut -d'|' -f3 <<< "$_meta")
         _native_ctx=$(cut -d'|' -f4 <<< "$_meta")
+        _gguf_ftype=$(cut -d'|' -f5 <<< "$_meta")
         # KV geometry (11d v35 fields 6 and 7) — see __kv_mb_per_1k.  Passing it means
         _kv_heads=$(cut -d'|' -f6 <<< "$_meta")
         _kv_dim=$(cut -d'|' -f7 <<< "$_meta")
@@ -2308,6 +2314,7 @@ bench_once_multi() {
     _spread=$(printf '%s\n' "${vals[@]}" | LC_ALL=C sort -n \
         | awk 'NR==1{min=$1} {max=$1} END{if (max>0) printf "%.2f", (max-min)*100/max}')
     printf '%s\n' "$_spread" > "/tmp/at-spread-$$"
+    printf '%s\n' "${vals[*]}" > "/tmp/at-spread-vals-$$"
     echo "$tps"
     return 0
 }
@@ -3938,10 +3945,15 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # Profile-2 fields only when profile 2 exists (BEST exists ⇒ P2 exists).
     _P2ARGS=("" "" "" "" "")
     [[ $P2_CTX -gt 0 ]] && _P2ARGS=("$P2_CTX" "$P2_B" "$P2_U" "$P2_TPS" "$P2_PREFILL")
-    # KV quant save: "QUANT/type-k/type-v" (field 5), preserving the quant part.
+    # KV quant save: "QUANT/type-k/type-v" (field 5), refreshing unknown prefix via __quant_label.
     KV_QUANT_SAVE=""
-    if [[ -n "${_qc%%/*}" ]]; then
-        KV_QUANT_SAVE="${_qc%%/*}/${WIN_KVK}/${WIN_KVV}"
+    _quant_prefix="${_qc%%/*}"
+    if [[ -z "$_quant_prefix" || "$_quant_prefix" == "unknown" ]] && declare -f __quant_label >/dev/null 2>&1; then
+        _q_derived=$(__quant_label "${_gguf_ftype:-}" "$MODEL_FILE")
+        [[ -n "$_q_derived" && "$_q_derived" != "unknown" ]] && _quant_prefix="$_q_derived"
+    fi
+    if [[ -n "$_quant_prefix" ]]; then
+        KV_QUANT_SAVE="${_quant_prefix}/${WIN_KVK}/${WIN_KVV}"
     fi
     # Measurement context (2b/3c): the box's load is read ONCE, BEFORE the selftest and
     _row_load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo "?")
@@ -4064,6 +4076,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         if [[ "$_meas_spread" =~ ^[0-9]+([.][0-9]+)?$ ]] \
             && awk -v s="$_meas_spread" -v w="$AUTOTUNE_SPREAD_WARN_PCT" 'BEGIN{exit !(s > w)}'; then
             echo "  sample spread ${_meas_spread}% exceeds ${AUTOTUNE_SPREAD_WARN_PCT}% — stamping INDICATIVE"
+            if [[ -r "/tmp/at-spread-vals-$$" ]]; then
+                echo "    samples: $(< "/tmp/at-spread-vals-$$")"
+            fi
             _meas_state="indicative"
             _append_verdict_reason "sample spread ${_meas_spread}% > ${AUTOTUNE_SPREAD_WARN_PCT}%"
         fi

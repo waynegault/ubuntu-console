@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 35
+# Module Version: 36
+#   v36 (2026-11-24): read classification= from LLM_AUTOTUNE_RESULT_FILE on any non-zero exit so
+#       deterministic per-model incompatibilities (loader_vintage, unsupported_arch, host RAM/staging)
+#       do not increment CONSECUTIVE_FAILURES or falsely halt a batch for "adapter degradation".
 #   v35 (2026-11-23): filter LLM_DRAFT_ARCHS and keep indicative slow rows eligible in default
 #       scope; inspect per-row exit3_reason/detail to distinguish budget, stall, collapse, and drift.
 #   v34 (2026-11-19): the per-row header shows a bare row NUMBER as itself and '?' for an
@@ -434,12 +437,16 @@ for ((i = 0; i < TOTAL; i++)); do
     fi
     _row_res="$(mktemp "${TMPDIR:-/tmp}/autotune-row-result.XXXXXX")"
     LLM_AUTOTUNE_RESULT_FILE="$_row_res" bash "$_SELF_DIR/autotune-model.sh" "$m" "${_contended[@]}" 2>&1 || _row_rc=$?
-    _e3_reason=""; _e3_detail=""
-    if (( _row_rc == 3 )) && [[ -r "$_row_res" ]]; then
-        # swallow-ok: an absent or partial result file leaves _e3_reason empty and uses the ledger check below
-        _e3_reason=$(sed -n 's/^exit3_reason=//p' "$_row_res" 2>/dev/null | head -1) || _e3_reason=""
-        # swallow-ok: missing detail line simply falls back to a generic description
-        _e3_detail=$(sed -n 's/^detail=//p' "$_row_res" 2>/dev/null | head -1) || _e3_detail=""
+    _e3_reason=""; _e3_detail=""; _row_cls=""
+    if (( _row_rc != 0 )) && [[ -r "$_row_res" ]]; then
+        if (( _row_rc == 3 )); then
+            # swallow-ok: an absent or partial result file leaves _e3_reason empty and uses the ledger check below
+            _e3_reason=$(sed -n 's/^exit3_reason=//p' "$_row_res" 2>/dev/null | head -1) || _e3_reason=""
+            # swallow-ok: missing detail line simply falls back to a generic description
+            _e3_detail=$(sed -n 's/^detail=//p' "$_row_res" 2>/dev/null | head -1) || _e3_detail=""
+        fi
+        # swallow-ok: missing classification falls back to systemic failure accounting below
+        _row_cls=$(sed -n 's/^classification=//p' "$_row_res" 2>/dev/null | head -1) || _row_cls=""
     fi
     # swallow-ok: best-effort cleanup of per-row temp result file
     rm -f "$_row_res" 2>/dev/null || true
@@ -448,9 +455,14 @@ for ((i = 0; i < TOTAL; i++)); do
         TUNED_COUNT=$((TUNED_COUNT + 1))
         CONSECUTIVE_FAILURES=0
     else
-        printf 'failed (exit %s)\n' "$_row_rc"
         FAILED_ROWS+=("$m")
-        CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+        case "${_row_rc}:${_row_cls}" in
+            1:loader_vintage|1:unsupported_arch|1:insufficient_host_ram|1:insufficient_host_staging)
+                printf 'failed (exit %s, %s — per-model, continuing)\n' "$_row_rc" "$_row_cls" ;;
+            *)
+                printf 'failed (exit %s)\n' "$_row_rc"
+                CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1)) ;;
+        esac
         # autotune-model.sh exits 3 for the ADAPTER backstops (the cycle budget,
         # consecutive stalls, tps collapse, or VRAM drift). Read the actual exit3_reason
         # before blaming the adapter or telling the operator to reboot.
