@@ -16,6 +16,12 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 38
+#   v38 (2026-11-25): the runner hold leaves a JOURNAL, not only a stopped-list.  CI-RUNNER-OFFLINE-001:
+#     two autotune sweeps were hard-killed (00:13, 00:47) and restore() never ran, so all three
+#     actions.runner.* units stayed down and ubuntu-console CI received nothing.  Each hold now
+#     logs `clean-room: runner-hold-request <unit> pid=<pid> ts=<epoch>`; bin/ci-runner-guard.sh
+#     restarts a unit whose requester is gone and whose record is past the TTL.
 # Module Version: 37
 #   v37 (2026-11-23): _tac_dxg_health_check treats a critical dxg line OLDER than the
 #     newest successful model load as superseded, not current.  One stale
@@ -1481,6 +1487,8 @@ _tac_cleanroom_enter() {
                 fi
             fi
         done
+        # Codes, not words (v38): the file-state column is OFFSET from `first` and
+        # `is-active` says `active`/`inactive` exactly, so neither is parsed by name.
         # swallow-ok: systemctl error listing runner units is handled by empty output
         _runner_units=$(systemctl --user list-unit-files 'actions.runner.*' --no-legend 2>/dev/null \
             | awk '{print $1}') || _runner_units=""
@@ -1488,6 +1496,15 @@ _tac_cleanroom_enter() {
             [[ -n "$_r" ]] || continue
             # swallow-ok: inactive runner units have nothing to hold
             systemctl --user is-active --quiet "$_r" 2>/dev/null || continue
+            # Journal the REQUEST to start it back before taking it down (v38).  A hard
+            # kill of the sweep (SIGKILL, OOM, `wsl --shutdown`) skips restore() entirely,
+            # and the stop above is lost with the stopped-list that held it — measured
+            # 2026-11-25: two autotune sweeps were killed at 00:13 and 00:47 and all three
+            # actions.runner.* units stayed stopped for 30+ min, so ubuntu-console CI
+            # received nothing (CI-RUNNER-OFFLINE-001).  bin/ci-runner-guard.sh reads these
+            # lines and holds the request for a bounded TTL, which keeps a LIVE sweep's
+            # hold intact; here it is only the fallback for the process that dies.
+            _tac_cleanroom_msg "clean-room: runner-hold-request $_r pid=$$ ts=$(date +%s)"
             # swallow-ok: a failed hold is reported by the else branch below, never hidden
             if systemctl --user stop "$_r" >/dev/null 2>&1; then
                 _TAC_CLEANROOM_RUNNERS_STOPPED+=("$_r")

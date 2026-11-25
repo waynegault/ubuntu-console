@@ -1,0 +1,13 @@
+[Unit]
+# install-profile: intel-xe-cuda
+# Ships with the guard service it wakes (see ci-runner-guard.service's header).
+Description=Run the CI runner guard every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

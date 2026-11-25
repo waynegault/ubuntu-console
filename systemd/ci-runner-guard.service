@@ -1,0 +1,14 @@
+[Unit]
+# install-profile: intel-xe-cuda
+# Ships with the clean-room that stops these units (bin/_tac-bin-lib.sh,
+# _tac_cleanroom_enter) and with the guard that starts them back.
+Description=CI runner guard (start back actions.runner.* units a killed sweep left down)
+Documentation=file:%h/github-wsl/ubuntu-console/bin/ci-runner-guard.sh
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ci-runner-guard.sh
+# A failing start must be visible to `systemctl --user --failed`, never a silent pass.
+StandardError=journal
+SyslogIdentifier=ci-runner-guard
+TimeoutStartSec=120
