@@ -110,6 +110,7 @@ jobs:
                tests/unit/06-spec-dec-stats.bats \
                tests/unit/07-spec-dec-launch.bats \
                tests/unit/08-autotune-workload.bats \
+               tests/unit/08b-moe-placement.bats \
                tests/unit/12-gpu-exclusivity.bats
 
       - name: Run the function-availability suite

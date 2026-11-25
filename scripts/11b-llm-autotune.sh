@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 52
+# Module Version: 53
+#   v53 (2026-11-25): profile_save takes moe_placement at slot 37 and writes col 49, in the
+#     forms 01-constants documents; an unrecognised value is DROPPED with a warning rather
+#     than stored as a label, and an empty one leaves the column alone.
 #   v52 (2026-11-25): add __autotune_batch_descent <batch> <ubatch> so an OOM during
 #     context discovery, climb, or filled-cache certification steps down one batch/ubatch
 #     rung (preserving ubatch <= batch down to 256:128) at the SAME ctx before descending
@@ -612,7 +615,8 @@ function __llm_autotune_done_for_model() {
 #       [spec_type] [spec_draft_model] [spec_n_max] [spec_ngl] [spec_device]
 #       [spec_accept_len] [workload] [ttft_ms] [meas_load] [meas_n]
 #       [meas_spread_pct] [meas_drift_pct] [meas_state] [ctx_policy]
-#       [llama_build] [gpu_carve] [threads_override]
+#       [llama_build] [gpu_carve] [threads_override] [mmap_mode] [flash_attn]
+#       [moe_placement]
 #   Profile 1 (existing columns) = max-ctx config; prefill_tps (col 21) is its
 #   prompt-eval throughput. Profile 2 (cols 22-26) = max-decode-TPS config for
 #   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v"), ngl (col 7)
@@ -667,6 +671,12 @@ function __llm_autotune_profile_save() {
     local threads_override="${34:-}"
     local mmap_mode_override="${35:-}"
     local flash_attn_override="${36:-}"
+    # moe_placement (col 49) — where this row's EXPERT weights live.  Slot 37, after the
+    # three overrides, so no existing positional caller shifts.  Empty means "this caller has
+    # no placement to report" and the awk leaves the column ALONE, exactly like gpu_carve: a
+    # caller that did not place the experts must not erase the placement a measured run
+    # recorded.
+    local moe_placement="${37:-}"
     if [[ -n "$threads_override" ]] && [[ ! "$threads_override" =~ ^[1-9][0-9]*$ ]]
     then
         warn "  ERROR: threads must be a positive integer (got '$threads_override')"
@@ -742,6 +752,17 @@ function __llm_autotune_profile_save() {
     # carve", and the awk below then leaves the column ALONE — a caller that cannot read the
     # card must not erase the pool a measured run recorded.
     [[ "$gpu_carve" =~ ^[0-9]+$ ]] || gpu_carve=""
+    # moe_placement (col 49): accepted in exactly the forms the header documents, anything
+    # else DROPPED rather than written.  A rejected value is reported, not silently discarded:
+    # a placement label that did not land is a row mislabelled as GPU-only, which is the
+    # reading this column exists to prevent.
+    if [[ -n "$moe_placement" ]] \
+        && ! [[ "$moe_placement" =~ ^(cpu-moe(:[0-9]+)?|tensor|moe-cache:[0-9]+(,(0\.[0-9]+|1(\.0+)?))?)$ ]]
+    then
+        warn "  ERROR: moe_placement '$moe_placement' is not a recorded form" \
+             "(cpu-moe, cpu-moe:N, tensor, moe-cache:MiB[,share]) — column left unchanged"
+        moe_placement=""
+    fi
 
     # Registry hygiene: persist measured floats at a maximum of 2 decimal
     # places. The server timings carry full float64 precision (e.g. prefill
@@ -822,6 +843,7 @@ function __llm_autotune_profile_save() {
         -v ctx_policy_val="$ctx_policy" \
         -v llama_build_val="$llama_build" \
         -v gpu_carve_val="$gpu_carve" \
+        -v moe_placement_val="$moe_placement" \
         -v thread_cap="$_thread_cap" \
         -v threads_override="$_threads_override" \
         -v mmap_val="$mmap_mode_override" \
@@ -895,6 +917,13 @@ function __llm_autotune_profile_save() {
                 # left over from the previous run would name a pool the new figure was not
                 # measured in.
                 if (gpu_carve_val != "") $48 = gpu_carve_val
+                # MOE EXPERT PLACEMENT (49): where this row of experts lives.  Written only
+                # when the caller states it, so a caller with nothing to report cannot erase a
+                # placement a measured run recorded.  An empty value is therefore NOT a way to
+                # clear the column; that needs an editor on the row.  No apostrophes or double
+                # quotes below: the awk program is single-quoted and either would end it early.  No double quotes below:
+                # the awk program is single-quoted, and one would end it early.
+                if (moe_placement_val != "") $49 = moe_placement_val
                 # THREADS (9): the tuner measured this count, so it is written where every
                 # launch reads it.  The CLAMP below still applies afterwards, so a probe
                 # can never store more than the host allows.

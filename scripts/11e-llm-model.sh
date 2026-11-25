@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 149
+# Module Version: 150
+#   v150 (2026-11-25): `model info` binds and prints moe_placement (col 49) when a row
+#     states one, and the fit preflight WARNS when a row records host experts on a
+#     shared-memory host whose policy forbids them — the row is not launched from that
+#     value, and a tps measured with offload does not describe a GPU-only launch.
 #   v149 (2026-11-23): honour GPU-only rule on shared-memory hosts in __model_use_fit_verdict
 #   (never emit cpu-moe on shared=1) and broaden MoE arch detection beyond *moe*.
 #   v148 (2026-11-23): `__model_is_draft_head` reads the ARCH as its second signal, and the
@@ -2365,6 +2369,20 @@ function __model_use_fit_preflight() {
             ;;
     esac
 
+    # A RECORDED expert placement (col 49) is honoured only on a box whose policy permits
+    # host experts: on a shared-memory host it is refused (the GPU-only rule) and reported
+    # rather than silently launched as GPU-only, so a row measured off-box does not read
+    # here as if it had been measured here.
+    local _moe_place
+    _moe_place=$(__llm_registry_field "$file" moe_placement)
+    if [[ -n "$_moe_place" && "${TAC_HOST_PROFILE_SHARED_MEMORY:-0}" == "1" ]]
+    then
+        local _rp="[row records moe_placement=${_moe_place}; this box's GPU-only policy forbids"
+        _rp+=" host experts, so they are placed on the device — a tps measured with offload"
+        _rp+=" does not describe this launch]"
+        __tac_info "Warning" "$_rp" "$C_Warning"
+    fi
+
     _model_mb=$(( model_bytes / 1048576 ))
     _vram_mb=$(( $(__tac_vram_total_bytes) / 1048576 ))
     _avail_mb=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo)
@@ -3688,7 +3706,7 @@ function __model_info() {
         _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx \
         _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n \
         _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy \
-        _llama_build _llama_build_prev _gpu_carve
+        _llama_build _llama_build_prev _gpu_carve _moe_placement
     # The trailing fields are bound for position only, and marked unread (SC2034)
     # so the positional binding needs no suppression.  The list runs to column 48
     # because meas_state (44) is the registry's own not-certified flag and DEF-024
@@ -3702,7 +3720,7 @@ function __model_info() {
         _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms \
         _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty \
         _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state \
-        _ctx_policy _llama_build _llama_build_prev _gpu_carve <<< "$entry"
+        _ctx_policy _llama_build _llama_build_prev _gpu_carve _moe_placement <<< "$entry"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -3728,6 +3746,10 @@ function __model_info() {
     # The carve qualifies the tps: the same model certified at 24 GiB and at 32 GiB is two
     # different numbers, so a bare figure without its pool is not comparable to anything.
     [[ -n "${_gpu_carve:-}" ]] && __tac_info "gpu_carve" "${_gpu_carve} MiB" "$C_Text"
+    # moe_placement (49): printed only when the row states one, so a GPU-only row stays quiet —
+    # but when present it is the difference between "fits the card" and "experts in host RAM",
+    # which the tps above cannot show on its own.
+    [[ -n "${_moe_placement:-}" ]] && __tac_info "moe_placement" "${_moe_placement}" "$C_Text"
     __tac_info "autotuned" "${autotuned:-no}" "$C_Text"
     __tac_info "is_default" "${is_default:-no}" "$C_Text"
     __tac_info "in_vram" "${in_vram:-no}" "$C_Text"

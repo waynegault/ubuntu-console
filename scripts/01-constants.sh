@@ -2,7 +2,13 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 64
+# Module Version: 65
+#   v65 (2026-11-25): the registry header gains moe_placement (49) — where a MoE row of
+#     experts lives (empty = GPU-only, cpu-moe, cpu-moe:N, tensor, moe-cache:MiB[,share]).
+#     Before it a host-offloaded row and a GPU-only row were stored identically, so a box
+#     whose policy forbids offload could not tell "measured off-box" from "measured here".
+#     RECORDED ONLY: nothing launches from it on this box, and moe-cache alone never means
+#     experts are in host RAM.  The column is 49 because the header has 48 before it.
 #   v64 (2026-11-24): v63's own documentation did not match its code, and CI caught it.
 #     The v63 entry above says LLAMA_BUILD_DIR "is exported from
 #     `${LLAMA_BUILD_DIR:-$LLAMA_ROOT/build}`", but the file only ever READ it
@@ -473,7 +479,28 @@ fi
 # beside the old value: a re-measurement replaces col 17, so a carve describing the previous
 # measurement would assert a pool the new number was not taken in.  Empty means the row was
 # never measured by an autotune run, not that the carve was zero.
-export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy|llama_build|llama_build_prev|gpu_carve'
+#
+# moe_placement (49) is where a MoE row's EXPERT weights live, which governs nothing about
+# the dense tensors.  Before it, a row that needed host experts and a row that fits entirely
+# in VRAM were stored identically (`gpu_layers` describes every layer, not the experts), so an
+# offloaded row could not be told from a GPU-only one — and on a box whose policy forbids
+# offload (asus, TAC_HOST_PROFILE_SHARED_MEMORY=1) the two have very different readings.
+#   ""          - GPU-only: no expert placement; every expert is a device tensor.  This is
+#                 also what a row that predates the column reads as, and it is correct there:
+#                 until now the launch path decided placement from pool arithmetic at LAUNCH
+#                 time, never from a stored value.
+#   cpu-moe     - `--cpu-moe` / `-cmoe`: ALL expert weights in host RAM.
+#   cpu-moe:N   - `--n-cpu-moe N` / `-ncmoe N`: experts of the first N layers in host RAM.
+#   tensor      - `-ot` / `--override-tensor`: per-tensor placement, not expressible as N.
+#   moe-cache:MiB[,share]
+#               - the GPU-side cache for host experts (`--moe-cache-mib`, optional
+#                 `--moe-cache-cpu-share`).  RECORDED ONLY: it is inert without one of the
+#                 placements above, because llama.cpp caches a layer only when all of its
+#                 experts are host weights (src/llama-moe-cache.cpp), so the tag alone never
+#                 means experts are in RAM.
+# A value outside those forms is REJECTED by the writer rather than stored as a label, so a
+# consumer can trust any non-empty value it reads.
+export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy|llama_build|llama_build_prev|gpu_carve|moe_placement'
 # A DRAFT HEAD is a GGUF architecture in its own right, passed beside its target as
 # --spec-draft-model (docs/speculative.md: `--spec-type draft-dflash` / `draft-eagle3`).
 # It is not a standalone chat model, so a registry row or an autotune sweep for one can
