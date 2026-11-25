@@ -730,3 +730,17 @@ PROFILE
         fi
     done
 }
+
+@test "each profile exports its own LLAMA_MAX_PROBE_CTX and clears any inherited value" {
+    run env LLM_HOST_PROFILE="asus-n1n-rtx-spark" LLAMA_MAX_PROBE_CTX="999999" \
+        TAC_HOST_FACTS_OVERRIDE="aarch64 1 0" \
+        bash -c 'source "$1"; tac_host_profile_apply; bash -c "printf \"%s\" \"\${LLAMA_MAX_PROBE_CTX:-}\""' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "262144" ]
+
+    run env LLM_HOST_PROFILE="intel-xe-cuda" LLAMA_MAX_PROBE_CTX="262144" \
+        TAC_HOST_FACTS_OVERRIDE="x86_64 1 1" \
+        bash -c 'source "$1"; tac_host_profile_apply; bash -c "printf \"%s\" \"\${LLAMA_MAX_PROBE_CTX:-}\""' _ "$LIB"
+    [ "$status" -eq 0 ]
+    [ "$output" = "65536" ]
+}

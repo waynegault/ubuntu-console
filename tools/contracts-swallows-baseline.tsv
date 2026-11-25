@@ -40,7 +40,7 @@ unclassified	scripts/12-dashboard-help.sh	13
 unclassified	scripts/13-init.sh	8
 unclassified	scripts/14-wsl-extras.sh	9
 unclassified	scripts/_startup-env.sh	3
-unclassified	scripts/autotune-model.sh	155
+unclassified	scripts/autotune-model.sh	152
 unclassified	scripts/load-vault-env.sh	9
 unclassified	bin/bench-timeout-runner.sh	9
 unclassified	bin/gpu-busy.sh	17

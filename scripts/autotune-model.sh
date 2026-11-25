@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 165
+#   v165 (2026-11-25): three fixes from row 4 live autotune (Inkling-2-Mini, 16.4G):
+#   (1) Record boot-monotonic load and witnessed-OOM watermarks (_tac_dxg_record_model_load /
+#       _tac_dxg_record_oom_refusal) across _bench_spawn, bench_once*, and ttft_probe instead
+#       of halting with exit 3 in _cuda_guard_or_exit after an expected candidate cudaMalloc
+#       OOM logs `dxgkio_make_resident: Ioctl failed: -12` (-ENOMEM) to dmesg.
+#   (2) Honour per-host LLAMA_MAX_PROBE_CTX (262144 on asus-n1n-rtx-spark, 65536 on
+#       intel-xe-cuda) on both START_CTX and MAX_CTX so small models with 1M+ native windows
+#       do not allocate 100+ GiB compute buffers above the box's serving ceiling.
+#   (3) Wire _bench_ctx_batch_descend + _adopt_batch_win into Phase 1/2 ctx discovery/climb,
+#       probe_upward, and Phase 4 filled-cache floor recovery so a compute-buffer OOM retries
+#       one smaller batch/ubatch pair at the same ctx before dropping context.
 # Module Version: 164
 #   v164 (2026-11-24): a file-layout preflight, and a loader_vintage message that does not
 #   send the operator in a circle.  Two rows failed on load-time tensor checks that the
@@ -585,7 +597,8 @@ __autotune_exit_trap() {
     # swallow-ok: the result file is a report; a run that cannot write it has already reported on stderr
     __autotune_write_result "$_rc" 2>/dev/null || true
     # swallow-ok: temp per-run state cleanup is best-effort
-    rm -f "/tmp/at-clock-$$" "/tmp/at-clock-raw-$$" "/tmp/at-remedy-$$" "/tmp/at-fa-$$" 2>/dev/null || true
+    rm -f "/tmp/at-clock-$$" "/tmp/at-clock-raw-$$" "/tmp/at-remedy-$$" \
+        "/tmp/at-fa-$$" "/tmp/at-batch-win-$$" 2>/dev/null || true
     # swallow-ok: temp spread sample list cleanup is best-effort
     rm -f "/tmp/at-spread-vals-$$" 2>/dev/null || true
     exit "$_rc"
@@ -1180,6 +1193,26 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [[ $START_CTX -lt $MIN_CTX ]] && START_CTX=$MIN_CTX
 [[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
 
+# ── THE BOX'S SERVING CEILING (2026-11-25, Wayne) ─────────────────────────────
+# The KV math above asks "how much window fits in the pool", and on a unified-memory
+# host that answer is enormous: row 4 (Inkling-2-Mini, 16.4G) priced 57 GiB of pool
+# against 50.88 MiB/1k and probed at 1,048,576 tokens — four times this box's 262,144
+# max_context_window.  The probe measured 28.92 tps there, then 1024/512 died allocating
+# 101,566 MiB of compute buffer (measured 2026-11-25 00:14-00:19).
+#
+# LLAMA_MAX_PROBE_CTX is a HOST PROFILE fact declared in config/hosts.d/*.conf (262144 on
+# asus-n1n-rtx-spark, 65536 on intel-xe-cuda).  Empty or 0 means no declared ceiling.
+_MAX_PROBE_CTX="${LLAMA_MAX_PROBE_CTX:-}"
+if [[ "$_MAX_PROBE_CTX" =~ ^[0-9]+$ ]] && (( _MAX_PROBE_CTX > 0 )); then
+    if (( START_CTX > _MAX_PROBE_CTX )); then
+        echo "  ceiling: probe start $(fmt "$START_CTX") -> $(fmt "$_MAX_PROBE_CTX")" \
+             "(LLAMA_MAX_PROBE_CTX, this box's probe ceiling)"
+        START_CTX=$_MAX_PROBE_CTX
+    fi
+else
+    _MAX_PROBE_CTX=0
+fi
+
 # ── FILE-LAYOUT preflight (2026-11-24) ─────────────────────────────────────────
 # A file that is SHORT (its header declares more blocks than it carries) or is one
 # SHARD of a split model cannot load, and the loader's own message hides both facts:
@@ -1226,6 +1259,14 @@ if ! declare -f __autotune_ctx_bounds &>/dev/null || ! declare -f __autotune_des
 fi
 read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
     "$START_CTX" "${_native_ctx:-}" "${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}" "$MIN_CTX")
+
+# The ceiling binds the CLIMB too, not only the first probe.  __autotune_ctx_bounds
+# derives MAX_CTX from START_CTX x mult and the model's native window — and a 1M native
+# window leaves it at the absolute cap.  Without this, the box's ceiling would cap Test 1
+# and then let Test 2 climb straight back over it.
+if (( _MAX_PROBE_CTX > 0 )) && (( MAX_CTX > _MAX_PROBE_CTX )); then
+    MAX_CTX=$_MAX_PROBE_CTX
+fi
 
 # The host verdict's clamp lands here, after the bounds: both the start AND the ceiling drop to
 if [[ "${_HOST_CTX_CLAMP:-0}" == "1" ]]; then
@@ -1842,8 +1883,18 @@ _bench_spawn() {
         hw=0
         while [[ $hw -lt "$AT_WINDOW_S" ]]; do
             sleep 1; hw=$((hw + 1))
-            kill -0 "$_BENCH_PID" 2>/dev/null || return 1
-            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
+            # swallow-ok: exited pid is the startup-death signal handled below
+            if ! kill -0 "$_BENCH_PID" 2>/dev/null; then
+                if _oom_witness_present && declare -f _tac_dxg_record_oom_refusal >/dev/null; then
+                    _tac_dxg_record_oom_refusal
+                fi
+                return 1
+            fi
+            # swallow-ok: transient curl errors while server warms up are retried in the poll loop
+            if curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"'; then
+                declare -f _tac_dxg_record_model_load >/dev/null && _tac_dxg_record_model_load
+                return 0
+            fi
             (( AT_WINDOW_S > 300 && hw % 60 == 0 )) \
                 && warn "    ... still loading (${hw}s / ${AT_WINDOW_S}s)"
         done
@@ -1898,6 +1949,7 @@ _bench_spawn() {
         # - model cannot run at any ctx".  A row that ran before was declared unrunnable by
         # a message about the wrong subsystem.
         if _oom_witness_present; then
+            declare -f _tac_dxg_record_oom_refusal >/dev/null && _tac_dxg_record_oom_refusal
             printf 'oom'
         elif _startup_load_fail "${1:-}"; then
             printf 'load_fail'
@@ -2313,6 +2365,10 @@ bench_once() {
     }
 
     local tps; tps=$(_bench_request_once "$mode" "$payload_file" "$bench_timeout") || tps=""
+    if [[ -z "$tps" ]] && declare -f __autotune_oom_evidence >/dev/null \
+        && __autotune_oom_evidence "${_BENCH_LOG:-}" "${_BENCH_PID:-}"; then
+        declare -f _tac_dxg_record_oom_refusal >/dev/null && _tac_dxg_record_oom_refusal
+    fi
     _bench_stop "$_BENCH_PID"
     [[ -n "$tps" ]] || { echo ""; return 1; }
     echo "$tps"
@@ -2374,7 +2430,13 @@ bench_once_multi() {
     # Restore the cold sample's metrics (decode|prefill|accept...) for the callers.
     [[ -n "$_cold_metrics" ]] && printf '%s\n' "$_cold_metrics" > "/tmp/at-metrics-$$"
 
-    if [[ ${#vals[@]} -eq 0 ]]; then echo ""; return 1; fi
+    if [[ ${#vals[@]} -eq 0 ]]; then
+        if declare -f __autotune_oom_evidence >/dev/null \
+            && __autotune_oom_evidence "${_BENCH_LOG:-}" "${_BENCH_PID:-}"; then
+            declare -f _tac_dxg_record_oom_refusal >/dev/null && _tac_dxg_record_oom_refusal
+        fi
+        echo ""; return 1
+    fi
 
     local tps
     if [[ ${#vals[@]} -eq 1 ]]; then
@@ -2424,6 +2486,55 @@ bench_ctx() {
     local tps; tps=$(bench_once_multi "$samples" "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$mode" "$kv_k" "$kv_v") || { echo ""; return 1; }
     # Refinement: only check for actual OOM (0 tokens). TPS floor is applied
     echo "$tps"
+    return 0
+}
+
+# _bench_ctx_batch_descend <ctx> <batch> <ubatch> [samples] [mmap] [ngl] [mode] [kv_k] [kv_v]
+#
+# bench_ctx, plus ONE retry at a smaller batch/ubatch when the failure was an OOM.
+#
+# WHY (2026-11-25, Wayne's decision "yes retry at lower batch on OOM").  An OOM was
+# treated as a verdict on the whole (ctx, batch, ubatch) triple, so the sweep moved on
+# and the model lost a window it had just served.  Measured on row 4 at 00:19: ctx
+# 1,048,576 at 512/128 returned 28.80 tps and the same ctx at 1024 asked cudaMalloc for
+# a 101,566 MiB compute buffer and died — the batch was too large, not the window.
+#
+# The retry runs at the SAME ctx, because that is the value being certified.  It writes
+# the winning pair to /tmp/at-batch-win-$$ so the caller can adopt it; the function
+# itself only reports the tps on stdout, like bench_ctx, so every existing `tps=$(...)`
+# call site keeps working.  The ladder is a pure function in 11b
+# (__autotune_batch_descent), so its arithmetic is unit-tested without a GPU.
+# One rung only: a second descent spends a cycle the budget may not have, and the
+# measured failure cleared on the first.
+_bench_ctx_batch_descend() {
+    local _c="$1" _b="$2" _u="$3"
+    shift 3
+    local _tps _pair _nb _nu
+    rm -f "/tmp/at-batch-win-$$"
+    _tps=$(bench_ctx "$_c" "$_b" "$_u" "$@") && { printf '%s\n' "$_tps"; return 0; }
+    # Only an OOM earns the retry: a load failure, a crash or a timeout is not a
+    # statement about the batch, and retrying it would spend a cycle to re-learn it.
+    [[ "$(last_fail_type)" == "oom" ]] || return 1
+    declare -f __autotune_batch_descent >/dev/null || return 1
+    _pair=$(__autotune_batch_descent "$_b" "$_u")
+    [[ -n "$_pair" ]] || return 1
+    _nb="${_pair%%:*}" _nu="${_pair##*:}"
+    warn "  OOM at batch ${_b}/${_u} — retrying the SAME ctx at ${_nb}/${_nu} before descending"
+    _tps=$(bench_ctx "$_c" "$_nb" "$_nu" "$@") || return 1
+    printf '%s:%s\n' "$_nb" "$_nu" > "/tmp/at-batch-win-$$"
+    printf '%s\n' "$_tps"
+    return 0
+}
+
+# _adopt_batch_win <b_var> <u_var> — update caller's batch/ubatch vars when batch descent won.
+_adopt_batch_win() {
+    [[ -r "/tmp/at-batch-win-$$" ]] || return 1
+    local _wb="" _wu=""
+    IFS=':' read -r _wb _wu < "/tmp/at-batch-win-$$"
+    rm -f "/tmp/at-batch-win-$$"
+    [[ "$_wb" =~ ^[0-9]+$ && "$_wu" =~ ^[0-9]+$ ]] || return 1
+    printf -v "$1" '%s' "$_wb"
+    printf -v "$2" '%s' "$_wu"
     return 0
 }
 
@@ -2713,12 +2824,13 @@ probe_upward() {
         _steps=$((_steps + 1))
         _pc=$(( _lo * 3 / 2 )); [[ $_pc -gt $MAX_CTX ]] && _pc=$MAX_CTX
         [[ $_pc -eq $_lo ]] && break
-        _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
+        _tps=$(_bench_ctx_batch_descend "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
             _hi=$_pc
             _fail_label=$(_last_fail_label)
             echo "    ctx $(fmt "$_pc") - ${_fail_label}: binary probe"
             break
         }
+        _adopt_batch_win _pb _pu || :
         echo "    ctx $(fmt "$_pc") - ${_tps} tps - climbing"
         _lo=$_pc; record_best "$_lo" "$_tps" "$_pb" "$_pu"
     done
@@ -2757,7 +2869,7 @@ for combo in "${COMBOS[@]}"; do
     test_num=0; c=$c0; found=false; _ALL_LOAD_FAIL=true; _ABORT_COMBO_WALK=0
     while [[ $c -ge $MIN_CTX ]]; do
         test_num=$((test_num + 1))
-        tps=$(bench_ctx "$c" "$b" "$u" 1) || {
+        tps=$(_bench_ctx_batch_descend "$c" "$b" "$u" 1) || {
             _lft=$(last_fail_type)
             fail_label=$(_last_fail_label "$_lft")
             # STOP, do not halve, on a hard load failure, timeout, or unclassified crash:
@@ -2774,6 +2886,7 @@ for combo in "${COMBOS[@]}"; do
             _ALL_LOAD_FAIL=false
             _next_c=$((c/2)); [[ $_next_c -lt $MIN_CTX ]] && break; c=$_next_c; continue
         }
+        _adopt_batch_win b u || :
         echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps"
         found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
         record_best "$c" "$tps" "$b" "$u"
@@ -2783,7 +2896,7 @@ for combo in "${COMBOS[@]}"; do
         while true; do
             [[ $c -eq $lo ]] && break
             test_num=$((test_num + 1))
-            bench_ctx "$c" "$b" "$u" 1 > /tmp/at-tps-$$; rc=$?
+            _bench_ctx_batch_descend "$c" "$b" "$u" 1 > /tmp/at-tps-$$; rc=$?
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
             # REF: ubuntu-console card b564d801 — bench_ctx can return rc=0 with tps=0
             if [[ $rc -ne 0 ]] || [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" || "$tps" == "0,00" ]]; then
@@ -2796,6 +2909,7 @@ for combo in "${COMBOS[@]}"; do
                 fi
                 break
             fi
+            _adopt_batch_win b u || :
             lo=$c; record_best "$lo" "$tps" "$b" "$u"
             # Capacity-first (2026-08-27, Wayne): the climb does NOT stop on
             echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps - climbing to $(fmt $((c*3/2)))"
@@ -3212,7 +3326,11 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     _P4_TOO_SLOW=0
     # TPS-first (2026-08-29, Wayne): the certified ctx is the highest ctx
     _FAST_REJECT=1
-    _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+    _ft=$(_bench_ctx_batch_descend "$_dc" "$BEST_B" "$BEST_U" 1 \
+        "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+    if _adopt_batch_win BEST_B BEST_U; then
+        BEST_COMBO="${BEST_B}:${BEST_U}"
+    fi
     if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         _fp="0"
         IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -3726,8 +3844,19 @@ ttft_probe() {
         hw=0
         while [[ $hw -lt "$AT_WINDOW_S" ]]; do
             sleep 1; hw=$((hw + 1))
-            kill -0 "$pid" 2>/dev/null || return 1
-            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
+            # swallow-ok: exited pid is the startup-death signal handled below
+            if ! kill -0 "$pid" 2>/dev/null; then
+                if declare -f __autotune_oom_evidence >/dev/null \
+                    && __autotune_oom_evidence "/tmp/at-ttft-${MODEL}-c${c}.log" "$pid"; then
+                    declare -f _tac_dxg_record_oom_refusal >/dev/null && _tac_dxg_record_oom_refusal
+                fi
+                return 1
+            fi
+            # swallow-ok: transient curl errors while server warms up are retried in the poll loop
+            if curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"'; then
+                declare -f _tac_dxg_record_model_load >/dev/null && _tac_dxg_record_model_load
+                return 0
+            fi
             (( AT_WINDOW_S > 300 && hw % 60 == 0 )) \
                 && warn "    ... still loading (${hw}s / ${AT_WINDOW_S}s)"
         done

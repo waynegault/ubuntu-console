@@ -16,6 +16,16 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 39
+#   v39 (2026-11-25): _tac_dxg_health_check tracks ephemeral autotune model-load and
+#     witnessed allocation-OOM monotonic watermarks (_tac_dxg_record_model_load /
+#     _tac_dxg_record_oom_refusal).  An in-sweep candidate OOM (e.g. row 4 beam search
+#     1024/512 asking cudaMalloc for 101,566 MiB) causes WSL2 dxgkrnl to log
+#     `dxgkio_make_resident: Ioctl failed: -12` (-ENOMEM) into dmesg while ephemeral
+#     spawns log to /tmp/at-*.log rather than journalctl --user; stamping the monotonic
+#     clock on witnessed allocation refusals and healthy /health loads keeps candidate
+#     OOMs from falsely halting rows or batches as adapter corruption while preserving
+#     hard refusals on -75 (EOVERFLOW), wait timeouts, and unwitnessed -12 errors.
 # Module Version: 38
 #   v38 (2026-11-25): the runner hold leaves a JOURNAL, not only a stopped-list.  CI-RUNNER-OFFLINE-001:
 #     two autotune sweeps were hard-killed (00:13, 00:47) and restore() never ran, so all three
@@ -1144,21 +1154,82 @@ _tac_heavy_job_busy() {
     _tac_heavy_job_busy_from "$out"
 }
 
+# _tac_monotonic_now — boot-relative seconds from /proc/uptime (or TAC_UPTIME_FILE).
+_tac_monotonic_now() {
+    local _up="${TAC_UPTIME_FILE:-/proc/uptime}" _ts=""
+    [[ -r "$_up" ]] || return 1
+    read -r _ts _ < "$_up" || _ts=""
+    [[ "$_ts" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 1
+    printf '%s\n' "$_ts"
+}
+
+# _tac_dxg_stamp_path <load|oom> — boot-scoped dxg watermark file, or rc 1 under synthetic test seams.
+_tac_dxg_stamp_path() {
+    local _kind="${1:-}" _explicit="" _prefix="" _boot_id=""
+    case "$_kind" in
+        load) _explicit="${TAC_DXG_LOAD_STAMP_FILE:-}"; _prefix="autotune-dxg-load-ts" ;;
+        oom)  _explicit="${TAC_DXG_OOM_STAMP_FILE:-}";  _prefix="autotune-dxg-oom-ts" ;;
+        *)    return 1 ;;
+    esac
+    if [[ -n "$_explicit" ]]; then
+        printf '%s\n' "$_explicit"
+        return 0
+    fi
+    if [[ -n "${TAC_TEST_TMPDIR:-}" || "${AUTOTUNE_SELFTEST:-0}" == "1" ]] \
+        || [[ -n "${TAC_DMESG_BIN:-}" && "${TAC_DMESG_BIN}" != "dmesg" ]]; then
+        return 1
+    fi
+    # swallow-ok: unreadable boot_id falls back to unknown
+    _boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
+    printf '/dev/shm/%s-%s\n' "$_prefix" "${_boot_id:-unknown}"
+}
+
+# _tac_dxg_record_model_load — stamp boot-monotonic seconds after an ephemeral llama-server loads.
+_tac_dxg_record_model_load() {
+    local _p="" _ts=""
+    _p=$(_tac_dxg_stamp_path load) || return 0
+    _ts=$(_tac_monotonic_now) || return 0
+    # swallow-ok: watermark persistence is best-effort; absence falls back to journalctl
+    printf '%s\n' "$_ts" > "$_p" 2>/dev/null || true
+}
+
+# _tac_dxg_record_oom_refusal — stamp boot-monotonic seconds after a witnessed allocation OOM.
+_tac_dxg_record_oom_refusal() {
+    local _p="" _ts=""
+    _p=$(_tac_dxg_stamp_path oom) || return 0
+    _ts=$(_tac_monotonic_now) || return 0
+    # swallow-ok: watermark persistence is best-effort; absence leaves -12 un-superseded
+    printf '%s\n' "$_ts" > "$_p" 2>/dev/null || true
+}
+
 # _tac_last_model_load_monotonic — boot-relative seconds of the newest successful
-# model load in this boot's journal, or empty when the journal names none.
+# model load in this boot's journal or ephemeral autotune stamp, or empty when none is known.
 #
 # dmesg stamps a line with seconds since boot and `journalctl -o short-monotonic`
-# stamps it the same way, so the two are directly comparable.  The marker is
-# llama.cpp's own `srv server_run_i: model loaded` line: a model that reached
-# `model loaded` proves the adapter allocated and served AFTER that instant.
+# (plus /proc/uptime for ephemeral autotune spawns) stamps it the same way, so they
+# are directly comparable.  A model that reached `model loaded` / `/health` ok proves
+# the adapter allocated and served AFTER that instant.
 _tac_last_model_load_monotonic() {
-    local jb="${TAC_JOURNALCTL_BIN:-journalctl}"
-    command -v "$jb" >/dev/null 2>&1 || return 0
-    local line
-    # swallow-ok: an unreadable journal reads as "no load known"; the caller keeps the error and refuses.
-    line=$("$jb" --user -q -b -o short-monotonic --no-pager 2>/dev/null | grep -F 'model loaded' | tail -1) || line=""
-    [[ -n "$line" ]] || return 0
-    printf '%s\n' "$line" | sed -n 's/^\[ *\([0-9][0-9]*\.[0-9][0-9]*\)\].*/\1/p'
+    local jb="${TAC_JOURNALCTL_BIN:-journalctl}" j_ts="" f_path="" f_ts="" line=""
+    if command -v "$jb" >/dev/null 2>&1; then
+        # swallow-ok: an unreadable journal reads as "no load known"; the caller keeps the error and refuses.
+        line=$("$jb" --user -q -b -o short-monotonic --no-pager 2>/dev/null \
+            | grep -F 'model loaded' | tail -1) || line=""
+        if [[ -n "$line" ]]; then
+            j_ts=$(printf '%s\n' "$line" | sed -n 's/^\[ *\([0-9][0-9]*\.[0-9][0-9]*\)\].*/\1/p')
+        fi
+    fi
+    if f_path=$(_tac_dxg_stamp_path load) && [[ -r "$f_path" ]]; then
+        read -r f_ts _ < "$f_path" || f_ts=""
+        [[ "$f_ts" =~ ^[0-9]+(\.[0-9]+)?$ ]] || f_ts=""
+    fi
+    if [[ -n "$j_ts" && -n "$f_ts" ]]; then
+        awk -v a="$j_ts" -v b="$f_ts" 'BEGIN { print (a + 0 >= b + 0) ? a : b }'
+    elif [[ -n "$j_ts" ]]; then
+        printf '%s\n' "$j_ts"
+    elif [[ -n "$f_ts" ]]; then
+        printf '%s\n' "$f_ts"
+    fi
 }
 
 # _tac_dxg_health_check — inspect dmesg for critical WSL2 dxgkrnl bridge failures.
@@ -1166,14 +1237,15 @@ _tac_last_model_load_monotonic() {
 # Flags critical errors (-12 ENOMEM, -75 EOVERFLOW, wait_for_completion timeouts).
 # Deliberately ignores -22 (EINVAL), which is common and benign telemetry queries rejected by WDDM.
 #
-# A critical line OLDER than the newest successful model load is SUPERSEDED evidence:
-# the adapter has allocated and served since it was written, so it does not describe
-# the adapter's state now.  Measured 2026-11-23: one `dxgkio_create_allocation: -12`
-# at 16:47 refused the whole 17:39 sweep at preflight — nothing was attempted — while
-# two lanes loaded cleanly at 17:41.  The gate read a boot-old line as current, and the
-# batch then reported "the adapter stalled" for a run that never launched.
-# What this proves is that the adapter still allocates, NOT that every model size fits:
-# a fresh failure writes a newer line and is refused again, so a retry is bounded.
+# Two monotonic watermarks prevent false adapter-corruption halts:
+#   1. `loaded_at`: any critical line OLDER than the newest successful model load (from
+#      systemd journalctl or ephemeral autotune /health readiness) is superseded because
+#      the adapter allocated and served cleanly after it.
+#   2. `oom_at`: a `failed: -12` (-ENOMEM) line at or before a launch whose own log carried
+#      an explicit allocation-failure witness (`cudaMalloc failed`, `failed to allocate`,
+#      etc.) is WDDM refusing that oversized candidate buffer — NOT adapter corruption.
+#      `-75` (EOVERFLOW), `wait_for_completion` timeouts, unparsable timestamps, and any
+#      `-12` newer than `oom_at` remain fatal.
 #
 # @returns 0 when healthy, 1 when critical kernel GPU errors are present (and prints reason on stdout).
 _tac_dxg_health_check() {
@@ -1191,6 +1263,24 @@ _tac_dxg_health_check() {
         errs=$(printf '%s\n' "$errs" | awk -v t="$loaded_at" '
             { ts = $1; gsub(/[^0-9.]/, "", ts) }
             ts + 0 <= 0 || ts + 0 > t + 0 { print }
+        ')
+    fi
+    [[ -n "$errs" ]] || return 0
+    local oom_path="" oom_at=""
+    if oom_path=$(_tac_dxg_stamp_path oom) && [[ -r "$oom_path" ]]; then
+        read -r oom_at _ < "$oom_path" || oom_at=""
+        [[ "$oom_at" =~ ^[0-9]+(\.[0-9]+)?$ ]] || oom_at=""
+    fi
+    if [[ -n "$oom_at" ]]; then
+        errs=$(printf '%s\n' "$errs" | awk -v oom="$oom_at" '
+            {
+                ts = $1; gsub(/[^0-9.]/, "", ts)
+                low = tolower($0)
+                is_12 = (index(low, "failed: -12") > 0)
+                is_severe = (index(low, "failed: -75") > 0 || low ~ /wait_for_completion.*timeout/)
+                if (ts + 0 > 0 && is_12 && !is_severe && ts + 0 <= oom + 0) next
+                print
+            }
         ')
     fi
     [[ -n "$errs" ]] || return 0

@@ -719,3 +719,20 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     [[ "$label" == *"STALE BUILD"* ]]
     [[ "$label" != *"incomplete or misnamed"* ]]
 }
+
+# --- __autotune_batch_descent (2026-11-25) -----------------------------------
+@test "batch-descent: steps down ubatch first, then batch, maintaining ubatch <= batch down to 256:128" {
+    [ "$(__autotune_batch_descent 2048 512)" = "2048:256" ]
+    [ "$(__autotune_batch_descent 1024 512)" = "1024:256" ]
+    [ "$(__autotune_batch_descent 1024 256)" = "1024:128" ]
+    [ "$(__autotune_batch_descent 1024 128)" = "512:128" ]
+    [ "$(__autotune_batch_descent 512 128)" = "256:128" ]
+    [ -z "$(__autotune_batch_descent 256 128)" ]
+    [ -z "$(__autotune_batch_descent 128 64)" ]
+}
+
+@test "batch-descent: rejects non-integers cleanly with empty stdout" {
+    run __autotune_batch_descent "bad" "256"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not two integers"* ]]
+}

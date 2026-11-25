@@ -28,6 +28,10 @@
 #   tac_host_profile_apply
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 20
+#   v20 (2026-11-25): LLAMA_MAX_PROBE_CTX joins the cleared and exported profile-owned set
+#   so each box's autotune context probe ceiling (262144 on asus-n1n-rtx-spark, 65536 on
+#   intel-xe-cuda) reaches child autotune shells without leaking across profile switches.
 # Module Version: 19
 #   v19 (2026-11-24): LLAMA_BUILD_DIR joins the CLEARED set.  v12 exported it but never
 #   cleared it, so a parent shell's tree won the profile's `:=` and this file cleared the
@@ -505,7 +509,7 @@ tac_host_profile_apply() {
     unset LLAMA_LANE_SPECS LLAMA_LANE_KEEP_UNITS LLAMA_CUDA_LANE_UNIT LLAMA_CUDA_LANE_PORT \
           TAC_HOST_GPU_COUNT TAC_HOST_CUDA_GPU_INDEX \
           LLAMA_OPENCL_ENABLE LLAMA_OPENCL_DIR LLAMA_OPENCL_ADRENO LLAMA_OPENCL_TARGET \
-          LLAMA_GPU_FREE_THRESHOLD_MIB \
+          LLAMA_GPU_FREE_THRESHOLD_MIB LLAMA_MAX_PROBE_CTX \
           LLM_AUTOTUNE_BASELINE_GAP_MAX LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB \
           LLAMA_THREAD_CAP LLAMA_BUILD_DIR LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
           TAC_HOST_PRIMARY_LANE \
@@ -583,7 +587,7 @@ tac_host_profile_apply() {
            LLAMA_CUDA_LANE_PORT \
            TAC_HOST_GPU_COUNT TAC_HOST_CUDA_GPU_INDEX \
            LLAMA_OPENCL_ENABLE LLAMA_OPENCL_DIR LLAMA_OPENCL_ADRENO LLAMA_OPENCL_TARGET \
-           LLAMA_GPU_FREE_THRESHOLD_MIB LLM_AUTOTUNE_BASELINE_GAP_MAX \
+           LLAMA_GPU_FREE_THRESHOLD_MIB LLAMA_MAX_PROBE_CTX LLM_AUTOTUNE_BASELINE_GAP_MAX \
            LLM_AUTOTUNE_CENSUS LLM_AUTOTUNE_CENSUS_MAX_MIB LLAMA_THREAD_CAP \
            LLAMA_CUDA_SERVER_BIN LLM_SERVICE_PORT \
            LLAMA_MODEL_DIR LLAMA_ARCHIVE_DIR \

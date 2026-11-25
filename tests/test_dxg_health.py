@@ -128,6 +128,131 @@ def test_a_critical_line_with_an_unreadable_stamp_is_refused(tmp_path: Path) -> 
     assert "-12" in res.stdout
 
 
+def test_witnessed_oom_stamp_supersedes_enomem_12_but_never_75_or_timeouts(tmp_path: Path) -> None:
+    """Row 4 beam-search regression (2026-11-25): a candidate cudaMalloc OOM writes
+    `dxgkio_make_resident: Ioctl failed: -12` into dmesg with no subsequent journalctl load.
+
+    Stamping TAC_DXG_OOM_STAMP_FILE via _tac_dxg_record_oom_refusal must clear -12 lines
+    up to that monotonic timestamp while still refusing:
+      - -12 lines NEWER than the OOM watermark (unwitnessed failure),
+      - -75 (EOVERFLOW) and wait_for_completion timeouts regardless of the OOM watermark.
+    """
+    uptime = tmp_path / "uptime"
+    uptime.write_text("35120.50 600000.00\n", encoding="utf-8", errors="strict")
+    oom_stamp = tmp_path / "oom.ts"
+    no_journal = _fake_journalctl(tmp_path, None)
+
+    dmesg_oom_12 = _fake_dmesg(
+        tmp_path,
+        "[35095.875190] misc dxg: dxgk: dxgkio_make_resident: Ioctl failed: -12",
+        "[35119.142438] misc dxg: dxgk: dxgkio_make_resident: Ioctl failed: -12",
+    )
+    cmd_ok = (
+        f"source '{TAC_BIN_LIB}'"
+        f" && TAC_UPTIME_FILE='{uptime}'"
+        f" && TAC_DXG_OOM_STAMP_FILE='{oom_stamp}'"
+        " && _tac_dxg_record_oom_refusal"
+        f" && TAC_DMESG_BIN='{dmesg_oom_12}'"
+        f" && TAC_JOURNALCTL_BIN='{no_journal}'"
+        " && _tac_dxg_health_check"
+    )
+    res_ok = subprocess.run(
+        ["bash", "-c", cmd_ok],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=10,
+        check=False,
+    )
+    assert res_ok.returncode == 0, res_ok.stdout
+    assert res_ok.stdout.strip() == ""
+
+    # A newer -12 after the OOM watermark (unwitnessed) must STILL be refused.
+    dmesg_newer_12 = _fake_dmesg(
+        tmp_path,
+        "[35119.142438] misc dxg: dxgk: dxgkio_make_resident: Ioctl failed: -12",
+        "[35200.000001] misc dxg: dxgk: dxgkio_make_resident: Ioctl failed: -12",
+    )
+    cmd_newer = (
+        f"source '{TAC_BIN_LIB}'"
+        f" && TAC_DXG_OOM_STAMP_FILE='{oom_stamp}'"
+        f" && TAC_DMESG_BIN='{dmesg_newer_12}'"
+        f" && TAC_JOURNALCTL_BIN='{no_journal}'"
+        " && _tac_dxg_health_check"
+    )
+    res_newer = subprocess.run(
+        ["bash", "-c", cmd_newer],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=10,
+        check=False,
+    )
+    assert res_newer.returncode == 1
+    assert "35200.000001" in res_newer.stdout
+
+    # -75 (EOVERFLOW) and wait_for_completion timeouts are NEVER excused by an OOM watermark.
+    for severe_line in (
+        "[35110.000000] misc dxg: dxgk: dxgkio_reserve_gpu_va: Ioctl failed: -75",
+        "[35110.000000] dxgkrnl: wait_for_completion_interruptible_timeout failed",
+    ):
+        dmesg_sev = _fake_dmesg(tmp_path, severe_line)
+        cmd_sev = (
+            f"source '{TAC_BIN_LIB}'"
+            f" && TAC_DXG_OOM_STAMP_FILE='{oom_stamp}'"
+            f" && TAC_DMESG_BIN='{dmesg_sev}'"
+            f" && TAC_JOURNALCTL_BIN='{no_journal}'"
+            " && _tac_dxg_health_check"
+        )
+        res_sev = subprocess.run(
+            ["bash", "-c", cmd_sev],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            timeout=10,
+            check=False,
+        )
+        assert res_sev.returncode == 1
+
+
+def test_ephemeral_autotune_model_load_stamp_supersedes_older_dxg_errors(tmp_path: Path) -> None:
+    """Ephemeral autotune llama-server spawns log to /tmp/at-*.log, not journalctl --user.
+
+    _tac_dxg_record_model_load stamps TAC_DXG_LOAD_STAMP_FILE from /proc/uptime so a
+    subsequent healthy autotune load supersedes earlier dxg errors even with no journal entry.
+    """
+    uptime = tmp_path / "uptime"
+    uptime.write_text("36000.25 600000.00\n", encoding="utf-8", errors="strict")
+    load_stamp = tmp_path / "load.ts"
+    dmesg = _fake_dmesg(
+        tmp_path,
+        "[35119.142438] misc dxg: dxgk: dxgkio_make_resident: Ioctl failed: -12",
+    )
+    cmd = (
+        f"source '{TAC_BIN_LIB}'"
+        f" && TAC_UPTIME_FILE='{uptime}'"
+        f" && TAC_DXG_LOAD_STAMP_FILE='{load_stamp}'"
+        " && _tac_dxg_record_model_load"
+        f" && TAC_DMESG_BIN='{dmesg}'"
+        f" && TAC_JOURNALCTL_BIN='{_fake_journalctl(tmp_path, None)}'"
+        " && _tac_dxg_health_check"
+    )
+    res = subprocess.run(
+        ["bash", "-c", cmd],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=10,
+        check=False,
+    )
+    assert res.returncode == 0, res.stdout
+    assert res.stdout.strip() == ""
+
+
 def test_wsl_restart_dry_run_includes_vmmem_poll() -> None:
     """wsl-restart.sh --dry-run outputs vmmemWSL.exe teardown wait in shutdown step."""
     res = subprocess.run(

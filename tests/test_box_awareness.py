@@ -36,11 +36,13 @@ def test_hardware_profiles_registry_contains_target_boxes() -> None:
     assert ASUS_RTX_SPARK_PROFILE.serving.gpu_layers == 999
     assert ASUS_RTX_SPARK_PROFILE.serving.parallel_slots == 4
     assert ASUS_RTX_SPARK_PROFILE.serving.primary_port == 18087
+    assert ASUS_RTX_SPARK_PROFILE.autotune_max_probe_ctx == 262144
     assert DELL_XPS_PROFILE.memory_arch == MemoryArchitecture.DISCRETE
     assert DELL_XPS_PROFILE.total_memory_mb == 4096
     assert DELL_XPS_PROFILE.serving.gpu_layers == 24
     assert DELL_XPS_PROFILE.serving.thread_cap == 6
     assert DELL_XPS_PROFILE.serving.primary_port == 18081
+    assert DELL_XPS_PROFILE.autotune_max_probe_ctx == 65536
 
 
 def test_hardware_profile_is_frozen_and_validates_strictly() -> None:
@@ -211,6 +213,7 @@ SHARED_FACTS: dict[str, Callable[[HardwareProfile], object]] = {
     "TAC_HOST_PRIMARY_LANE": lambda p: p.lanes[0].unit_name,
     "LLM_AUTOTUNE_CENSUS": lambda p: p.autotune_census,
     "LLM_AUTOTUNE_CENSUS_MAX_MIB": lambda p: p.autotune_census_max_mib,
+    "LLAMA_MAX_PROBE_CTX": lambda p: p.autotune_max_probe_ctx,
 }
 
 # Facts a conf deliberately does not declare.  The XPS derives its store from

@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 51
+# Module Version: 52
+#   v52 (2026-11-25): add __autotune_batch_descent <batch> <ubatch> so an OOM during
+#     context discovery, climb, or filled-cache certification steps down one batch/ubatch
+#     rung (preserving ubatch <= batch down to 256:128) at the SAME ctx before descending
+#     the context window.
 #   v51 (2026-11-24): the GGUF layout census, and what it cost to write.  Two autotune
 #     rows failed on load-time tensor checks that their own headers decided: Calme-4x7B-MoE
 #     (row 1) was a pre-2024 per-expert conversion — hash-perfect, per the Hub LFS oid, so
@@ -360,6 +364,43 @@ function __autotune_descent_candidates() {
         return 0
     fi
     printf '%s\n' "${cands[@]}" | LC_ALL=C sort -nr | awk '!seen[$0]++'
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_batch_descent <batch> <ubatch> — the next SMALLER batch/ubatch pair, or
+#   empty when there is nothing smaller to try.
+#   stdout: "batch:ubatch" | ""
+#
+# WHY A BATCH DESCENT EXISTS (2026-11-25, Wayne's decision).  The sweep treats an OOM
+# as one diagnosis and moves to the next ctx.  Measured on row 4 at 00:19: the SAME ctx
+# that had just served 28.8 tps at 1024/512 and 28.8 tps at 512/128 died at 1024/512
+# allocating a 101,566 MiB compute buffer — the batch, not the window, was too large.
+# Marking that combo OOM discards a config the model can serve, so an OOM now buys one
+# smaller pair at the same ctx before anything descends.  The ladder honours the
+# ubatch <= batch invariant the candidate space enforces, and it stops at 256/128: below
+# that the prefill is slow enough that the descent is worth more than the pair.
+# Pure arithmetic — no card, no registry — so it is unit-tested beside the ctx bounds.
+# ---------------------------------------------------------------------------
+function __autotune_batch_descent() {
+    local b="${1:-0}" u="${2:-0}"
+
+    if ! [[ "$b" =~ ^[0-9]+$ ]] || ! [[ "$u" =~ ^[0-9]+$ ]]; then
+        warn "WARN: batch descent asked for '$1:$2', which is not two integers — no smaller pair"
+        return 0
+    fi
+
+    if (( u > 128 )); then
+        local nu=$(( u / 2 ))
+        (( nu > b )) && nu=$b
+        printf '%s:%s\n' "$b" "$nu"
+        return 0
+    fi
+    if (( b > 256 )); then
+        # The batch halves WITH its ubatch, so the pair stays inside ubatch <= batch.
+        printf '%s:%s\n' $(( b / 2 )) $(( u < b / 2 ? u : b / 2 ))
+        return 0
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------

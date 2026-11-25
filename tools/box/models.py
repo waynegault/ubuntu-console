@@ -1,10 +1,10 @@
 """Pydantic v2 domain models for box profiles and hardware awareness.
 
-Module Version: 2 (2026-11-11)
-Module Version: 3 (2026-11-18)
+Module Version: 4 (2026-11-25)
 Provides typed, validated, and immutable schemas for hardware architectures,
 memory models, serving parameters, quantization policies, and lane port allocations.
 
+v4 (2026-11-25): add autotune_max_probe_ctx (LLAMA_MAX_PROBE_CTX) to HardwareProfile.
 v3 (2026-11-18): add baseline_model (TAC_HOST_BASELINE_MODEL) to HardwareProfile.
 v2 (2026-11-11): PortAllocation rejects two lanes on one TCP port.  The check was
     asserted by tests/test_box_awareness.py but never implemented — the case passed
@@ -254,6 +254,10 @@ class HardwareProfile(BaseModel):
     )
     gpu_free_threshold_mib: NonNegativeInt = Field(
         default=3500, description="Minimum free VRAM required before launching workloads"
+    )
+    autotune_max_probe_ctx: NonNegativeInt = Field(
+        default=0,
+        description="Maximum context window an autotune probe may test on this host (LLAMA_MAX_PROBE_CTX)",
     )
     model_dir: str | None = Field(default=None, description="Active models directory")
     archive_dir: str | None = Field(default=None, description="Archived models directory")

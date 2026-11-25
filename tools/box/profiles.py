@@ -1,10 +1,12 @@
 """Target hardware profile definitions for the repository.
 
-Module Version: 5 (2026-11-21)
+Module Version: 6 (2026-11-25)
 Declares profile definitions for:
 - Asus ProArt P16 / RTX Spark N1X (128GB unified memory)
 - Dell XPS 15 (Intel i9 / 4GB discrete CUDA)
 
+v6 (2026-11-25): sync autotune_max_probe_ctx (LLAMA_MAX_PROBE_CTX: 262144 on ASUS, 65536 on XPS)
+    from config/hosts.d/*.conf.
 v5 (2026-11-21): resolve_profile() delegates to prober.detect_hardware_profile() when no
     override is configured instead of hardcoding ASUS_RTX_SPARK_PROFILE.
 v4 (2026-11-18): add IQ4_XS and Q4_0 to ASUS_RTX_SPARK_PROFILE.quant_policy acceptable
@@ -218,6 +220,7 @@ ASUS_RTX_SPARK_PROFILE = HardwareProfile(
     autotune_census_max_mib=_num(_ASUS, "LLM_AUTOTUNE_CENSUS_MAX_MIB", 6144),
     autotune_baseline_gap_max=_num(_ASUS, "LLM_AUTOTUNE_BASELINE_GAP_MAX", 3500),
     gpu_free_threshold_mib=_num(_ASUS, "LLAMA_GPU_FREE_THRESHOLD_MIB", 3500),
+    autotune_max_probe_ctx=_num(_ASUS, "LLAMA_MAX_PROBE_CTX", 262144),
     model_dir=_txt(_ASUS, "LLAMA_MODEL_DIR", "$HOME/models/active"),
     archive_dir=_txt(_ASUS, "LLAMA_ARCHIVE_DIR", "$HOME/models/archived"),
     hf_home=_txt(_ASUS, "HF_HOME", "$HOME/models/active"),
@@ -310,6 +313,7 @@ DELL_XPS_PROFILE = HardwareProfile(
     igpu_label=_txt(_XPS, "TAC_HOST_IGPU_LABEL", "Intel Xe"),
     cuda_arch=_txt(_XPS, "LLAMA_CUDA_ARCH", "86"),
     autotune_baseline_gap_max=_num(_XPS, "LLM_AUTOTUNE_BASELINE_GAP_MAX", 3500),
+    autotune_max_probe_ctx=_num(_XPS, "LLAMA_MAX_PROBE_CTX", 65536),
     baseline_model=_txt(_XPS, "TAC_HOST_BASELINE_MODEL", "cuda-llama32-3b/llama32"),
 )
 
