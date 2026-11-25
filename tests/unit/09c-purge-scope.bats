@@ -181,3 +181,65 @@ teardown() { rm -rf "$TAC_TEST_TMPDIR"; }
     [ "$(sed -n '2p' "$_calls")" = "sessions.reset" ]
     [ "$(wc -l < "$_calls")" -eq 2 ]
 }
+
+# ---------------------------------------------------------------------------
+# 2026-11-25: Wayne, "i don't think it works properly".  The three behavioural
+# defects were a substring classifier that kept cron RUNS forever, a dry run that
+# did not list the destructive arm, and no memory step at all.
+# ---------------------------------------------------------------------------
+
+@test "classifier: a cron RUN session is deleted, its job session is kept" {
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    # The exact shape measured on the box, 2026-11-25.
+    [ "$(__oc_purge_classify_key 'agent:sarah:cron:70d7121e-e88d-436b-ae4a-2b60ce130f87')" = "cronjob" ]
+    [ "$(__oc_purge_classify_key 'agent:sarah:cron:70d7121e-e88d-436b-ae4a-2b60ce130f87:run:bef428f2-28ae-436d-b172-d97aaf138924')" = "cronrun" ]
+}
+
+@test "classifier: a main is main, a whatsapp lane is neither main nor cron" {
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    [ "$(__oc_purge_classify_key 'agent:hal:main')" = "main" ]
+    [ "$(__oc_purge_classify_key 'agent:hal:whatsapp:direct:+447720061019')" = "ephemeral" ]
+}
+
+@test "classifier: a sub-agent under a cron parent is classified subagent, not cronrun" {
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    # Narrower meaning wins: Wayne asked for sub-agent sessions to be deleted explicitly, so the
+    # class must be nameable even when a cron job parented it.
+    [ "$(__oc_purge_classify_key 'agent:hal:sub:abc123')" = "subagent" ]
+    [ "$(__oc_purge_classify_key 'agent:hal:subagent:abc123')" = "subagent" ]
+}
+
+@test "the delete set is derived from ONE place, so preview cannot list a set the run does not delete" {
+    # Same defect shape as the reset scope in v37: two derivations drift. The raw grep excludes
+    # comments because the header documents the old filter and a raw count reads the prose.
+    run bash -c "grep -v '^[[:space:]]*#' '$REPO_ROOT/scripts/09c-oc-core.sh' \
+        | grep -c '__oc_purge_delete_keys'"
+    # 1 function definition + 1 call in the dry run + 1 call in the delete batch = 3 code lines.
+    [ "$output" = "3" ]
+}
+
+@test "the old substring filter is gone from the delete path" {
+    # It kept every `agent:<a>:cron:<job>:run:<id>`. If this string returns, 21 cron-run
+    # sessions silently become permanent again.
+    run bash -c "grep -v '^[[:space:]]*#' '$REPO_ROOT/scripts/09c-oc-core.sh' \
+        | grep -c \"grep -vE '(:main\$|:cron:)'\""
+    [ "$output" = "0" ]
+}
+
+@test "oc-purge has a memory step, and it refuses an agent whose flush cannot be shown" {
+    # Defect A: measured 2026-11-25, grep for memory|distill|flush|persist over oc-purge and its
+    # four helpers returned 0. The gate must exist AND be wired before the reset.
+    run bash -c "grep -v '^[[:space:]]*#' '$REPO_ROOT/scripts/09c-oc-core.sh' \
+        | grep -c '__oc_purge_memory_flush'"
+    # definition + call in the reset loop + this arm's own reference = at least 2
+    [ "$output" -ge 2 ]
+}
+
+@test "a workspace-less agent is refused rather than reset blind" {
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/ghost/agent"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    run __oc_purge_memory_flush ghost
+    [ "$status" -eq 1 ]
+}

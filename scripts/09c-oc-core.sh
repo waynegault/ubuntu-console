@@ -594,6 +594,168 @@ function ocstop() {
     openclaw agents delete "$@"
 }
 
+# __oc_purge_classify_key — ONE classifier, so the preview, the reset scope and the delete
+# batch cannot disagree about what a key is.  Echoes exactly one of:
+#   main   / cronjob / cronrun / subagent / ephemeral
+#
+# WHY THIS EXISTS (2026-11-25, Wayne: "i don't think it works properly").  The delete filter
+# was `grep -vE '(:main$|:cron:)'`, a substring test on the WHOLE key.  A cron RUN session is
+# `agent:<a>:cron:<job>:run:<id>`; it contains `:cron:` and so was KEPT -- permanently, because
+# nothing else ever reaches it.  Measured on this box the same day: 21 cron-run sessions across
+# 14 agents, of which sarah alone held 12.  Those are the rows that make a "fresh start" not
+# fresh, and they accumulate one per failed or slow automation run forever.
+#
+# The distinction the substring test cannot make is exactly the one that matters:
+#   cronjob  = agent:<a>:cron:<job-id>            the automation's OWN session. KEPT (owner's
+#                                                  call 2026-10-23: cron is automation state).
+#   cronrun  = agent:<a>:cron:<job-id>:run:<id>   one execution. DELETED -- the run is over and
+#                                                  its transcript is history, not state.
+# Sub-agent sessions are DELETED too (Wayne's requirement 2026-11-25).  None exist on this box
+# at the time of writing, so the arm is written from the shape rather than observed -- and it is
+# ordered BEFORE the cron arms because a sub-agent spawned by a cron job is both, and the
+# narrower meaning wins.
+function __oc_purge_classify_key() {
+    local _k="${1:-}"
+    [[ -n "$_k" ]] || { printf 'ephemeral\n'; return 0; }
+    # A sub-agent/spawn key, whether or not a cron job parented it.
+    if [[ "$_k" =~ :(subagent|sub|spawn|child)(:|$) ]] || [[ "$_k" == *":sub:"* ]]
+    then
+        printf 'subagent\n'; return 0
+    fi
+    # Cron RUN: a trailing `:run:<uuid>` under a cron job id. Anchored to the end so the job's
+    # own session (which has no `:run:`) is not caught.
+    if [[ "$_k" =~ ^agent:[^:]+:cron:[^:]+:run:[^:]+$ ]]
+    then
+        printf 'cronrun\n'; return 0
+    fi
+    if [[ "$_k" == *":main" ]]
+    then
+        printf 'main\n'; return 0
+    fi
+    if [[ "$_k" == *":cron:"* ]]
+    then
+        printf 'cronjob\n'; return 0
+    fi
+    printf 'ephemeral\n'
+}
+
+# __oc_purge_delete_keys — the keys this command will DELETE, derived ONCE from the union of
+# the CLI roster and every agent store.  Preview and batch both call this, so the dry run
+# cannot list a set the real run does not perform (the defect its own v37 notes claim fixed
+# for the reset scope only).
+function __oc_purge_delete_keys() {
+    local _key
+    while IFS= read -r _key
+    do
+        [[ -n "$_key" ]] || continue
+        case "$(__oc_purge_classify_key "$_key")" in
+            main|cronjob) : ;;                 # kept; main is reset instead
+            *)            printf '%s\n' "$_key" ;;
+        esac
+    done < <(__oc_purge_session_keys)
+}
+
+# __oc_purge_memory_flush — distill an agent's session history into durable memory BEFORE its
+# main is reset, and PROVE something survived that outlives the transcript.  Returns 0 on a
+# verified flush, 1 on failure.
+#
+# WHY THIS EXISTS (Wayne, 2026-11-25): "this should save key facts to memory, completely clear
+# agent main sessions so nothing is in them".  Measured the same day, the purge had NO memory
+# step at all -- grep -icE 'memory|distill|flush|persist' over oc-purge and its four helpers
+# returned 0.  It reset mains to empty and relied on the agent having already written things
+# down, which is a hope, not a control: anything said in a main and not yet written was
+# destroyed.  A purge that cannot show it preserved context must not clear it.
+#
+# NO NEW EXTRACTION IS INVENTED HERE; the two existing commands do different jobs and only one
+# of them can run while the gateway serves:
+#   openclaw memory session-backfill --apply   ONLINE.  Distils retained transcript history into
+#       staged candidates in the agent store's memory_index_* tables and writes DREAMS.md diary
+#       entries.  Those live OUTSIDE the session tables, so they survive sessions.reset and are
+#       the durable artefact this gate verifies.
+#   openclaw memory promote --apply            OFFLINE-ONLY.  It refuses while the Gateway owns
+#       the state root ("requires exclusive offline state ownership"), and oc-purge NEVER stops
+#       the gateway by design (v33).  So promotion into MEMORY.md cannot happen here; it is
+#       DEFERRED to the next offline maintenance window and SAID SO, rather than papered over.
+#       Measured 2026-11-25: the refusal is a clean cli_error, not a corruption.
+#
+# THE PROOF IS A COUNT AND A HASH, NOT AN EXIT CODE (rule: "a success code is not a success").
+# memory_index_sources rows and the DREAMS.md hash are read before and after.  The flush passes
+# when the backfill ran AND at least one of: the index grew, DREAMS.md changed, or the backfill
+# reported zero candidates (history already distilled -- backfill is idempotent, measured: a
+# second --apply over processed days returns days:[] candidateCount 0).  Anything else refuses.
+function __oc_purge_memory_flush() {
+    local _agent="${1:?__oc_purge_memory_flush needs an agent id}"
+    local _ws="$HOME/.openclaw/workspace-$_agent"
+    local _db="$OC_AGENTS/$_agent/agent/openclaw-agent.sqlite"
+    if [[ ! -d "$_ws" ]]
+    then
+        __tac_info "Memory" "[$_agent: NO WORKSPACE at $_ws - cannot verify a flush, refusing its RESET]" "$C_Error"
+        return 1
+    fi
+
+    local _idx_before=0 _idx_after=0 _dreams_before="" _dreams_after=""
+    _idx_before=$(__oc_purge_memory_index_rows "$_db")
+    [[ -f "$_ws/DREAMS.md" ]] && _dreams_before=$(sha256sum "$_ws/DREAMS.md" | cut -d' ' -f1)
+
+    local _bf="" _cands=0
+    if ! _bf=$(timeout -k 10 900 openclaw memory session-backfill --agent "$_agent" --apply --json 2>&1)
+    then
+        __tac_info "Memory" "[$_agent: session-backfill FAILED - refusing its RESET]" "$C_Error"
+        __oc_purge_stderr "$_bf"
+        return 1
+    fi
+    _cands=$(printf '%s' "$_bf" | jq -r '(.candidateCount // ([.days[]?.candidateCount // 0] | add) // 0)' 2>/dev/null || echo 0)
+    [[ "$_cands" =~ ^[0-9]+$ ]] || _cands=0
+
+    _idx_after=$(__oc_purge_memory_index_rows "$_db")
+    [[ -f "$_ws/DREAMS.md" ]] && _dreams_after=$(sha256sum "$_ws/DREAMS.md" | cut -d' ' -f1)
+
+    # Deferred promotion: attempt it, and treat the offline-only refusal as DEFERRED, not failed.
+    # If it ever does run (an offline purge), MEMORY.md gains the facts immediately.
+    local _pr="" _promote_state="deferred (offline-only; gateway serving)"
+    if _pr=$(timeout -k 10 300 openclaw memory promote --agent "$_agent" --apply --json 2>&1)
+    then
+        _promote_state="applied"
+    elif printf '%s' "$_pr" | grep -qi 'exclusive offline state ownership\|offline-only'
+    then
+        _promote_state="deferred (offline-only; gateway serving)"
+    else
+        _promote_state="promote errored - see log"
+    fi
+
+    # The gate.
+    if (( _idx_after > _idx_before ))
+    then
+        __tac_info "Memory" "[$_agent: $_idx_before -> $_idx_after indexed source(s), ${_cands} candidate(s); MEMORY.md promote $_promote_state]" "$C_Dim"
+        return 0
+    fi
+    if [[ -n "$_dreams_after" && "$_dreams_after" != "$_dreams_before" ]]
+    then
+        __tac_info "Memory" "[$_agent: DREAMS.md updated, ${_cands} candidate(s); MEMORY.md promote $_promote_state]" "$C_Dim"
+        return 0
+    fi
+    if (( _cands == 0 ))
+    then
+        __tac_info "Memory" "[$_agent: nothing left to distil (0 candidates, history already processed); promote $_promote_state]" "$C_Dim"
+        return 0
+    fi
+    __tac_info "Memory" "[$_agent: $_cands candidate(s) but NOTHING durable changed - refusing its RESET]" "$C_Error"
+    return 1
+}
+
+# __oc_purge_memory_index_rows — count the durable memory rows for a store, 0 when unreadable.
+# Used only as a before/after reading, so an unreadable store reads 0 on both sides and the
+# gate falls through to the candidate/DREAMS arms rather than passing on a phantom increase.
+function __oc_purge_memory_index_rows() {
+    local _db="${1:-}"
+    [[ -f "$_db" ]] || { printf '0\n'; return 0; }
+    local _n
+    _n=$(timeout 30 sqlite3 "file:$_db?mode=ro" \
+        "select count(*) from memory_index_sources;" 2>/dev/null) || _n=0
+    [[ "$_n" =~ ^[0-9]+$ ]] || _n=0
+    printf '%s\n' "$_n"
+}
+
 # ---------------------------------------------------------------------------
 # oc-purge — Reset every agent: delete every stored non-main, non-cron session, reset the
 # configured main to empty, repair any tombstoned main, prune the session files no store
@@ -703,30 +865,30 @@ function __oc_purge_session_keys() {
 # with the CLI's own output on stderr rather than discarded.
 function __oc_purge_delete_sessions() {
     local -a _keys=()
-    local _key _out="" _mains=0 _cron=0
+    local _key _out="" _mains=0 _cron=0 _runs=0 _cls
+    # The KEPT classes are counted here for the report; the DELETE SET comes from
+    # __oc_purge_delete_keys, the same function the dry run calls, so the preview cannot list a
+    # set this batch does not perform.  Counting and selecting are deliberately separate: the
+    # counts describe what was scanned, the batch acts on one derivation.
     while IFS= read -r _key
     do
         [[ -n "$_key" ]] || continue
-        # The CLI REFUSES to delete a main session ("Cannot delete the main session"),
-        # and one refused key fails the whole batch.  So mains are counted and reported
-        # rather than sent; the configured one is reset instead (see oc-purge step 5b).
-        if [[ "$_key" == *":main" ]]
-        then
-            _mains=$(( _mains + 1 ))
-            continue
-        fi
-        # Cron sessions are automation state and are KEPT (owner's call 2026-10-23);
-        # deleting them here would also make the roster read-back fail over rows this
-        # command deliberately left.
-        if [[ "$_key" == *":cron:"* ]]
-        then
-            _cron=$(( _cron + 1 ))
-            continue
-        fi
-        _keys+=("$_key")
+        _cls=$(__oc_purge_classify_key "$_key")
+        case "$_cls" in
+            main)    _mains=$(( _mains + 1 )) ;;   # CLI refuses mains; reset instead (step 5b)
+            cronjob) _cron=$(( _cron + 1 ))   ;;   # automation state, kept (2026-10-23)
+            cronrun) _runs=$(( _runs + 1 )) ;;      # one execution: deleted
+        esac
     done < <(__oc_purge_session_keys)
 
-    printf '%s %s %s\n' "${#_keys[@]}" "$_mains" "$_cron"
+    # ONE derivation of what is deleted.
+    while IFS= read -r _key
+    do
+        [[ -n "$_key" ]] || continue
+        _keys+=("$_key")
+    done < <(__oc_purge_delete_keys)
+
+    printf '%s %s %s %s\n' "${#_keys[@]}" "$_mains" "$_cron" "$_runs"
     (( ${#_keys[@]} > 0 )) || return 0
 
     if ! _out=$(timeout -k 15 300 openclaw sessions delete "${_keys[@]}" --yes --json 2>&1)
@@ -1004,8 +1166,22 @@ function __oc_purge_store_census() {
 
 function oc-purge() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
-        __tac_info "OpenClaw" "[NOT INSTALLED - cannot purge sessions]" "$C_Error"
-        return 1
+        # DEFECT E (2026-11-25): __TAC_OPENCLAW_OK is probed once at source time and cached in
+        # /dev/shm for 300 s, so ONE transient failure makes purge refuse with "[NOT INSTALLED]"
+        # for up to five minutes.  Measured: in a clean cache dir purge refused while
+        # `openclaw --version` printed 2026.11.10 and returned 0 in the same shell.  A
+        # housekeeping command that refuses for minutes after a blip is indistinguishable from
+        # a broken one.  So RE-PROBE before refusing, bypassing the cache, and say which check
+        # answered -- the cache was never the authority, only a shortcut.
+        if command -v openclaw >/dev/null 2>&1 && timeout -k 5 30 openclaw --version >/dev/null 2>&1
+        then
+            __tac_info "OpenClaw" "[cached probe said NOT INSTALLED; live re-probe OK - continuing]" "$C_Warning"
+            __TAC_OPENCLAW_OK=1
+        else
+            __tac_info "OpenClaw" "[NOT INSTALLED - cannot purge sessions]" "$C_Error"
+            __tac_info "OpenClaw" "[re-probed live: openclaw --version also failed - the refusal is real]" "$C_Dim"
+            return 1
+        fi
     fi
 
     # Validate OC_AGENTS path — prevent catastrophic rm -rf
@@ -1033,14 +1209,29 @@ function oc-purge() {
     if (( _dry_run == 1 ))
     then
         local _agent_dir _key _tb_recovered _reset_scope _dry_key
-        __tac_info "Sessions" "[WOULD DELETE every stored session except agent mains and cron]" "$C_Dim"
-        __oc_purge_session_keys | grep -vE '(:main$|:cron:)' | sed 's/^/    /'
+        # The destructive arm lists every KEY it would delete.  Its old form printed one summary
+        # line while every other arm listed keys -- so the one irreversible action was the one
+        # with no preview (Wayne, 2026-11-25: "i don't think it works properly").  Derived from
+        # the same __oc_purge_delete_keys the real run uses, so a preview cannot diverge from it.
+        local _dcount=0
         while IFS= read -r _key
         do
-            case "$_key" in
-                *:main)     __tac_info "Session" "[WOULD KEEP - agent main] $_key" "$C_Dim" ;;
-                *":cron:"*) __tac_info "Session" "[WOULD KEEP - cron] $_key" "$C_Dim" ;;
-                *)          : ;;
+            [[ -n "$_key" ]] || continue
+            _dcount=$(( _dcount + 1 ))
+            __tac_info "Session" "[WOULD DELETE] $_key" "$C_Dim"
+        done < <(__oc_purge_delete_keys)
+        if (( _dcount == 0 ))
+        then
+            __tac_info "Sessions" "[WOULD DELETE nothing - no deletable sessions]" "$C_Dim"
+        else
+            __tac_info "Sessions" "[WOULD DELETE $_dcount session(s) listed above]" "$C_Dim"
+        fi
+        while IFS= read -r _key
+        do
+            case "$(__oc_purge_classify_key "$_key")" in
+                main)           __tac_info "Session" "[WOULD KEEP - agent main] $_key" "$C_Dim" ;;
+                cronjob)        __tac_info "Session" "[WOULD KEEP - cron job] $_key" "$C_Dim" ;;
+                *)              : ;;
             esac
         done < <(__oc_purge_session_keys)
         _reset_scope=$(__oc_purge_reset_scope)
@@ -1108,15 +1299,20 @@ function oc-purge() {
         __tac_info "Sessions" "[FAILED to delete store rows - reported, not claimed]" "$C_Error"
         _failed=$(( _failed + 1 ))
     else
-        read -r _deleted _mains _cron <<< "$_counts"
+        local _runs=0
+        read -r _deleted _mains _cron _runs <<< "$_counts"
         __tac_info "Sessions" "[$_deleted session key(s) deleted]" "$C_Dim"
+        if (( _runs > 0 ))
+        then
+            __tac_info "Sessions" "[$_runs of those were cron RUN transcripts - history, not state]" "$C_Dim"
+        fi
         if (( _mains > 0 ))
         then
             __tac_info "Sessions" "[$_mains main session(s) KEPT - the CLI refuses to delete main]" "$C_Dim"
         fi
         if (( _cron > 0 ))
         then
-            __tac_info "Sessions" "[$_cron cron session(s) KEPT - automation state is not purge's]" "$C_Dim"
+            __tac_info "Sessions" "[$_cron cron JOB session(s) KEPT - automation state is not purge's]" "$C_Dim"
         fi
     fi
 
@@ -1138,6 +1334,19 @@ function oc-purge() {
             [[ "$_reset_key" == *:main ]] || continue
             if [[ "$_reset_scope" != "all" && "$_reset_key" != "agent:$_reset_scope:main" ]]
             then
+                continue
+            fi
+            # 3b-i. THE MEMORY GATE (Wayne, 2026-11-25). Distill and promote durable memory
+            # BEFORE the main is emptied, and refuse THIS agent's reset if nothing can be
+            # shown to have landed.  Skipping the agent -- rather than failing the whole run --
+            # is deliberate: a purge that aborts on the first bad lane would leave the fleet in
+            # a half-purged state, which is worse than one agent starting un-freshened.
+            local _reset_agent="${_reset_key#agent:}"
+            _reset_agent="${_reset_agent%%:*}"
+            if ! __oc_purge_memory_flush "$_reset_agent"
+            then
+                _failed=$(( _failed + 1 ))
+                __tac_info "Sessions" "[$_reset_key reset SKIPPED - memory flush not proven]" "$C_Error"
                 continue
             fi
             __oc_purge_reset_main "$_reset_key"
