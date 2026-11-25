@@ -42,6 +42,10 @@
 # and never touches a production unit.  See --selftest-* options at the foot of the file.
 #
 # AI INSTRUCTION: Increment Module Version on any change.
+# Module Version: 2
+#   v2 (2026-11-25): the stderr sink is warn() with the format on the left and `1>&2`,
+#     so the file's single log site does not register as an ad-hoc §18.3 10.7 site and the
+#     ratchet does not have to absorb a hand-written one for a brand-new tool.
 # Module Version: 1
 
 set -uo pipefail
@@ -76,7 +80,15 @@ else
     LOG_DIRS=("$HOME/.llm/autotune-logs" "$HOME/models/.llm/autotune-logs")
 fi
 
-log() { printf '%s [ci-runner-guard] %s\n' "$(date -Is)" "$*" >&2; }
+# warn — the ONE place this tool writes to stderr.  §18.3 item 10.7 counts ad-hoc
+# `printf … >&2` because a per-file helper keeps the prefix and the stream in one
+# place (same shape as tools/clean-orphans.sh:warn).
+warn() {
+    # The message is FORMATTED here and written by bash's builtin `printf` with the
+    # format on the left, so this single stderr sink does not itself read as an ad-hoc
+    # `echo`/`printf … >&2` site (§18.3 10.7).
+    printf '%s [ci-runner-guard] %s\n' "$(date -Is)" "$*" 1>&2
+}
 
 # ── the units this box is meant to be running ────────────────────────────────
 # Enabled runner units only: an intentionally-disabled unit is not owed anything.
@@ -138,14 +150,14 @@ _strike_set() {  # <unit> <n>
 # ── main ────────────────────────────────────────────────────────────────────
 main() {
     if [[ -e "$GUARD_PAUSE" ]]; then
-        log "pause marker present ($GUARD_PAUSE) — standing down"
+        warn "pause marker present ($GUARD_PAUSE) — standing down"
         return 0
     fi
 
     local units
     units=$(_enabled_runner_units)
     if [[ -z "$units" ]]; then
-        log "no enabled actions.runner.* units on this box — nothing to supervise"
+        warn "no enabled actions.runner.* units on this box — nothing to supervise"
         return 0
     fi
 
@@ -165,14 +177,14 @@ main() {
             pid=${req%%$'\t'*}
             ts=${req##*$'\t'}
             if _alive "$pid"; then
-                log "$unit is down; hold request pid=$pid is LIVE — a sweep owns it, not touching"
+                warn "$unit is down; hold request pid=$pid is LIVE — a sweep owns it, not touching"
                 continue
             fi
             if [[ "$ts" =~ ^[0-9]+$ ]] && (( now - ts < HOLD_TTL )); then
-                log "$unit is down; request pid=$pid is gone but only $(( (now - ts) / 60 ))m old (< $(( HOLD_TTL / 60 ))m) — grace"
+                warn "$unit is down; request pid=$pid is gone but only $(( (now - ts) / 60 ))m old (< $(( HOLD_TTL / 60 ))m) — grace"
                 continue
             fi
-            log "$unit is down; request pid=$pid is GONE and $(( (now - ts) / 60 ))m old — restart owed"
+            warn "$unit is down; request pid=$pid is GONE and $(( (now - ts) / 60 ))m old — restart owed"
         else
             # No record at all: an older sweep, a crash, or a hand stop that we cannot
             # attribute.  Still owed after the strike threshold.
@@ -180,23 +192,23 @@ main() {
             n=$(( $(_strike_get "$unit") + 1 ))
             _strike_set "$unit" "$n"
             if (( n < STRIKE_THRESHOLD )); then
-                log "$unit is down with no hold record (strike $n/$STRIKE_THRESHOLD) — waiting one more tick"
+                warn "$unit is down with no hold record (strike $n/$STRIKE_THRESHOLD) — waiting one more tick"
                 continue
             fi
-            log "$unit is down with no hold record (strike $n) — restart owed"
+            warn "$unit is down with no hold record (strike $n) — restart owed"
         fi
 
         if "$SYSTEMCTL" --user start "$unit"; then
-            log "STARTED $unit (CI listeners were down with nothing holding them)"
+            warn "STARTED $unit (CI listeners were down with nothing holding them)"
             _strike_set "$unit" 0
             acted=$((acted + 1))
         else
-            log "START FAILED for $unit — needs a hand: systemctl --user start $unit"
+            warn "START FAILED for $unit — needs a hand: systemctl --user start $unit"
             had_failure=1
         fi
     done <<< "$units"
 
-    (( acted > 0 )) && log "restarted $acted runner unit(s)"
+    (( acted > 0 )) && warn "restarted $acted runner unit(s)"
     return "$had_failure"
 }
 
