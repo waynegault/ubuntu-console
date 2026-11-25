@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 166
+#   v166 (2026-11-25): define fmt/fmts above the LLAMA_MAX_PROBE_CTX ceiling banner so
+#   bash calls the comma-format helper instead of /usr/bin/fmt.
 # Module Version: 165
 #   v165 (2026-11-25): three fixes from row 4 live autotune (Inkling-2-Mini, 16.4G):
 #   (1) Record boot-monotonic load and witnessed-OOM watermarks (_tac_dxg_record_model_load /
@@ -1193,6 +1196,11 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [[ $START_CTX -lt $MIN_CTX ]] && START_CTX=$MIN_CTX
 [[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
 
+# Comma-format numbers (standalone helpers — no outer-scope capture)
+fmt() { printf "%'d" "$1"; }
+# fmts — comma-format each "batch:ubatch" combo passed as args.
+fmts() { local _c _out=""; for _c in "$@"; do _out+="$(printf "%'d:%'d " "${_c%%:*}" "${_c##*:}")"; done; printf '%s' "${_out% }"; }
+
 # ── THE BOX'S SERVING CEILING (2026-11-25, Wayne) ─────────────────────────────
 # The KV math above asks "how much window fits in the pool", and on a unified-memory
 # host that answer is enormous: row 4 (Inkling-2-Mini, 16.4G) priced 57 GiB of pool
@@ -1273,11 +1281,6 @@ if [[ "${_HOST_CTX_CLAMP:-0}" == "1" ]]; then
     START_CTX=$MIN_CTX
     MAX_CTX=$MIN_CTX
 fi
-
-# Comma-format numbers (standalone helpers — no outer-scope capture)
-fmt() { printf "%'d" "$1"; }
-# fmts — comma-format each "batch:ubatch" combo passed as args.
-fmts() { local _c _out=""; for _c in "$@"; do _out+="$(printf "%'d:%'d " "${_c%%:*}" "${_c##*:}")"; done; printf '%s' "${_out% }"; }
 
 # ── 3c: the certification's write gate ──────────────────────────────────────
 __autotune_measurement_verdict() {

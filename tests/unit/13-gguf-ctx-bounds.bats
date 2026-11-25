@@ -736,3 +736,11 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
     [ "$status" -eq 0 ]
     [[ "$output" == *"not two integers"* ]]
 }
+
+@test "probe-ceiling: fmt() is defined before LLAMA_MAX_PROBE_CTX logs so /usr/bin/fmt never runs" {
+    local fmt_line ceil_line
+    fmt_line=$(grep -n '^fmt()' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    ceil_line=$(grep -n '_MAX_PROBE_CTX="\${LLAMA_MAX_PROBE_CTX:-}"' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    [[ "$fmt_line" =~ ^[0-9]+$ && "$ceil_line" =~ ^[0-9]+$ ]]
+    (( fmt_line < ceil_line ))
+}
