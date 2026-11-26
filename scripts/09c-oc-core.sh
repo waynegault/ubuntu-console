@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 55
+# Module Version: 56
 #   v55 (2026-11-26): classify ten swallow sites v54 left unclassified. The §18.3 gate read
 #       10 against a baseline of 8 and refused the push. Four of the ten already carried a
 #       `# swallow-ok:` line — but above the FIRST line of a two-line construct, while the
@@ -2007,11 +2007,24 @@ function oc-purge() {
             [[ -d "${_agent_dir%/}/sessions" ]] \
                 && __tac_info "Session" "[WOULD PRUNE] ${_agent_dir%/}/sessions (files no store row names)" "$C_Dim"
         done
+        # D8 (measured 2026-11-26): this return skips phases 1-3 ENTIRELY, so the one phase
+        # that rewrites MEMORY.md on every agent and the reset arm have never had a preview --
+        # and a real run that printed "1 FAILED" looked identical here, i.e. invisible.  The
+        # preview cannot run them (it may not flush, stop the gateway, or reset), but it MUST
+        # say what it is not showing, or "DRY RUN" reads as "this is the whole operation".
+        __tac_info "Memory" \
+            "[NOT PREVIEWED - phase 1 flush, phase 2 promote and phase 3 reset run only on a real run]" \
+            "$C_Warning"
+        __tac_info "Memory" \
+            "[a real run reports its memory outcome in the final banner; the dry run cannot]" \
+            "$C_Dim"
         __tac_info "Purge Complete" "[DRY RUN - nothing deleted, gateway untouched]" "$C_Dim"
         return 0
     fi
 
     local _pruned=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0 _tombstoned=0
+    # D8: WHY counts live beside the count itself -- a bare number is not a finding.
+    local -a _failed_why=()
     # v54: the driving lane's own main, kept by design. Declared here because this function is
     # the one that increments it, and an undeclared counter is a shell error under `set -u`.
     local _self_skipped=0
@@ -2051,7 +2064,7 @@ function oc-purge() {
         # batches landed.  Say what the exit means and let the per-agent lines above name who.
         __tac_info "Sessions" \
             "[at least one agent's delete batch was REFUSED - see the line above naming it]" "$C_Error"
-        _failed=$(( _failed + 1 ))
+        _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
     else
         # FIVE FIELDS, NOT FOUR (v48).  __oc_purge_delete_sessions prints
         # "<deleted> <mains> <cron> <runs> <dfail>"; this read listed four names, so the LAST
@@ -2253,7 +2266,7 @@ function oc-purge() {
             done
             if (( _proven == 0 ))
             then
-                _failed=$(( _failed + 1 ))
+                _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
                 __tac_info "Sessions" "[$_reset_key reset SKIPPED - memory flush not proven]" "$C_Error"
                 continue
             fi
@@ -2266,7 +2279,7 @@ function oc-purge() {
                 4) _tombstoned=$(( _tombstoned + 1 ))
                    __tac_info "Sessions" \
                        "[$_reset_key TOMBSTONED - successor started, tombstone REMAINS]" "$C_Warning" ;;
-                *) _failed=$(( _failed + 1 ))
+                *) _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
                    __tac_info "Sessions" "[FAILED to reset $_reset_key]" "$C_Error" ;;
             esac
         done < <(__oc_purge_session_keys | grep -E ':main$' | sort -u)
@@ -2285,7 +2298,7 @@ function oc-purge() {
             3) : ;;
             4) _tombstoned=$(( _tombstoned + 1 ))
                __tac_info "Sessions" "[$_tb_key TOMBSTONED - successor started, tombstone REMAINS]" "$C_Warning" ;;
-            *) _failed=$(( _failed + 1 ))
+            *) _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
                __tac_info "Sessions" "[FAILED to repair $_tb_key]" "$C_Error" ;;
         esac
     done < <(__oc_purge_broken_tombstones)
@@ -2298,7 +2311,7 @@ function oc-purge() {
     __tac_info "Sessions" "[pruning session files no store row names]" "$C_Dim"
     if ! _pruned=$(__oc_purge_prune_orphans)
     then
-        _failed=$(( _failed + 1 ))
+        _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
         __tac_info "Sessions" "[FAILED to prune orphan session files]" "$C_Error"
     elif (( _pruned > 0 ))
     then
@@ -2319,7 +2332,7 @@ function oc-purge() {
     # and a body that does not parse is a FAILURE rather than a silent zero.
     if ! _roster_raw=$(timeout -k 10 60 openclaw sessions --all-agents --json)
     then
-        _failed=$(( _failed + 1 ))
+        _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
         __tac_info "Sessions" "[could not read the roster back after delete]" "$C_Error"
     else
         _roster_left=$(printf '%s\n' "$_roster_raw" \
@@ -2329,7 +2342,7 @@ function oc-purge() {
         if [[ ! "$_roster_left" =~ ^[0-9]+$ ]]
         then
             _roster_left=""
-            _failed=$(( _failed + 1 ))
+            _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
             __tac_info "Sessions" "[the roster body could not be parsed as a session list]" "$C_Error"
         fi
     fi
@@ -2341,12 +2354,12 @@ function oc-purge() {
     local _store_rc=$?
     if (( _store_rc != 0 ))
     then
-        _failed=$(( _failed + 1 ))
+        _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
         __tac_info "Sessions" "[could not read the STORES back after delete]" "$C_Error"
     fi
     if [[ -n "$_roster_left" && "$_roster_left" != "0" ]]
     then
-        _failed=$(( _failed + 1 ))
+        _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
         __tac_info "Sessions" "[$_roster_left non-main session(s) still in the CLI ROSTER after delete]" "$C_Error"
     fi
     # A STORE ROW THE CLI CANNOT SEE IS NOT A SURVIVING SESSION (v51).
@@ -2394,7 +2407,7 @@ function oc-purge() {
         done < <(__oc_purge_store_left_keys)
         if (( _survivors > 0 ))
         then
-            _failed=$(( _failed + 1 ))
+            _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
             __tac_info "Sessions" \
                 "[$_survivors stored, gateway-visible session(s) survived the delete]" "$C_Error"
         fi
@@ -2402,7 +2415,7 @@ function oc-purge() {
         then
             if [[ "${OC_PURGE_INVISIBLE_IS_FAILURE:-0}" == "1" ]]
             then
-                _failed=$(( _failed + 1 ))
+                _failed=$(( _failed + 1 )); _failed_why+=("ln${LINENO}")
                 __tac_info "Sessions" \
                     "[$_invisible_left orphan store row(s) the CLI cannot see - failing as requested]" \
                     "$C_Error"
@@ -2470,7 +2483,17 @@ function oc-purge() {
     fi
     if (( _failed > 0 ))
     then
-        __tac_info "Purge Complete" "[store reset, $_pruned orphan(s) pruned, $_failed FAILED]" "$C_Error"
+        # MEASURED 2026-11-26 (D8): run 1 printed "1 FAILED" and named NOTHING -- \`grep -c
+        # "could not read"\` was 0 -- because a _failed increment on a transient read has no
+        # message of its own, and because THIS line discarded \`$_extra\`, which by then held
+        # "memory: 13 flushed, PROMOTE DID NOT RUN, 13 main(s) reset, the driving lane's own
+        # main KEPT".  A failure summary that drops the run's outcome is worse than a terse
+        # one: the operator cannot tell what DID land.  Every increment now also names itself
+        # (\`_failed_why\`), and the banner keeps \`$_extra\`.
+        local _why="${_failed_why[*]}"
+        __tac_info "Purge Complete" \
+            "[store reset, $_pruned orphan(s) pruned, $_failed FAILED${_why:+: $_why}${_extra}]" \
+            "$C_Error"
         # A summary that says FAILED must not exit 0.  Measured live 2026-10-19: the run
         # printed "2 FAILED" and returned 0, so a caller (and the background task's
         # rc=0) read it as success — the exit code is what a caller actually sees.
