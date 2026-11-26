@@ -49,6 +49,33 @@ DEFAULT_DB = Path.home() / ".openclaw" / "kgraph.sqlite"
 COLUMNS = ("lang", "name", "defined_in", "kgraph", "callers", "truth", "evidence")
 
 
+# Names a RUNTIME invokes with no call site in the source.  They are entry points, not
+# candidates for a dead-code verdict: `len()` calls `__len__`, http.server calls
+# `do_POST`, pytest calls `pytest_*`, and `main` is called by a shell or a unit file.
+_RUNTIME_PREFIXES = ("do_GET", "do_POST", "do_PUT", "do_DELETE", "do_OPTIONS", "do_HEAD", "do_PATCH")
+_RUNTIME_EXACT = frozenset({"main", "__main__"})
+
+
+def is_runtime_dispatched(name: str) -> bool:
+    """True when a runtime (interpreter, framework, shell) invokes this by convention.
+
+    Measured 2026-11-26: the first certification run failed on exactly three names —
+    `__len__`, `__getattr__` and `do_POST` — every one of them called by Python or by
+    http.server with no call syntax anywhere.  A bar that demands a static caller for
+    those measures an impossibility, so they are excluded from the sample and named
+    instead of silently dropped.
+    """
+    if name.startswith("__") and name.endswith("__"):
+        return True
+    return name in _RUNTIME_EXACT or name.startswith(_RUNTIME_PREFIXES) or name.startswith("pytest_")
+
+
+def is_test_path(path: str) -> bool:
+    """A path that ships with the test suite rather than the product."""
+    lowered = path.replace("\\", "/").lower()
+    return "/tests/" in f"/{lowered}" or lowered.startswith("tests/")
+
+
 def load_definitions(db: Path) -> list[dict[str, str]]:
     """Function definitions kgraph knows, with the files it believes call them."""
     if not db.is_file():
@@ -81,7 +108,9 @@ def load_definitions(db: Path) -> list[dict[str, str]]:
     return defs
 
 
-def stratify(defs: list[dict[str, str]], per_language: int, seed: int) -> list[dict[str, str]]:
+def stratify(
+    defs: list[dict[str, str]], per_language: int, seed: int, production_only: bool = True
+) -> list[dict[str, str]]:
     """Deterministic, reproducible sample: `per_language` of each language, seeded.
 
     Sorted BEFORE sampling so the result depends on the tree's content, not on
@@ -90,7 +119,13 @@ def stratify(defs: list[dict[str, str]], per_language: int, seed: int) -> list[d
     out: list[dict[str, str]] = []
     for lang in ("bash", "python"):
         pool = sorted(
-            (d for d in defs if d["lang"] == lang),
+            (
+                d
+                for d in defs
+                if d["lang"] == lang
+                and not is_runtime_dispatched(d["name"])
+                and not (production_only and is_test_path(d["defined_in"]))
+            ),
             key=lambda d: (d["name"], d["defined_in"]),
         )
         rng = random.Random(f"{seed}:{lang}")
@@ -151,6 +186,7 @@ def check(rows: list[dict[str, str]]) -> int:
 
     if false_unused:
         print(f"\nFAIL — {len(false_unused)} FALSE-UNUSED (the bar is zero):")
+        print("  (a runtime-dispatched name here means the sample rule is wrong, not the graph)")
         for r in false_unused:
             print(f"  {r['lang']:7s} {r['name']:36s} {r['defined_in']}")
             print(f"          verified evidence: {r['evidence']}")
@@ -186,10 +222,7 @@ def report(db: Path) -> int:
     return 0
 
 
-def _test_side(path: str) -> bool:
-    """A path that ships with the test suite rather than the product."""
-    lowered = path.replace("\\", "/").lower()
-    return "/tests/" in f"/{lowered}" or lowered.startswith("tests/")
+_test_side = is_test_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -199,13 +232,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", type=Path, metavar="TSV", help="certify a filled sample")
     parser.add_argument("--report", action="store_true", help="totals only")
     parser.add_argument("--sample", type=int, default=100, help="definitions PER LANGUAGE (default 100)")
+    parser.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="sample test-file definitions too (default: production only, where a verdict applies)",
+    )
     parser.add_argument("--seed", default="2026-11-26", help="sample seed")
     args = parser.parse_args(argv)
 
     if args.check:
         return check(read_sample(args.check))
     if args.emit:
-        return emit(stratify(load_definitions(args.db), args.sample, args.seed), args.emit)
+        picked = stratify(load_definitions(args.db), args.sample, args.seed, production_only=not args.include_tests)
+        return emit(picked, args.emit)
     return report(args.db)
 
 

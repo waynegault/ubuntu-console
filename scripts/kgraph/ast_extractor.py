@@ -301,6 +301,29 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
     if max_files and len(source_files) > max_files:
         source_files = source_files[:max_files]
 
+    # ── defined-name pre-scan ──
+    # A reference pass must know whether a name is a function ANYWHERE in the repo, not
+    # only in the files already processed.  Without this, a reference from
+    # `tests/e2e/...` to a function defined in `tools/...` was dropped because `tools/`
+    # sorts later (measured 2026-11-26: `default_ctx_size` read unused while a test
+    # reads it as an attribute).  Linking still happens in `_link_call_defs`, so this
+    # set only decides whether a reference is worth recording.
+    known_funcs: dict[str, set[str]] = {"python": set(), "bash": set()}
+    for fpath, lang in source_files:
+        try:
+            text = fpath.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.debug("pre-scan skipped %s: %s", fpath, exc, exc_info=True)
+            continue
+        if lang == "python":
+            known_funcs["python"].update(
+                re.findall(r"^[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w*)", text, re.MULTILINE)
+            )
+        elif lang == "bash":
+            known_funcs["bash"].update(
+                re.findall(r"^[ \t]*(?:function[ \t]+)?([A-Za-z_][\w-]*)[ \t]*\(\)", text, re.MULTILINE)
+            )
+
     # ── per-file extraction ──
     parsers: dict[str, Any] = {}
     file_node_ids: dict[str, str] = {}
@@ -350,7 +373,7 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
         elif lang == "bash":
             _extract_bash_defs(root_node, code, rel_path, file_id, builder, include_variables, file_source)
 
-        _extract_calls(root_node, code, lang, rel_path, file_id, builder, file_source)
+        _extract_calls(root_node, code, lang, rel_path, file_id, builder, file_source, known_funcs[lang])
 
     # ── inter-file refs from imports ──
     graph = builder.build()
@@ -743,12 +766,20 @@ def _enclosing_function(node, code: bytes) -> str:
 
 
 def _extract_calls(
-    root_node, code: bytes, lang: str, rel_path: str, file_id: str, builder: GraphBuilder, file_source: str
+    root_node,
+    code: bytes,
+    lang: str,
+    rel_path: str,
+    file_id: str,
+    builder: GraphBuilder,
+    file_source: str,
+    known: set[str] | None = None,
 ) -> None:
     """Extract function/method call references."""
     grammar_lang = _LANGUAGES.get(lang)
     if not grammar_lang:
         return
+    known = known if known is not None else set()
 
     if lang == "python":
         queries = [PYTHON_QUERIES["function_call"], PYTHON_QUERIES["method_call"]]
@@ -819,18 +850,109 @@ def _extract_calls(
 
     if lang == "python":
         _extract_python_references(
-            grammar_lang, root_node, code, file_id, builder, seen_calls, seen_caller_edges, file_source
+            grammar_lang,
+            root_node,
+            code,
+            file_id,
+            builder,
+            seen_calls,
+            seen_caller_edges,
+            file_source,
+            known,
         )
 
     if lang == "bash":
+        # A known function NAMED INSIDE A STRING is still reached: `bash -c '…; fn'`
+        # and `alias chat:='local_chat'` both invoke fn with no command node to see.
+        # Measured 2026-11-26: `libcuda_shadowed` (called only via `bash -c` inside a
+        # bats case) and `local_chat` (alias body) both read as unused.
+        _extract_bash_string_calls(root_node, code, file_id, builder, seen_calls, seen_caller_edges, file_source, known)
+
         # A name passed as an ARGUMENT is a call site too (v53): `run_it helper` is how
         # this repo dispatches callbacks, and a `command_name` query cannot see it —
         # measured 2026-11-26, `_oc_promote_pass` (09c-oc-core.sh:972) is invoked only
         # as `__oc_purge_offline_window _oc_promote_pass` (:1057) and had no caller.
-        _extract_argument_calls(command_nodes, code, file_id, builder, seen_calls, seen_caller_edges, file_source)
+        _extract_argument_calls(
+            command_nodes,
+            code,
+            file_id,
+            builder,
+            seen_calls,
+            seen_caller_edges,
+            file_source,
+            known,
+        )
         # One capture, three consumers: each used to re-run (and recompile) this query.
         _extract_dispatched_calls(command_nodes, code, file_id, builder, seen_calls, file_source)
         _extract_trap_handlers(grammar_lang, command_nodes, code, file_id, builder, seen_calls, file_source)
+
+
+def _extract_bash_string_calls(
+    root_node,
+    code: bytes,
+    file_id: str,
+    builder: GraphBuilder,
+    seen_calls: set[str],
+    seen_caller_edges: set[tuple[str, str]],
+    file_source: str,
+    known: set[str],
+) -> None:
+    """Record a KNOWN function named inside a shell string literal.
+
+    Two shapes in this repo reach a function only that way: a `bash -c '… fn'` probe
+    (a bats case) and an alias body (`alias chat:='local_chat'`).  The container is the
+    STRING, so there is no `command` node for the call pass to see.
+
+    Only a token that resolves to a known bash function is recorded, and the edge is
+    INFERRED: the string may never be evaluated.  Same bias as the other passes — an
+    extra edge hides dead code, a missing one kills live code.
+    """
+    for node in _walk_nodes(root_node):
+        if node.type not in ("string", "raw_string", "ansii_c_string", "string_content"):
+            continue
+        text = _node_text(node, code)
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_-]*", text):
+            if token not in known:
+                continue
+            call_id = _symbol_id("call", "bash", token)
+            if call_id not in seen_calls:
+                seen_calls.add(token)
+                builder.add_node(
+                    {
+                        "id": call_id,
+                        "label": token,
+                        "type": "call",
+                        "language": "bash",
+                        "source": "ast",
+                        "confidence": ConfidenceLevel.INFERRED,
+                    }
+                )
+            caller = _enclosing_function(node, code)
+            caller_id = file_id
+            if caller:
+                resolved = _symbol_id("func", "bash", caller)
+                if builder.has_node(resolved):
+                    caller_id = resolved
+            for source_id in dict.fromkeys((file_id, caller_id)):
+                if (source_id, call_id) in seen_caller_edges:
+                    continue
+                seen_caller_edges.add((source_id, call_id))
+                builder.add_edge(
+                    {
+                        "source": source_id,
+                        "target": call_id,
+                        "label": "calls",
+                        "confidence": ConfidenceLevel.INFERRED,
+                        "sources": [file_source],
+                    }
+                )
+
+
+def _walk_nodes(node):
+    """Depth-first over every node, including unnamed ones."""
+    yield node
+    for child in node.children:
+        yield from _walk_nodes(child)
 
 
 def _extract_python_references(
@@ -842,6 +964,7 @@ def _extract_python_references(
     seen_calls: set[str],
     seen_caller_edges: set[tuple[str, str]],
     file_source: str,
+    known: set[str],
 ) -> None:
     """Record a function used as a VALUE (registry entry, table value, callback).
 
@@ -861,19 +984,22 @@ def _extract_python_references(
         name = _node_text(node, code).strip()
         if not name:
             continue
-        func_id = _symbol_id("func", "python", name)
-        if not builder.has_node(func_id):
+        if name not in known:
             continue
         parent = node.parent
-        if parent is not None and parent.type in (
+        if parent is not None and parent.type == "keyword_argument":
+            # The keyword's NAME (`target=`) is not a reference; its VALUE is.
+            # `threading.Thread(target=worker)` and `field(default_factory=resolve_total_vram_mb)`
+            # both reach the function through the value (measured 2026-11-26: both read
+            # unused while plainly used).  An ATTRIBUTE parent is kept too, because
+            # `row.certified` reads a @property, which has no call syntax at all.
+            if parent.child_by_field_name("name") == node:
+                continue
+        elif parent is not None and parent.type in (
             "function_definition",
             "class_definition",
-            "attribute",
-            "keyword_argument",
             "parameters",
         ):
-            # A definition name, an attribute part (`obj.name`), or a parameter list is
-            # not a reference to the function object.
             continue
         call_id = _symbol_id("call", "python", name)
         if call_id not in seen_calls:
@@ -917,6 +1043,7 @@ def _extract_argument_calls(
     seen_calls: set[str],
     seen_caller_edges: set[tuple[str, str]],
     file_source: str,
+    known: set[str],
 ) -> None:
     """Record a KNOWN FUNCTION passed as a command argument as a call.
 
@@ -954,8 +1081,7 @@ def _extract_argument_calls(
             raw = _node_text(child, code).strip().strip("'\"")
             if not raw or not _BASH_NAME_RE.match(raw):
                 continue
-            callee_id = _symbol_id("func", "bash", raw)
-            if not builder.has_node(callee_id):
+            if raw not in known:
                 continue
             call_id = _symbol_id("call", "bash", raw)
             if call_id not in seen_calls:
