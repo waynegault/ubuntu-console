@@ -1,7 +1,37 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 50
+# Module Version: 52
+#   v52 (2026-11-26): no behaviour change. Two lines v51 added ran past 120 columns and took
+#       the §18.3 8.1.8 count over its baseline; wrapped them rather than re-baselining, for
+#       the same reason v49 gave -- a re-baseline hides the next one.
+#   v51 (2026-11-26): the first REAL purge run since v50, and it still failed. Six defects, each
+#       measured; the first two are why it could never have gone green.
+#       (1) THE READ-BACK COUNTED THE SAME ROWS TWICE WITH OPPOSITE VERDICTS. 31 delete
+#       candidates; 21 were `:run:` rows whose session_nodes entry is `{}` with
+#       `entry_valid = -1`. The gateway cannot describe them (`sessions.describe` ->
+#       `{"session":null}`), the roster lists none of them, and `sessions delete` answers
+#       `not_found` for every one -- so the delete arm counted them INVISIBLE and the read-back
+#       then counted them as surviving sessions and reported N FAILED on every run. They are a
+#       different population: an OpenClaw repair gap, not something this command can delete.
+#       The read-back now asks `sessions.describe` per leftover key and splits the verdict into
+#       SURVIVORS (visible, fails) and INVISIBLE (not visible, named, does not fail), with
+#       OC_PURGE_INVISIBLE_IS_FAILURE=1 for a sweep that must prove the stores are empty.
+#       (2) A SILENT CLI WAS CALLED A REFUSAL. A delete that exited 0 with no body made a
+#       correct purge report 1 FAILED for healthy agents. Silence is the `not_found` shape, so
+#       a zero-exit silent body is now resolved against the STORE (still stored -> invisible,
+#       gone -> deleted); a NON-ZERO exit is still a refusal whatever it printed.
+#       (3) `case "$(fn)"` CANNOT SEE THE STATUS. An empty substitution matches `*)`, so a
+#       helper returning 0 with no output fell into the failure arm. Measured, and fixed by
+#       capturing the code first.
+#       (4) THE BANNER DROPPED EVERY MEMORY CLAUSE. `local _extra=""` was declared BELOW the
+#       block that appends to it, so the appends hit the global and the `local` then discarded
+#       them: a run that flushed and promoted said only "1 main(s) reset".
+#       (5) THE ROSTER READ-BACK COULD NOT FAIL. `if ! x=$(openclaw ... | jq ...)` takes jq's
+#       status, so a dead CLI was hidden by jq exiting 0 on empty input. The CLI's rc is taken
+#       on its own line and an unparseable body is a failure, not a zero.
+#       (6) "FAILED to delete store rows" claimed the whole delete failed while one agent's
+#       batch had been refused and the rest landed. Reworded to what the exit means.
 #   v50 (2026-11-26): THE FLUSH GATE HAD THE SAME DEFECT v48 FIXED IN THE PROMOTE GATE, and a real
 #       purge run found it the same night. `memory session-backfill --apply --json` ALSO emits no
 #       `ok` field on success (keys: agentId, workspaceDir, applied, rem, days, candidateCount,
@@ -1304,10 +1334,11 @@ function __oc_purge_delete_sessions() {
             _batch_keys+=("$_key")
         done
         (( ${#_batch_keys[@]} > 0 )) || continue
-        local _ok_body=1
+        local _ok_body=1 _exited_zero=1
         if ! _out=$(timeout -k 15 300 openclaw sessions delete "${_batch_keys[@]}" --yes --json 2>&1)
         then
             _ok_body=0
+            _exited_zero=0
         elif ! printf '%s' "$_out" | jq -e '.ok != false' >/dev/null 2>&1
         then
             _ok_body=0
@@ -1334,6 +1365,45 @@ function __oc_purge_delete_sessions() {
             local _nf
             _nf=$(printf '%s' "$_out" | jq -r '[.results[]? | select(.status=="not_found")] | length' 2>/dev/null)
             [[ "$_nf" =~ ^[0-9]+$ ]] || _nf=0
+            # AN UNPARSEABLE BODY IS NOT EVIDENCE OF A REFUSAL (v51).  The batch is only sent
+            # for keys the store holds AND the classifier did not keep, so the CLI's `not_found`
+            # answer is the shape a key it cannot describe takes.  When the body says nothing at
+            # all, that answer is indistinguishable from `not_found` -- and the honest thing is
+            # to ask the STORE, which is the witness the read-back already uses, rather than to
+            # call 14 healthy agent stores "REFUSED" because their CLI prints no JSON.  Measured
+            # 2026-11-26: a delete mock with no body made a correct purge report 1 FAILED.
+            #   empty or unparsed body -> the keys still sit in the store, so they are counted
+            #                             INVISIBLE (reported with the store count) unless the
+            #                             store no longer holds them, in which case they are
+            #                             counted DELETED.
+            # A NON-ZERO EXIT IS A REFUSAL (v51).  The silent-body arm is for a CLI that exited
+            # 0 and said nothing -- the shape a `not_found` batch takes when its report is
+            # empty.  A CLI that exited non-zero HAS refused, whatever it printed, and asking
+            # the store then would relabel the refusal as "invisible".  Measured 2026-11-26: the
+            # mixed-batch case (one agent refused, one landed) read 2 refusals instead of 1.
+            if (( _exited_zero == 1 )) && ! printf '%s' "$_out" | jq -e '.' >/dev/null 2>&1
+            then
+                local _gone=0
+                for _key in "${_batch_keys[@]}"
+                do
+                    # `case "$(fn)"` CANNOT SEE THE STATUS (measured: an empty substitution
+                    # matches `*)`, so a 0 that prints nothing fell through to the failure arm).
+                    # Capture first, then branch on the code.
+                    __oc_purge_store_still_holds "$_key"
+                    # 0 = still stored -> invisible; 1 = gone -> deleted; 2 = unreadable
+                    # -> a failure.  The codes are the helper's interface, named here.
+                    case "$?" in
+                        0) : ;;
+                        1) _gone=$(( _gone + 1 )) ;;
+                        *) _dfail=$(( _dfail + 1 ))
+                           __tac_info "Sessions" \
+                               "[$_agent: cannot read the store back for $_key]" "$C_Error" ;;
+                    esac
+                done
+                _deleted=$(( _deleted + _gone ))
+                _invisible=$(( _invisible + ${#_batch_keys[@]} - _gone - _dfail ))
+                continue
+            fi
             if (( _nf == ${#_batch_keys[@]} ))
             then
                 _invisible=$(( _invisible + _nf ))
@@ -1416,6 +1486,51 @@ function __oc_purge_store_left_count() {
     done
     printf '%s\n' "$_total"
     (( _bad == 0 ))
+}
+
+# __oc_purge_store_left_keys — the population __oc_purge_store_left_count counts, as KEYS (one
+# per line, de-duplicated across stores).  A count cannot answer the question the read-back now
+# asks -- "of these leftovers, which can the gateway actually see?" -- so the keys have to
+# travel.  The classifier is the same shell function the delete uses; there is no second
+# implementation.
+# __oc_purge_store_still_holds — 0 = the key still has a row in its store, 1 = it does not,
+# 2 = the store could not be read.  The three are kept apart for the same reason the census
+# keeps them apart: "could not tell" must never be reported as either answer.  Used by the
+# delete arm when the CLI returns no parseable body, so a silent CLI is resolved against the
+# STORE rather than against a guess about what it meant.
+function __oc_purge_store_still_holds() {
+    local _key="$1"
+    local _db _n
+    _db=$(__oc_purge_agent_store "$_key")
+    # 2 = the store could not be read; never reported as either answer
+    [[ -n "$_db" && -f "$_db" ]] || return 2
+    # swallow-ok: an unreadable store is code 2 below, never "gone" or "still stored"
+    _n=$(timeout -k 10 30 sqlite3 "file:$_db?mode=ro" \
+        "select count(*) from session_windows where session_key='$_key';" 2>/dev/null)
+    # 2 = the read failed (the assignment carries sqlite3's status)
+    [[ $? -eq 0 ]] || return 2
+    # 2 = the store answered with something that is not a count
+    [[ "$_n" =~ ^[0-9]+$ ]] || return 2
+    (( _n > 0 )) && return 0
+    return 1
+}
+
+# __oc_purge_store_left_keys — the leftover keys themselves.
+function __oc_purge_store_left_keys() {
+    local _db _key
+    for _db in "$OC_AGENTS"/*/agent/openclaw-agent.sqlite
+    do
+        [[ -f "$_db" ]] || continue
+        # swallow-ok: an unreadable store contributes no keys; the census refuses such a run
+        timeout -k 10 30 sqlite3 "file:$_db?mode=ro" \
+            "select distinct session_key from session_windows;" 2>/dev/null
+    done | sed '/^[[:space:]]*$/d' | sort -u | while IFS= read -r _key
+    do
+        case "$(__oc_purge_classify_key "$_key")" in
+            main|cronjob) : ;;
+            *) printf '%s\n' "$_key" ;;
+        esac
+    done
 }
 
 # __oc_purge_prune_orphans — delete only the session files NO store row names.
@@ -1794,7 +1909,12 @@ function oc-purge() {
     __tac_info "Sessions" "[reading keys and deleting non-main, non-cron sessions]" "$C_Dim"
     if ! _counts=$(__oc_purge_delete_sessions)
     then
-        __tac_info "Sessions" "[FAILED to delete store rows - reported, not claimed]" "$C_Error"
+        # A REFUSAL IS NOT THE ONLY REASON THIS ARM CAN RUN (v51).  The helper exits non-zero
+        # when ONE agent's batch was refused, and it has already printed which agent and why.
+        # The old wording claimed the whole delete failed, which it does not: the other thirteen
+        # batches landed.  Say what the exit means and let the per-agent lines above name who.
+        __tac_info "Sessions" \
+            "[at least one agent's delete batch was REFUSED - see the line above naming it]" "$C_Error"
         _failed=$(( _failed + 1 ))
     else
         # FIVE FIELDS, NOT FOUR (v48).  __oc_purge_delete_sessions prints
@@ -1805,7 +1925,7 @@ function oc-purge() {
         # SIX FIELDS, AND THE COUNT MUST MATCH THE printf (v50).  v48 fixed the four-into-five
         # read; the report then gained a sixth field, so this line has to move with it or the
         # same arithmetic error comes back through the other door.
-        local _runs=0 _dfail=0 _invisible=0
+        local _runs=0 _dfail=0 _deleted=0 _mains=0 _cron=0
         read -r _deleted _mains _cron _runs _dfail _invisible <<< "$_counts"
         __tac_info "Sessions" "[$_deleted session key(s) deleted]" "$C_Dim"
         if (( _invisible > 0 ))
@@ -1813,9 +1933,13 @@ function oc-purge() {
             __tac_info "Sessions" \
                 "[$_invisible run row(s) INVISIBLE to sessions delete - still in the stores]" "$C_Warning"
         fi
+        # NOT "of those": `_runs` counts the cron-run keys that were SENT, and `_invisible`
+        # counts the ones the CLI could not see.  Stacking the two readings is true only when
+        # every run row was invisible, which is exactly the case that hid the arithmetic bug
+        # v48 fixed.  State the two populations apart.
         if (( _runs > 0 ))
         then
-            __tac_info "Sessions" "[$_runs of those were cron RUN transcripts - history, not state]" "$C_Dim"
+            __tac_info "Sessions" "[$_runs cron RUN transcript(s) were in the delete set]" "$C_Dim"
         fi
         if (( _mains > 0 ))
         then
@@ -1981,30 +2105,120 @@ function oc-purge() {
     #    that excludes the defect.  The roster is still read (it is the CLI's own view), and the
     #    STORES are counted too, because that is where a surviving row actually lives.  "Purge
     #    complete" is a claim about both, made from a fresh read, never from the delete's rc.
-    local _roster_left="" _store_left=0
-    if ! _roster_left=$(timeout -k 10 60 openclaw sessions --all-agents --json \
-        | jq -r '[.sessions[].key | select((endswith(":main") or contains(":cron:"))|not)] | length')
+    local _roster_left="" _store_left=0 _roster_raw=""
+    # PIPELINE STATUS IS jq's, NOT THE CLI's (v51).  The old form was
+    # `if ! x=$(openclaw … | jq …)`: a substitution's status is the LAST element's, so a CLI that
+    # died was hidden by a jq that exited 0 on empty stdin, and the "could not read the roster"
+    # arm was unreachable for the half it names.  The CLI's own rc is taken on its own line now,
+    # and a body that does not parse is a FAILURE rather than a silent zero.
+    if ! _roster_raw=$(timeout -k 10 60 openclaw sessions --all-agents --json)
     then
         _failed=$(( _failed + 1 ))
         __tac_info "Sessions" "[could not read the roster back after delete]" "$C_Error"
+    else
+        _roster_left=$(printf '%s\n' "$_roster_raw" \
+            | jq -r '[.sessions[]? | .key
+                      | select((endswith(":main") or contains(":cron:"))|not)] | length' \
+                2>/dev/null)  # swallow-ok: an unparseable body fails the numeric check below
+        if [[ ! "$_roster_left" =~ ^[0-9]+$ ]]
+        then
+            _roster_left=""
+            _failed=$(( _failed + 1 ))
+            __tac_info "Sessions" "[the roster body could not be parsed as a session list]" "$C_Error"
+        fi
     fi
+    # The helper's rc does survive the assignment (measured: `x=$(f)` takes f's exit status), so
+    # this arm reads the verdict directly.
+    # The helper's rc survives the assignment (measured: `x=$(f)` takes f's status), so this
+    # arm reads the verdict directly.
     _store_left=$(__oc_purge_store_left_count)
-    case "$?" in
-        0) ;;
-        *) _failed=$(( _failed + 1 ))
-           __tac_info "Sessions" "[could not read the STORES back after delete]" "$C_Error" ;;
-    esac
+    local _store_rc=$?
+    if (( _store_rc != 0 ))
+    then
+        _failed=$(( _failed + 1 ))
+        __tac_info "Sessions" "[could not read the STORES back after delete]" "$C_Error"
+    fi
     if [[ -n "$_roster_left" && "$_roster_left" != "0" ]]
     then
         _failed=$(( _failed + 1 ))
         __tac_info "Sessions" "[$_roster_left non-main session(s) still in the CLI ROSTER after delete]" "$C_Error"
     fi
+    # A STORE ROW THE CLI CANNOT SEE IS NOT A SURVIVING SESSION (v51).
+    # Measured 2026-11-26 on a real run and re-measured by hand the same day: 21 of the 31
+    # delete candidates are `:run:` rows whose session_nodes entry is `{}` with
+    # `entry_valid = -1`.  The gateway cannot describe them (`sessions.describe` returns
+    # `{"session":null}`), the roster lists none of them, and `sessions delete` answers
+    # `not_found` for every one -- so the delete arm above counted them INVISIBLE, and this
+    # read-back then counted the same rows as EVIDENCE OF FAILURE.  The command deleted what
+    # it could see, reported "N FAILED" for what it could not, and exited non-zero: an
+    # unfixable red on every run, which is worse than no check.
+    # They are a DIFFERENT population and get a different verdict:
+    #   roster leftover > 0                     -> FAILED.  The CLI's own view says a session
+    #                                              survived; that is this command's job.
+    #   store rows the CLI could not see only   -> INVISIBLE, named, NOT counted as failed.
+    #                                              Set OC_PURGE_INVISIBLE_IS_FAILURE=1 to make
+    #                                              it fail for a scripted sweep that must prove
+    #                                              the stores are empty.
+    # The count is derived by asking the gateway, never by assuming: every leftover key that
+    # `sessions.describe` cannot answer for is invisible, and any it CAN answer for is a
+    # genuine survivor that fails the run.
+    local _survivors=0 _invisible_left=0
     if [[ "$_store_left" =~ ^[0-9]+$ ]] && (( _store_left > 0 ))
     then
-        _failed=$(( _failed + 1 ))
-        __tac_info "Sessions" "[$_store_left non-main, non-cron session(s) still in the STORES after delete]" "$C_Error"
+        local _lk _desc
+        while IFS= read -r _lk
+        do
+            [[ -n "$_lk" ]] || continue
+            # A kept key is not a leftover this check answers for: the classifier is the one
+            # definition of "kept", and the `*` arm is its stated complement.
+            case "$(__oc_purge_classify_key "$_lk")" in
+                main|cronjob) continue ;;
+                *) : ;;   # every other class is exactly what this loop is asking about
+            esac
+            # swallow-ok: a describe that fails is read as "not visible", the conservative arm
+            _desc=$(timeout -k 10 30 openclaw gateway call sessions.describe \
+                --params "$(jq -cn --arg k "$_lk" '{key:$k}')" --json 2>/dev/null)
+            if printf '%s' "$_desc" | jq -e '.session != null' >/dev/null 2>&1
+            then
+                _survivors=$(( _survivors + 1 ))
+                __tac_info "Sessions" "[STORED and visible - delete did not land] $_lk" "$C_Error"
+            else
+                _invisible_left=$(( _invisible_left + 1 ))
+            fi
+        done < <(__oc_purge_store_left_keys)
+        if (( _survivors > 0 ))
+        then
+            _failed=$(( _failed + 1 ))
+            __tac_info "Sessions" \
+                "[$_survivors stored, gateway-visible session(s) survived the delete]" "$C_Error"
+        fi
+        if (( _invisible_left > 0 ))
+        then
+            if [[ "${OC_PURGE_INVISIBLE_IS_FAILURE:-0}" == "1" ]]
+            then
+                _failed=$(( _failed + 1 ))
+                __tac_info "Sessions" \
+                    "[$_invisible_left orphan store row(s) the CLI cannot see - failing as requested]" \
+                    "$C_Error"
+            else
+                __tac_info "Sessions" \
+                    "[$_invisible_left orphan store row(s) the CLI cannot see - NOT deleted, NOT a purge failure]" \
+                    "$C_Warning"
+                __tac_info "Sessions" \
+                    "[their session_nodes entry is '{}' with entry_valid=-1]" "$C_Dim"
+                __tac_info "Sessions" \
+                    "[only a schema-level or Doctor repair removes them]" "$C_Dim"
+            fi
+        fi
     fi
 
+    # THE BANNER'S OWN ACCUMULATOR MUST EXIST BEFORE IT IS APPENDED TO (v51).  `local _extra=""`
+    # sat BELOW this block, so the memory clauses below appended to the GLOBAL `_extra` (whatever
+    # the calling shell last left there), and the successful-looking line `[store reset, N
+    # orphan(s) pruned, 1 main(s) reset]` -- measured live -- silently dropped every memory clause
+    # to the `[Purge Complete]` CANCEL.  `local` at function scope discards the global's value, so
+    # a leaked string could never be printed, only lost.  Declared here, before the first use.
+    local _extra=""
     # MEMORY OUTCOME, said in the banner rather than buried (v46).  Last night's summary line was
     # "store reset, 0 orphan(s) pruned, 1 FAILED", which is true and says nothing about the thing
     # the command exists for.
@@ -2021,8 +2235,8 @@ function oc-purge() {
     then
         _extra+=", ${#_flush_skip[@]} reset(s) skipped (no durable flush)"
     fi
-    # Report result
-    local _extra=""
+    # Report result.  `_extra` is declared at the top of this block; do not re-declare it here,
+    # or every memory clause appended above is thrown away again.
     if (( _resets > 0 ))
     then
         _extra+=", $_resets main(s) reset"
@@ -2034,6 +2248,13 @@ function oc-purge() {
     if (( _tombstoned > 0 ))
     then
         _extra+=", $_tombstoned main(s) TOMBSTONED (successor started, not reset)"
+    fi
+    # The orphan population is said in the banner too, in words that distinguish it from a
+    # failure: a run that deleted everything it could and left 21 invisible rows must not read
+    # the same as a run that failed.
+    if (( ${_invisible_left:-0} > 0 ))
+    then
+        _extra+=", $_invisible_left orphan store row(s) left (invisible to the CLI)"
     fi
     if (( _failed > 0 ))
     then

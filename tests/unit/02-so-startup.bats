@@ -725,7 +725,8 @@ __so_test_prelude() {
     do
         sqlite3 "$OC_AGENTS/$_agent/agent/openclaw-agent.sqlite" \
             "create table session_transcript_archives(archive_name text);" \
-            "create table session_transcript_cold_archives(archive_name text);"
+            "create table session_transcript_cold_archives(archive_name text);" \
+            "create table session_windows(session_key text);"
     done
     __oc_safe_gateway_shutdown() { : > "$TAC_TEST_TMPDIR/stopped"; }
     # A PATH stub, not a shell function: the command calls it as `timeout 60 openclaw`,
@@ -750,6 +751,13 @@ esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    # The memory gate runs before any reset.  These fixtures have no workspace-$agent dir
+    # (they are synthetic `alpha`/`beta`), and v50's gate refuses an agent it cannot verify --
+    # correctly.  Stub the two phases so this case tests the ORPHAN PRUNE it is about, not
+    # the memory gate (which 09c-purge-scope.bats covers arm by arm).
+    __oc_purge_memory_flush() { return 2; }
+    __oc_purge_memory_promote_all() { return 0; }
 
     # 1. --dry-run names both directories and the keys it would delete, deletes NEITHER,
     #    and never stops the gateway: the old code stopped it before deciding it was a
@@ -815,6 +823,9 @@ MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
+    __oc_purge_memory_flush() { return 2; }
+    __oc_purge_memory_promote_all() { return 0; }
+
     run oc-purge
 
     [ "$status" -eq 0 ]
@@ -846,7 +857,7 @@ MOCK
     run oc-purge
 
     [ "$status" -eq 1 ]
-    [[ "$output" == *"FAILED to delete store rows"* ]]
+    [[ "$output" == *"delete batch was REFUSED"* ]]
 }
 
 @test "oc purge: cron sessions are KEPT and the configured main is RESET, not deleted" {
@@ -901,6 +912,12 @@ MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
+    # The reset is gated on a proven memory flush (v45/v50).  This case is about WHICH session
+    # is deleted and which is reset -- not about the gate -- so the flush reports "applied,
+    # nothing to do" (2), which is a pass, and promote is a no-op.
+    __oc_purge_memory_flush() { return 2; }
+    __oc_purge_memory_promote_all() { return 0; }
+
     run oc-purge
 
     [ "$status" -eq 0 ]
@@ -916,7 +933,7 @@ MOCK
         || { echo "sessions.reset needs the param named 'key'"; return 1; }
     ! grep -qF 'sessionKey' "$TAC_TEST_TMPDIR/rpc-argv" \
         || { echo "sessions.reset rejects 'sessionKey'"; return 1; }
-    [[ "$output" == *"[1 cron session(s) KEPT"* ]]
+    [[ "$output" == *"[1 cron JOB session(s) KEPT"* ]]
     [[ "$output" == *"[agent:hal:main reset"* ]]
 }
 
@@ -1332,6 +1349,12 @@ esac
 MOCK
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    # Same reason as the cron case: `alpha`/`beta` have no workspace to distil, and the gate
+    # refuses an agent it cannot verify.  Stub the two memory phases so this case measures the
+    # SCOPE of the reset loop (every main, never cron), which is what it exists for.
+    __oc_purge_memory_flush() { return 2; }
+    __oc_purge_memory_promote_all() { return 0; }
 
     run oc-purge
 

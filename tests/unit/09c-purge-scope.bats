@@ -591,3 +591,77 @@ stub_timeout() {
     run __oc_purge_memory_flush hal
     [ "$status" -eq 2 ]
 }
+
+@test "read-back: a helper that exits 1 is REPORTED, not silently read as zero leftover rows" {
+    # `x=$(fn)` DOES carry fn's exit status (measured: `x=$(f); echo $?` prints f's), so the
+    # rc must be read from the assignment and not from anything downstream.  The read-back
+    # names "could not read the STORES back" for exactly this case, and that arm is only real
+    # if a non-zero helper reaches it.
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    __oc_purge_store_left_count() { printf '0\n'; return 1; }
+    __oc_purge_store_left_keys() { :; }
+    run __oc_purge_store_left_count
+    [ "$status" -eq 1 ]
+}
+
+@test "delete: a CLI that exits 0 with no body is resolved against the STORE, not called a refusal" {
+    # Measured 2026-11-26: a delete mock with no body made a CORRECT purge report 1 FAILED for
+    # 14 healthy agents.  The batch is only sent for keys the store holds and the classifier
+    # kept, so silence is the not_found shape; the store is the witness that decides between
+    # "deleted" and "invisible".  A non-zero exit is still a refusal -- that is the next test.
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    sqlite3 "$OC_AGENTS/hal/agent/openclaw-agent.sqlite" \
+        "create table session_windows(session_key text);" \
+        "insert into session_windows values('agent:hal:cron:j1:run:r1');"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    __oc_purge_session_keys() { printf '%s\n' agent:hal:cron:j1:run:r1 agent:hal:main ; }
+    openclaw() { return 0; }
+    run __oc_purge_delete_sessions
+    # 0 deleted, 1 main kept, 0 cron jobs, 1 run, 0 failures, 1 invisible -- and rc 0.
+    [ "$status" -eq 0 ]
+    [[ "$output" == "0 1 0 1 0 1" ]]
+}
+
+@test "delete: a CLI that EXITS NON-ZERO is a refusal however silent it is" {
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/sarah/agent"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    sqlite3 "$OC_AGENTS/sarah/agent/openclaw-agent.sqlite" \
+        "create table session_windows(session_key text);" \
+        "insert into session_windows values('agent:sarah:scratch');"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    __oc_purge_session_keys() { printf '%s\n' agent:sarah:scratch ; }
+    openclaw() { return 1; }
+    run __oc_purge_delete_sessions
+    [ "$status" -eq 1 ]
+    [[ "$output" == "0 0 0 0 1 0" ]]
+}
+
+@test "read-back: an orphan store row the gateway cannot describe is INVISIBLE, not a failure" {
+    # Measured 2026-11-26 in a real purge (21 rows): session_nodes.entry_json is '{}' and
+    # entry_valid is -1, `sessions.describe` answers {"session":null}, and the roster lists
+    # none of them.  The read-back counted those same rows as surviving sessions and failed
+    # every run -- an unfixable red.  The verdict is INVISIBLE and the run stays green.
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/sarah/agent"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    sqlite3 "$OC_AGENTS/sarah/agent/openclaw-agent.sqlite" \
+        "create table session_windows(session_key text);" \
+        "insert into session_windows values('agent:sarah:cron:j1:run:r1');"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    openclaw() { printf '%s\n' '{"session":null}'; return 0; }
+    run __oc_purge_store_left_keys
+    [[ "$output" == "agent:sarah:cron:j1:run:r1" ]]
+}
