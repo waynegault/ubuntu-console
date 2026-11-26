@@ -126,6 +126,10 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     # ── Mode flags ──
     parser.add_argument("--serve", action="store_true", help="Serve graph viewer in browser")
     parser.add_argument("--wiring-all", action="store_true", help="Show full wiring report without truncation")
+    parser.add_argument(
+        "--deadcode-all", action="store_true", help="Show every row of the deadcode report, untruncated"
+    )
+    parser.add_argument("--deadcode-json", action="store_true", help="Emit the deadcode report as JSON instead of text")
 
     # Query tools
     parser.add_argument("--query", help="Search nodes matching a pattern")
@@ -264,6 +268,24 @@ def cmd_wiring(args: argparse.Namespace) -> None:
     report = analyze_wiring(args.repo)
     print(format_wiring_report(report, show_all=args.wiring_all))
     print(f"\nSUMMARY: {wiring_summary(report)}")
+
+
+def cmd_deadcode(args: argparse.Namespace) -> None:
+    """Per-call code health: isolated symbols, unresolved calls, test coverage.
+
+    A report, not a verdict: every section says what it does not mean.  The
+    dead-code BAR is tools/kgraph_deadcode_audit.py --check, which is separate data.
+    """
+    from dataclasses import asdict
+
+    from .analysis import build_report, format_report
+
+    graph = Graph.from_dict(_load_graph(args))
+    report = build_report(graph)
+    if args.deadcode_json:
+        print(json.dumps(asdict(report), indent=2, default=list))
+        return
+    print(format_report(report, show_all=args.deadcode_all))
 
 
 def _hooks_dir_or_exit() -> str:
@@ -620,6 +642,7 @@ _COMMANDS: tuple[tuple[str, str], ...] = (
     ("report", "Generate GRAPH_REPORT.md"),
     ("ast", "Extract AST code concepts from a repo"),
     ("wiring", "Analyze source-tree wiring (stdlib AST import graph)"),
+    ("deadcode", "Per-call code health: isolated symbols, unresolved calls, test coverage"),
     ("communities", "Detect communities/clusters"),
     ("god-nodes", "List the most central nodes"),
     ("call-flow", "Generate call-flow HTML/Mermaid"),
@@ -645,6 +668,7 @@ _DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "report": cmd_report,
     "ast": cmd_ast,
     "wiring": cmd_wiring,
+    "deadcode": cmd_deadcode,
     "communities": cmd_communities,
     "god-nodes": cmd_god_nodes,
     "call-flow": cmd_call_flow,
