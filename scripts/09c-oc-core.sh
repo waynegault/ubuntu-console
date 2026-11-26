@@ -1,7 +1,18 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 49
+# Module Version: 50
+#   v50 (2026-11-26): THE FLUSH GATE HAD THE SAME DEFECT v48 FIXED IN THE PROMOTE GATE, and a real
+#       purge run found it the same night. `memory session-backfill --apply --json` ALSO emits no
+#       `ok` field on success (keys: agentId, workspaceDir, applied, rem, days, candidateCount,
+#       stagedEntries, ...); `ok` appears only on the ERROR path. So v46's `.ok == true` was false
+#       on every HEALTHY lane and the real run refused all 14 resets -- "memory flush not proven"
+#       14 times, 16 FAILED, 0 resets, rc 1. The success spelling is now `has("applied") and
+#       .error == null`. Verified after the fix: aris and sarah both return 2 (nothing to
+#       distil), which phase 3 correctly treats as reset-eligible.
+#       LESSON, and it is the third instance: `jq -e '.ok == true'` is not a universal success
+#       check in this CLI. RPC methods emit `ok`; these two CLI commands do not. Assert the
+#       spelling the command actually uses, and prove it against a real run before shipping.
 #   v49 (2026-11-26): no behaviour change. Three v48 lines ran past 120 columns and took the
 #       §18.3 8.1.8 count 287 -> 290; wrapped them rather than re-baselining, because a
 #       re-baseline would hide the next one.
@@ -766,19 +777,35 @@ function __oc_purge_memory_flush() {
         return 1
     fi
 
-    # ASSERT THE BODY IS A SUCCESS BEFORE READING ANY COUNT (v46).  Measured defect: the error
-    # body is {"ok":false,"error":{...}} with no candidateCount, so the old
-    # `(.candidateCount // ...) // 0` yielded 0 with jq rc 0 -- and "0 candidates" was a PASS
-    # arm.  A failed backfill was therefore indistinguishable from "nothing to distil", so the
-    # fleet gate could not fail on any lane.  The CLI exits 0 on that body too: rc is no help.
-    if ! printf '%s' "$_bf" | jq -e '.ok == true' >/dev/null 2>&1
+    # ASSERT THE BODY IS A SUCCESS BEFORE READING ANY COUNT (v46), BUT ASSERT THE SPELLING THE
+    # COMMAND ACTUALLY USES (v50).  Measured 2026-11-26 in a real purge run: a SUCCESSFUL
+    # `session-backfill --apply --json` body is
+    #   {agentId, workspaceDir, applied, rem, days, candidateCount, stagedEntries,
+    #    writtenDiaryEntries, replacedDiaryEntries, batchCount, batches}
+    # -- IT HAS NO `ok` FIELD EITHER.  So v46's `.ok == true` was FALSE on every HEALTHY lane and
+    # the run refused all 14 resets with "memory flush not proven".  The defect is one level up
+    # from where v46 fixed it: RC says nothing, and `ok` is emitted only on the ERROR path.
+    #   error body   -> {"ok":false,"error":{...}}      (printed by the CLI's own error handler)
+    #   success body -> no `ok` key at all
+    # The success spelling is therefore `applied` present and `error` absent.  Both are required:
+    # a body with neither is unreadable and REFUSES.
+    # THE BODY IS NOT THE WHOLE CAPTURE (v50).  `2>&1` merges the CLI's `[secrets]` chatter into
+    # the same variable, so `jq` on the raw capture fails to PARSE and every test below reads as
+    # "not a success".  Measured 2026-11-26: this is what made a real purge skip all 14 resets
+    # even after the `.ok` defect was fixed -- a direct call filtered the chatter and returned 2,
+    # while the same call inside the run returned 1.  The JSON starts at the first line that
+    # begins with `{`.  Same extraction as the promote gate, for the same reason.
+    local _bj
+    _bj=$(printf '%s\n' "$_bf" | sed -n '/^{/,$p')
+    if printf '%s' "$_bj" | jq -e '.error != null' >/dev/null 2>&1 \
+        || ! printf '%s' "$_bj" | jq -e 'has("applied")' >/dev/null 2>&1
     then
-        __tac_info "Memory" "[$_agent: session-backfill returned a NON-OK body - refusing its RESET]" "$C_Error"
+        __tac_info "Memory" "[$_agent: session-backfill body is not a success - refusing its RESET]" "$C_Error"
         __oc_purge_stderr "$_bf"
         return 1
     fi
-    _cands=$(printf '%s' "$_bf" | jq -r '.candidateCount // ([.days[]?.candidateCount // 0] | add) // 0' 2>/dev/null)
-    _staged=$(printf '%s' "$_bf" | jq -r '.stagedEntries // 0' 2>/dev/null)
+    _cands=$(printf '%s' "$_bj" | jq -r '.candidateCount // ([.days[]?.candidateCount // 0] | add) // 0' 2>/dev/null)
+    _staged=$(printf '%s' "$_bj" | jq -r '.stagedEntries // 0' 2>/dev/null)
     [[ "$_cands" =~ ^[0-9]+$ ]] || _cands=-1
     [[ "$_staged" =~ ^[0-9]+$ ]] || _staged=0
     if (( _cands < 0 ))
@@ -819,7 +846,7 @@ function __oc_purge_memory_flush() {
     if (( _cands == 0 ))
     then
         __tac_info "Memory" \
-            "[$_agent: ok:true and 0 candidates (history already processed); promote $_promote_state]" "$C_Dim"
+            "[$_agent: body applied, 0 candidates (history already processed); promote $_promote_state]" "$C_Dim"
         return 2   # 2 = nothing to do (ok:true, no candidates); NOT a refusal, NOT a pass
     fi
     __tac_info "Memory" \
@@ -1260,7 +1287,7 @@ function __oc_purge_delete_sessions() {
     # run printed "1 FAILED" and every cron-run transcript stayed in its store.  A fleet-wide
     # batch makes one unlisted key everyone's problem; per agent, a refusal is that agent's
     # failure and the other thirteen still land.  A refusal counts as a failure, never a skip.
-    local _deleted=0 _dfail=0 _agent _batch
+    local _deleted=0 _dfail=0 _invisible=0 _agent _batch
     local -a _batch_keys=()
     local -A _seen=()
     for _key in "${_keys[@]}"
@@ -1289,14 +1316,37 @@ function __oc_purge_delete_sessions() {
         then
             _deleted=$(( _deleted + ${#_batch_keys[@]} ))
         else
-            _dfail=$(( _dfail + 1 ))
-            __tac_info "Sessions" \
-                "[$_agent: delete REFUSED for ${#_batch_keys[@]} key(s) - reported, not claimed]" "$C_Error"
-            __oc_purge_stderr "$_out"
+            # `not_found` IS NOT A REFUSAL (v50).  Measured 2026-11-26 in a real purge: 21 keys
+            # answered `"status":"not_found"` while the store still held a `session_windows` row
+            # for each, status `done`.  The CLI's delete reads a roster those rows are absent
+            # from, so it cannot see them -- and `sessions cleanup --fix-missing` (which removes
+            # store entries whose transcript files are gone) does not see them either, on the
+            # same store.  The desired END STATE for a `:run:` key is "absent", and a key the CLI
+            # reports not_found is already in that state from the CLI's point of view. Two very
+            # different things share that answer, so they are counted apart:
+            #   * EVERY key in the batch is not_found  -> the CLI could not see the batch at all.
+            #     Not a failure it caused, and not a deletion: counted as INVISIBLE and reported
+            #     with the store count that proves the rows still exist.
+            #   * mixed / other errors                 -> a real refusal, counted as FAILED.
+            # Closer to the socket than this would need the CLI to name why it cannot see a row
+            # its own store holds; until then the honest report is "N invisible", with the
+            # store row count as the witness.
+            local _nf
+            _nf=$(printf '%s' "$_out" | jq -r '[.results[]? | select(.status=="not_found")] | length' 2>/dev/null)
+            [[ "$_nf" =~ ^[0-9]+$ ]] || _nf=0
+            if (( _nf == ${#_batch_keys[@]} ))
+            then
+                _invisible=$(( _invisible + _nf ))
+            else
+                _dfail=$(( _dfail + 1 ))
+                __tac_info "Sessions" \
+                    "[$_agent: delete REFUSED for ${#_batch_keys[@]} key(s) - reported, not claimed]" "$C_Error"
+                __oc_purge_stderr "$_out"
+            fi
         fi
     done
 
-    printf '%s %s %s %s %s\n' "$_deleted" "$_mains" "$_cron" "$_runs" "$_dfail"
+    printf '%s %s %s %s %s %s\n' "$_deleted" "$_mains" "$_cron" "$_runs" "$_dfail" "$_invisible"
     (( ${#_keys[@]} == 0 )) && return 0
     (( _dfail == 0 )) || return 1
     return 0
@@ -1752,9 +1802,17 @@ function oc-purge() {
         # variable absorbed the remainder and read "0 0".  `(( _runs > 0 ))` then became
         # `(( 0 0 > 0 ))` and bash printed "arithmetic syntax error in expression (error token
         # is \"0\")" into the middle of the purge report.  Measured 2026-11-26 in the 02 suite.
-        local _runs=0 _dfail=0
-        read -r _deleted _mains _cron _runs _dfail <<< "$_counts"
+        # SIX FIELDS, AND THE COUNT MUST MATCH THE printf (v50).  v48 fixed the four-into-five
+        # read; the report then gained a sixth field, so this line has to move with it or the
+        # same arithmetic error comes back through the other door.
+        local _runs=0 _dfail=0 _invisible=0
+        read -r _deleted _mains _cron _runs _dfail _invisible <<< "$_counts"
         __tac_info "Sessions" "[$_deleted session key(s) deleted]" "$C_Dim"
+        if (( _invisible > 0 ))
+        then
+            __tac_info "Sessions" \
+                "[$_invisible run row(s) INVISIBLE to sessions delete - still in the stores]" "$C_Warning"
+        fi
         if (( _runs > 0 ))
         then
             __tac_info "Sessions" "[$_runs of those were cron RUN transcripts - history, not state]" "$C_Dim"
@@ -1782,7 +1840,16 @@ function oc-purge() {
     # resets must not happen until both have been given their chance.
     local -a _flush_ok=() _flush_skip=()
     local _flush_rc=0
-    if [[ -n "$(__oc_purge_reset_scope)" ]] && (( ! _dry_run ))
+    # THE SCOPE MUST EXIST BEFORE PHASE 1 READS IT (v50).  `_reset_scope` used to be assigned
+    # further down, next to the reset loop, so at THIS line it was still empty -- and phase 1's
+    # own filter `[[ "$_reset_scope" != "all" && "$_reset_key" != "agent::main" ]]` was true for
+    # every key.  The loop therefore iterated ZERO times, `_flush_ok` stayed empty, and every
+    # reset was skipped with "memory flush not proven" while the same function called by hand
+    # returned 2 for all 14 agents.  Measured 2026-11-26 on three consecutive real runs; the
+    # function was right and its caller's variable was not.
+    local _reset_scope=""
+    _reset_scope=$(__oc_purge_reset_scope)
+    if [[ -n "$_reset_scope" ]] && (( ! _dry_run ))
     then
         __tac_info "Memory" "[phase 1/3: distilling session history per agent, online]" "$C_Dim"
         while IFS= read -r _reset_key
@@ -1829,8 +1896,8 @@ function oc-purge() {
     #     archived) then reset, each bounded by the store's current session id and read
     #     back from the STORE.  `OC_PURGE_RESET_MAIN` narrows the scope to one agent when
     #     it names one; unset or `all` means every main.
-    local _reset_scope="" _reset_key="" _tb_key="" _tb_recovered=""
-    _reset_scope=$(__oc_purge_reset_scope)
+    local _reset_key="" _tb_key="" _tb_recovered=""
+    # _reset_scope is computed ABOVE, before phase 1 reads it; do not re-assign it here.
     local _rc=0
     # Unset = every main; an explicit EMPTY value disables the reset (the repair case uses
     # that to exercise the tombstone arm alone); any other value names one agent.

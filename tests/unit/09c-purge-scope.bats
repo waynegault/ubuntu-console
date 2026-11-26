@@ -283,6 +283,11 @@ stub_timeout() {
     OC_AGENTS="$HOME/.openclaw/agents"
     source "$REPO_ROOT/scripts/09c-oc-core.sh"
     __tac_info() { :; }
+    # EVERY call in the module is wrapped in `timeout`, an EXTERNAL binary that resolves
+    # `openclaw` through PATH and never consults a shell function. A case that defines
+    # `openclaw()` and not `stub_timeout` runs the REAL CLI -- measured 2026-11-26, that is
+    # what made this case pass for the wrong reason and then fail after the fixture changed.
+    stub_timeout
     # The CLI exits 0 on this body (measured), so the stub must too.
     openclaw() {
         printf '%s\n' '{"ok":false,"error":{"type":"cli_error","message":"Unknown agent id"}}'
@@ -300,7 +305,8 @@ stub_timeout() {
     __tac_info() { :; }
     stub_timeout
     openclaw() {
-        printf '%s\n' '{"ok":true,"candidateCount":0,"stagedEntries":0,"days":[]}'
+        # THE REAL SUCCESS BODY (measured 2026-11-26): no `ok` field at all.
+        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"days":[],"candidateCount":0,"stagedEntries":0}'
         return 0
     }
     run __oc_purge_memory_flush hal
@@ -313,8 +319,11 @@ stub_timeout() {
     OC_AGENTS="$HOME/.openclaw/agents"
     source "$REPO_ROOT/scripts/09c-oc-core.sh"
     __tac_info() { :; }
+    stub_timeout
+    # A REAL success body (no `ok` key) that reports candidates, with no index growth and no
+    # DREAMS.md change: the flush must REFUSE, because nothing durable was proven.
     openclaw() {
-        printf '%s\n' '{"ok":true,"candidateCount":22,"stagedEntries":0,"days":[]}'
+        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"days":[],"candidateCount":22,"stagedEntries":0}'
         return 0
     }
     run __oc_purge_memory_flush hal
@@ -378,8 +387,8 @@ stub_timeout() {
     run __oc_purge_delete_sessions
     [ "$status" -eq 1 ]
     grep -q 'agent:hal:cron:j2:run:r3' "$_calls"
-    # the report line: deleted mains cron runs failures
-    [[ "$output" == "1 2 0 3 1" ]]
+    # the report line: deleted mains cron runs failures invisible (six fields, v50)
+    [[ "$output" == "1 2 0 3 1 0" ]]
 }
 
 @test "read-back counts STORE rows, not just the CLI roster" {
@@ -462,4 +471,116 @@ stub_timeout() {
     }
     run __oc_purge_promote_possible hal
     [ "$status" -eq 1 ]
+}
+
+@test "flush: the REAL success body has no ok field, and that must NOT refuse the reset" {
+    # Measured 2026-11-26 by running a real purge: `memory session-backfill --apply --json`
+    # emits agentId, workspaceDir, applied, rem, days, candidateCount, stagedEntries,
+    # writtenDiaryEntries, replacedDiaryEntries, batchCount, batches -- and NO `ok`. v46
+    # asserted `.ok == true`, so all 14 lanes were refused with "memory flush not proven"
+    # and the purge did nothing. This body is copied from a live run.
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent" "$HOME/.openclaw/workspace-hal"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    openclaw() {
+        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"rem":false,"days":[],'
+        printf '%s\n' ' "candidateCount":0,"stagedEntries":0,"writtenDiaryEntries":0,'
+        printf '%s\n' ' "replacedDiaryEntries":0,"batchCount":1,"batches":[{"batch":1,"days":0}]}'
+        return 0
+    }
+    run __oc_purge_memory_flush hal
+    [ "$status" -eq 2 ]
+}
+
+@test "flush: an ERROR body still refuses, because ok:false rides the error path" {
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent" "$HOME/.openclaw/workspace-hal"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    openclaw() {
+        printf '%s\n' '{"ok":false,"error":{"type":"cli_error","message":"Unknown agent id"}}'
+        return 0
+    }
+    run __oc_purge_memory_flush hal
+    [ "$status" -eq 1 ]
+}
+
+@test "flush: a body with NEITHER applied nor error is unreadable and refuses" {
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent" "$HOME/.openclaw/workspace-hal"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    openclaw() { printf '%s\n' '{"something":"else"}'; return 0; }
+    run __oc_purge_memory_flush hal
+    [ "$status" -eq 1 ]
+}
+
+@test "delete: a batch the CLI cannot SEE is INVISIBLE, not a refusal and not a deletion" {
+    # Measured 2026-11-26 in a real purge: 21 `:run:` keys answered
+    #   {"ok":false,"status":"not_found","error":"Session not found..."}
+    # while the store still held a `session_windows` row for each with status `done`, and
+    # `sessions cleanup --fix-missing` did not see them either. Counting that as a refusal
+    # failed the whole run for a state the CLI cannot reach; counting it as deleted would
+    # claim 21 deletions that did not happen. It is a third thing, so it gets its own count.
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    __oc_purge_session_keys() { printf '%s\n' \
+        agent:sarah:cron:j1:run:r1 agent:sarah:cron:j1:run:r2 agent:sarah:main ; }
+    openclaw() {
+        printf '%s\n' '{"ok":false,"error":{"type":"cli_error","message":"Session delete did not complete for every requested key."},"results":['
+        printf '%s\n' '{"key":"agent:sarah:cron:j1:run:r1","ok":false,"status":"not_found"},'
+        printf '%s\n' '{"key":"agent:sarah:cron:j1:run:r2","ok":false,"status":"not_found"}]}'
+        return 0
+    }
+    run __oc_purge_delete_sessions
+    # 0 deleted, 1 main kept, 0 cron jobs, 2 runs, 0 failures, 2 invisible -- and rc 0,
+    # because the CLI did not refuse anything it could have done.
+    [ "$status" -eq 0 ]
+    [[ "$output" == "0 1 0 2 0 2" ]]
+}
+
+@test "delete: a MIXED batch is still a refusal, because part of it could have landed" {
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    __oc_purge_session_keys() { printf '%s\n' agent:sarah:cron:j1:run:r1 agent:sarah:cron:j1:run:r2 ; }
+    openclaw() {
+        printf '%s\n' '{"ok":false,"error":{"type":"cli_error"},"results":['
+        printf '%s\n' '{"key":"agent:sarah:cron:j1:run:r1","ok":false,"status":"not_found"},'
+        printf '%s\n' '{"key":"agent:sarah:cron:j1:run:r2","ok":false,"status":"error"}]}'
+        return 0
+    }
+    run __oc_purge_delete_sessions
+    [ "$status" -eq 1 ]
+    # the body is echoed to the report on a refusal, so match the final line only
+    [[ "${lines[-1]}" == "0 0 0 2 1 0" ]]
+}
+
+@test "flush: [secrets] chatter ahead of the JSON must not make a healthy body unreadable" {
+    # THE DEFECT THAT SURVIVED THE .ok FIX (measured 2026-11-26). The module captures the
+    # backfill with `2>&1`, and the CLI writes `[secrets] ...` lines to stderr BEFORE the JSON.
+    # jq on that capture fails to parse, so every success check read as failure and a real
+    # purge skipped all 14 resets -- while a hand-filtered call of the same command returned 2.
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent" "$HOME/.openclaw/workspace-hal"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    openclaw() {
+        printf '%s\n' '[secrets] skills.entries.agentmail-cli.apiKey: *** entry is disabled.'
+        printf '%s\n' '[secrets] memory promote: gateway secrets.resolve unavailable; resolved locally.'
+        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"days":[],"candidateCount":0,"stagedEntries":0}'
+        return 0
+    }
+    run __oc_purge_memory_flush hal
+    [ "$status" -eq 2 ]
 }
