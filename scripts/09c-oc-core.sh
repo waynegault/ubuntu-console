@@ -1,7 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 54
+# Module Version: 55
+#   v55 (2026-11-26): classify ten swallow sites v54 left unclassified. The §18.3 gate read
+#       10 against a baseline of 8 and refused the push. Four of the ten already carried a
+#       `# swallow-ok:` line — but above the FIRST line of a two-line construct, while the
+#       redirection sits on the continuation, and a marker attaches only to the line
+#       directly below it; those moved inline. The other six are real classifications: two
+#       jq reads whose non-numeric result is coerced on the next line, a source whose
+#       failure the next arm reports, an rc deliberately ignored because the BODY decides,
+#       and two cgroup reads whose `|| return 1` IS the handling. Comments only.
 #   v54 (2026-11-26): D6 — the reset phase must not be able to kill its own driver. The 14:47
 #       real run reset exactly the five alphabetically-first mains (aris, chief, del, finn,
 #       hal) and then stopped: it was launched from hal's main, and resetting that main ended
@@ -15,6 +23,11 @@
 #       genuinely wants all fourteen. Detection that cannot name exactly one caller is
 #       reported as undetermined rather than guessed — a wrong skip is a lane left un-purged,
 #       which the summary says out loud, while a wrong reset is the whole run dying.
+#       ALSO D7, same class through phase 2: `openclaw-gateway.service` is KillMode=mixed and an
+#       agent's tool shell runs INSIDE that service's cgroup (measured /proc/self/cgroup == the
+#       unit's ControlGroup), so phase 2's `systemctl --user stop` would SIGKILL the purge that
+#       requested it. `__oc_purge_owns_cgroup` detects co-location from /proc and skips phase 2
+#       with a reason; MEMORY.md is then left unchanged rather than half-written.
 #   v53 (2026-11-26): the SC1090 suppression above the env-file source is now a
 #       `source=/dev/null` directive. v51 added it and took the §18.3 11.5 suppression count to
 #       17 against a baseline of 16, and the fast suite refuses a rise. A directive names the
@@ -854,7 +867,9 @@ function __oc_purge_memory_flush() {
         __oc_purge_stderr "$_bf"
         return 1
     fi
+    # swallow-ok: a failed jq parse reads -1 on the next line, which the gate refuses
     _cands=$(printf '%s' "$_bj" | jq -r '.candidateCount // ([.days[]?.candidateCount // 0] | add) // 0' 2>/dev/null)
+    # swallow-ok: as above; coerced to 0 on the next line
     _staged=$(printf '%s' "$_bj" | jq -r '.stagedEntries // 0' 2>/dev/null)
     [[ "$_cands" =~ ^[0-9]+$ ]] || _cands=-1
     [[ "$_staged" =~ ^[0-9]+$ ]] || _staged=0
@@ -962,6 +977,7 @@ function __oc_purge_memory_promote_all() {
         # 17th suppression against a baseline of 16 — i.e. it would have raised a number the
         # ratchet exists to lower.
         # shellcheck source=/dev/null
+        # swallow-ok: a failed source is reported by the arm on the same construct
         . "$_envfile" 2>/dev/null \
             || __oc_purge_stderr "(could not source $_envfile; promote may not resolve its secret)"
         set +a
@@ -1072,6 +1088,7 @@ function __oc_purge_memory_promote_all() {
 # are different.
 function __oc_purge_promote_possible() {
     local _out=""
+    # swallow-ok: the rc is not the verdict here; the body is matched on the next line
     _out=$(timeout -k 10 120 openclaw memory promote --agent "$1" --json 2>&1) || true
     if [[ "$_out" == *"requires exclusive offline state ownership"* ]]
     then
@@ -1389,6 +1406,7 @@ function __oc_purge_delete_sessions() {
             # its own store holds; until then the honest report is "N invisible", with the
             # store row count as the witness.
             local _nf
+            # swallow-ok: a failed parse reads 0 on the next line (nothing was invisible)
             _nf=$(printf '%s' "$_out" | jq -r '[.results[]? | select(.status=="not_found")] | length' 2>/dev/null)
             [[ "$_nf" =~ ^[0-9]+$ ]] || _nf=0
             # AN UNPARSEABLE BODY IS NOT EVIDENCE OF A REFUSAL (v51).  The batch is only sent
@@ -1532,7 +1550,7 @@ function __oc_purge_store_still_holds() {
     [[ -n "$_db" && -f "$_db" ]] || return 2
     # swallow-ok: an unreadable store is code 2 below, never "gone" or "still stored"
     _n=$(timeout -k 10 30 sqlite3 "file:$_db?mode=ro" \
-        "select count(*) from session_windows where session_key='$_key';" 2>/dev/null)
+        "select count(*) from session_windows where session_key='$_key';" 2>/dev/null)  # swallow-ok: rc below
     # 2 = the read failed (the assignment carries sqlite3's status)
     [[ $? -eq 0 ]] || return 2
     # 2 = the store answered with something that is not a count
@@ -1549,7 +1567,7 @@ function __oc_purge_store_left_keys() {
         [[ -f "$_db" ]] || continue
         # swallow-ok: an unreadable store contributes no keys; the census refuses such a run
         timeout -k 10 30 sqlite3 "file:$_db?mode=ro" \
-            "select distinct session_key from session_windows;" 2>/dev/null
+            "select distinct session_key from session_windows;" 2>/dev/null  # swallow-ok: unreadable -> no keys
     done | sed '/^[[:space:]]*$/d' | sort -u | while IFS= read -r _key
     do
         case "$(__oc_purge_classify_key "$_key")" in
@@ -1809,6 +1827,29 @@ function __oc_purge_self_agent() {
         return 0
     fi
     return 1
+}
+
+# __oc_purge_owns_cgroup — is this shell INSIDE the gateway's own service cgroup?
+#
+# WHY (measured 2026-11-26, D7). `openclaw-gateway.service` is `KillMode=mixed`, and a tool
+# shell spawned by an agent turn runs in that service's cgroup: measured /proc/self/cgroup on
+# this very exec returned exactly the unit's ControlGroup. A `systemctl --user stop` therefore
+# SIGKILLs the whole cgroup, so phase 2's offline window ends the purge in the middle of the
+# run — the same defect as D6 through a different mechanism (D6 was one RPC; D7 is the stop
+# that phase 2 exists to perform). Co-location is a FACT, not a guess, so this is measurable
+# without the caller declaring anything: read /proc/self/cgroup and compare it to the unit.
+#
+# This does NOT refuse. A run that cannot open the window simply does not promote, and says so:
+# promote is the one phase that needs the gateway down, and skipping it leaves MEMORY.md
+# unchanged rather than half-written.
+function __oc_purge_owns_cgroup() {
+    local _mine="" _unit=""
+    # swallow-ok: an unreadable cgroup file is a refusal, handled by the || return 1
+    _mine=$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null | head -n 1) || return 1
+    # swallow-ok: as above; the same || return 1 handles it
+    _unit=$(systemctl --user show openclaw-gateway.service -p ControlGroup --value 2>/dev/null) \
+        || return 1
+    [[ -n "$_mine" && -n "$_unit" && "$_mine" == "$_unit" ]]
 }
 
 # __oc_purge_store_census — count readable agent stores, and FAIL when the census is
@@ -2140,8 +2181,25 @@ function oc-purge() {
     local _promote_ok=1
     if (( ${#_flush_ok[@]} > 0 )) && (( ! _dry_run ))
     then
-        __tac_info "Memory" "[phase 2/3: promote into MEMORY.md inside one offline window]" "$C_Dim"
-        __oc_purge_memory_promote_all "${_flush_ok[@]}" || _promote_ok=0
+        # D7.  THE OFFLINE WINDOW WOULD KILL THIS RUN IF IT RUNS IN THE GATEWAY'S CGROUP.
+        # Measured 2026-11-26: this exec's /proc/self/cgroup IS the unit's ControlGroup, and the
+        # unit is KillMode=mixed, so `systemctl --user stop` SIGKILLs every process left in it —
+        # including this one.  The window is the whole point of phase 2, so the run does not open
+        # it from inside the cgroup; it says why and leaves MEMORY.md alone, which is the honest
+        # half of the operation rather than a half-written one.
+        if __oc_purge_owns_cgroup
+        then
+            _promote_ok=0
+            __tac_info "Memory" \
+                "[phase 2 SKIPPED - this run is inside the gateway's cgroup; stopping it would kill the run]" \
+                "$C_Warning"
+            __tac_info "Memory" \
+                "[run the purge from a detached unit to get an offline promote: systemd-run --user --collect ...]" \
+                "$C_Dim"
+        else
+            __tac_info "Memory" "[phase 2/3: promote into MEMORY.md inside one offline window]" "$C_Dim"
+            __oc_purge_memory_promote_all "${_flush_ok[@]}" || _promote_ok=0
+        fi
         # THE GATEWAY MUST BE SERVING BEFORE THE RESETS: they are RPC, and phase 2 owns a stop.
         if ! __oc_purge_ensure_serving
         then
@@ -2325,7 +2383,7 @@ function oc-purge() {
             esac
             # swallow-ok: a describe that fails is read as "not visible", the conservative arm
             _desc=$(timeout -k 10 30 openclaw gateway call sessions.describe \
-                --params "$(jq -cn --arg k "$_lk" '{key:$k}')" --json 2>/dev/null)
+                --params "$(jq -cn --arg k "$_lk" '{key:$k}')" --json 2>/dev/null)  # swallow-ok: read as not visible
             if printf '%s' "$_desc" | jq -e '.session != null' >/dev/null 2>&1
             then
                 _survivors=$(( _survivors + 1 ))

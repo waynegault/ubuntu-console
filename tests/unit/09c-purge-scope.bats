@@ -793,3 +793,70 @@ stub_timeout() {
     [[ "$_rc" == *"rc=1"* ]]
     [ ! -s "$_touched" ]
 }
+
+# ---------------------------------------------------------------------------
+# D7 (v54): phase 2's offline window must not kill the run that opened it.
+#
+# `openclaw-gateway.service` is KillMode=mixed, and an exec spawned by an agent turn runs in
+# that service's cgroup (measured 2026-11-26: /proc/self/cgroup was exactly the unit's
+# ControlGroup). `systemctl --user stop` therefore SIGKILLs every remaining process in it,
+# including the purge -- the same class as D6, through the mechanism phase 2 exists to use.
+# Phase 2 is skipped with a reason rather than skipped silently, because promote is the one
+# phase that needs the gateway down and a skipped promote leaves MEMORY.md unchanged.
+# ---------------------------------------------------------------------------
+
+@test "cgroup: co-location is DETECTED, so the window cannot be opened unknowingly" {
+    # The positive reading, from the real /proc and the real unit -- the same two sources the
+    # function uses in production.  If this box ever stops co-locating the run with the unit,
+    # this case goes red rather than the guard silently never firing.
+    command -v systemctl >/dev/null 2>&1 || skip "systemctl not available"
+    __oc_purge_owns_cgroup
+}
+
+@test "cgroup: a different cgroup is NOT co-location, so the guard cannot always fire" {
+    # The falsifier.  A helper that answers yes to everything would pass the case above and
+    # make phase 2 permanently unreachable -- a guard that never lets the operation run is
+    # not a guard.  Stub the two readings instead of the decision.  The existence check is
+    # part of the case: on code without the helper, `! undefined_fn` is TRUE and the case
+    # would pass for the wrong reason (measured: it did, before this line was added).
+    [ "$(type -t __oc_purge_owns_cgroup)" = "function" ]
+    systemctl() {
+        case "$*" in
+            *ControlGroup*) printf '%s\n' '/user.slice/user-1000.slice/some-other.service' ;;
+            *) return 0 ;;
+        esac
+    }
+    sed() {
+        case "$*" in
+            */proc/self/cgroup*) printf '%s\n' '0::/user.slice/user-1000.slice/session-1.scope' ;;
+            *) command sed "$@" ;;
+        esac
+    }
+    ! __oc_purge_owns_cgroup
+}
+
+@test "phase 2 is SKIPPED with a reason when the run owns the gateway cgroup" {
+    export __TAC_OPENCLAW_OK=1
+    unset OC_PURGE_RESET_MAIN OC_PURGE_ALLOW_SELF_RESET
+    export OC_PURGE_SELF_AGENT=hal
+    local _out="$TAC_TEST_TMPDIR/p2.out" _promote="$TAC_TEST_TMPDIR/promote.log"
+    : > "$_promote"
+    __tac_info() { printf '%s %s %s\n' "$1" "$2" "$3" >> "$_out"; }
+    __oc_purge_store_census() { return 0; }
+    __oc_purge_session_keys() { printf '%s\n' agent:hal:main agent:finn:main; }
+    __oc_purge_broken_tombstones() { :; }
+    __oc_purge_memory_flush() { return 0; }
+    __oc_purge_memory_promote_all() { echo promoted >> "$_promote"; return 0; }
+    __oc_purge_owns_cgroup() { return 0; }        # the measured production shape
+    __oc_purge_ensure_serving() { return 0; }
+    __oc_purge_delete_sessions() { printf '%s' "0"; }
+    __oc_purge_prune_orphans() { printf '%s' "0"; }
+    __oc_purge_store_left_count() { printf '%s' "0"; return 0; }
+    __oc_purge_reset_main() { return 0; }
+    openclaw() { printf '%s\n' '{"sessions":[]}'; return 0; }
+    stub_timeout
+    run oc-purge
+    grep -q 'phase 2 SKIPPED' "$_out"
+    grep -q 'detached unit' "$_out"
+    [ ! -s "$_promote" ]
+}
