@@ -1,7 +1,20 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 45
+# Module Version: 47
+#   v47 (2026-11-26): three fixes found by running v46's own new suite.
+#     (a) __oc_purge_stderr printed a bare newline for an EMPTY body, so a refusal whose
+#         CLI said nothing prepended a blank line to the delete report and the report's
+#         own regression test failed on noise rather than on a count. An empty body now
+#         reports nothing.
+#     (b) The v46 swallow markers were written at explanatory length and took the §18.3
+#         8.1.8 count 287 -> 294 (markers are code lines for that counter). Shortened to
+#         classify the same sites inside 120 columns; 8.1.8 is back at its baseline.
+#     (c) tests/unit/09c-purge-scope.bats stubbed `openclaw()` while every call is wrapped
+#         in `timeout`, which is an EXTERNAL binary and resolves `openclaw` via PATH, so
+#         the stub was never consulted and three cases ran the real CLI. The suite now
+#         stubs `timeout` in the cases that need it; 26/26 pass, and through the pytest
+#         bridge too (was 3 failed).
 #   v45 (2026-11-25): memory-first purge.  The reset used to empty every agent main before
 #     any memory had been promoted, so a purge could destroy the only copy of what an agent
 #     had learned.  Order is now: (i) online per-agent `session-backfill --apply`, verified
@@ -11,6 +24,24 @@
 #     in which promote is admitted; (iii) the resets, which need the Gateway back because
 #     they are RPC.  The window restores the Gateway on a trap and verifies at the predicate
 #     (`openclaw health`), never at systemd's `active` word.
+#   v46 (2026-11-26): the 2026-11-25T23:20Z run was measured against its own intent and five
+#     defects were found, each with a command behind it (reports/2026-11-26-oc-purge-plan.md).
+#     (1) ORDER, and promote cannot run at all on this box: online `memory.cli` refuses
+#     "requires exclusive offline state ownership"; offline it cannot resolve its secret
+#     ("gateway secrets.resolve unavailable (ECONNREFUSED)", 14/14 lanes).  Promote ran FIRST,
+#     before any backfill, and promoted nothing -- MEMORY.md untouched in all 14.  The window
+#     now runs AFTER the flush pass and exports the unit EnvironmentFile so the secret can
+#     resolve locally; if it still cannot, the run says "promote DID NOT RUN" and counts it.
+#     (2) THE GATE COULD NOT FAIL: a parse failure yielded candidateCount 0, and "0 candidates"
+#     returned 0 (pass) -- 13 of 14 lanes passed on that arm.  It now asserts `.ok == true`
+#     FIRST, reads `stagedEntries`, and treats an unparsed or error body as a FAILURE.
+#     (3) RESET AND DELETE POPULATIONS: the reset loop walked roster UNION stores; the delete
+#     handed the CLI only roster keys, so 21 `:run:` rows were reset-pending and undeletable.
+#     (4) ONE REFUSED KEY FAILED THE FLEET: the delete was a single `sessions delete` over 21
+#     keys; the CLI refused one, the batch failed, and every cron-run transcript stayed.  Now
+#     per agent, so a refusal is that agent's failure and the rest still land.
+#     (5) THE VERIFY ARM READ THE ROSTER, which omits exactly the rows in question -- it read 0
+#     while 21 `:run:` rows sat in the stores.  The read-back now counts the STORES too.
 #   v44 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v43 (2026-11-01): the dispatcher's help lines for `ms` and `sync-models` describe what
@@ -193,7 +224,7 @@ function xo() {
     fi
 
     # Check if anything is actually running before we try to stop
-    # swallow-ok: a unit that is not loaded reads inactive, and __test_port below is the second opinion; the pair sets _was_running, which the restore arm then uses
+    # swallow-ok: an unloaded unit reads inactive; __test_port is the second opinion
     if systemctl --user is-active --quiet "$_svc" 2>/dev/null \
         || __test_port "$OC_PORT"
     then
@@ -208,7 +239,7 @@ function xo() {
     # embedder.
     if __llm_server_running; then
         printf '%s\n' "${C_Dim}Stopping LLM server ...${C_Reset}"
-        # swallow-ok: a failed stop IS the branch condition; the very next line reports "did not land; it may still hold VRAM" rather than proceeding silently
+        # swallow-ok: failure IS the branch condition; the next line reports it
         if ! halt 2>/dev/null; then
             printf '%s\n' "${C_Dim}LLM stop did not land; it may still hold VRAM${C_Reset}"
         fi
@@ -290,8 +321,9 @@ function oc() {
             # failure; the third cannot fail. Markers are inline because the scanner attaches
             # a marker only to the line directly below it, and each redirection is on a
             # continued line of its own.
-            OPENCLAW_TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || \  # swallow-ok: rung 1 of 3; its failure selects rung 2
-                             openssl rand -hex 16 2>/dev/null || \  # swallow-ok: rung 2 of 3; its failure selects rung 3, which cannot fail
+            # swallow-ok: rung 1 of 3; its failure selects rung 2
+            OPENCLAW_TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || \
+                             openssl rand -hex 16 2>/dev/null || \  # swallow-ok: rung 2 of 3; rung 3 cannot fail
                              date +%s%N | sha256sum | head -c 32)
             printf '%s' "$OPENCLAW_TOKEN" > "$_token_file"
             chmod 600 "$_token_file"
@@ -713,16 +745,35 @@ function __oc_purge_memory_flush() {
     _idx_before=$(__oc_purge_memory_index_rows "$_db")
     [[ -f "$_ws/DREAMS.md" ]] && _dreams_before=$(sha256sum "$_ws/DREAMS.md" | cut -d' ' -f1)
 
-    local _bf="" _cands=0
+    local _bf="" _cands=0 _staged=0
     if ! _bf=$(timeout -k 10 900 openclaw memory session-backfill --agent "$_agent" --apply --json 2>&1)
     then
         __tac_info "Memory" "[$_agent: session-backfill FAILED - refusing its RESET]" "$C_Error"
         __oc_purge_stderr "$_bf"
         return 1
     fi
-    # swallow-ok: jq's parse failure and `echo 0` are one outcome — the next line coerces anything non-numeric to 0, so a malformed backfill payload reads "no candidates", never a crash
-    _cands=$(printf '%s' "$_bf" | jq -r '(.candidateCount // ([.days[]?.candidateCount // 0] | add) // 0)' 2>/dev/null || echo 0)
-    [[ "$_cands" =~ ^[0-9]+$ ]] || _cands=0
+
+    # ASSERT THE BODY IS A SUCCESS BEFORE READING ANY COUNT (v46).  Measured defect: the error
+    # body is {"ok":false,"error":{...}} with no candidateCount, so the old
+    # `(.candidateCount // ...) // 0` yielded 0 with jq rc 0 -- and "0 candidates" was a PASS
+    # arm.  A failed backfill was therefore indistinguishable from "nothing to distil", so the
+    # fleet gate could not fail on any lane.  The CLI exits 0 on that body too: rc is no help.
+    if ! printf '%s' "$_bf" | jq -e '.ok == true' >/dev/null 2>&1
+    then
+        __tac_info "Memory" "[$_agent: session-backfill returned a NON-OK body - refusing its RESET]" "$C_Error"
+        __oc_purge_stderr "$_bf"
+        return 1
+    fi
+    _cands=$(printf '%s' "$_bf" | jq -r '.candidateCount // ([.days[]?.candidateCount // 0] | add) // 0' 2>/dev/null)
+    _staged=$(printf '%s' "$_bf" | jq -r '.stagedEntries // 0' 2>/dev/null)
+    [[ "$_cands" =~ ^[0-9]+$ ]] || _cands=-1
+    [[ "$_staged" =~ ^[0-9]+$ ]] || _staged=0
+    if (( _cands < 0 ))
+    then
+        __tac_info "Memory" "[$_agent: ok:true but candidateCount unreadable - refusing its RESET]" "$C_Error"
+        __oc_purge_stderr "$_bf"
+        return 1
+    fi
 
     _idx_after=$(__oc_purge_memory_index_rows "$_db")
     [[ -f "$_ws/DREAMS.md" ]] && _dreams_after=$(sha256sum "$_ws/DREAMS.md" | cut -d' ' -f1)
@@ -733,23 +784,33 @@ function __oc_purge_memory_flush() {
     # fourteen restarts for no gain.  The verdict below says which arm carried the proof.
     local _promote_state="pending offline pass"
 
-    # The gate.
+    # THE GATE.  0 = a durable artefact was proven, 2 = ok:true and nothing to do, 1 = REFUSE.
+    # The three are kept apart because the caller must act differently on 2 (nothing was
+    # staged, so a promote has nothing to carry) and on 1 (refuse the reset).
     if (( _idx_after > _idx_before ))
     then
-        __tac_info "Memory" "[$_agent: $_idx_before -> $_idx_after indexed source(s), ${_cands} candidate(s); MEMORY.md promote $_promote_state]" "$C_Dim"
+        local _msg="[$_agent: $_idx_before -> $_idx_after indexed source(s), ${_cands} candidate(s),"
+        _msg+=" ${_staged} staged; MEMORY.md promote $_promote_state]"
+        __tac_info "Memory" "$_msg" "$C_Dim"
         return 0
     fi
     if [[ -n "$_dreams_after" && "$_dreams_after" != "$_dreams_before" ]]
     then
-        __tac_info "Memory" "[$_agent: DREAMS.md updated, ${_cands} candidate(s); MEMORY.md promote $_promote_state]" "$C_Dim"
+        local _msg="[$_agent: DREAMS.md updated, ${_cands} candidate(s), ${_staged} staged;"
+        _msg+=" MEMORY.md promote $_promote_state]"
+        __tac_info "Memory" "$_msg" "$C_Dim"
         return 0
     fi
+    # Zero candidates is "nothing to do" ONLY because the body said ok:true two checks above --
+    # never as a fallback for a body that could not be read.
     if (( _cands == 0 ))
     then
-        __tac_info "Memory" "[$_agent: nothing left to distil (0 candidates, history already processed); promote $_promote_state]" "$C_Dim"
-        return 0
+        __tac_info "Memory" \
+            "[$_agent: ok:true and 0 candidates (history already processed); promote $_promote_state]" "$C_Dim"
+        return 2   # 2 = nothing to do (ok:true, no candidates); NOT a refusal, NOT a pass
     fi
-    __tac_info "Memory" "[$_agent: $_cands candidate(s) but NOTHING durable changed - refusing its RESET]" "$C_Error"
+    __tac_info "Memory" \
+        "[$_agent: $_cands candidate(s) reported but NOTHING durable changed - refusing its RESET]" "$C_Error"
     return 1
 }
 
@@ -768,44 +829,128 @@ function __oc_purge_memory_flush() {
 # staging landed.  Saying that plainly matters: it is the difference between "memory preserved"
 # and "memory preserved in a form the next session reads first".
 function __oc_purge_memory_promote_all() {
-    local -a _agents=()
+    local -a _agents=("$@")
     local _key _a
-    while IFS= read -r _key
-    do
-        [[ "$_key" == *:main ]] || continue
-        _a="${_key#agent:}"; _a="${_a%%:*}"
-        _agents+=("$_a")
-    done < <(__oc_purge_session_keys)
+    if [[ ${#_agents[@]} -eq 0 ]]
+    then
+        while IFS= read -r _key
+        do
+            [[ "$_key" == *:main ]] || continue
+            _a="${_key#agent:}"; _a="${_a%%:*}"
+            _agents+=("$_a")
+        done < <(__oc_purge_session_keys)
+    fi
     if [[ ${#_agents[@]} -eq 0 ]]
     then
         __tac_info "Memory" "[no agents to promote]" "$C_Dim"
         return 0
     fi
 
+    # WHY THIS SETS THE ENVIRONMENT (v46).  `openclaw memory promote` is admitted only with
+    # exclusive offline state ownership, and the WHOLE `memory` family routes through
+    # `memory.cli`, which the CLI will not admit while a Gateway lives -- measured 2026-11-26:
+    # `openclaw memory status --json` with the Gateway serving answers "Cannot admit memory.cli
+    # ... requires exclusive offline state ownership".  Meanwhile its secret targets (the
+    # embedding provider apiKey, a SecretRef of source "env") are resolved through the Gateway
+    # when one is up.  The two admission rules are mutually exclusive on this box, which is why
+    # the 2026-11-25 run promoted nothing: 14/14 lanes logged
+    #   [secrets] memory promote: gateway secrets.resolve unavailable (ECONNREFUSED)
+    # The one lever this command has is to make the CLI's LOCAL resolution path work.  The unit
+    # loads $HOME/.openclaw/gateway.systemd.env through EnvironmentFile=, but a CLI process does
+    # not read that file, so OPENCLAW_EMBEDDING_API_KEY is simply absent to it.  Sourcing the
+    # same file into the window's environment gives loadMemoryCommandConfig what it needs to
+    # resolve locally instead of calling the Gateway.  This changes HOW the window invokes the
+    # command; it does not change OpenClaw's admission rules.
+    local _envfile="${OPENCLAW_ENV_FILE:-$HOME/.openclaw/gateway.systemd.env}"
+    if [[ -f "$_envfile" ]]
+    then
+        set -a
+        # shellcheck disable=SC1090
+        . "$_envfile" 2>/dev/null \
+            || __oc_purge_stderr "(could not source $_envfile; promote may not resolve its secret)"
+        set +a
+    fi
+
+    # The command the offline window runs: one `memory promote --apply` per agent, counting
+    # a body that says ok:false as a failure even when the CLI exited 0.
     _oc_promote_pass() {
         local _ag _out _ok=0 _bad=0
         for _ag in "${_agents[@]}"
         do
-            if _out=$(timeout -k 10 300 openclaw memory promote --agent "$_ag" --apply --json 2>&1)
+            if ! _out=$(timeout -k 10 300 openclaw memory promote --agent "$_ag" --apply --json 2>&1)
             then
-                _ok=$(( _ok + 1 ))
-            else
                 _bad=$(( _bad + 1 ))
-                __tac_info "Memory" "[$_ag: promote FAILED offline - reported, not claimed]" "$C_Error"
                 __oc_purge_stderr "$_out"
+                continue
             fi
+            # A SUCCESS CODE IS NOT A SUCCESS (v46).  The 2026-11-25 run counted 14 exit codes of
+            # 0 while every one of the 14 bodies carried a secrets.resolve failure and no
+            # MEMORY.md grew a byte.  The BODY is the claim: require ok:true.
+            if ! printf '%s' "$_out" | jq -e '.ok == true' >/dev/null 2>&1
+            then
+                _bad=$(( _bad + 1 ))
+                __oc_purge_stderr "$_out"
+                continue
+            fi
+            _ok=$(( _ok + 1 ))
         done
-        __tac_info "Memory" "[MEMORY.md promote: $_ok applied, $_bad failed of ${#_agents[@]} agent(s)]" \
-            "$( (( _bad > 0 )) && printf '%s' "$C_Warning" || printf '%s' "$C_Success" )"
-        (( _bad == 0 ))
+        if (( _bad > 0 ))
+        then
+            __tac_info "Memory" \
+                "[MEMORY.md promote: $_ok applied, $_bad FAILED of ${#_agents[@]} agent(s) - body read]" \
+                "$C_Warning"
+            return 1
+        fi
+        __tac_info "Memory" \
+            "[MEMORY.md promote: $_ok applied, 0 failed of ${#_agents[@]} agent(s) - body read, not rc]" "$C_Success"
+        return 0
     }
+
+    # ASK WHETHER PROMOTE CAN BE ADMITTED AT ALL before opening the window on a guess.
+    if ! __oc_purge_promote_possible "${_agents[0]}"
+    then
+        __tac_info "Memory" \
+            "[promote DID NOT RUN - memory.cli is offline-only, its secret cannot resolve" \
+            " offline; MEMORY.md unchanged]" "$C_Error"
+        return 1
+    fi
+
     __oc_purge_offline_window _oc_promote_pass
     local _rc=$?
     if (( _rc != 0 ))
     then
-        __tac_info "Memory" "[promote pass incomplete - memory is staged, prose promotion deferred]" "$C_Warning"
+        __tac_info "Memory" "[promote pass INCOMPLETE - memory is staged but the prose was not written]" "$C_Error"
     fi
-    return 0   # never fails the purge: staging already passed the reset gate
+    return $_rc
+}
+
+# __oc_purge_promote_possible — 0 when `memory promote` can be admitted at all on this box.
+# The probe asks OpenClaw and classifies its own answer, rather than predicting it: the refusal
+# text names which admission rule refused, and an unreadable answer is NOT taken as an
+# admission (a window that did not open must not be reported as one).
+# It is called from INSIDE the offline window, where "not admitted" can only mean the secret
+# still could not resolve -- so the two refusals are reported separately, because their fixes
+# are different.
+function __oc_purge_promote_possible() {
+    local _out=""
+    _out=$(timeout -k 10 120 openclaw memory promote --agent "$1" --json 2>&1) || true
+    if [[ "$_out" == *"requires exclusive offline state ownership"* ]]
+    then
+        __tac_info "Memory" "[promote probe: still not admitted - a Gateway still owns the state root]" "$C_Error"
+        return 1
+    fi
+    if [[ "$_out" == *"secrets.resolve unavailable"* ]]
+    then
+        __tac_info "Memory" \
+            "[promote probe: offline, but the secret still cannot resolve - MEMORY.md cannot be written]" "$C_Error"
+        return 1
+    fi
+    if printf '%s' "$_out" | jq -e '.ok == true or .workspaceDir != null' >/dev/null 2>&1
+    then
+        return 0
+    fi
+    __oc_purge_stderr "$_out"
+    return 1
 }
 
 # __oc_purge_offline_window — stop the Gateway so the offline-only memory writes can run, run
@@ -843,6 +988,8 @@ function __oc_purge_offline_window() {
     fi
 
     local _restarted=0 _rc=0
+    # The trap target: start the Gateway and wait for the PREDICATE (`openclaw health`), not
+    # for systemd's `active` word, which reads active while the port is still binding.
     __oc_purge_gateway_restore() {
         (( _restarted == 1 )) && return 0
         _restarted=1
@@ -897,7 +1044,7 @@ function __oc_purge_memory_index_rows() {
     # passing on a phantom increase. The marker is inline because the scanner attaches a
     # marker only to the line directly below it, and the redirection is on the continued line.
     _n=$(timeout 30 sqlite3 "file:$_db?mode=ro" \
-        "select count(*) from memory_index_sources;" 2>/dev/null) || _n=0  # swallow-ok: unreadable store reads 0 both sides; the gate falls through, never passes
+        "select count(*) from memory_index_sources;" 2>/dev/null) || _n=0  # swallow-ok: unreadable reads 0 both sides
     [[ "$_n" =~ ^[0-9]+$ ]] || _n=0
     printf '%s\n' "$_n"
 }
@@ -1010,8 +1157,8 @@ function __oc_purge_session_keys() {
 # Prints the number of keys it asked to delete.  Returns 1 when the delete did not land,
 # with the CLI's own output on stderr rather than discarded.
 function __oc_purge_delete_sessions() {
-    local -a _keys=()
     local _key _out="" _mains=0 _cron=0 _runs=0 _cls
+    local -a _all=()
     # The KEPT classes are counted here for the report; the DELETE SET comes from
     # __oc_purge_delete_keys, the same function the dry run calls, so the preview cannot list a
     # set this batch does not perform.  Counting and selecting are deliberately separate: the
@@ -1019,35 +1166,83 @@ function __oc_purge_delete_sessions() {
     while IFS= read -r _key
     do
         [[ -n "$_key" ]] || continue
+        _all+=("$_key")
         _cls=$(__oc_purge_classify_key "$_key")
+        # Counts describe what was SCANNED; the delete set comes from __oc_purge_delete_keys
+        # below.
         case "$_cls" in
-            main)    _mains=$(( _mains + 1 )) ;;   # CLI refuses mains; reset instead (step 5b)
+            # No `*` arm on purpose: a class this block does not name is simply not counted,
+            # and a catch-all would make an unrecognised key look like a known one.
+            main)    _mains=$(( _mains + 1 )) ;;   # CLI refuses mains; reset instead
             cronjob) _cron=$(( _cron + 1 ))   ;;   # automation state, kept (2026-10-23)
-            cronrun) _runs=$(( _runs + 1 )) ;;      # one execution: deleted
+            cronrun) _runs=$(( _runs + 1 )) ;;     # one execution: deleted
         esac
     done < <(__oc_purge_session_keys)
 
     # ONE derivation of what is deleted.
+    local -a _keys=()
     while IFS= read -r _key
     do
         [[ -n "$_key" ]] || continue
         _keys+=("$_key")
     done < <(__oc_purge_delete_keys)
 
-    printf '%s %s %s %s\n' "${#_keys[@]}" "$_mains" "$_cron" "$_runs"
-    (( ${#_keys[@]} > 0 )) || return 0
+    # THE BATCH IS PER AGENT (v46).  Measured 2026-11-25: one `sessions delete` over 21 keys, of
+    # which the CLI refused a single `:run:` key it did not list, failed the WHOLE batch -- the
+    # run printed "1 FAILED" and every cron-run transcript stayed in its store.  A fleet-wide
+    # batch makes one unlisted key everyone's problem; per agent, a refusal is that agent's
+    # failure and the other thirteen still land.  A refusal counts as a failure, never a skip.
+    local _deleted=0 _dfail=0 _agent _batch
+    local -a _batch_keys=()
+    local -A _seen=()
+    for _key in "${_keys[@]}"
+    do
+        _agent="${_key#agent:}"; _agent="${_agent%%:*}"
+        _seen["$_agent"]=1
+    done
+    for _agent in $(printf '%s\n' "${!_seen[@]}" | sort)
+    do
+        _batch_keys=()
+        for _key in "${_keys[@]}"
+        do
+            [[ "${_key#agent:}" == "$_agent:"* ]] || continue
+            _batch_keys+=("$_key")
+        done
+        (( ${#_batch_keys[@]} > 0 )) || continue
+        local _ok_body=1
+        if ! _out=$(timeout -k 15 300 openclaw sessions delete "${_batch_keys[@]}" --yes --json 2>&1)
+        then
+            _ok_body=0
+        elif ! printf '%s' "$_out" | jq -e '.ok != false' >/dev/null 2>&1
+        then
+            _ok_body=0
+        fi
+        if (( _ok_body == 1 ))
+        then
+            _deleted=$(( _deleted + ${#_batch_keys[@]} ))
+        else
+            _dfail=$(( _dfail + 1 ))
+            __tac_info "Sessions" \
+                "[$_agent: delete REFUSED for ${#_batch_keys[@]} key(s) - reported, not claimed]" "$C_Error"
+            __oc_purge_stderr "$_out"
+        fi
+    done
 
-    if ! _out=$(timeout -k 15 300 openclaw sessions delete "${_keys[@]}" --yes --json 2>&1)
-    then
-        __oc_purge_stderr "$_out"
-        return 1
-    fi
+    printf '%s %s %s %s %s\n' "$_deleted" "$_mains" "$_cron" "$_runs" "$_dfail"
+    (( ${#_keys[@]} == 0 )) && return 0
+    (( _dfail == 0 )) || return 1
     return 0
 }
 
 # __oc_purge_stderr — the one place this command writes a diagnostic to stderr, so a
 # scan whose stdout is the RESULT list cannot be corrupted by its own warnings.
 function __oc_purge_stderr() {
+    # An EMPTY body has nothing to report.  Callers pass the CLI's captured output even
+    # when the CLI printed none — a refusal with a silent body leaves it "" — and
+    # `printf '%s\n' ""` then writes a bare newline.  Measured 2026-11-26: that phantom
+    # line prepended an empty first line to the delete report, so its own regression test
+    # (which pins the report line exactly) failed on noise rather than on a count.
+    [[ -n "${1:-}" ]] || return 0
     printf '%s\n' "$1" >&2
 }
 
@@ -1068,6 +1263,41 @@ function __oc_purge_store_read() {
     local _sql="$2"
     [[ -f "$_db" ]] || return 1
     timeout -k 10 30 sqlite3 "file:$_db?mode=ro" "$_sql"
+}
+
+# __oc_purge_store_left_count — print how many session_windows rows across ALL agent stores
+# are neither a main nor a cron JOB (i.e. the class this command claims to have removed).
+# Exit 1 when a store cannot be read, so "could not tell" is never reported as 0 -- the same
+# rule the orphan prune follows, for the same reason.
+#
+# WHY A SECOND COUNT EXISTS (v46).  The CLI roster omits rows the stores still hold, so a
+# verify that reads only the roster can be green while the defect is present.  Measured
+# 2026-11-25: roster said 0 non-main sessions, stores held 21 `:run:` rows.
+function __oc_purge_store_left_count() {
+    local _db _n _total=0 _bad=0
+    for _db in "$OC_AGENTS"/*/agent/openclaw-agent.sqlite
+    do
+        [[ -f "$_db" ]] || continue
+        if ! _n=$(timeout -k 10 30 sqlite3 "file:$_db?mode=ro" \
+            "select count(distinct session_key) from session_windows;")
+        then
+            _bad=$(( _bad + 1 )); continue
+        fi
+        [[ "$_n" =~ ^[0-9]+$ ]] || { _bad=$(( _bad + 1 )); continue; }
+        # Count the class here rather than in SQL: the classifier is ONE shell function, and a
+        # second implementation in SQL is exactly the drift this file has already paid for.
+        while IFS= read -r _key
+        do
+            [[ -n "$_key" ]] || continue
+            case "$(__oc_purge_classify_key "$_key")" in
+                main|cronjob) : ;;
+                *) _total=$(( _total + 1 )) ;;
+            esac
+        done < <(timeout -k 10 30 sqlite3 "file:$_db?mode=ro" \
+            "select distinct session_key from session_windows;")
+    done
+    printf '%s\n' "$_total"
+    (( _bad == 0 ))
 }
 
 # __oc_purge_prune_orphans — delete only the session files NO store row names.
@@ -1416,7 +1646,7 @@ function oc-purge() {
     fi
 
     local _pruned=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0 _tombstoned=0
-    local _purge_left="" _counts=""
+    local _counts=""
 
     # 1. A SERVING gateway is the precondition, not a stop.  The delete and the reset run
     #    over RPC, so the gateway is STARTED only when it does not already answer: a
@@ -1466,18 +1696,59 @@ function oc-purge() {
         fi
     fi
 
-    # 3b-0. MEMORY FIRST, THEN CLEAR (Wayne, 2026-11-25). Two phases, in this order:
-    #   (i)  ONLINE per-agent flush: session-backfill --apply, verified durable.  This is what
-    #        decides whether an agent may be reset at all (the gate lives in the loop below).
-    #   (ii) ONE offline window: memory promote --apply for the whole fleet, which is the only
-    #        way the staged candidates reach MEMORY.md.  It runs BEFORE the resets so the prose
-    #        exists before any transcript is emptied, and it never blocks a reset whose staging
-    #        already landed -- see __oc_purge_memory_promote_all's header for why.
-    # Doing (ii) first also means the Gateway is back up before the resets run over RPC, which
-    # is required: the reset is an RPC call and needs a serving Gateway.
+    # 3b-0. MEMORY FIRST, THEN CLEAR (Wayne, 2026-11-25), in the order the owner stated and the
+    # code had inverted (v46).  The 2026-11-25T23:20Z run measured the inversion: promote ran
+    # FIRST and offline, before a single backfill, and promoted nothing -- MEMORY.md was
+    # untouched in all 14 workspaces.
+    #   PHASE 1  ONLINE per-agent flush: `session-backfill --apply`, verified durable.  This is
+    #            what decides whether an agent may be reset at all.
+    #   PHASE 2  ONE offline window: `memory promote --apply` for every agent whose flush
+    #            proved something, so the staged candidates become prose in MEMORY.md.
+    #   PHASE 3  the resets, which need the Gateway back because they are RPC.
+    # Phase 1 runs first because a promote before a flush has nothing to carry, and because the
+    # resets must not happen until both have been given their chance.
+    local -a _flush_ok=() _flush_skip=()
+    local _flush_rc=0
     if [[ -n "$(__oc_purge_reset_scope)" ]] && (( ! _dry_run ))
     then
-        __oc_purge_memory_promote_all
+        __tac_info "Memory" "[phase 1/3: distilling session history per agent, online]" "$C_Dim"
+        while IFS= read -r _reset_key
+        do
+            [[ "$_reset_key" == *:main ]] || continue
+            if [[ "$_reset_scope" != "all" && "$_reset_key" != "agent:$_reset_scope:main" ]]
+            then
+                continue
+            fi
+            local _flush_agent="${_reset_key#agent:}"
+            _flush_agent="${_flush_agent%%:*}"
+            __oc_purge_memory_flush "$_flush_agent"
+            _flush_rc=$?
+            case "$_flush_rc" in
+                0) _flush_ok+=("$_flush_agent") ;;
+                2) _flush_ok+=("$_flush_agent") ;;
+                *) _flush_skip+=("$_flush_agent") ;;
+            esac
+        done < <(__oc_purge_session_keys | grep -E ':main$' | sort -u)
+        if (( ${#_flush_skip[@]} > 0 ))
+        then
+            __tac_info "Memory" \
+                "[${#_flush_skip[@]} agent(s) cannot show a durable flush: ${_flush_skip[*]}]" "$C_Error"
+        fi
+    fi
+
+    # 3b-0ii. PHASE 2: the one offline window.  It runs AFTER phase 1 and BEFORE the resets.
+    local _promote_ok=1
+    if (( ${#_flush_ok[@]} > 0 )) && (( ! _dry_run ))
+    then
+        __tac_info "Memory" "[phase 2/3: promote into MEMORY.md inside one offline window]" "$C_Dim"
+        __oc_purge_memory_promote_all "${_flush_ok[@]}" || _promote_ok=0
+        # THE GATEWAY MUST BE SERVING BEFORE THE RESETS: they are RPC, and phase 2 owns a stop.
+        if ! __oc_purge_ensure_serving
+        then
+            __tac_info "Purge" \
+                "[REFUSED - the gateway did not come back from the offline window; no main was reset]" "$C_Error"
+            return 1
+        fi
     fi
 
     # 3b. Reset EVERY agent's main so each comes back EMPTY (owner's call 2026-10-24).
@@ -1500,14 +1771,17 @@ function oc-purge() {
             then
                 continue
             fi
-            # 3b-i. THE MEMORY GATE (Wayne, 2026-11-25). Distill and promote durable memory
-            # BEFORE the main is emptied, and refuse THIS agent's reset if nothing can be
-            # shown to have landed.  Skipping the agent -- rather than failing the whole run --
-            # is deliberate: a purge that aborts on the first bad lane would leave the fleet in
-            # a half-purged state, which is worse than one agent starting un-freshened.
+            # 3b-i. THE GATE'S VERDICT, from phase 1.  A flush that returned 1 refuses THIS
+            # agent's reset; skipping the agent -- rather than aborting the run -- is deliberate:
+            # a purge that dies on the first bad lane leaves the fleet half-purged.
             local _reset_agent="${_reset_key#agent:}"
             _reset_agent="${_reset_agent%%:*}"
-            if ! __oc_purge_memory_flush "$_reset_agent"
+            local _proven=0 _a
+            for _a in "${_flush_ok[@]}"
+            do
+                [[ "$_a" == "$_reset_agent" ]] && _proven=1
+            done
+            if (( _proven == 0 ))
             then
                 _failed=$(( _failed + 1 ))
                 __tac_info "Sessions" "[$_reset_key reset SKIPPED - memory flush not proven]" "$C_Error"
@@ -1527,7 +1801,6 @@ function oc-purge() {
             esac
         done < <(__oc_purge_session_keys | grep -E ':main$' | sort -u)
     fi
-
     # 3c. Repair a main whose recovery tombstone names a successor the store no longer
     #     holds.  The delete above can create exactly that row, because a rollover
     #     successor is an ordinary non-main key.
@@ -1562,20 +1835,52 @@ function oc-purge() {
         __tac_info "Sessions" "[$_pruned orphan session file(s) pruned]" "$C_Dim"
     fi
 
-    # 5. Read the NON-MAIN roster back, excluding the cron rows kept above: counting either
-    #    class would turn every correct purge into a failure.  "Purge complete" is a claim
-    #    about the store, so it is made from a fresh read, never from the delete's rc.
-    if ! _purge_left=$(timeout -k 10 60 openclaw sessions --all-agents --json \
+    # 5. Read the store back TWO ways (v46).  The 2026-11-25 run's verify arm read ONLY the CLI
+    #    roster, which omits exactly the rows in question: it reported 0 "non-main, non-cron"
+    #    sessions while 21 cron-RUN rows sat in the agent stores -- a green about a population
+    #    that excludes the defect.  The roster is still read (it is the CLI's own view), and the
+    #    STORES are counted too, because that is where a surviving row actually lives.  "Purge
+    #    complete" is a claim about both, made from a fresh read, never from the delete's rc.
+    local _roster_left="" _store_left=0
+    if ! _roster_left=$(timeout -k 10 60 openclaw sessions --all-agents --json \
         | jq -r '[.sessions[].key | select((endswith(":main") or contains(":cron:"))|not)] | length')
     then
         _failed=$(( _failed + 1 ))
         __tac_info "Sessions" "[could not read the roster back after delete]" "$C_Error"
-    elif [[ -n "$_purge_left" && "$_purge_left" != "0" ]]
+    fi
+    _store_left=$(__oc_purge_store_left_count)
+    case "$?" in
+        0) ;;
+        *) _failed=$(( _failed + 1 ))
+           __tac_info "Sessions" "[could not read the STORES back after delete]" "$C_Error" ;;
+    esac
+    if [[ -n "$_roster_left" && "$_roster_left" != "0" ]]
     then
         _failed=$(( _failed + 1 ))
-        __tac_info "Sessions" "[$_purge_left non-main session(s) STILL STORED after delete]" "$C_Error"
+        __tac_info "Sessions" "[$_roster_left non-main session(s) still in the CLI ROSTER after delete]" "$C_Error"
+    fi
+    if [[ "$_store_left" =~ ^[0-9]+$ ]] && (( _store_left > 0 ))
+    then
+        _failed=$(( _failed + 1 ))
+        __tac_info "Sessions" "[$_store_left non-main, non-cron session(s) still in the STORES after delete]" "$C_Error"
     fi
 
+    # MEMORY OUTCOME, said in the banner rather than buried (v46).  Last night's summary line was
+    # "store reset, 0 orphan(s) pruned, 1 FAILED", which is true and says nothing about the thing
+    # the command exists for.
+    if (( ${#_flush_ok[@]} > 0 )) && (( _resets > 0 ))
+    then
+        if (( _promote_ok == 1 ))
+        then
+            _extra+=", memory: ${#_flush_ok[@]} flushed and promoted"
+        else
+            _extra+=", memory: ${#_flush_ok[@]} flushed, PROMOTE DID NOT RUN"
+        fi
+    fi
+    if (( ${#_flush_skip[@]} > 0 ))
+    then
+        _extra+=", ${#_flush_skip[@]} reset(s) skipped (no durable flush)"
+    fi
     # Report result
     local _extra=""
     if (( _resets > 0 ))

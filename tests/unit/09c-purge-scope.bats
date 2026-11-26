@@ -25,6 +25,31 @@ setup() {
 
 teardown() { rm -rf "$TAC_TEST_TMPDIR"; }
 
+# stub_timeout — redefine `timeout` so it runs its command IN-PROCESS.
+#
+# WHY (measured 2026-11-26).  Every `openclaw` call in 09c-oc-core.sh is wrapped, e.g.
+# `timeout -k 10 900 openclaw memory session-backfill ...`.  `timeout` is an EXTERNAL
+# binary, so it resolves `openclaw` through PATH and never consults a shell function —
+# a test that stubs `openclaw() { ... }` stubs nothing, the real CLI runs, and the case
+# fails on behaviour nobody wrote a test for.  Three cases failed exactly that way, each
+# carrying the real binary's "Unknown agent id" body.
+#
+# The shim drops `-k <dur>` and the duration, then runs the remaining argv here, so the
+# command IS a shell function and the stub is reached.  It implements no deadline on
+# purpose: a case that needs one should say so, and none here does.
+stub_timeout() {
+    timeout() {
+        while [[ $# -gt 0 && "$1" == -* ]]; do
+            case "$1" in
+                -k|--kill-after) shift 2 ;;
+                *)                shift   ;;
+            esac
+        done
+        [[ $# -gt 0 ]] && shift   # the duration
+        "$@"
+    }
+}
+
 @test "reset scope: unset means every main, not one agent" {
     unset OC_PURGE_RESET_MAIN
     [ "$(__oc_purge_reset_scope)" = "all" ]
@@ -242,4 +267,127 @@ teardown() { rm -rf "$TAC_TEST_TMPDIR"; }
     source "$REPO_ROOT/scripts/09c-oc-core.sh"
     run __oc_purge_memory_flush ghost
     [ "$status" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# 2026-11-26: the 2026-11-25T23:20Z run was measured against its own intent.  These
+# pin the four gates that let it pass while doing nothing.
+# ---------------------------------------------------------------------------
+
+@test "gate: an ERROR body from session-backfill REFUSES the reset (it used to pass as 0 candidates)" {
+    # The defect, measured: the error body is {"ok":false,"error":{...}}, it carries no
+    # candidateCount, so `(.candidateCount // ...) // 0` returned 0 with jq rc 0 -- and
+    # "0 candidates" was a PASS arm.  A failed backfill and an empty one were the same thing.
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent" "$HOME/.openclaw/workspace-hal"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    # The CLI exits 0 on this body (measured), so the stub must too.
+    openclaw() {
+        printf '%s\n' '{"ok":false,"error":{"type":"cli_error","message":"Unknown agent id"}}'
+        return 0
+    }
+    run __oc_purge_memory_flush hal
+    [ "$status" -eq 1 ]
+}
+
+@test "gate: ok:true with 0 candidates returns 2 (nothing to do), not 1 and not a silent 0" {
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent" "$HOME/.openclaw/workspace-hal"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    openclaw() {
+        printf '%s\n' '{"ok":true,"candidateCount":0,"stagedEntries":0,"days":[]}'
+        return 0
+    }
+    run __oc_purge_memory_flush hal
+    [ "$status" -eq 2 ]
+}
+
+@test "gate: ok:true with candidates but no durable change REFUSES the reset" {
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/agents/hal/agent" "$HOME/.openclaw/workspace-hal"
+    OC_AGENTS="$HOME/.openclaw/agents"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    openclaw() {
+        printf '%s\n' '{"ok":true,"candidateCount":22,"stagedEntries":0,"days":[]}'
+        return 0
+    }
+    run __oc_purge_memory_flush hal
+    [ "$status" -eq 1 ]
+}
+
+@test "gate: a fee-free promote body that says ok:false counts as a FAILED promote" {
+    # Last night counted 14 exit codes of 0 while every body carried a secrets failure.
+    export TAC_TEST_TMPDIR
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    __oc_purge_offline_window() { "$@"; }        # pretend the stop/start worked
+    __oc_purge_promote_possible() { return 0; }  # pretend admission is possible
+    openclaw() {
+        printf '%s\n' '{"ok":false,"error":{"type":"cli_error","message":"[secrets] memory promote: gateway secrets.resolve unavailable"}}'
+        return 0                          # rc 0 -- the defect
+    }
+    run __oc_purge_memory_promote_all hal
+    [ "$status" -eq 1 ]
+}
+
+@test "promote is attempted for the flushed agents only" {
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    __oc_purge_offline_window() { "$@"; }
+    __oc_purge_promote_possible() { return 0; }
+    stub_timeout
+    local _args="$TAC_TEST_TMPDIR/args"
+    : > "$_args"
+    openclaw() { printf '%s\n' "$*" >> "$_args"; printf '%s\n' '{"ok":true}'; return 0; }
+    run __oc_purge_memory_promote_all finn juno
+    [ "$status" -eq 0 ]
+    grep -q -- '--agent finn' "$_args"
+    grep -q -- '--agent juno' "$_args"
+    ! grep -q -- '--agent hal' "$_args"
+}
+
+@test "delete: one agent's refusal does not stop the other agents" {
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    __oc_purge_session_keys() { printf '%s\n' \
+        agent:sarah:cron:j1:run:r1 agent:sarah:cron:j1:run:r2 \
+        agent:hal:cron:j2:run:r3 agent:hal:main agent:sarah:main ; }
+    local _calls="$TAC_TEST_TMPDIR/calls"
+    : > "$_calls"
+    openclaw() {
+        printf '%s\n' "$*" >> "$_calls"
+        # sarah's batch is refused; hal's lands.  The old code sent ONE batch and lost both.
+        if [[ "$*" == *sarah* ]]; then return 1; fi
+        printf '%s\n' '{"ok":true}'
+        return 0
+    }
+    run __oc_purge_delete_sessions
+    [ "$status" -eq 1 ]
+    grep -q 'agent:hal:cron:j2:run:r3' "$_calls"
+    # the report line: deleted mains cron runs failures
+    [[ "$output" == "1 2 0 3 1" ]]
+}
+
+@test "read-back counts STORE rows, not just the CLI roster" {
+    # The defect: roster said 0 non-main sessions while 21 :run: rows sat in the stores.
+    command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 not installed"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    local _db="$OC_AGENTS/hal/agent/openclaw-agent.sqlite"
+    mkdir -p "$OC_AGENTS/hal/agent"
+    sqlite3 "$_db" "create table session_windows(session_key text);"
+    sqlite3 "$_db" "insert into session_windows values
+        ('agent:hal:main'),('agent:hal:cron:job1'),
+        ('agent:hal:cron:job1:run:r1'),('agent:hal:cron:job1:run:r2'),
+        ('agent:hal:whatsapp:direct:+447');"
+    run __oc_purge_store_left_count
+    [ "$status" -eq 0 ]
+    [ "$output" = "3" ]
 }
