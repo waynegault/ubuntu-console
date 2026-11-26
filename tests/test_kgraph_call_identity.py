@@ -241,3 +241,43 @@ def test_a_docstring_mentioning_a_name_is_not_a_registration(tmp_path):
     )
     edges = _edges(g)
     assert not any(label == "registers" for _, _, label in edges)
+
+
+def test_a_pydantic_validator_registers(tmp_path):
+    """Detects: `@model_validator` invoked by pydantic, never by a call site."""
+    g = _graph(
+        tmp_path,
+        "m.py",
+        """
+        from pydantic import model_validator
+
+
+        class P:
+            @model_validator(mode="after")
+            def validate_invariants(self):
+                return self
+        """,
+    )
+    edges = _edges(g)
+    assert ("ast_file:m-py", "ast_func:python:validate_invariants", "registers") in edges
+
+
+def test_runtime_name_patterns_register_without_a_decorator(tmp_path):
+    """Detects: `pytest_*` hooks and HTTP verb handlers, which pytest/http.server call
+    by NAME with no decorator and no identifier anywhere."""
+    g = _graph(
+        tmp_path,
+        "h.py",
+        """
+        def pytest_runtest_logreport(report):
+            return None
+
+
+        class H:
+            def do_POST(self):
+                return None
+        """,
+    )
+    targets = {dst for _, dst, label in _edges(g) if label == "registers"}
+    assert "ast_func:python:pytest_runtest_logreport" in targets
+    assert "ast_func:python:do_POST" in targets

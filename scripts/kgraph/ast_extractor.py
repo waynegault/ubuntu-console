@@ -496,7 +496,30 @@ _REGISTRATION_DECORATORS = frozenset(
         "fixture",
         "middleware",
         "exception_handler",
+        # pydantic: a validator is invoked by the model, never by a call site.
+        "model_validator",
+        "field_validator",
+        "root_validator",
+        "validator",
+        # a property is read as an attribute; so are its setter and deleter.
+        "property",
+        "cached_property",
+        "setter",
+        "deleter",
     }
+)
+
+# Names a RUNTIME invokes with neither a decorator nor a call site.  Measured
+# 2026-11-26: three `pytest_*` hooks in tools/vscode-pytest-log and the HTTP verb
+# handlers in scripts/kgraph/mcp_server were callerless for this reason alone.
+_RUNTIME_NAME_PATTERNS = (
+    re.compile(r"^pytest_[a-z_]+$"),
+    re.compile(r"^do_(GET|POST|PUT|DELETE|OPTIONS|HEAD|PATCH)$"),
+    # A dunder is invoked by the interpreter — `len(x)` calls `__len__`, `x.attr`
+    # falls back to `__getattr__`.
+    re.compile(r"^__[a-z][a-z0-9_]*__$"),
+    # ast.NodeVisitor dispatches on the node class name: `visit_Call`.
+    re.compile(r"^visit_[A-Z]\w*$"),
 )
 
 
@@ -577,6 +600,8 @@ def _extract_python_defs(
             # `retrieval_coverage` is invoked through `@mcp.tool()` and read as unused —
             # the only false-unused on a 132-row sample.
             registered_as = _registration_decorator(node, code)
+            if not registered_as and any(pat.match(name.strip()) for pat in _RUNTIME_NAME_PATTERNS):
+                registered_as = "runtime-name:" + name.strip()
             if registered_as:
                 builder.add_edge(
                     {
