@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 166
+# Module Version: 167
 #   v166 (2026-11-25): define fmt/fmts above the LLAMA_MAX_PROBE_CTX ceiling banner so
 #   bash calls the comma-format helper instead of /usr/bin/fmt.
 # Module Version: 165
@@ -2385,7 +2385,16 @@ bench_once_multi() {
     local tag="/tmp/at-vram-${MODEL}-${c}"
 
     _BENCH_FAIL_TYPE=""
-    cleanup_gpu >&2 || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
+    # cleanup_gpu failing is NOT an out-of-memory verdict: it means the card could not be
+    # cleared, so the measurement never happened. Recording it as "oom" made the
+    # certification descend past rows that were never tested and report a memory verdict
+    # about a port that was still held (T-JARVIS-120). The type travels, so the caller's
+    # message and the metrics file both name the real cause.
+    if ! cleanup_gpu >&2; then
+        _BENCH_FAIL_TYPE="cleanup_failed"
+        echo "0|0|cleanup_failed" > "/tmp/at-metrics-$$"
+        echo ""; return 1
+    fi
 
     if [[ ! -f $tag ]]; then
         local g; g=$(timeout -k 2 "${TAC_SMI_TIMEOUT:-10}" \
@@ -3446,7 +3455,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             _cert_t=$(bench_ctx "$_cert_dc" "$BEST_B" "$BEST_U" 5 \
                 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert_t=""
             if [[ -z "$_cert_t" ]] || [[ $(echo "${_cert_t:-0} > 0" | bc 2>/dev/null || echo "0") != 1 ]]; then
-                echo "  ctx $(fmt "$_cert_dc") — filled load failed, continuing down"
+                echo "  ctx $(fmt "$_cert_dc") — filled load failed (cause=${_BENCH_FAIL_TYPE:-unclassified}), continuing down"
                 continue
             fi
             IFS='|' read -r _cert_d _cert_p _cert_f < "/tmp/at-metrics-$$" 2>/dev/null || true
