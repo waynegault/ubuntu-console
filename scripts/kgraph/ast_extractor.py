@@ -169,6 +169,11 @@ _SKIP_DIRS = ("venv", "node_modules", "__pycache__", "dist", "build", ".git")
 
 EXT_LANG = {
     ".sh": "bash",
+    # Bats files ARE bash: 119 suites of 2.0M here, and they are the only place the
+    # shell functions under test are called. Leaving them out made every shell
+    # function look test-uncovered and made `tests/*.bats` invisible as test code
+    # (measured 2026-11-26: production coverage read 39.3% with them missing).
+    ".bats": "bash",
     ".bash": "bash",
     ".zsh": "bash",
     ".py": "python",

@@ -166,13 +166,30 @@ def check(rows: list[dict[str, str]]) -> int:
 
 
 def report(db: Path) -> int:
+    """Caller coverage, split production from test code.
+
+    The split is the measurement.  Quoting one figure over both populations read
+    41.8% for Python, because 1,581 of its 2,560 functions are pytest test functions
+    that pytest collects BY NAME and nothing calls.  Production Python reads 85.5% on
+    the same graph (measured 2026-11-26), and the two populations answer different
+    questions, so they are never summed.
+    """
     defs = load_definitions(db)
     for lang in ("bash", "python"):
         group = [d for d in defs if d["lang"] == lang]
-        used = sum(1 for d in group if d["kgraph"] == "used")
-        share = 100.0 * used / max(len(group), 1)
-        print(f"{lang:7s} {len(group):5d} definitions, {used:5d} with a caller ({share:.1f}%)")
+        prod = [d for d in group if not _test_side(d["defined_in"])]
+        test = [d for d in group if _test_side(d["defined_in"])]
+        for label, subset in (("production", prod), ("tests/", test)):
+            used = sum(1 for d in subset if d["kgraph"] == "used")
+            share = 100.0 * used / max(len(subset), 1)
+            print(f"{lang:7s} {label:11s} {used:5d}/{len(subset):5d} with a caller ({share:5.1f}%)")
     return 0
+
+
+def _test_side(path: str) -> bool:
+    """A path that ships with the test suite rather than the product."""
+    lowered = path.replace("\\", "/").lower()
+    return "/tests/" in f"/{lowered}" or lowered.startswith("tests/")
 
 
 def main(argv: list[str] | None = None) -> int:

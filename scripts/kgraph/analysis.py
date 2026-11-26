@@ -80,6 +80,18 @@ def _is_test_path(path: str) -> bool:
     return "/tests/" in f"/{lowered}" or lowered.startswith("tests/")
 
 
+def _is_production(node: Any) -> bool:
+    """A node whose file is not under tests/.
+
+    Measured 2026-11-26: 1,581 of 2,560 Python "functions" in this graph are pytest
+    test functions, which pytest collects BY NAME and nothing ever calls. Counting
+    them made production caller coverage read 41.8% when it is 85.5%, and made the
+    coverage denominator four-fifths test code. Coverage of production code is the
+    question; test code is reported as its own population.
+    """
+    return not _is_test_path(_node_path(node))
+
+
 @dataclass(frozen=True)
 class IsolatedSymbol:
     """A callable-ish node with almost no wiring.  A GAP SIGNAL, not a verdict."""
@@ -151,6 +163,8 @@ def isolated_symbols(graph: Graph) -> tuple[IsolatedSymbol, ...]:
         # isolated set holds functions and classes only.  Counting call nodes put
         # /usr/bin/smbd and `bats` in the list on the first run.
         if node.type in _NON_SYMBOL_TYPES or node.type == "call" or not _is_code_node(node):
+            continue
+        if not _is_production(node):
             continue
         label = node.label or ""
         if not label or label.startswith(".") and label.endswith("()"):
@@ -278,32 +292,47 @@ def unresolved_calls(graph: Graph) -> tuple[UnresolvedCall, ...]:
 
 
 def test_coverage(graph: Graph) -> CoverageReport:
-    """Functions a test file reaches through a call edge.
+    """Production functions REACHABLE from a test file, transitively.
 
-    Ported from graphify's `test_coverage`, which asks whether a test reaches a
-    module.  kgraph answers at FUNCTION granularity because it now has caller
-    identity: a function is covered when a call node its callers include is
-    referenced by a file under tests/.  Module-level coverage is the union of its
-    functions, so this is strictly finer.
+    Ported from graphify's `test_coverage`, which asks whether a test REACHES a
+    module. Reachability is transitive: a helper called by a tested function is
+    covered even though no test names it. A direct-only reading reported 261/1963
+    (13.3%) on this tree, which is not what the question means.
+
+    Seeds are the functions a test file calls directly; the fixpoint follows
+    `func -> call -> func` edges forward from every covered function.
     """
     nodes, out, inc = _index(graph)
+    functions = {nid for nid, n in nodes.items() if n.type == "function" and _is_production(n)}
+
+    def callees_of(call_id: str) -> set[str]:
+        return {edge.target for edge in out.get(call_id, ()) if edge.label == "calls" and edge.target in functions}
+
     covered: set[str] = set()
-    functions = {nid for nid, n in nodes.items() if n.type == "function"}
     for call_id, edges in inc.items():
         call_node = nodes.get(call_id)
         if call_node is None or call_node.type != "call":
             continue
-        # A call node is test-reachable when any file that references it is a test.
         test_reachable = any(
             _is_test_path(_node_path(nodes.get(e.source)))
             for e in edges
             if nodes.get(e.source) is not None and nodes.get(e.source).type == "file"
         )
-        if not test_reachable:
-            continue
-        for edge in out.get(call_id, ()):
-            if edge.label == "calls" and edge.target in functions:
-                covered.add(edge.target)
+        if test_reachable:
+            covered |= callees_of(call_id)
+
+    frontier = list(covered)
+    while frontier:
+        current = frontier.pop()
+        for edge in out.get(current, ()):
+            target_node = nodes.get(edge.target)
+            if target_node is None or target_node.type != "call":
+                continue
+            for callee in callees_of(edge.target):
+                if callee not in covered:
+                    covered.add(callee)
+                    frontier.append(callee)
+
     uncovered = functions - covered
     return CoverageReport(
         covered=tuple(sorted(covered)),
@@ -364,9 +393,11 @@ def format_report(report: DeadcodeReport, *, show_all: bool = False, limit: int 
     coverage = report.coverage
     lines.append("")
     lines.append(
-        f"TEST COVERAGE  {len(coverage.covered)}/{coverage.total} functions reachable "
-        f"from a test file ({coverage.ratio * 100:.1f}%)"
+        f"TEST COVERAGE  {len(coverage.covered)}/{coverage.total} PRODUCTION functions "
+        f"reachable from a test file ({coverage.ratio * 100:.1f}%)"
     )
+    lines.append("  scope is production code: test functions are collected BY NAME by")
+    lines.append("  pytest and nothing calls them, so they are not a coverage denominator")
     lines.append("  reachability by call edge, not execution: a function called only")
     lines.append("  from untested code counts as uncovered even if it runs in production")
     uncovered = coverage.uncovered
