@@ -344,7 +344,14 @@ stub_timeout() {
     stub_timeout
     local _args="$TAC_TEST_TMPDIR/args"
     : > "$_args"
-    openclaw() { printf '%s\n' "$*" >> "$_args"; printf '%s\n' '{"ok":true}'; return 0; }
+    # THE REAL BODY SHAPE (measured 2026-11-26): no `ok` field exists. `{"ok":true}` is not
+    # what this CLI emits, and a fixture that answers a shape the tool never produces tests
+    # the stub rather than the code.
+    openclaw() {
+        printf '%s\n' "$*" >> "$_args"
+        printf '%s\n' '{"workspaceDir":"/tmp/ws","storePath":"s","lockPath":"l","audit":{},"candidates":[],"apply":{"applied":0,"appended":0}}'
+        return 0
+    }
     run __oc_purge_memory_promote_all finn juno
     [ "$status" -eq 0 ]
     grep -q -- '--agent finn' "$_args"
@@ -390,4 +397,69 @@ stub_timeout() {
     run __oc_purge_store_left_count
     [ "$status" -eq 0 ]
     [ "$output" = "3" ]
+}
+
+@test "promote: the REAL body has no ok field, and that is a pass, not 14 FAILED lanes" {
+    # v46 asserted `.ok == true` on this body. Measured 2026-11-26 in a live offline window:
+    # the keys are workspaceDir, storePath, lockPath, audit, candidates[, apply] -- there is no
+    # `ok`, so that gate was false on every SUCCESSFUL run. This is the falsification: the body
+    # below is copied from a real run, and the verdict must not be FAILED.
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/workspace-hal"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    __oc_purge_offline_window() { "$@"; }
+    __oc_purge_promote_possible() { return 0; }
+    stub_timeout
+    openclaw() {
+        printf '%s\n' '[secrets] memory promote: gateway secrets.resolve unavailable (ECONNREFUSED); resolved command secrets locally.'
+        printf '%s\n' '{"workspaceDir":"/tmp/ws","storePath":"s","lockPath":"l","audit":{"entryCount":512},"candidates":[],"apply":{"applied":0,"appended":0}}'
+        return 0
+    }
+    run __oc_purge_memory_promote_all hal
+    [ "$status" -eq 0 ]
+    [[ "$output" != *FAILED* ]]
+}
+
+@test "promote: a MEMORY.md whose sha changed is the proof the prose was written" {
+    export HOME="$TAC_TEST_TMPDIR"
+    mkdir -p "$HOME/.openclaw/workspace-hal"
+    printf 'before\n' > "$HOME/.openclaw/workspace-hal/MEMORY.md"
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    # PRINT the verdict: every other case stubs this out, which is why this one asserts on a
+    # word the helper emits rather than on an exit code alone.
+    __tac_info() { printf '%s\n' "${2:-}"; }
+    __oc_purge_offline_window() { "$@"; }
+    __oc_purge_promote_possible() { return 0; }
+    stub_timeout
+    openclaw() {
+        printf 'after\n' > "$HOME/.openclaw/workspace-hal/MEMORY.md"
+        printf '%s\n' '{"workspaceDir":"/tmp/ws","storePath":"s","lockPath":"l","audit":{},"candidates":[],"apply":{"applied":1}}'
+        return 0
+    }
+    run __oc_purge_memory_promote_all hal
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"written"* ]]
+}
+
+@test "promote probe: the SUCCESS spelling is accepted, a bare secret failure is not" {
+    source "$REPO_ROOT/scripts/09c-oc-core.sh"
+    __tac_info() { :; }
+    stub_timeout
+    # A WORKING offline promote still prints the secrets.resolve line and then resolves
+    # locally. v46 refused on the first half, so the window never opened on a healthy box.
+    openclaw() {
+        printf '%s\n' '[secrets] memory promote: gateway secrets.resolve unavailable (ECONNREFUSED); resolved command secrets locally.'
+        printf '%s\n' '{"workspaceDir":"/tmp/ws","storePath":"s","lockPath":"l","audit":{},"candidates":[]}'
+        return 0
+    }
+    run __oc_purge_promote_possible hal
+    [ "$status" -eq 0 ]
+
+    openclaw() {
+        printf '%s\n' '[secrets] memory promote: gateway secrets.resolve unavailable (ECONNREFUSED).'
+        return 0
+    }
+    run __oc_purge_promote_possible hal
+    [ "$status" -eq 1 ]
 }

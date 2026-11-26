@@ -1,7 +1,20 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 47
+# Module Version: 49
+#   v49 (2026-11-26): no behaviour change. Three v48 lines ran past 120 columns and took the
+#       §18.3 8.1.8 count 287 -> 290; wrapped them rather than re-baselining, because a
+#       re-baseline would hide the next one.
+#   v48 (2026-11-26): TWO GATES IN v46 THAT COULD NEVER PASS, both found by opening a real
+#       offline window instead of reasoning about one. (1) `memory promote --json` emits NO `ok`
+#       field -- keys are workspaceDir, storePath, lockPath, audit, candidates[, apply] -- so
+#       `.ok == true` was false on every SUCCESSFUL run and would have reported 14 of 14 lanes
+#       FAILED while MEMORY.md was being written correctly. (2) A working offline promote still
+#       prints `gateway secrets.resolve unavailable ...; resolved command secrets locally`, and
+#       the probe refused on the first half, so the window never opened. The success spelling
+#       is now the second half. The write is proven by MEMORY.md's sha, and "nothing qualified"
+#       is reported apart from FAILED because it is a threshold, not a fault: measured this day,
+#       every lane's best candidate scores below the 0.75 default.
 #   v47 (2026-11-26): three fixes found by running v46's own new suite.
 #     (a) __oc_purge_stderr printed a bare newline for an EMPTY body, so a refusal whose
 #         CLI said nothing prepended a blank line to the delete report and the report's
@@ -874,35 +887,78 @@ function __oc_purge_memory_promote_all() {
     # The command the offline window runs: one `memory promote --apply` per agent, counting
     # a body that says ok:false as a failure even when the CLI exited 0.
     _oc_promote_pass() {
-        local _ag _out _ok=0 _bad=0
+        local _ag _out _json _ok=0 _none=0 _bad=0
+        local _mem _sha_before _sha_after
         for _ag in "${_agents[@]}"
         do
+            _mem="$HOME/.openclaw/workspace-$_ag/MEMORY.md"
+            _sha_before=""
+            [[ -f "$_mem" ]] && _sha_before=$(sha256sum "$_mem" | cut -d' ' -f1)
             if ! _out=$(timeout -k 10 300 openclaw memory promote --agent "$_ag" --apply --json 2>&1)
             then
                 _bad=$(( _bad + 1 ))
                 __oc_purge_stderr "$_out"
                 continue
             fi
-            # A SUCCESS CODE IS NOT A SUCCESS (v46).  The 2026-11-25 run counted 14 exit codes of
-            # 0 while every one of the 14 bodies carried a secrets.resolve failure and no
-            # MEMORY.md grew a byte.  The BODY is the claim: require ok:true.
-            if ! printf '%s' "$_out" | jq -e '.ok == true' >/dev/null 2>&1
+            # A SUCCESS CODE IS NOT A SUCCESS (v46), AND NEITHER IS A FIELD I ASSUMED (v48).
+            # Measured 2026-11-26 in a real offline window: `memory promote --json` DOES NOT
+            # EMIT AN `ok` FIELD AT ALL.  Its keys are
+            #   workspaceDir, storePath, lockPath, audit, candidates[, apply]
+            # so v46's `.ok == true` was FALSE ON EVERY SUCCESSFUL RUN -- a gate that cannot
+            # pass, which is the same class of defect it was written to repair.  The success
+            # spelling here is the presence of the body's own structure plus a measured write.
+            # `[secrets]` chatter goes to stderr and is merged by 2>&1, so the JSON starts at
+            # the first line beginning with '{'.
+            _json=$(printf '%s\n' "$_out" | sed -n '/^{/,$p')
+            if ! printf '%s' "$_json" \
+                | jq -e 'has("workspaceDir") and has("audit") and has("candidates")' >/dev/null 2>&1
             then
                 _bad=$(( _bad + 1 ))
                 __oc_purge_stderr "$_out"
                 continue
             fi
-            _ok=$(( _ok + 1 ))
+            # A BODY THAT NAMES AN ERROR IS A FAILURE EVEN WITH THE STRUCTURE PRESENT.
+            if printf '%s' "$_json" | jq -e '.error != null' >/dev/null 2>&1
+            then
+                _bad=$(( _bad + 1 ))
+                __oc_purge_stderr "$_out"
+                continue
+            fi
+            _sha_after=""
+            [[ -f "$_mem" ]] && _sha_after=$(sha256sum "$_mem" | cut -d' ' -f1)
+            # THE WRITE IS THE PROOF, NOT THE COUNT.  `.apply.applied` counts candidates the
+            # scorer accepted; MEMORY.md growing is the only thing a next session can read.
+            if [[ -n "$_sha_after" && "$_sha_after" != "$_sha_before" ]]
+            then
+                _ok=$(( _ok + 1 ))
+            else
+                # NOT A FAILURE, AND NOT SILENT.  Measured 2026-11-26: every lane's candidates
+                # score BELOW the 0.75 default (hal tops at 0.486, finn 0.695, sarah 0.512) and
+                # `uniqueQueries` reads 0 for all of them, so the diversity component is
+                # structurally zero.  The honest wording for that is "nothing qualified", and
+                # reporting it as FAILED would make the fleet look broken when it is the
+                # promotion threshold that is unreachable.
+                _none=$(( _none + 1 ))
+            fi
         done
         if (( _bad > 0 ))
         then
             __tac_info "Memory" \
-                "[MEMORY.md promote: $_ok applied, $_bad FAILED of ${#_agents[@]} agent(s) - body read]" \
-                "$C_Warning"
+                "[MEMORY.md promote: $_ok written, $_none nothing qualified," \
+                " $_bad FAILED of ${#_agents[@]} - body+sha]" \
+                "$C_Error"
             return 1
         fi
+        if (( _none > 0 ))
+        then
+            __tac_info "Memory" \
+                "[MEMORY.md promote: $_ok written, $_none nothing qualified" \
+                " of ${#_agents[@]} - below threshold, not an error]" \
+                "$C_Warning"
+            return 0
+        fi
         __tac_info "Memory" \
-            "[MEMORY.md promote: $_ok applied, 0 failed of ${#_agents[@]} agent(s) - body read, not rc]" "$C_Success"
+            "[MEMORY.md promote: $_ok written of ${#_agents[@]} - MEMORY.md sha changed, not rc]" "$C_Success"
         return 0
     }
 
@@ -939,13 +995,25 @@ function __oc_purge_promote_possible() {
         __tac_info "Memory" "[promote probe: still not admitted - a Gateway still owns the state root]" "$C_Error"
         return 1
     fi
-    if [[ "$_out" == *"secrets.resolve unavailable"* ]]
+    # RECOGNISE THE SUCCESS SPELLING (v48, rule 27).  A WORKING offline promote STILL PRINTS
+    # the phrase this probe used to reject on: measured 2026-11-26, the successful body's stderr
+    # carries
+    #   [secrets] memory promote: gateway secrets.resolve unavailable (ECONNREFUSED ...
+    #   ); resolved command secrets locally.
+    # The old arm matched on the first half and refused a promote that had already worked, so
+    # the window never ran.  The distinguishing clause is the SECOND half: "resolved command
+    # secrets locally" is the success spelling, and its absence is the failure.
+    if [[ "$_out" == *"secrets.resolve unavailable"* && "$_out" != *"resolved command secrets locally"* ]]
     then
         __tac_info "Memory" \
             "[promote probe: offline, but the secret still cannot resolve - MEMORY.md cannot be written]" "$C_Error"
         return 1
     fi
-    if printf '%s' "$_out" | jq -e '.ok == true or .workspaceDir != null' >/dev/null 2>&1
+    # The success shape is the body's own structure; `ok` is not among its fields.
+    local _pjson
+    _pjson=$(printf '%s\n' "$_out" | sed -n '/^{/,$p')
+    if printf '%s' "$_pjson" | jq -e 'has("workspaceDir") and has("candidates")' >/dev/null 2>&1 \
+        && ! printf '%s' "$_pjson" | jq -e '.error != null' >/dev/null 2>&1
     then
         return 0
     fi
@@ -1679,8 +1747,13 @@ function oc-purge() {
         __tac_info "Sessions" "[FAILED to delete store rows - reported, not claimed]" "$C_Error"
         _failed=$(( _failed + 1 ))
     else
-        local _runs=0
-        read -r _deleted _mains _cron _runs <<< "$_counts"
+        # FIVE FIELDS, NOT FOUR (v48).  __oc_purge_delete_sessions prints
+        # "<deleted> <mains> <cron> <runs> <dfail>"; this read listed four names, so the LAST
+        # variable absorbed the remainder and read "0 0".  `(( _runs > 0 ))` then became
+        # `(( 0 0 > 0 ))` and bash printed "arithmetic syntax error in expression (error token
+        # is \"0\")" into the middle of the purge report.  Measured 2026-11-26 in the 02 suite.
+        local _runs=0 _dfail=0
+        read -r _deleted _mains _cron _runs _dfail <<< "$_counts"
         __tac_info "Sessions" "[$_deleted session key(s) deleted]" "$C_Dim"
         if (( _runs > 0 ))
         then
