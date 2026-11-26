@@ -178,3 +178,24 @@ def test_report_without_a_source_root_says_so_rather_than_printing_zero():
     """Detects: a missing root rendered as '0 call sites', i.e. a false measurement."""
     text = format_report(build_report(_graph([], [])))
     assert "pass --repo" in text
+
+
+def test_coverage_against_the_real_extractor_is_not_zero(tmp_path):
+    """Detects: a coverage figure that is 0% because it keyed on a field the real
+    graph leaves empty.  The hand-built fixture above sets `file` on the file node and
+    therefore could not disagree with the implementation — this one runs the extractor
+    that actually produces the graph, so a wrong field access shows up as 0/2.
+    """
+    from kgraph.ast_extractor import extract_repo_graph
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts" / "a.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_a.py").write_text(
+        "from scripts.a import helper\n\n\ndef test_it():\n    helper()\n", encoding="utf-8"
+    )
+    graph = Graph.from_dict(extract_repo_graph(str(tmp_path)))
+    report = coverage_of(graph)
+    assert report.total >= 2, "the extractor must see both functions"
+    assert report.covered, "a function called from tests/ cannot be 0% covered"
+    assert len(report.covered) < report.total, "and the untested one must stay uncovered"

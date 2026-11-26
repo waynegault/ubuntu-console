@@ -63,6 +63,17 @@ def _is_code_node(node: Any) -> bool:
     return str(getattr(node, "id", "")).startswith("ast_")
 
 
+def _node_path(node: Any) -> str:
+    """A node's source path: `file`, else the absolute `path` a FILE node carries.
+
+    Measured 2026-11-26: `ast_file:*` nodes ship `file=""` and a bare-basename label,
+    with the only real location in `path`.  Test-coverage keyed on `file` therefore
+    reported 0/3554 functions as reachable from a test — a wrong answer that looked
+    like a finding, and the reason the coverage case now runs the REAL extractor.
+    """
+    return str(getattr(node, "file", "") or getattr(node, "path", "") or "")
+
+
 def _is_test_path(path: str) -> bool:
     """A source path that ships with the test suite rather than the product."""
     lowered = path.replace("\\", "/").lower()
@@ -151,7 +162,7 @@ def isolated_symbols(graph: Graph) -> tuple[IsolatedSymbol, ...]:
                     node_id=node_id,
                     label=label,
                     node_type=node.type,
-                    file=node.file,
+                    file=_node_path(node),
                     degree=degree,
                     defined_only=degree == 1,
                 )
@@ -249,7 +260,7 @@ def unresolved_calls(graph: Graph) -> tuple[UnresolvedCall, ...]:
             continue
         referencing_files = tuple(
             sorted(
-                nodes.get(edge.source).file or edge.source
+                _node_path(nodes.get(edge.source)) or edge.source
                 for edge in inc.get(node_id, ())
                 if (nodes.get(edge.source) is not None)
             )
@@ -284,7 +295,7 @@ def test_coverage(graph: Graph) -> CoverageReport:
             continue
         # A call node is test-reachable when any file that references it is a test.
         test_reachable = any(
-            _is_test_path(nodes.get(e.source).file or "")
+            _is_test_path(_node_path(nodes.get(e.source)))
             for e in edges
             if nodes.get(e.source) is not None and nodes.get(e.source).type == "file"
         )
@@ -461,9 +472,10 @@ def call_frequency(graph: Graph, source_root: Path) -> CallFrequency:
     """
     files: set[Path] = set()
     for node in graph.nodes:
-        if node.type in _NON_SYMBOL_TYPES or not _is_code_node(node) or not node.file:
+        if node.type in _NON_SYMBOL_TYPES or not _is_code_node(node) or not _node_path(node):
             continue
-        candidate = source_root / node.file
+        raw = _node_path(node)
+        candidate = Path(raw) if Path(raw).is_absolute() else source_root / raw
         if candidate.is_file():
             files.add(candidate)
     # Only pairs whose CALLEE is a function the graph knows: graphify's overlay
