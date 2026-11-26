@@ -207,3 +207,27 @@ def test_coverage_against_the_real_extractor_scopes_to_production(tmp_path):
     assert not any("test_it" in nid for nid in report.covered + report.uncovered), (
         "a pytest function is collected by name, not called, so it is not a denominator"
     )
+
+
+def test_isolated_report_names_the_population_by_type():
+    """Detects: a headline count read as "N dead FUNCTIONS" when most are classes.
+
+    Measured on investigator 2026-11-26: 1,749 isolated symbols were 1,729 classes and
+    20 functions, and the report printed one number with no breakdown.
+    """
+    graph = _graph(
+        [
+            _node("ast_class:python:Orphan", "Orphan", "class", "a.py"),
+            _node("ast_func:python:lonely", "lonely", "function", "a.py"),
+            _node("ast_file:a", "a", "file", "a.py"),
+            # a `defines` edge leaves each subject at degree 1
+        ],
+        [
+            _edge("ast_file:a", "ast_class:python:Orphan", "defines"),
+            _edge("ast_file:a", "ast_func:python:lonely", "defines"),
+        ],
+    )
+    report = build_report(graph)
+    assert report.isolated_by_type == {"class": 1, "function": 1}
+    assert sum(report.isolated_by_type.values()) == len(report.isolated)
+    assert "by node type: class=1, function=1" in format_report(report)

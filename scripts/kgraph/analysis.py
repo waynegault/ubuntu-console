@@ -145,6 +145,10 @@ class DeadcodeReport:
     unresolved: tuple[UnresolvedCall, ...] = ()
     coverage: CoverageReport = field(default_factory=CoverageReport)
     by_language: dict[str, int] = field(default_factory=dict)
+    # The population, split by node type. Without this the headline "N defined but
+    # never referenced" reads as N FUNCTIONS; measured on investigator, 1,729 of 1,749
+    # were CLASSES with only a `defines` edge and just 20 were functions.
+    isolated_by_type: dict[str, int] = field(default_factory=dict)
     frequency: CallFrequency = field(default_factory=CallFrequency)
 
 
@@ -350,6 +354,7 @@ def build_report(graph: Graph, source_root: Path | None = None) -> DeadcodeRepor
         node = nodes.get(symbol.node_id)
         by_language[node.language or "?"] += 1
     return DeadcodeReport(
+        isolated_by_type=dict(sorted(Counter(s.node_type for s in isolated).items())),
         isolated=isolated,
         unresolved=unresolved_calls(graph),
         coverage=test_coverage(graph),
@@ -367,6 +372,8 @@ def format_report(report: DeadcodeReport, *, show_all: bool = False, limit: int 
     lines.append(f"ISOLATED SYMBOLS  ({len(unwired)} with no edge, {len(defined_only)} defined but never referenced)")
     lines.append("  a WIRING GAP signal, not dead code: entry points (main, a systemd")
     lines.append("  ExecStart target, a function a user types) legitimately have degree <= 1")
+    if report.isolated_by_type:
+        lines.append("  by node type: " + ", ".join(f"{k}={v}" for k, v in report.isolated_by_type.items()))
     if report.by_language:
         lines.append("  by language: " + ", ".join(f"{k}={v}" for k, v in report.by_language.items()))
     for symbol in isolated if show_all else unwired[:limit]:
