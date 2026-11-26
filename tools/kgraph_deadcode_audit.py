@@ -76,6 +76,45 @@ def is_test_path(path: str) -> bool:
     return "/tests/" in f"/{lowered}" or lowered.startswith("tests/")
 
 
+def _definitions_from_graph(graph: dict) -> list[dict[str, str]]:
+    """Definitions and caller counts from an in-memory extraction.
+
+    WHY (2026-11-26, Wayne: "point kgraph at investigator"): the DB path is this box's
+    store for ONE repo.  A directory can be measured without writing anything, which is
+    what pointing the tool at another checkout requires — `kgraph update` also runs
+    markdown import, community detection and a PR dashboard, none of which a verdict
+    needs (it ran ten minutes on investigator without producing a store).
+    """
+    called = {e["target"] for e in graph["edges"] if e.get("label") == "calls"}
+    callers: dict[str, set[str]] = {}
+    for edge in graph["edges"]:
+        if edge.get("label") == "calls":
+            callers.setdefault(edge["target"], set()).add(edge["source"])
+    out: list[dict[str, str]] = []
+    for node in graph["nodes"]:
+        if node.get("type") != "function":
+            continue
+        srcs = sorted(callers.get(node["id"], ()))
+        out.append(
+            {
+                "id": node["id"],
+                "lang": node.get("language") or "python",
+                "name": node.get("label") or "",
+                "defined_in": str(node.get("file") or node.get("rel_path") or node.get("path") or ""),
+                "kgraph": "used" if node["id"] in called else "unused",
+                "callers": ",".join(s.replace("ast_file:", "").replace("ast_call:", "call:") for s in srcs[:4]),
+            }
+        )
+    return out
+
+
+def load_definitions_from_dir(root: Path) -> list[dict[str, str]]:
+    """Extract a repo in memory and return its definitions. Writes nothing."""
+    from kgraph.ast_extractor import extract_repo_graph
+
+    return _definitions_from_graph(extract_repo_graph(str(root)))
+
+
 def load_definitions(db: Path) -> list[dict[str, str]]:
     """Function definitions kgraph knows, with the files it believes call them."""
     if not db.is_file():
@@ -163,13 +202,22 @@ def read_sample(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def check(rows: list[dict[str, str]]) -> int:
+def check(rows: list[dict[str, str]], defs: list[dict[str, str]] | None = None) -> int:
     blank = [r for r in rows if r["truth"] not in ("used", "unused")]
     if blank:
         print(f"CANNOT CERTIFY: {len(blank)} row(s) have no truth value yet", file=sys.stderr)
         for r in blank[:10]:
             print(f"  line {r['lineno']}: {r['lang']} {r['name']}", file=sys.stderr)
         return 2
+
+    # The verdict is read from the GRAPH JUST BUILT, not from the row's stored column:
+    # a check against the file's own snapshot proves only that the file has not changed
+    # (measured 2026-11-26, pointing the tool at another checkout).
+    live = {(d["lang"], d["name"], d["defined_in"]): d["kgraph"] for d in (defs or [])}
+    for row in rows:
+        key = (row["lang"], row["name"], row["defined_in"])
+        if key in live:
+            row["kgraph"] = live[key]
 
     false_unused = [r for r in rows if r["kgraph"] == "unused" and r["truth"] == "used"]
     false_used = [r for r in rows if r["kgraph"] == "used" and r["truth"] == "unused"]
@@ -201,7 +249,7 @@ def check(rows: list[dict[str, str]]) -> int:
     return 0
 
 
-def report(db: Path) -> int:
+def report(defs: list[dict[str, str]]) -> int:
     """Caller coverage, split production from test code.
 
     The split is the measurement.  Quoting one figure over both populations read
@@ -210,7 +258,6 @@ def report(db: Path) -> int:
     the same graph (measured 2026-11-26), and the two populations answer different
     questions, so they are never summed.
     """
-    defs = load_definitions(db)
     for lang in ("bash", "python"):
         group = [d for d in defs if d["lang"] == lang]
         prod = [d for d in group if not _test_side(d["defined_in"])]
@@ -228,6 +275,12 @@ _test_side = is_test_path
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument(
+        "--graph-dir",
+        type=Path,
+        metavar="DIR",
+        help="measure this checkout directly (no store written); overrides --db",
+    )
     parser.add_argument("--emit", type=Path, metavar="TSV", help="write a sampling template")
     parser.add_argument("--check", type=Path, metavar="TSV", help="certify a filled sample")
     parser.add_argument("--report", action="store_true", help="totals only")
@@ -240,12 +293,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", default="2026-11-26", help="sample seed")
     args = parser.parse_args(argv)
 
+    # One definition loader for both sources: this box's store, or any checkout given as
+    # a directory (which writes nothing — pointing kgraph at another repo must not
+    # disturb either repo's state).
+    defs = load_definitions_from_dir(args.graph_dir.resolve()) if args.graph_dir else load_definitions(args.db)
     if args.check:
-        return check(read_sample(args.check))
+        return check(read_sample(args.check), defs)
     if args.emit:
-        picked = stratify(load_definitions(args.db), args.sample, args.seed, production_only=not args.include_tests)
+        picked = stratify(defs, args.sample, args.seed, production_only=not args.include_tests)
         return emit(picked, args.emit)
-    return report(args.db)
+    return report(defs)
 
 
 if __name__ == "__main__":
