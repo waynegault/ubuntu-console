@@ -97,7 +97,14 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-11-25): retire the commentcap and proofcap arms.  Both patchers are
+#   deleted, so the two -x tests could only ever report "nothing to do" and the arms
+#   were dead weight that read as working.  The read-path tolerance commentcap added
+#   is already in the pristine 2026.11.10 bundle, and the 2001-char throw is a
+#   write-path design limit rather than a defect, so deletion clears the red at its
+#   cause instead of quietening a true alarm.  Recoverable copies of both scripts:
+#   /tmp/patch-retire-backup.
 #   v14 (2026-11-04): a SEVENTH tool is announced -- the VS Code BATS Test Runner's
 #   spawn-timeout patcher (~/.local/bin/vscode-bats-timeout-patch.py), probed rc-aware
 #   like the test-log and agentmail tools (0 patched / 1 reverted / 2 no extension /
@@ -203,13 +210,8 @@ export PATH="/home/linuxbrew/.linuxbrew/bin:/home/wayne/.local/bin:/usr/local/bi
 PATCH="/home/wayne/.local/bin/qwen-guard-patch.sh"
 IDX="/home/wayne/.local/bin/qwen-memory-index-patch.sh"
 STYLE="/home/wayne/.local/bin/qwen-memory-style-patch.sh"
-# The comment-cap patcher lives in the OTHER repo and takes its own package root; named by
-# path here rather than linked into ~/.local/bin, because this watchdog is the only thing
-# that invokes it (card 75b9cfcc).
-COMMENTCAP="/home/wayne/.openclaw/scripts/workboard-commentcap-patch.sh"
-# The Workboard proof-cap + diagnostics-refresh patcher (2026-10-16).  Same foreign
-# bundle as the comment-cap patcher and the same repo, so named the same way.
-PROOFCAP="/home/wayne/.openclaw/scripts/workboard-proofcap-patch.sh"
+# (commentcap / proofcap patcher paths removed 2026-11-25 — both scripts deleted; see the
+# RETIRED note at the probe block below and docs/incidents/2026-11-25-patch-retirement.md.)
 # The VS Code Testing results-logger patcher (2026-10-07).  Named by path like its
 # siblings; its --check is rc-aware, so it is probed separately below rather than by
 # the boolean `! … --check` test the four above use.
@@ -235,8 +237,6 @@ if [[ -n "$QSH_TOOL_ROOT" ]]; then
   PATCH="$QSH_TOOL_ROOT/qwen-guard-patch.sh"
   IDX="$QSH_TOOL_ROOT/qwen-memory-index-patch.sh"
   STYLE="$QSH_TOOL_ROOT/qwen-memory-style-patch.sh"
-  COMMENTCAP="$QSH_TOOL_ROOT/workboard-commentcap-patch.sh"
-  PROOFCAP="$QSH_TOOL_ROOT/workboard-proofcap-patch.sh"
   TESTLOG="$QSH_TOOL_ROOT/vscode-pytest-log-patch.py"
   DENLINK="$QSH_TOOL_ROOT/skill-denlink.sh"
   AGENTMAIL="$QSH_TOOL_ROOT/agentmail-dist-patch.sh"
@@ -259,21 +259,19 @@ fi
 if [[ -x "$STYLE" ]] && ! "$STYLE" --check >/dev/null 2>&1; then
   needed+=(memory-style)
 fi
-if [[ -x "$COMMENTCAP" ]] && ! "$COMMENTCAP" --check >/dev/null 2>&1; then
-  needed+=(commentcap)
-fi
-
-# The proof-cap patcher shares the comment-cap patcher's exit codes (0 applied, 1 a
-# reverted copy, 3 no Workboard bundle, 4 unusable cap, 5 no node), so it cannot use
-# the boolean form either: only rc 1 is a reversion worth re-applying.  Measured
-# 2026-10-16: nothing executable called it, so the proof-cap fix would rot silently.
-PROOFCAP_rc=0
-if [[ -x "$PROOFCAP" ]]; then
-  "$PROOFCAP" --check >/dev/null 2>&1 || PROOFCAP_rc=$?
-  if [[ "$PROOFCAP_rc" -eq 1 ]]; then
-    needed+=(proofcap)
-  fi
-fi
+# commentcap / proofcap RETIRED 2026-11-25 (Wayne). Both patchers are deleted, so the two
+# `-x` tests above would report "nothing to do" forever and the arms are dead weight. They
+# are removed rather than left to pass silently, because a permanently-passing arm is
+# indistinguishable from a working one when it is read a year from now.
+#
+# WHY THEY WENT: not a repair we gave up on. The read-path tolerance commentcap added is
+# ALREADY IN the pristine 2026.11.10 tarball (`?.find(...)?.body??`), and a 3511-char card
+# comment reads back fine through workboard_read; the 2001-char throw is a write-path design
+# limit, not a defect. Together they were the whole 30-minute red on this unit. Deletion
+# clears the failure at its cause instead of quietening a true alarm.
+#
+# Record: see this file's v15 header entry. Recoverable copy of both scripts in
+# /tmp/patch-retire-backup until the trash is purged.
 if [[ -x "$DENLINK" ]] && ! "$DENLINK" --check >/dev/null 2>&1; then
   needed+=(denlink)
 fi
@@ -423,8 +421,6 @@ for tool in "${needed[@]}"; do
     guard) patch="$PATCH"; label="guard patch"; apply_args=() ;;
     memory-index) patch="$IDX"; label="memory-index patch"; apply_args=() ;;
     memory-style) patch="$STYLE"; label="memory-style patch"; apply_args=() ;;
-    commentcap) patch="$COMMENTCAP"; label="workboard-commentcap patch"; apply_args=() ;;
-    proofcap) patch="$PROOFCAP"; label="workboard-proofcap patch"; apply_args=() ;;
     denlink) patch="$DENLINK"; label="plugin-skill hardlink"; apply_args=(--apply) ;;
     testlog) patch="$TESTLOG"; label="test-log patch"; apply_args=(--apply) ;;
     agentmail) patch="$AGENTMAIL"; label="agentmail dist patch"; apply_args=(--apply) ;;
