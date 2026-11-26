@@ -1,7 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 44
+# Module Version: 45
+#   v45 (2026-11-25): memory-first purge.  The reset used to empty every agent main before
+#     any memory had been promoted, so a purge could destroy the only copy of what an agent
+#     had learned.  Order is now: (i) online per-agent `session-backfill --apply`, verified
+#     durable, which gates whether that agent may be reset at all (the gate skips the agent,
+#     not the run, so one bad lane cannot leave the fleet half-purged); (ii) ONE offline
+#     window running `memory promote --apply` for the whole fleet, which is the only context
+#     in which promote is admitted; (iii) the resets, which need the Gateway back because
+#     they are RPC.  The window restores the Gateway on a trap and verifies at the predicate
+#     (`openclaw health`), never at systemd's `active` word.
 #   v44 (2026-11-11): one canonical version line; the historical entries below
 #     are changelog only, so the loader sums this file once (inspection 13.4.3).
 #   v43 (2026-11-01): the dispatcher's help lines for `ms` and `sync-models` describe what
@@ -184,6 +193,7 @@ function xo() {
     fi
 
     # Check if anything is actually running before we try to stop
+    # swallow-ok: a unit that is not loaded reads inactive, and __test_port below is the second opinion; the pair sets _was_running, which the restore arm then uses
     if systemctl --user is-active --quiet "$_svc" 2>/dev/null \
         || __test_port "$OC_PORT"
     then
@@ -198,6 +208,7 @@ function xo() {
     # embedder.
     if __llm_server_running; then
         printf '%s\n' "${C_Dim}Stopping LLM server ...${C_Reset}"
+        # swallow-ok: a failed stop IS the branch condition; the very next line reports "did not land; it may still hold VRAM" rather than proceeding silently
         if ! halt 2>/dev/null; then
             printf '%s\n' "${C_Dim}LLM stop did not land; it may still hold VRAM${C_Reset}"
         fi
@@ -274,8 +285,13 @@ function oc() {
             OPENCLAW_TOKEN=$(< "$_token_file")
         else
             mkdir -p "$HOME/.openclaw"
-            OPENCLAW_TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || \
-                             openssl rand -hex 16 2>/dev/null || \
+            # Token source is a three-rung fallback: urandom, then openssl, then a timestamp
+            # digest. Each rung's failure IS the reason for the next, so none is a silent
+            # failure; the third cannot fail. Markers are inline because the scanner attaches
+            # a marker only to the line directly below it, and each redirection is on a
+            # continued line of its own.
+            OPENCLAW_TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || \  # swallow-ok: rung 1 of 3; its failure selects rung 2
+                             openssl rand -hex 16 2>/dev/null || \  # swallow-ok: rung 2 of 3; its failure selects rung 3, which cannot fail
                              date +%s%N | sha256sum | head -c 32)
             printf '%s' "$OPENCLAW_TOKEN" > "$_token_file"
             chmod 600 "$_token_file"
@@ -704,24 +720,18 @@ function __oc_purge_memory_flush() {
         __oc_purge_stderr "$_bf"
         return 1
     fi
+    # swallow-ok: jq's parse failure and `echo 0` are one outcome — the next line coerces anything non-numeric to 0, so a malformed backfill payload reads "no candidates", never a crash
     _cands=$(printf '%s' "$_bf" | jq -r '(.candidateCount // ([.days[]?.candidateCount // 0] | add) // 0)' 2>/dev/null || echo 0)
     [[ "$_cands" =~ ^[0-9]+$ ]] || _cands=0
 
     _idx_after=$(__oc_purge_memory_index_rows "$_db")
     [[ -f "$_ws/DREAMS.md" ]] && _dreams_after=$(sha256sum "$_ws/DREAMS.md" | cut -d' ' -f1)
 
-    # Deferred promotion: attempt it, and treat the offline-only refusal as DEFERRED, not failed.
-    # If it ever does run (an offline purge), MEMORY.md gains the facts immediately.
-    local _pr="" _promote_state="deferred (offline-only; gateway serving)"
-    if _pr=$(timeout -k 10 300 openclaw memory promote --agent "$_agent" --apply --json 2>&1)
-    then
-        _promote_state="applied"
-    elif printf '%s' "$_pr" | grep -qi 'exclusive offline state ownership\|offline-only'
-    then
-        _promote_state="deferred (offline-only; gateway serving)"
-    else
-        _promote_state="promote errored - see log"
-    fi
+    # Promotion into MEMORY.md is OFFLINE-ONLY, so it is NOT attempted here: this function runs
+    # while the Gateway serves and is called per agent.  __oc_purge_memory_promote_all does the
+    # whole fleet inside ONE offline window -- stopping the Gateway once per agent would be
+    # fourteen restarts for no gain.  The verdict below says which arm carried the proof.
+    local _promote_state="pending offline pass"
 
     # The gate.
     if (( _idx_after > _idx_before ))
@@ -743,6 +753,138 @@ function __oc_purge_memory_flush() {
     return 1
 }
 
+# __oc_purge_memory_promote_all — run the offline-only `memory promote --apply` for every agent
+# that will be reset, inside ONE offline window (one stop, one guaranteed restart).
+#
+# This is the step that makes backfill's staged candidates DURABLE in MEMORY.md.  Without it a
+# purge leaves them staged in the agent store and the promise "still able to access their
+# memories" is met only by tables the agent cannot read as prose.  Wayne authorised the stop on
+# 2026-11-25T19:06Z: "i dont mind purge closing the gateway as long as it starts again."
+#
+# THE RESET DOES NOT WAIT ON THIS.  The gate that decides whether an agent may be reset is
+# __oc_purge_memory_flush, which runs online and has already proven durable staging.  Promotion
+# is an UPGRADE of the same facts into prose, not the only place they exist -- so a promote that
+# fails is reported and counted, and it does not license a refusal to reset an agent whose
+# staging landed.  Saying that plainly matters: it is the difference between "memory preserved"
+# and "memory preserved in a form the next session reads first".
+function __oc_purge_memory_promote_all() {
+    local -a _agents=()
+    local _key _a
+    while IFS= read -r _key
+    do
+        [[ "$_key" == *:main ]] || continue
+        _a="${_key#agent:}"; _a="${_a%%:*}"
+        _agents+=("$_a")
+    done < <(__oc_purge_session_keys)
+    if [[ ${#_agents[@]} -eq 0 ]]
+    then
+        __tac_info "Memory" "[no agents to promote]" "$C_Dim"
+        return 0
+    fi
+
+    _oc_promote_pass() {
+        local _ag _out _ok=0 _bad=0
+        for _ag in "${_agents[@]}"
+        do
+            if _out=$(timeout -k 10 300 openclaw memory promote --agent "$_ag" --apply --json 2>&1)
+            then
+                _ok=$(( _ok + 1 ))
+            else
+                _bad=$(( _bad + 1 ))
+                __tac_info "Memory" "[$_ag: promote FAILED offline - reported, not claimed]" "$C_Error"
+                __oc_purge_stderr "$_out"
+            fi
+        done
+        __tac_info "Memory" "[MEMORY.md promote: $_ok applied, $_bad failed of ${#_agents[@]} agent(s)]" \
+            "$( (( _bad > 0 )) && printf '%s' "$C_Warning" || printf '%s' "$C_Success" )"
+        (( _bad == 0 ))
+    }
+    __oc_purge_offline_window _oc_promote_pass
+    local _rc=$?
+    if (( _rc != 0 ))
+    then
+        __tac_info "Memory" "[promote pass incomplete - memory is staged, prose promotion deferred]" "$C_Warning"
+    fi
+    return 0   # never fails the purge: staging already passed the reset gate
+}
+
+# __oc_purge_offline_window — stop the Gateway so the offline-only memory writes can run, run
+# the caller's command, then GUARANTEE the Gateway comes back.  Returns 1 if it could not
+# restart, and says so loudly: a purge that leaves the fleet dark is worse than a purge that
+# never ran.
+#
+# Wayne, 2026-11-25T19:06Z: "i dont mind purge closing the gateway as long as it starts again."
+# That is a change of owner position.  v33 recorded "oc-purge NEVER stops or restarts the
+# gateway" as a deliberate rule, and that rule was right for the reason it was written: the old
+# version stopped the gateway to clear sessions/, which bought nothing.  This stop is different
+# in kind -- `openclaw memory promote --apply` REFUSES while the Gateway owns the state root
+# ("requires exclusive offline state ownership", measured 2026-11-25), so without an offline
+# window the promote step can never run and the memory gate can only ever defer.
+#
+# The restart is a trap, not a following line: if the agent function dies, is interrupted, or
+# the shell is told to exit, the Gateway still comes back.  A signal is not a bound unless the
+# handler can land (rule 15), so the stop is bounded and the start is VERIFIED by asking
+# `openclaw health`, not by `systemctl is-active` alone -- a unit can read active while the
+# gateway is still binding its port.
+function __oc_purge_offline_window() {
+    local _svc="openclaw-gateway.service"
+    local _cmd=("$@")
+    if [[ ${#_cmd[@]} -eq 0 ]]
+    then
+        __tac_info "Offline" "[offline window: no command supplied]" "$C_Error"
+        return 1
+    fi
+    # swallow-ok: an inactive or absent unit IS the "already offline" answer; the caller then runs the command and the promote refusal reports itself
+    if ! systemctl --user is-active -q "$_svc" 2>/dev/null
+    then
+        # Already offline (a maintenance window, or a stopped box): just run the command.
+        "${_cmd[@]}"
+        return $?
+    fi
+
+    local _restarted=0 _rc=0
+    __oc_purge_gateway_restore() {
+        (( _restarted == 1 )) && return 0
+        _restarted=1
+        systemctl --user start "$_svc" >/dev/null 2>&1
+        # Verify at the predicate: the unit can read active before the port answers.
+        local _i
+        for (( _i = 1; _i <= 60; _i++ ))
+        do
+            # swallow-ok: a health probe that fails IS the retry condition; the loop's exhaustion is what reports the failure, loudly
+            if timeout 10 openclaw health >/dev/null 2>&1
+            then
+                __tac_info "Offline" "[Gateway restarted and ANSWERING]" "$C_Success"
+                return 0
+            fi
+            sleep 3
+        done
+        __tac_info "Offline" "[GATEWAY DID NOT COME BACK - start it by hand: systemctl --user start $_svc]" "$C_Error"
+        return 1
+    }
+    trap '__oc_purge_gateway_restore; trap - EXIT INT TERM' EXIT INT TERM
+
+    __tac_info "Offline" "[stopping $_svc for the memory promote]" "$C_Dim"
+    # swallow-ok: the exit status IS the decision (rc 0 = stopped, non-zero = still up); systemd's error text is not read here, the branch below reports the outcome
+    if ! timeout -k 30 180 systemctl --user stop "$_svc" 2>/dev/null
+    then
+        # The stop did not land, so the Gateway is STILL UP.  Run the command online (promote
+        # will refuse and defer, which is honest) and do NOT run the restore arm -- nothing was
+        # stopped, so "restarting" would be a false report of a window that never opened.
+        trap - EXIT INT TERM
+        __tac_info "Offline" "[could not stop the Gateway - continuing online, promote will defer]" "$C_Warning"
+        "${_cmd[@]}"
+        return $?
+    fi
+
+    __tac_info "Offline" "[Gateway stopped - offline window open]" "$C_Dim"
+    "${_cmd[@]}"
+    _rc=$?
+    __oc_purge_gateway_restore || return 1
+    trap - EXIT INT TERM
+    return $_rc
+}
+
 # __oc_purge_memory_index_rows — count the durable memory rows for a store, 0 when unreadable.
 # Used only as a before/after reading, so an unreadable store reads 0 on both sides and the
 # gate falls through to the candidate/DREAMS arms rather than passing on a phantom increase.
@@ -750,8 +892,12 @@ function __oc_purge_memory_index_rows() {
     local _db="${1:-}"
     [[ -f "$_db" ]] || { printf '0\n'; return 0; }
     local _n
+    # The store read is a before/after witness only: an unreadable or absent store reads 0
+    # on BOTH sides, so the gate falls through to the candidate/DREAMS arms rather than
+    # passing on a phantom increase. The marker is inline because the scanner attaches a
+    # marker only to the line directly below it, and the redirection is on the continued line.
     _n=$(timeout 30 sqlite3 "file:$_db?mode=ro" \
-        "select count(*) from memory_index_sources;" 2>/dev/null) || _n=0
+        "select count(*) from memory_index_sources;" 2>/dev/null) || _n=0  # swallow-ok: unreadable store reads 0 both sides; the gate falls through, never passes
     [[ "$_n" =~ ^[0-9]+$ ]] || _n=0
     printf '%s\n' "$_n"
 }
@@ -1284,9 +1430,13 @@ function oc-purge() {
     fi
 
     # 2. Clear session state caches
+    # swallow-ok: removing a cache file that may not exist is the intended state, not a failure — these are rebuilt on next read
     rm -f "$TAC_CACHE_DIR/oc_sessions.json" 2>/dev/null
+    # swallow-ok: as above — an absent cache file is already the desired end state
     rm -f "$TAC_CACHE_DIR/oc_agents.json" 2>/dev/null
+    # swallow-ok: as above — an absent cache file is already the desired end state
     rm -f "$TAC_CACHE_DIR/oc_agent_use.txt" 2>/dev/null
+    # swallow-ok: as above — an absent cache file is already the desired end state
     rm -f "$TAC_CACHE_DIR/oc_agent_stats.tsv" 2>/dev/null
 
     # 3. Delete every stored session EXCEPT each agent's main and cron sessions.  The CLI
@@ -1314,6 +1464,20 @@ function oc-purge() {
         then
             __tac_info "Sessions" "[$_cron cron JOB session(s) KEPT - automation state is not purge's]" "$C_Dim"
         fi
+    fi
+
+    # 3b-0. MEMORY FIRST, THEN CLEAR (Wayne, 2026-11-25). Two phases, in this order:
+    #   (i)  ONLINE per-agent flush: session-backfill --apply, verified durable.  This is what
+    #        decides whether an agent may be reset at all (the gate lives in the loop below).
+    #   (ii) ONE offline window: memory promote --apply for the whole fleet, which is the only
+    #        way the staged candidates reach MEMORY.md.  It runs BEFORE the resets so the prose
+    #        exists before any transcript is emptied, and it never blocks a reset whose staging
+    #        already landed -- see __oc_purge_memory_promote_all's header for why.
+    # Doing (ii) first also means the Gateway is back up before the resets run over RPC, which
+    # is required: the reset is an RPC call and needs a serving Gateway.
+    if [[ -n "$(__oc_purge_reset_scope)" ]] && (( ! _dry_run ))
+    then
+        __oc_purge_memory_promote_all
     fi
 
     # 3b. Reset EVERY agent's main so each comes back EMPTY (owner's call 2026-10-24).
