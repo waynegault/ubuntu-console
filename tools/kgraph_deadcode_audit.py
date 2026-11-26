@@ -85,11 +85,17 @@ def _definitions_from_graph(graph: dict) -> list[dict[str, str]]:
     markdown import, community detection and a PR dashboard, none of which a verdict
     needs (it ran ten minutes on investigator without producing a store).
     """
-    called = {e["target"] for e in graph["edges"] if e.get("label") == "calls"}
+    # A `registers` edge is a USE: `@mcp.tool()` reaches the function by name at
+    # runtime. Counting only `calls` reported investigator's MCP tools as dead.
+    _USE_LABELS = ("calls", "registers")
+    called = {e["target"] for e in graph["edges"] if e.get("label") in _USE_LABELS}
     callers: dict[str, set[str]] = {}
     for edge in graph["edges"]:
-        if edge.get("label") == "calls":
-            callers.setdefault(edge["target"], set()).add(edge["source"])
+        if edge.get("label") in _USE_LABELS:
+            src = edge["source"]
+            callers.setdefault(edge["target"], set()).add(
+                ("registered:" + src) if edge.get("label") == "registers" else src
+            )
     out: list[dict[str, str]] = []
     for node in graph["nodes"]:
         if node.get("type") != "function":

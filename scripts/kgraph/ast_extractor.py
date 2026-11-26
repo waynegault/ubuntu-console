@@ -465,6 +465,57 @@ def _extract_bash_defs(
                 )
 
 
+# Decorator names that REGISTER the decorated callable into a runtime table.  The last
+# dotted segment is matched, so `mcp.tool()`, `app.route(...)`, `celery.task` and
+# `pytest.fixture` all count, while a decorator like `functools.cache` (which returns a
+# wrapper the source calls directly) does not.
+_REGISTRATION_DECORATORS = frozenset(
+    {
+        "tool",
+        "register",
+        "command",
+        "route",
+        "task",
+        "resource",
+        "handler",
+        "on_event",
+        "callback",
+        "job",
+        "endpoint",
+        "subscribe",
+        "receiver",
+        "fixture",
+        "middleware",
+        "exception_handler",
+    }
+)
+
+
+def _registration_decorator(node, code: bytes) -> str:
+    """The decorator that registers this function, or "" when none does.
+
+    WHY (2026-11-26, Wayne: "find where retrieval_coverage is registered"): it is
+    reached through `@mcp.tool()`, which registers the function by `__name__` into
+    FastMCP's table.  Nothing in the source names it, so a name-based reference pass
+    cannot see it and a dead-code verdict called it unused.
+    """
+    parent = node.parent
+    if parent is None or parent.type != "function_definition":
+        return ""
+    holder = parent.parent
+    if holder is None or holder.type != "decorated_definition":
+        return ""
+    for child in holder.children:
+        if child.type not in ("decorator", "decorated_definition"):
+            continue
+        text = _node_text(child, code).strip().lstrip("@").strip()
+        head = text.split("(", 1)[0]
+        last = head.rsplit(".", 1)[-1].strip()
+        if last in _REGISTRATION_DECORATORS:
+            return head
+    return ""
+
+
 def _extract_python_defs(
     root_node,
     code: bytes,
@@ -511,6 +562,25 @@ def _extract_python_defs(
                     "sources": [file_source],
                 }
             )
+            # DECORATOR REGISTRATION. `@mcp.tool()` (and `@app.route`, `@celery.task`,
+            # `@pytest.fixture`, …) registers the function BY NAME into a runtime table,
+            # so nothing in the source ever names it.  Measured 2026-11-26: investigator's
+            # `retrieval_coverage` is invoked through `@mcp.tool()` and read as unused —
+            # the only false-unused on a 132-row sample.
+            registered_as = _registration_decorator(node, code)
+            if registered_as:
+                builder.add_edge(
+                    {
+                        "source": file_id,
+                        "target": nid,
+                        "label": "registers",
+                        "confidence": ConfidenceLevel.EXTRACTED,
+                        # The decorator's name is deliberately NOT in metadata: that
+                        # model is extra="forbid" and rejected it.  The edge itself is
+                        # the fact; which decorator it was is recoverable from source.
+                        "sources": [file_source],
+                    }
+                )
 
     for node, tag in _query_captures(lang, PYTHON_QUERIES["class_def"], root_node):
         if tag == "name":

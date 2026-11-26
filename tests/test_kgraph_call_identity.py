@@ -166,3 +166,40 @@ def test_a_definition_name_is_not_a_reference(tmp_path):
     assert not any(src == "ast_call:python:lonely" for src, _, _ in edges), (
         "the definition name must not create a call node"
     )
+
+
+def test_a_registration_decorator_makes_the_function_used(tmp_path):
+    """Detects: `@mcp.tool()` registering a function by name, which no textual
+    reference can see — investigator's `retrieval_coverage` read as dead this way."""
+    g = _graph(
+        tmp_path,
+        "tools.py",
+        """
+        from pipeline._mcp_app import mcp
+
+
+        @mcp.tool()
+        def retrieval_coverage(settings=None):
+            return "{}"
+        """,
+    )
+    edges = _edges(g)
+    assert ("ast_file:tools-py", "ast_func:python:retrieval_coverage", "registers") in edges
+
+
+def test_a_non_registration_decorator_does_not_register(tmp_path):
+    """Detects: every decorator counting as registration, which would hide real dead code."""
+    g = _graph(
+        tmp_path,
+        "m.py",
+        """
+        import functools
+
+
+        @functools.cache
+        def memoised():
+            return 1
+        """,
+    )
+    edges = _edges(g)
+    assert not any(label == "registers" for _, _, label in edges)
