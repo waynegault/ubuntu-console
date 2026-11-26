@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 167
+# Module Version: 168
 #   v166 (2026-11-25): define fmt/fmts above the LLAMA_MAX_PROBE_CTX ceiling banner so
 #   bash calls the comma-format helper instead of /usr/bin/fmt.
 # Module Version: 165
@@ -3455,7 +3455,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             _cert_t=$(bench_ctx "$_cert_dc" "$BEST_B" "$BEST_U" 5 \
                 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert_t=""
             if [[ -z "$_cert_t" ]] || [[ $(echo "${_cert_t:-0} > 0" | bc 2>/dev/null || echo "0") != 1 ]]; then
-                echo "  ctx $(fmt "$_cert_dc") — filled load failed (cause=${_BENCH_FAIL_TYPE:-unclassified}), continuing down"
+                echo "  ctx $(fmt "$_cert_dc") — filled load failed (cause=${_BENCH_FAIL_TYPE:-unclassified})," \
+            "continuing down"
                 continue
             fi
             IFS='|' read -r _cert_d _cert_p _cert_f < "/tmp/at-metrics-$$" 2>/dev/null || true

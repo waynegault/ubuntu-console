@@ -306,7 +306,10 @@ stub_timeout() {
     stub_timeout
     openclaw() {
         # THE REAL SUCCESS BODY (measured 2026-11-26): no `ok` field at all.
-        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"days":[],"candidateCount":0,"stagedEntries":0}'
+        # A REAL success body: measured 2026-11-26, session-backfill --apply --json emits NO `ok`
+        # key at all. Split across lines only to stay inside the 120-column ratchet.
+        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"days":[],'\
+'"candidateCount":0,"stagedEntries":0}'
         return 0
     }
     run __oc_purge_memory_flush hal
@@ -535,7 +538,8 @@ stub_timeout() {
     __oc_purge_session_keys() { printf '%s\n' \
         agent:sarah:cron:j1:run:r1 agent:sarah:cron:j1:run:r2 agent:sarah:main ; }
     openclaw() {
-        printf '%s\n' '{"ok":false,"error":{"type":"cli_error","message":"Session delete did not complete for every requested key."},"results":['
+        printf '%s\n' '{"ok":false,"error":{"type":"cli_error",'\
+'"message":"Session delete did not complete for every requested key."},"results":['
         printf '%s\n' '{"key":"agent:sarah:cron:j1:run:r1","ok":false,"status":"not_found"},'
         printf '%s\n' '{"key":"agent:sarah:cron:j1:run:r2","ok":false,"status":"not_found"}]}'
         return 0
@@ -578,7 +582,10 @@ stub_timeout() {
     openclaw() {
         printf '%s\n' '[secrets] skills.entries.agentmail-cli.apiKey: *** entry is disabled.'
         printf '%s\n' '[secrets] memory promote: gateway secrets.resolve unavailable; resolved locally.'
-        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"days":[],"candidateCount":0,"stagedEntries":0}'
+        # A REAL success body: measured 2026-11-26, session-backfill --apply --json emits NO `ok`
+        # key at all. Split across lines only to stay inside the 120-column ratchet.
+        printf '%s\n' '{"agentId":"hal","workspaceDir":"/tmp/ws","applied":true,"days":[],'\
+'"candidateCount":0,"stagedEntries":0}'
         return 0
     }
     run __oc_purge_memory_flush hal

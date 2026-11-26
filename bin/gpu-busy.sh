@@ -200,7 +200,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 30
+# Module Version: 31
 #   v29 (2026-11-24): the sanctioned-exe list prefers the profile's declared build tree — see
 #     the 1.20.0 entry at the top of this file.  A box that builds build/ and still carries a
 #     build-cuda/ was sanctioning the tree nobody maintains: the same disagreement the
@@ -463,6 +463,9 @@ _gpu_free_mib() {
     printf '%s' "$_v"
 }
 
+# util_peak — echo the highest utilisation reading, 1 when the probe failed.
+# The body deliberately records NOTHING: the caller decides whether a reading becomes
+# a reason, so the suppression path can PRINT a reading it declined to act on.
 util_peak() {
     local max_util=0 s out rc line
     for _ in $(seq 1 "$SAMPLES"); do
