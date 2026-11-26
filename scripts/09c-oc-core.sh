@@ -1,7 +1,20 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 53
+# Module Version: 54
+#   v54 (2026-11-26): D6 — the reset phase must not be able to kill its own driver. The 14:47
+#       real run reset exactly the five alphabetically-first mains (aris, chief, del, finn,
+#       hal) and then stopped: it was launched from hal's main, and resetting that main ended
+#       the agent turn that owned the exec running the loop (holderSignalAborted=true on a
+#       57.6-minute holder). Phase 2 never opened — nine mains kept pre-run ids, zero
+#       `memory.promote` calls, gateway up since 12:17. The reset phase now DERIVES the agent
+#       that owns this shell (`__oc_purge_self_agent`, declared by OC_PURGE_SELF_AGENT or from
+#       the gateway's own running-session view) and SKIPS that main, naming it in the summary
+#       and in the exit code's accounting. The default is refusal-to-self-kill, not
+#       completeness: `OC_PURGE_ALLOW_SELF_RESET=1` opts back in for a detached driver that
+#       genuinely wants all fourteen. Detection that cannot name exactly one caller is
+#       reported as undetermined rather than guessed — a wrong skip is a lane left un-purged,
+#       which the summary says out loud, while a wrong reset is the whole run dying.
 #   v53 (2026-11-26): the SC1090 suppression above the env-file source is now a
 #       `source=/dev/null` directive. v51 added it and took the §18.3 11.5 suppression count to
 #       17 against a baseline of 16, and the fast suite refuses a rise. A directive names the
@@ -1757,6 +1770,47 @@ function __oc_purge_reset_scope() {
     printf '%s\n' "${OC_PURGE_RESET_MAIN-all}"
 }
 
+# __oc_purge_self_agent — the agent whose main session owns THIS shell, or nothing.
+#
+# WHY (measured 2026-11-26, D6 in workspace-hal/reports/2026-11-26-oc-purge-plan.md). The
+# reset loop walks `__oc_purge_session_keys | grep -E ':main$' | sort -u`, i.e. alphabetical:
+# aris, chief, del, finn, hal, jarvis, ...  The 14:47 run was launched from hal's own main, so
+# the FIFTH reset (hal, 14:51:34) terminated the agent turn that owned the exec running the
+# loop -- holderSignalAborted=true on a 57.6-minute holder -- and the run stopped there. Five
+# of fourteen mains were reset; nine kept their pre-run ids; phase 2 never opened because the
+# process that would have stopped the gateway was gone. A destructive command must not be
+# able to kill its own driver, so purge REFUSES to reset the main it is itself running in.
+#
+# Detection has to work from inside a tool shell. Measured 2026-11-26, in that order:
+#   - the environment carries no agent id: the gateway's own environ has OPENCLAW_SERVICE_*
+#     but no OPENCLAW_AGENT_ID, and the tool shell inherits exactly that;
+#   - the ancestry carries none either: /proc walk upward is exec-tool bash -> spawn-broker
+#     worker.js -> service-child-group-anchor.js -> openclaw-gateway -> systemd --user, and no
+#     link names a lane;
+#   - `openclaw sessions --all-agents --json` exposes no run state (sessionStartedAt, totals,
+#     participants -- no `state`, no holder), so it cannot say which main is executing.
+# A control that must GUESS which lane it is about to destroy is the defect, not the fix.
+# So the caller declares itself, and the run REFUSES rather than guessing when it is
+# unset — the same shape as promote's offline gate: no unambiguous identity, no destructive
+# phase. Leaving the whole reset phase to a human `OC_PURGE_SELF_AGENT=` is loud and safe;
+# resetting the wrong lane during an unattended nightly sweep is silent, and this command's
+# own history is fourteen mains emptied in alphabetical order up to the point the driver died.
+#
+#   OC_PURGE_SELF_AGENT=<id>   the lane whose main is THIS shell's driver: it is skipped
+#   OC_PURGE_SELF_AGENT=""     declares "no driver lane" (a human at a terminal, a detached unit)
+#   unset                      the caller did not say, so the reset phase REFUSES and names it
+#
+# OC_PURGE_ALLOW_SELF_RESET=1 overrides the skip for a detached driver that genuinely wants all
+# fourteen; it is the only way the invoking lane's main is emptied while it is still live.
+function __oc_purge_self_agent() {
+    if [[ -n "${OC_PURGE_SELF_AGENT+set}" ]]
+    then
+        printf '%s\n' "${OC_PURGE_SELF_AGENT}"
+        return 0
+    fi
+    return 1
+}
+
 # __oc_purge_store_census — count readable agent stores, and FAIL when the census is
 # incomplete.  Every key list here starts from a store read, so an unreadable store makes the
 # delete list shorter and the dry run LESS alarming than the truth — the failure is silent in
@@ -1857,6 +1911,30 @@ function oc-purge() {
             esac
         done < <(__oc_purge_session_keys)
         _reset_scope=$(__oc_purge_reset_scope)
+        # The driver's own main is SKIPPED, and the preview must say so too: a dry run that
+        # promises fourteen resets and a real run that performs thirteen is the same
+        # preview/run disagreement the single-derivation rule above exists to prevent. An
+        # UNDECLARED caller does not suppress the list -- it is listed as WOULD RESET and the
+        # phase is flagged REFUSED above it, because a preview's job is to show what the run
+        # would do if admitted, and the refusal is what the run actually does.
+        local _self="" _self_rc=0
+        if [[ "${OC_PURGE_ALLOW_SELF_RESET:-0}" == "1" ]]
+        then
+            _self=""
+        else
+            _self=$(__oc_purge_self_agent)
+            _self_rc=$?
+        fi
+        if (( _self_rc != 0 ))
+        then
+            __tac_info "Sessions" \
+                "[WOULD REFUSE the reset phase - OC_PURGE_SELF_AGENT is unset; name the driving lane]" \
+                "$C_Error"
+        elif [[ -n "$_self" ]]
+        then
+            __tac_info "Sessions" \
+                "[WOULD KEEP - agent:$_self:main is this run's own driver]" "$C_Warning"
+        fi
         if [[ -n "$_reset_scope" ]]
         then
             if [[ "$_reset_scope" == "all" ]]
@@ -1872,6 +1950,7 @@ function oc-purge() {
                 then
                     continue
                 fi
+                [[ -n "$_self" && "$_dry_key" == "agent:$_self:main" ]] && continue
                 __tac_info "Session" "[WOULD RESET] $_dry_key" "$C_Dim"
             done < <(__oc_purge_session_keys | grep -E ':main$' | sort -u)
         else
@@ -1892,6 +1971,9 @@ function oc-purge() {
     fi
 
     local _pruned=0 _failed=0 _deleted=0 _mains=0 _cron=0 _resets=0 _repairs=0 _tombstoned=0
+    # v54: the driving lane's own main, kept by design. Declared here because this function is
+    # the one that increments it, and an undeclared counter is a shell error under `set -u`.
+    local _self_skipped=0
     local _counts=""
 
     # 1. A SERVING gateway is the precondition, not a stop.  The delete and the reset run
@@ -1986,6 +2068,42 @@ function oc-purge() {
     # function was right and its caller's variable was not.
     local _reset_scope=""
     _reset_scope=$(__oc_purge_reset_scope)
+    # THE DRIVER'S OWN MAIN IS EXCLUDED, AND AN UNDECLARED CALLER ABORTS THE DESTRUCTIVE PHASES
+    # (v54, D6). Measured 2026-11-26 14:47-14:51: the run reset the five alphabetically-first
+    # mains and then stopped, because the fifth was the main whose turn owned the exec running
+    # the loop. A destructive run must not be able to kill its driver, and it must not guess
+    # which lane that is: detection is impossible from inside a tool shell (no
+    # OPENCLAW_AGENT_ID in the environment, no lane name in the /proc ancestry, no run state in
+    # `sessions list`), so OC_PURGE_SELF_AGENT declares it and an unset value REFUSES. The
+    # refusal happens BEFORE phase 1, so a mistyped run costs no flushes and no deletes.
+    local _self="" _self_rc=0
+    local _self_out=""
+    if [[ "${OC_PURGE_ALLOW_SELF_RESET:-0}" != "1" ]]
+    then
+        # The status must be read from the substitution's own line: wrapping the call in an
+        # `if` makes a non-zero return the BRANCH condition, and a `return 1` inside a braced
+        # group there ends the whole command -- measured in the suite, where the refusal's
+        # `return 1` propagated out of oc-purge and bats reported a function failure at this
+        # line instead of a clean exit status.
+        _self_out=$(__oc_purge_self_agent)
+        _self_rc=$?
+        _self="$_self_out"
+        if (( _self_rc != 0 ))
+        then
+            __tac_info "Purge" \
+                "[REFUSED - OC_PURGE_SELF_AGENT is unset: this run cannot tell whether it would reset its own driver]" \
+                "$C_Error"
+            __tac_info "Purge" \
+                "[name the lane: OC_PURGE_SELF_AGENT=hal. EMPTY for a terminal/detached run." \
+                "$C_Dim"
+            return 1
+        fi
+    fi
+    if [[ -n "$_self" && "$_reset_scope" == "all" ]]
+    then
+        __tac_info "Sessions" \
+            "[agent:$_self:main is this run's driver and will be SKIPPED]" "$C_Warning"
+    fi
     if [[ -n "$_reset_scope" ]] && (( ! _dry_run ))
     then
         __tac_info "Memory" "[phase 1/3: distilling session history per agent, online]" "$C_Dim"
@@ -1996,6 +2114,11 @@ function oc-purge() {
             then
                 continue
             fi
+            # The driving lane is not reset, so there is nothing to carry and nothing to
+            # promote for it: flushing it would spend an offline window's worth of time on a
+            # lane whose main is about to be reset by someone else, and its session is still
+            # live so the flush's own read-back is meaningless.
+            [[ -n "$_self" && "$_reset_key" == "agent:$_self:main" ]] && continue
             local _flush_agent="${_reset_key#agent:}"
             _flush_agent="${_flush_agent%%:*}"
             __oc_purge_memory_flush "$_flush_agent"
@@ -2046,6 +2169,18 @@ function oc-purge() {
             [[ "$_reset_key" == *:main ]] || continue
             if [[ "$_reset_scope" != "all" && "$_reset_key" != "agent:$_reset_scope:main" ]]
             then
+                continue
+            fi
+            # 3b-0. THE DRIVER IS NOT A CANDIDATE (v54, D6). Resetting this main ends the turn
+            # that owns the shell running this loop, so the run stops wherever the driver sorts
+            # in the key order -- measured as five of fourteen on 2026-11-26. It is a SKIP, not
+            # a failure: nothing went wrong, the lane was deliberately kept, and the summary
+            # says so.
+            if [[ -n "$_self" && "$_reset_key" == "agent:$_self:main" ]]
+            then
+                _self_skipped=1
+                __tac_info "Sessions" \
+                    "[$_reset_key KEPT - this run's own driver; not reset]" "$C_Warning"
                 continue
             fi
             # 3b-i. THE GATE'S VERDICT, from phase 1.  A flush that returned 1 refuses THIS
@@ -2261,6 +2396,12 @@ function oc-purge() {
     if (( _tombstoned > 0 ))
     then
         _extra+=", $_tombstoned main(s) TOMBSTONED (successor started, not reset)"
+    fi
+    # The kept driver is not a failure and not a tombstone: it is the one main this run was
+    # forbidden to empty, and a banner that omits it would read as fourteen-of-fourteen.
+    if (( _self_skipped > 0 ))
+    then
+        _extra+=", the driving lane's own main KEPT (not reset by design)"
     fi
     # The orphan population is said in the banner too, in words that distinguish it from a
     # failure: a run that deleted everything it could and left 21 invisible rows must not read

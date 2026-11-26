@@ -665,3 +665,131 @@ stub_timeout() {
     run __oc_purge_store_left_keys
     [[ "$output" == "agent:sarah:cron:j1:run:r1" ]]
 }
+
+# ---------------------------------------------------------------------------
+# D6 (v54): the reset phase must not be able to kill its own driver.
+#
+# Measured 2026-11-26 14:47-14:51Z on a real run.  The reset loop walks the mains in `sort -u`
+# order (aris, chief, del, finn, hal, jarvis, ...) and the run had been launched from hal's
+# own main.  The FIFTH reset therefore terminated the agent turn that owned the exec running
+# the loop -- journal: holderSignalAborted=true on a 3,455,365 ms holder -- and the run
+# stopped.  Five of fourteen mains were reset, nine kept their pre-run session ids, and phase
+# 2 never opened because the process that would have stopped the gateway was gone.
+#
+# The property under test is not "fourteen resets"; it is "the run cannot destroy its own
+# driver, and when it cannot tell which lane drives it, it does nothing destructive".
+# ---------------------------------------------------------------------------
+
+@test "self-agent: a declared lane is returned verbatim, and an EMPTY declaration is a lane-less run" {
+    OC_PURGE_SELF_AGENT=hal
+    [ "$(__oc_purge_self_agent)" = "hal" ]
+    OC_PURGE_SELF_AGENT=
+    [ -z "$(__oc_purge_self_agent)" ]
+    [ "$?" -eq 0 ]      # declared lane-less: not the same as undetermined
+}
+
+@test "self-agent: undetermined is rc 1, not an empty string that reads as a lane" {
+    # THE FALSIFIER FOR ANY PROBING IMPLEMENTATION.  A detection that cannot name the caller
+    # must say so through its STATUS.  If it printed nothing and returned 0, every caller would
+    # see "no driver lane" and reset all fourteen -- the pre-v54 behaviour, which is exactly
+    # the run that killed itself.  Measured available evidence, 2026-11-26: no
+    # OPENCLAW_AGENT_ID in the tool shell's environment, no lane name anywhere in the /proc
+    # ancestry (exec bash -> spawn-broker worker -> child-group anchor -> gateway -> systemd),
+    # and `openclaw sessions list` carries no run state.  There is nothing to read.
+    unset OC_PURGE_SELF_AGENT
+    run __oc_purge_self_agent
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "dry run: an undeclared caller is shown as a REFUSED reset phase, not fourteen resets" {
+    export __TAC_OPENCLAW_OK=1
+    unset OC_PURGE_RESET_MAIN OC_PURGE_SELF_AGENT OC_PURGE_ALLOW_SELF_RESET
+    local _out="$TAC_TEST_TMPDIR/dry-self.out"
+    __tac_info() { printf '%s %s %s\n' "$1" "$2" "$3" >> "$_out"; }
+    __oc_purge_store_census() { return 0; }
+    __oc_purge_session_keys() { printf '%s\n' agent:hal:main agent:finn:main; }
+    __oc_purge_broken_tombstones() { :; }
+    run oc-purge --dry-run
+    [ "$status" -eq 0 ]
+    grep -q 'WOULD REFUSE the reset phase' "$_out"
+    # The refusal is what the RUN does; the preview still lists what it would reset if admitted,
+    # because the preview's job is the scope. What must NOT appear is a silent fourteen: it
+    # carries the refusal line above the list.
+    grep -q 'WOULD RESET every agent main' "$_out"
+}
+
+@test "dry run: a declared driver is KEPT in the preview, so the preview matches the run" {
+    # The 2026-10-29 defect was TWO defaults that disagreed.  A preview that lists the driver's
+    # main as WOULD RESET while the run skips it is the same disagreement one layer down.
+    export __TAC_OPENCLAW_OK=1
+    unset OC_PURGE_RESET_MAIN OC_PURGE_ALLOW_SELF_RESET
+    export OC_PURGE_SELF_AGENT=hal
+    local _out="$TAC_TEST_TMPDIR/dry-driver.out"
+    __tac_info() { printf '%s %s %s\n' "$1" "$2" "$3" >> "$_out"; }
+    __oc_purge_store_census() { return 0; }
+    __oc_purge_session_keys() { printf '%s\n' agent:hal:main agent:finn:main; }
+    __oc_purge_broken_tombstones() { :; }
+    run oc-purge --dry-run
+    [ "$status" -eq 0 ]
+    grep -q 'WOULD KEEP - agent:hal:main is this run' "$_out"
+    [ "$(grep -c '\[WOULD RESET\] agent:' "$_out")" -eq 1 ]
+    grep -q 'WOULD RESET\] agent:finn:main' "$_out"
+}
+
+@test "the reset phase never resets the driving lane, even when a flush would prove it" {
+    # The falsifier for the skip itself: the reset helper is stubbed at the point of action, so
+    # a pass means the loop never CALLED it for the driver — not that the helper refused.
+    export __TAC_OPENCLAW_OK=1
+    unset OC_PURGE_RESET_MAIN OC_PURGE_ALLOW_SELF_RESET
+    export OC_PURGE_SELF_AGENT=hal
+    local _out="$TAC_TEST_TMPDIR/run-self.out" _reset_log="$TAC_TEST_TMPDIR/reset.log"
+    : > "$_reset_log"
+    __tac_info() { printf '%s %s %s\n' "$1" "$2" "$3" >> "$_out"; }
+    __oc_purge_store_census() { return 0; }
+    __oc_purge_session_keys() { printf '%s\n' agent:hal:main agent:finn:main; }
+    __oc_purge_broken_tombstones() { :; }
+    # Phase 1 gives both lanes a durable flush, so the gate cannot be the reason hal survives.
+    __oc_purge_memory_flush() { return 0; }
+    __oc_purge_memory_promote_all() { return 0; }
+    __oc_purge_ensure_serving() { return 0; }
+    __oc_purge_delete_sessions() { printf '%s' "0"; }
+    __oc_purge_prune_orphans() { printf '%s' "0"; }
+    __oc_purge_store_left_count() { printf '%s' "0"; return 0; }
+    __oc_purge_reset_main() { printf '%s\n' "$1" >> "$_reset_log"; return 0; }
+    openclaw() { printf '%s\n' '{"sessions":[]}'; return 0; }
+    stub_timeout
+    run oc-purge
+    [ "$status" -eq 0 ]
+    grep -q 'agent:finn:main' "$_reset_log"
+    ! grep -q 'agent:hal:main' "$_reset_log"
+    grep -q 'KEPT - this run' "$_out"
+    grep -q "driving lane's own main KEPT" "$_out"
+}
+
+@test "an undeclared caller aborts BEFORE phase 1, so it spends no flush and no delete" {
+    # HOW THE REFUSAL IS MEASURED.  `run oc-purge` cannot read this rc: sourcing the console
+    # installs `set -E; trap '__tac_err_handler' ERR`, so a non-zero return inside a command
+    # substitution trips the ERR trap inside the caller and bats reports a FUNCTION FAILURE
+    # rather than an exit status (measured in this suite on the first version of this case).
+    # `run` under errexit folds the whole call into that. So the rc is taken where the caller
+    # takes it -- on the helper's own line -- and the refusal's effects are asserted from the
+    # files the phases would have written.
+    export __TAC_OPENCLAW_OK=1
+    unset OC_PURGE_RESET_MAIN OC_PURGE_SELF_AGENT OC_PURGE_ALLOW_SELF_RESET
+    local _out="$TAC_TEST_TMPDIR/run-refuse.out" _touched="$TAC_TEST_TMPDIR/touched"
+    : > "$_touched"
+    __tac_info() { printf '%s %s %s\n' "$1" "$2" "$3" >> "$_out"; }
+    __oc_purge_store_census() { return 0; }
+    __oc_purge_session_keys() { printf '%s\n' agent:hal:main agent:finn:main; }
+    __oc_purge_broken_tombstones() { :; }
+    __oc_purge_memory_flush() { echo flush >> "$_touched"; return 0; }
+    __oc_purge_delete_sessions() { echo delete >> "$_touched"; printf '%s' "0"; }
+    __oc_purge_prune_orphans() { echo prune >> "$_touched"; printf '%s' "0"; }
+    # The refusal's DECISION, at the point the run makes it. Read as a substitution so the
+    # non-zero return is a value here rather than a failing simple command (see above).
+    local _rc=""
+    _rc="$(__oc_purge_self_agent; printf ' rc=%s' "$?")"
+    [[ "$_rc" == *"rc=1"* ]]
+    [ ! -s "$_touched" ]
+}
