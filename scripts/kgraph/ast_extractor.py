@@ -697,6 +697,39 @@ def _extract_trap_handlers(
             )
 
 
+# A call's caller is the nearest enclosing function-like node.  Both grammars name
+# their definition node `function_definition`; `function_declaration` and
+# `method_definition` are here so a grammar that spells it differently does not
+# silently drop the caller.
+_FUNCTION_NODE_TYPES = frozenset({"function_definition", "function_declaration", "method_definition"})
+
+
+def _enclosing_function(node, code: bytes) -> str:
+    """The name of the function this call sits inside, or "" at file scope.
+
+    WHY THIS EXISTS (2026-11-26).  Every call edge used to originate at the FILE
+    (`ast_file:X -> ast_call:name`), so the graph could say "somewhere in this file
+    something calls X" but never "FUNCTION Y calls X".  Two things follow from that
+    gap: a call made only by dead code keeps its target looking live, and graphify's
+    per-call analyses (unused call edges, call frequency) have no caller to attribute
+    a frequency to.  Walking the tree-sitter parents is exact — no text matching — so
+    the caller recorded here is the enclosing definition, not a guess.
+    """
+    parent = node.parent
+    while parent is not None:
+        if parent.type in _FUNCTION_NODE_TYPES:
+            named = parent.child_by_field_name("name")
+            if named is not None:
+                return _node_text(named, code).strip()
+            # A bash function_definition may carry the name as a plain child word.
+            for child in parent.children:
+                if child.type in ("word", "identifier"):
+                    return _node_text(child, code).strip()
+            return ""
+        parent = parent.parent
+    return ""
+
+
 def _extract_calls(
     root_node, code: bytes, lang: str, rel_path: str, file_id: str, builder: GraphBuilder, file_source: str
 ) -> None:
@@ -713,6 +746,10 @@ def _extract_calls(
         return
 
     seen_calls: set[str] = set()
+    # One edge per (caller, callee-name): a function that calls `warn` nine times is
+    # still one edge.  Call FREQUENCY is a separate question and is not asserted here,
+    # because a repeated edge would inflate every traversal that counts them.
+    seen_caller_edges: set[tuple[str, str]] = set()
     command_nodes: list = []
     for qtext in queries:
         for node, tag in _query_captures(grammar_lang, qtext, root_node):
@@ -749,11 +786,121 @@ def _extract_calls(
                     "sources": [file_source],
                 }
             )
+            # WHO calls it, not just which file.  Same call node, a second edge: the
+            # file edge keeps describing the file, and this one names the enclosing
+            # definition when there is one.  Emitted only when the caller's def node
+            # already exists, so an unresolved caller cannot invent a dangling func.
+            caller = _enclosing_function(node, code)
+            if caller and (caller, nid) not in seen_caller_edges:
+                seen_caller_edges.add((caller, nid))
+                caller_id = _symbol_id("func", lang, caller)
+                if caller_id != nid and builder.has_node(caller_id):
+                    builder.add_edge(
+                        {
+                            "source": caller_id,
+                            "target": nid,
+                            "label": "calls",
+                            "confidence": ConfidenceLevel.EXTRACTED,
+                            "sources": [file_source],
+                        }
+                    )
 
     if lang == "bash":
+        # A name passed as an ARGUMENT is a call site too (v53): `run_it helper` is how
+        # this repo dispatches callbacks, and a `command_name` query cannot see it —
+        # measured 2026-11-26, `_oc_promote_pass` (09c-oc-core.sh:972) is invoked only
+        # as `__oc_purge_offline_window _oc_promote_pass` (:1057) and had no caller.
+        _extract_argument_calls(command_nodes, code, file_id, builder, seen_calls, seen_caller_edges, file_source)
         # One capture, three consumers: each used to re-run (and recompile) this query.
         _extract_dispatched_calls(command_nodes, code, file_id, builder, seen_calls, file_source)
         _extract_trap_handlers(grammar_lang, command_nodes, code, file_id, builder, seen_calls, file_source)
+
+
+def _extract_argument_calls(
+    command_nodes: list,
+    code: bytes,
+    file_id: str,
+    builder: GraphBuilder,
+    seen_calls: set[str],
+    seen_caller_edges: set[tuple[str, str]],
+    file_source: str,
+) -> None:
+    """Record a KNOWN FUNCTION passed as a command argument as a call.
+
+    `__oc_purge_offline_window _oc_promote_pass` runs `_oc_promote_pass`: the callee is
+    an argument, so no `command_name` capture ever sees it and the target looked
+    callerless.  That is the shape bash uses for callbacks, and it is invisible to a
+    command-position scanner by construction.
+
+    ONLY names that resolve to a function this graph knows are recorded, and only when
+    the word is a plain name (`_BASH_NAME_RE`): an argument that happens to be a string,
+    a path or a flag cannot become a call.  The bias is deliberate — an extra call edge
+    makes dead code look alive (tolerated), while a missing one reports live code as
+    dead (the one error a dead-code verdict must not make).
+    """
+    for command_name in command_nodes:
+        # The query capture is the `word` INSIDE `command_name`, so the enclosing
+        # `command` is two levels up: word -> command_name -> command.  Using
+        # `command_name.parent` iterated the command's own name children and found no
+        # arguments at all (measured 2026-11-26).
+        command = command_name.parent
+        if command is not None and command.type == "command_name":
+            command = command.parent
+        if command is None or command.type != "command":
+            continue
+        for child in command.children:
+            # The command's own name is not an argument.  Skipped by TYPE here: an
+            # earlier version cleared a `first_word` flag on the first word-typed
+            # child, which consumed the first ARGUMENT instead, so `run_it helper`
+            # recorded nothing (measured 2026-11-26 against
+            # `__oc_purge_offline_window _oc_promote_pass`).
+            if child.type == "command_name":
+                continue
+            if child.type not in ("word", "string", "raw_string"):
+                continue
+            raw = _node_text(child, code).strip().strip("'\"")
+            if not raw or not _BASH_NAME_RE.match(raw):
+                continue
+            callee_id = _symbol_id("func", "bash", raw)
+            if not builder.has_node(callee_id):
+                continue
+            call_id = _symbol_id("call", "bash", raw)
+            if call_id not in seen_calls:
+                seen_calls.add(raw)
+                builder.add_node(
+                    {
+                        "id": call_id,
+                        "label": raw,
+                        "type": "call",
+                        "language": "bash",
+                        "source": "ast",
+                        "confidence": ConfidenceLevel.EXTRACTED,
+                    }
+                )
+            caller = _enclosing_function(command, code)
+            caller_id = file_id
+            if caller:
+                resolved = _symbol_id("func", "bash", caller)
+                if builder.has_node(resolved):
+                    caller_id = resolved
+            # BOTH edges, because they answer different questions and existing
+            # consumers rely on the first: `file -> call` is what the dispatcher and
+            # trap passes emit, and `TestDispatcherCallEdges` pins it; `caller -> call`
+            # is the caller identity this pass adds.  Emitting only the second made a
+            # dispatched call lose its file edge (measured 2026-11-26, red unit case).
+            for source_id in dict.fromkeys((file_id, caller_id)):
+                if (source_id, call_id) in seen_caller_edges:
+                    continue
+                seen_caller_edges.add((source_id, call_id))
+                builder.add_edge(
+                    {
+                        "source": source_id,
+                        "target": call_id,
+                        "label": "calls",
+                        "confidence": ConfidenceLevel.INFERRED,
+                        "sources": [file_source],
+                    }
+                )
 
 
 def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph, builder: GraphBuilder) -> None:
