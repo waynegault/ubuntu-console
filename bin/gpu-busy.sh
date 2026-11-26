@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.21.0 (2026-11-26, T-JARVIS-134 admittance): utilisation_arm() asks whether the
+#          card can FIT a lane before it lets an unattributable reading stop one. See the block
+#          inside the arm.
 # Version: 1.20.0 (2026-11-24, the declared build tree): _sanctioned_exes() now prefers
 #          ${LLAMA_BUILD_DIR}/bin/llama-server — the tree `llm-build` writes, which the host
 #          profile declares — and keeps build-cuda/ then build/ as the fallbacks.  Before
@@ -197,7 +200,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 29
+# Module Version: 30
 #   v29 (2026-11-24): the sanctioned-exe list prefers the profile's declared build tree — see
 #     the 1.20.0 entry at the top of this file.  A box that builds build/ and still carries a
 #     build-cuda/ was sanctioning the tree nobody maintains: the same disagreement the
@@ -294,6 +297,12 @@
 set -u
 
 UTIL_THRESHOLD="${GPU_BUSY_UTIL_THRESHOLD:-15}"
+# A lane's VRAM footprint in MiB, used ONLY by utilisation_arm()'s admittance test. There
+# is deliberately no literal default: a footprint invented by this probe would be a machine
+# fact asserted by the wrong object, and the 124476a0 lesson (asking a port from another
+# box) is the same shape. Declared by the box's host profile; unset means the admittance
+# test is skipped entirely and the pre-existing fail-closed direction stands unchanged.
+GPU_LANE_FOOTPRINT_MIB="${GPU_LANE_FOOTPRINT_MIB:-}"
 SAMPLES="${GPU_BUSY_SAMPLES:-2}"
 SAMPLE_INTERVAL="${GPU_BUSY_SAMPLE_INTERVAL:-1.5}"
 BENCH_LOCK="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
@@ -441,6 +450,19 @@ sanctioned_lane_serving() {
 # Splitting it out is what lets the suppression path PRINT a reading it declined to
 # act on, without a second sampling loop and without the risk of a read that appends
 # to REASONS by itself.
+# _gpu_free_mib -- the card's free memory in MiB, on stdout. Fails LOUDLY (rc 1) when the
+# reading is not a number, because its only caller uses it to decide whether to DECLINE a
+# stop: a parse failure must not read as "lots of room". Mirrors the single-line-per-card
+# discipline util_peak() carries, so two cards cannot concatenate into one bogus figure.
+_gpu_free_mib() {
+    local _v
+    # swallow-ok: the `|| return 1` below IS the gate -- a failed or unparseable read answers "could not measure", never free memory, so the caller keeps its fail-closed stop; stderr is dropped because the exit STATUS is the signal and the error text is never read as a figure.
+    _v=$("${TAC_SMI_BIN:-nvidia-smi}" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null \
+        | head -1 | tr -d ' ') || return 1
+    [[ "$_v" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$_v"
+}
+
 util_peak() {
     local max_util=0 s out rc line
     for _ in $(seq 1 "$SAMPLES"); do
@@ -501,6 +523,41 @@ utilisation_arm() {
     elif sanctioned_lane_serving; then
         :
     else
+        # NOTHING IS ATTRIBUTED. Before this arm can stop the lane, ask the one question
+        # that separates "an unknown owner is using the card" from "nobody is, and the
+        # utilisation is not ours to claim". This is the arithmetic T-JARVIS-134 has asked
+        # for since 2026-11-06 and the reason a stopped lane could never recover: once the
+        # lane is down it cannot answer sanctioned_lane_serving(), so a stop made on an
+        # unattributable reading is SELF-PERPETUATING — nothing the watchdog itself did can
+        # ever clear it. Utilisation is a rate; memory is a quantity, and a quantity can be
+        # tested against a footprint in a way a rate cannot.
+        #
+        # ADMITTANCE ONLY, and it can never add a stop. Two conditions must BOTH hold for
+        # this arm to decline the stop: residency really is unreadable (RESIDENCY_EMPTY),
+        # and the free memory is at least a whole lane's footprint, so the lane could start.
+        # Anything short of that — a foreign resident listed, a memory read that failed —
+        # falls through to util_busy unchanged, which is the pre-existing fail-closed
+        # direction. The 1.9.0 lesson is honoured rather than reversed: stopping needs
+        # positive evidence of a foreign owner, and an unreadable residency table plus room
+        # for our own footprint is the absence of it.
+        local _free
+        _free=$(_gpu_free_mib) || { util_busy; return; }
+        # An UNDECLARED footprint must skip the test, not compare against an empty string:
+        # bash reads `(( x >= ))` as `(( x >= 0 ))`, so an unset footprint would admit every
+        # card with any free memory at all — the exact fail-open this arm must not be.
+        # Measured on the twin 2026-11-26: with GPU_LANE_FOOTPRINT_MIB unset the line read
+        # `admittance:free=40000MiB>=footprint=MiB` and answered FREE.
+        if [[ "$GPU_LANE_FOOTPRINT_MIB" =~ ^[0-9]+$ ]] \
+           && (( GPU_LANE_FOOTPRINT_MIB > 0 )) \
+           && (( RESIDENCY_EMPTY )) && (( _free >= GPU_LANE_FOOTPRINT_MIB )); then
+            m=$(util_peak) || { util_busy; return; }
+            [[ "$m" =~ ^[0-9]+$ ]] || { util_busy; return; }
+            (( m >= UTIL_THRESHOLD )) || return 1
+            REASONS+=("cannot-attribute:residency-empty")
+            REASONS+=("admittance:free=${_free}MiB>=footprint=${GPU_LANE_FOOTPRINT_MIB}MiB")
+            REASONS+=("util-suppressed:${m}%>=${UTIL_THRESHOLD}%")
+            return 1
+        fi
         util_busy
         return
     fi

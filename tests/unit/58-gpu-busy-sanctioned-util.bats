@@ -554,3 +554,95 @@ EOS
     # the pid is not a reading about it.
     [[ "$output" == *"foreign-app pid=$RESIDENT_PID"* ]]
 }
+
+# ==============================================================================
+# ADMITTANCE (T-JARVIS-134, 2026-11-26) — an unattributable reading must not
+# strand the lane it stopped.
+# ==============================================================================
+# The defect these pin is SELF-PERPETUATING by construction: when residency is
+# unreadable and no lane is serving, utilisation could only ever answer BUSY, the
+# watchdog stopped the lane, and a stopped lane can never become "serving" to
+# clear the verdict. Nothing the watchdog itself did could ever lift it.
+#
+# The fix is an ADMITTANCE test, and its direction is the reason it is safe: it
+# can only ever DECLINE a stop. Two conditions must both hold — residency really
+# is empty, and free memory is at least a whole lane's footprint. Anything else
+# falls through to the pre-existing fail-closed path, so every case that used to
+# answer BUSY still does.
+
+@test "admittance: empty residency + room for a footprint declines the stop, and says why" {
+    export GPU_LANE_FOOTPRINT_MIB=20000
+    export STUB_PIDS=""
+    export STUB_UTIL=95
+    export STUB_VRAM=1000
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-compute-apps*) exit 0 ;;
+    *--query-gpu=utilization.gpu*) printf '%s\n' "${STUB_UTIL:-0}" ;;
+    *--query-gpu=memory.free*) printf '40000\n' ;;
+    *--query-gpu=memory.used*) printf '%s\n' "${STUB_VRAM:-0}" ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+
+    run run_probe
+    # The verdict, the label, and the arithmetic that decided it. A stop that is
+    # declined silently is the 1.9.1 defect again, so the figures must travel.
+    [[ "$output" == "free reasons="* ]]
+    [[ "$output" == *"cannot-attribute:residency-empty"* ]]
+    [[ "$output" == *"admittance:free=40000MiB>=footprint=20000MiB"* ]]
+    [[ "$output" == *"util-suppressed:95%>=15%"* ]]
+}
+
+@test "admittance: empty residency WITHOUT room still stops the lane (fail-closed intact)" {
+    export GPU_LANE_FOOTPRINT_MIB=20000
+    export STUB_PIDS=""
+    export STUB_UTIL=95
+    export STUB_VRAM=15000
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-compute-apps*) exit 0 ;;
+    *--query-gpu=utilization.gpu*) printf '%s\n' "${STUB_UTIL:-0}" ;;
+    *--query-gpu=memory.free*) printf '1179\n' ;;
+    *--query-gpu=memory.used*) printf '%s\n' "${STUB_VRAM:-0}" ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+
+    run run_probe
+    # Catches: treating "unreadable residency" as "probably ours". The card cannot
+    # fit a lane, so something else holds the memory and the stop must stand.
+    [[ "$output" == "busy reasons="* ]]
+    [[ "$output" == *"util=95%>=15%"* ]]
+}
+
+@test "admittance: an UNDECLARED footprint is skipped, never compared as zero" {
+    unset GPU_LANE_FOOTPRINT_MIB
+    export STUB_PIDS=""
+    export STUB_UTIL=95
+    export STUB_VRAM=1000
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-compute-apps*) exit 0 ;;
+    *--query-gpu=utilization.gpu*) printf '%s\n' "${STUB_UTIL:-0}" ;;
+    *--query-gpu=memory.free*) printf '40000\n' ;;
+    *--query-gpu=memory.used*) printf '%s\n' "${STUB_VRAM:-0}" ;;
+    *) exit 0 ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+
+    run run_probe
+    # Catches the fail-open this test was written for: `(( x >= ))` reads an empty
+    # operand as 0, so an unset footprint admitted every card with any free memory
+    # and the probe answered FREE on a busy card. Measured before the fix:
+    # `admittance:free=40000MiB>=footprint=MiB`. An undeclared machine fact must
+    # leave the pre-existing behaviour alone.
+    [[ "$output" == "busy reasons="* ]]
+    [[ "$output" != *"admittance:"* ]]
+}
