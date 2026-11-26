@@ -8,25 +8,29 @@ scripts (read, not assumed); the MECHANISM does not, because kgraph's graph is
 typed and already carries caller identity — graphify reconstructs a Claude-shaped
 graph from JSON, kgraph reads its own.
 
-WHAT IS AND IS NOT PORTED YET.  This module covers three of the four:
-`isolated_symbols`, `unresolved_calls` and `test_coverage`.  `call_frequency` needs
-an occurrence COUNT per (caller, callee), which kgraph's edges do not carry — one
-edge per pair is deliberate, so a traversal is not inflated — and adding it is its
-own change.  It is NOT claimed here.
+WHAT IS PORTED.  All four: `isolated_symbols`, `unresolved_calls`, `test_coverage`
+and `call_frequency`.  The first three read the graph.  `call_frequency` cannot —
+kgraph emits ONE edge per (caller, callee) on purpose, so a traversal is not
+inflated, and the count is therefore an overlay computed from source, exactly as
+graphify's own `call_frequency` does it.  It needs the source root and is the only
+function here that touches files.
 
 THE HONESTY CONSTRAINT (sharpened by three failed text oracles the same day): these
-functions never decide that code is DEAD.  They report three measurements a human
-reads — a symbol with almost no wiring, a call whose target never resolved, and a
-function no test reaches.  `isolated_symbols` in particular is a WIRING GAP signal:
-an entry point (`main`, a systemd `ExecStart` target, a bash function a user types)
-legitimately has degree ≤ 1, so a non-empty list is expected and is not a defect
-list.  The dead-code BAR lives in tools/kgraph_deadcode_audit.py and is unmet.
+functions never decide that code is DEAD.  They report measurements a human reads — a
+symbol with almost no wiring, a call whose target never resolved, a function no test
+reaches, and how often a caller calls a callee.  `isolated_symbols` in particular is a
+WIRING GAP signal: an entry point (`main`, a systemd `ExecStart` target, a bash
+function a user types) legitimately has degree ≤ 1, so a non-empty list is expected
+and is not a defect list.  The dead-code BAR lives in tools/kgraph_deadcode_audit.py
+and is unmet.
 """
 
 from __future__ import annotations
 
+import ast
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .models import Graph
@@ -105,11 +109,20 @@ class CoverageReport:
 
 
 @dataclass(frozen=True)
+class CallFrequency:
+    """Call sites counted per (caller, callee), sorted by count then name."""
+
+    pairs: tuple[tuple[str, str, int], ...] = ()
+    total_calls: int = 0
+
+
+@dataclass(frozen=True)
 class DeadcodeReport:
     isolated: tuple[IsolatedSymbol, ...] = ()
     unresolved: tuple[UnresolvedCall, ...] = ()
     coverage: CoverageReport = field(default_factory=CoverageReport)
     by_language: dict[str, int] = field(default_factory=dict)
+    frequency: CallFrequency = field(default_factory=CallFrequency)
 
 
 def isolated_symbols(graph: Graph) -> tuple[IsolatedSymbol, ...]:
@@ -288,8 +301,8 @@ def test_coverage(graph: Graph) -> CoverageReport:
     )
 
 
-def build_report(graph: Graph) -> DeadcodeReport:
-    """All three analyses, plus a per-language count for the isolated list."""
+def build_report(graph: Graph, source_root: Path | None = None) -> DeadcodeReport:
+    """Every analysis; call frequency only when a source root is supplied."""
     isolated = isolated_symbols(graph)
     by_language: Counter[str] = Counter()
     nodes, _, _ = _index(graph)
@@ -301,6 +314,7 @@ def build_report(graph: Graph) -> DeadcodeReport:
         unresolved=unresolved_calls(graph),
         coverage=test_coverage(graph),
         by_language=dict(sorted(by_language.items())),
+        frequency=call_frequency(graph, source_root) if source_root else CallFrequency(),
     )
 
 
@@ -349,4 +363,118 @@ def format_report(report: DeadcodeReport, *, show_all: bool = False, limit: int 
         lines.append(f"    uncovered: {name}")
     if not show_all and len(uncovered) > limit:
         lines.append(f"    ... {len(uncovered) - limit} more (--deadcode-all)")
+
+    frequency = report.frequency
+    lines.append("")
+    lines.append(
+        f"CALL FREQUENCY  ({frequency.total_calls} call sites, {len(frequency.pairs)} distinct caller->callee pairs)"
+    )
+    lines.append("  counted from SOURCE, not from the graph: kgraph emits one edge per")
+    lines.append("  pair, so the graph cannot say how often a callee is called")
+    if frequency.pairs:
+        for caller, callee, count in frequency.pairs if show_all else frequency.pairs[:limit]:
+            lines.append(f"    {caller} -> {callee}  x{count}")
+    else:
+        lines.append("    (no source root given: pass --repo to count frequency)")
     return "\n".join(lines)
+
+
+# ── call frequency: the one analysis that needs SOURCE, not the graph ──────────
+def _python_pairs(path: Path) -> Counter[tuple[str, str]]:
+    """(caller, callee) counts for one Python file, by real call occurrences."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError, OSError:
+        return Counter()
+
+    pairs: Counter[tuple[str, str]] = Counter()
+    stack: list[str] = ["<module>"]
+
+    class Visitor(ast.NodeVisitor):
+        def _func(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+            stack.append(node.name)
+            try:
+                self.generic_visit(node)
+            finally:
+                stack.pop()
+
+        visit_FunctionDef = _func
+        visit_AsyncFunctionDef = _func
+
+        def visit_Call(self, node: ast.Call) -> None:
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+            if name:
+                pairs[(stack[-1], name)] += 1
+            self.generic_visit(node)
+
+    Visitor().visit(tree)
+    return pairs
+
+
+def _bash_pairs(path: Path) -> Counter[tuple[str, str]]:
+    """(caller, callee) counts for one shell file.
+
+    Reuses the extractor's own node helpers rather than re-deriving them: the same
+    `_enclosing_function` that names a caller for the graph names it here, so the
+    overlay and the graph cannot disagree about who the caller is.
+    """
+    try:
+        import tree_sitter_bash
+        from tree_sitter import Language, Parser
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        # A missing grammar is reported, not silently treated as "no calls".
+        import logging
+
+        logging.getLogger(__name__).debug("tree-sitter-bash unavailable: %s", exc, exc_info=True)
+        return Counter()
+
+    from .ast_extractor import _enclosing_function, _node_text
+
+    source = path.read_bytes()
+    parser = Parser(Language(tree_sitter_bash.language()))
+    pairs: Counter[tuple[str, str]] = Counter()
+
+    def walk(node) -> None:
+        if node.type == "command":
+            name_node = next((c for c in node.children if c.type == "command_name"), None)
+            if name_node is not None:
+                callee = _node_text(name_node, source).strip().strip("'\"")
+                # Require a bare name: `/usr/bin/x` and `$(cmd)` are not a caller/callee
+                # pair inside this codebase, and counting them would inflate the table
+                # with commands no source file defines.
+                if callee and all(ch.isalnum() or ch in "_-." for ch in callee):
+                    caller = _enclosing_function(node, source) or "<module>"
+                    pairs[(caller, callee)] += 1
+        for child in node.children:
+            walk(child)
+
+    walk(parser.parse(source).root_node)
+    return pairs
+
+
+def call_frequency(graph: Graph, source_root: Path) -> CallFrequency:
+    """Count calls per (caller, callee) across the graph's own source files.
+
+    The file set comes from the GRAPH (function nodes carry `file`), so the overlay
+    covers exactly the tree the graph describes — not whatever happens to be on disk.
+    """
+    files: set[Path] = set()
+    for node in graph.nodes:
+        if node.type in _NON_SYMBOL_TYPES or not _is_code_node(node) or not node.file:
+            continue
+        candidate = source_root / node.file
+        if candidate.is_file():
+            files.add(candidate)
+    # Only pairs whose CALLEE is a function the graph knows: graphify's overlay
+    # weights existing edges, and a command like `grep` has no node to weight. The
+    # first run listed `grep x63` and `printf x65`, which no analysis can act on.
+    known = {n.label for n in graph.nodes if n.type == "function"}
+    totals: Counter[tuple[str, str]] = Counter()
+    for path in sorted(files):
+        counted = _bash_pairs(path) if path.suffix in (".sh", ".bash") else _python_pairs(path)
+        totals.update({pair: n for pair, n in counted.items() if pair[1] in known})
+    ordered = tuple(
+        (caller, callee, count) for (caller, callee), count in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
+    return CallFrequency(pairs=ordered, total_calls=sum(totals.values()))

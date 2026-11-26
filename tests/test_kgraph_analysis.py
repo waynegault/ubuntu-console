@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from kgraph.analysis import (
     build_report,
+    call_frequency,
     format_report,
     isolated_symbols,
     test_coverage as coverage_of,
@@ -133,3 +134,47 @@ def test_format_report_states_what_each_section_does_not_mean():
     text = format_report(build_report(_graph([], [])))
     for phrase in ("not dead code", "NOT a dead-code claim", "not execution"):
         assert phrase in text, f"the report must caveat itself: missing {phrase!r}"
+
+
+def test_call_frequency_counts_real_occurrences(tmp_path):
+    """Detects: a frequency table built from one edge per pair, i.e. all counts 1."""
+    (tmp_path / "a.py").write_text(
+        "def helper():\n    return 1\n\n\ndef caller():\n    helper()\n    helper()\n    helper()\n",
+        encoding="utf-8",
+    )
+    graph = _graph(
+        [
+            _node("ast_func:python:helper", "helper", "function", "a.py"),
+            _node("ast_func:python:caller", "caller", "function", "a.py"),
+        ],
+        [],
+    )
+    freq = call_frequency(graph, tmp_path)
+    pairs = {(c, e): n for c, e, n in freq.pairs}
+    assert pairs[("caller", "helper")] == 3, "the count must be occurrences, not edges"
+    assert freq.total_calls == 3
+
+
+def test_call_frequency_excludes_command_names_and_unknown_callees(tmp_path):
+    """Detects: `grep x63` in the table — a callee no graph edge could ever weight."""
+    (tmp_path / "b.sh").write_text(
+        "#!/usr/bin/env bash\nhelper() { :; }\ncaller() { helper; helper; grep x /dev/null; }\n",
+        encoding="utf-8",
+    )
+    graph = _graph(
+        [
+            _node("ast_func:bash:helper", "helper", "function", "b.sh", "bash"),
+            _node("ast_func:bash:caller", "caller", "function", "b.sh", "bash"),
+        ],
+        [],
+    )
+    freq = call_frequency(graph, tmp_path)
+    pairs = {(c, e): n for c, e, n in freq.pairs}
+    assert pairs[("caller", "helper")] == 2
+    assert not any(callee == "grep" for _, callee, _ in freq.pairs)
+
+
+def test_report_without_a_source_root_says_so_rather_than_printing_zero():
+    """Detects: a missing root rendered as '0 call sites', i.e. a false measurement."""
+    text = format_report(build_report(_graph([], [])))
+    assert "pass --repo" in text

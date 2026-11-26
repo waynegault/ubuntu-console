@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import os
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -281,7 +282,10 @@ def cmd_deadcode(args: argparse.Namespace) -> None:
     from .analysis import build_report, format_report
 
     graph = Graph.from_dict(_load_graph(args))
-    report = build_report(graph)
+    # Frequency needs SOURCE: the graph holds one edge per pair by design, so the
+    # count is an overlay. Without a root the section says so rather than printing 0.
+    source_root = Path(args.repo) if args.repo else None
+    report = build_report(graph, source_root)
     if args.deadcode_json:
         print(json.dumps(asdict(report), indent=2, default=list))
         return
