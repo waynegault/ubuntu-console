@@ -203,3 +203,41 @@ def test_a_non_registration_decorator_does_not_register(tmp_path):
     )
     edges = _edges(g)
     assert not any(label == "registers" for _, _, label in edges)
+
+
+def test_a_function_named_only_inside_a_string_is_registered(tmp_path):
+    """Detects: dispatch by name — `{"kgraph_path": "_tool_path"}` then getattr —
+    which kgraph's own MCP server does, leaving five handlers callerless."""
+    g = _graph(
+        tmp_path,
+        "srv.py",
+        """
+        def _tool_path(params):
+            return params
+
+
+        HANDLERS = {"kgraph_path": "_tool_path"}
+        """,
+    )
+    edges = _edges(g)
+    assert ("ast_file:srv-py", "ast_func:python:_tool_path", "registers") in edges
+
+
+def test_a_docstring_mentioning_a_name_is_not_a_registration(tmp_path):
+    """Detects: substring/whitespace matching that would mark code used because prose
+    happened to mention it — the failure that produced three bad oracles."""
+    g = _graph(
+        tmp_path,
+        "m.py",
+        '''
+        def helper():
+            return 1
+
+
+        def caller():
+            """Calls _tool_path and helper in prose only."""
+            return 0
+        ''',
+    )
+    edges = _edges(g)
+    assert not any(label == "registers" for _, _, label in edges)

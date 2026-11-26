@@ -309,6 +309,10 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
     # reads it as an attribute).  Linking still happens in `_link_call_defs`, so this
     # set only decides whether a reference is worth recording.
     known_funcs: dict[str, set[str]] = {"python": set(), "bash": set()}
+    # (file_id, lang, name, file_source) collected while parsing and resolved AFTER
+    # every file is read: a string-dispatched target may be defined in a file that has
+    # not been reached yet.
+    pending_registers: list[tuple[str, str, str, str]] = []
     for fpath, lang in source_files:
         try:
             text = fpath.read_text(encoding="utf-8", errors="replace")
@@ -374,11 +378,16 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
             _extract_bash_defs(root_node, code, rel_path, file_id, builder, include_variables, file_source)
 
         _extract_calls(root_node, code, lang, rel_path, file_id, builder, file_source, known_funcs[lang])
+        if lang == "python":
+            _collect_string_registrations(
+                root_node, code, file_id, file_source, known_funcs["python"], pending_registers
+            )
 
     # ── inter-file refs from imports ──
     graph = builder.build()
     _resolve_import_edges(file_node_ids, graph, builder)
     _link_call_defs(builder)
+    _link_string_registrations(builder, pending_registers)
     graph = builder.build()
 
     result = graph.to_dict()
@@ -1210,6 +1219,58 @@ def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph, builder: 
                     {"source": n.id, "target": fid, "label": "resolves_to", "confidence": ConfidenceLevel.INFERRED}
                 )
                 break
+
+
+def _strip_quotes(text: str) -> str:
+    """Drop a surrounding pair of quote characters, one layer only."""
+    for quote in ('"""', "'''", '"', "'"):
+        if text.startswith(quote) and text.endswith(quote) and len(text) >= 2 * len(quote):
+            return text[len(quote) : -len(quote)].strip()
+    return text.strip()
+
+
+def _collect_string_registrations(
+    root_node,
+    code: bytes,
+    file_id: str,
+    file_source: str,
+    known: set[str],
+    pending: list[tuple[str, str, str, str]],
+) -> None:
+    """Collect string literals that name a known function — dispatch by name.
+
+    Measured 2026-11-26 on this repo: kgraph's own MCP server maps tools as
+    `{"kgraph_path": "_tool_path"}` and then `getattr(self, name)`, so five `_tool_*`
+    handlers had no caller at all — the name exists only inside a string.
+
+    A string must EQUAL the function name, never merely contain it: a docstring that
+    mentions a name is not a dispatch, and substring matching would mark code used for
+    the wrong reason.  `_strip_quotes` removes exactly one surrounding pair, which is
+    what a tree-sitter string node carries.
+    """
+    for node in _walk_nodes(root_node):
+        if node.type not in ("string", "concatenated_string"):
+            continue
+        name = _strip_quotes(_node_text(node, code))
+        if name and name in known:
+            pending.append((file_id, "python", name, file_source))
+
+
+def _link_string_registrations(builder: GraphBuilder, pending: list[tuple[str, str, str, str]]) -> None:
+    """Emit `registers` edges for string-dispatched functions that now exist."""
+    for file_id, lang, name, file_source in pending:
+        func_id = _symbol_id("func", lang, name)
+        if not builder.has_node(func_id):
+            continue
+        builder.add_edge(
+            {
+                "source": file_id,
+                "target": func_id,
+                "label": "registers",
+                "confidence": ConfidenceLevel.INFERRED,
+                "sources": [file_source],
+            }
+        )
 
 
 def _link_call_defs(builder: GraphBuilder) -> None:
