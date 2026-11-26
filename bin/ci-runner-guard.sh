@@ -42,7 +42,10 @@
 # and never touches a production unit.  See --selftest-* options at the foot of the file.
 #
 # AI INSTRUCTION: Increment Module Version on any change.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-11-26): the file's missing `# end of file` marker.  `tests/tactical-console-fast.bats`
+#     ("hygiene: all scripts end with # end of file marker") requires it of every bin/*.sh, and
+#     the suite was red at the pushed tip.  Marker only; no behaviour change.
 #   v2 (2026-11-25): the stderr sink is warn() with the format on the left and `1>&2`,
 #     so the file's single log site does not register as an ad-hoc §18.3 10.7 site and the
 #     ratchet does not have to absorb a hand-written one for a brand-new tool.
@@ -214,3 +217,5 @@ main() {
 
 # Tests call main directly after setting the env; a plain run uses the defaults.
 main "$@"
+
+# end of file
