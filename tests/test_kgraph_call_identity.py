@@ -125,3 +125,44 @@ def test_file_level_edges_are_retained(tmp_path, lang_file):
     assert any(src.startswith("ast_file:") and dst == "ast_call:bash:helper" for src, dst, _ in edges), (
         "the file -> call edge must survive; consumers count callers by file"
     )
+
+
+def test_python_function_used_as_a_table_value_is_a_call(tmp_path):
+    """Detects: a CLI dispatch handler looked dead because it is only NAMED in a dict.
+
+    `"benchmark": cmd_benchmark,` reaches the function; no call syntax exists, so a
+    call-only extractor reports it unused (measured 2026-11-26: cmd_benchmark,
+    cmd_audit and cmd_serve were all in the unused list).
+    """
+    g = _graph(
+        tmp_path,
+        "cli.py",
+        """
+        def cmd_benchmark():
+            return 1
+
+
+        COMMANDS = {"benchmark": cmd_benchmark}
+        """,
+    )
+    edges = _edges(g)
+    assert ("ast_call:python:cmd_benchmark", "ast_func:python:cmd_benchmark", "calls") in edges
+    assert any(dst == "ast_call:python:cmd_benchmark" for _, dst, _ in edges), (
+        "the file that names it must be recorded as a caller"
+    )
+
+
+def test_a_definition_name_is_not_a_reference(tmp_path):
+    """Detects: a function credited with calling itself because its `def` line matches."""
+    g = _graph(
+        tmp_path,
+        "m.py",
+        """
+        def lonely():
+            return 1
+        """,
+    )
+    edges = _edges(g)
+    assert not any(src == "ast_call:python:lonely" for src, _, _ in edges), (
+        "the definition name must not create a call node"
+    )

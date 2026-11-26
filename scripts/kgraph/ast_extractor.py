@@ -236,6 +236,13 @@ PYTHON_QUERIES = {
         )
       )
     """,
+    # A function named as a VALUE, not called: `"benchmark": cmd_benchmark,`.
+    # The CLI dispatch tables in this repo are built exactly that way, so a command
+    # handler had no caller at all (measured 2026-11-26: cmd_benchmark, cmd_audit,
+    # cmd_serve and 9 ratchet counters were all reported unused).
+    "reference": """
+      (identifier) @ref
+    """,
 }
 
 
@@ -810,6 +817,11 @@ def _extract_calls(
                         }
                     )
 
+    if lang == "python":
+        _extract_python_references(
+            grammar_lang, root_node, code, file_id, builder, seen_calls, seen_caller_edges, file_source
+        )
+
     if lang == "bash":
         # A name passed as an ARGUMENT is a call site too (v53): `run_it helper` is how
         # this repo dispatches callbacks, and a `command_name` query cannot see it —
@@ -819,6 +831,82 @@ def _extract_calls(
         # One capture, three consumers: each used to re-run (and recompile) this query.
         _extract_dispatched_calls(command_nodes, code, file_id, builder, seen_calls, file_source)
         _extract_trap_handlers(grammar_lang, command_nodes, code, file_id, builder, seen_calls, file_source)
+
+
+def _extract_python_references(
+    lang: Any,
+    root,
+    code: bytes,
+    file_id: str,
+    builder: GraphBuilder,
+    seen_calls: set[str],
+    seen_caller_edges: set[tuple[str, str]],
+    file_source: str,
+) -> None:
+    """Record a function used as a VALUE (registry entry, table value, callback).
+
+    `"benchmark": cmd_benchmark` reaches cmd_benchmark, and no call site exists for a
+    static analyser to see.  Only identifiers that resolve to a KNOWN function of this
+    graph are recorded, and the edge is INFERRED because the value may never be
+    invoked.  The bias matches the bash pass: an extra edge makes dead code look alive
+    (tolerated), a missing one reports live code as dead.
+
+    Definition names and attribute parts are skipped — they are not values — and an
+    identifier that is also a call's function is already covered by the call pass.
+    """
+    names = _query_captures(lang, PYTHON_QUERIES["reference"], root)
+    for node, tag in names:
+        if tag != "ref":
+            continue
+        name = _node_text(node, code).strip()
+        if not name:
+            continue
+        func_id = _symbol_id("func", "python", name)
+        if not builder.has_node(func_id):
+            continue
+        parent = node.parent
+        if parent is not None and parent.type in (
+            "function_definition",
+            "class_definition",
+            "attribute",
+            "keyword_argument",
+            "parameters",
+        ):
+            # A definition name, an attribute part (`obj.name`), or a parameter list is
+            # not a reference to the function object.
+            continue
+        call_id = _symbol_id("call", "python", name)
+        if call_id not in seen_calls:
+            seen_calls.add(name)
+            builder.add_node(
+                {
+                    "id": call_id,
+                    "label": name,
+                    "type": "call",
+                    "language": "python",
+                    "source": "ast",
+                    "confidence": ConfidenceLevel.INFERRED,
+                }
+            )
+        caller = _enclosing_function(node, code)
+        caller_id = file_id
+        if caller:
+            resolved = _symbol_id("func", "python", caller)
+            if builder.has_node(resolved):
+                caller_id = resolved
+        for source_id in dict.fromkeys((file_id, caller_id)):
+            if (source_id, call_id) in seen_caller_edges:
+                continue
+            seen_caller_edges.add((source_id, call_id))
+            builder.add_edge(
+                {
+                    "source": source_id,
+                    "target": call_id,
+                    "label": "calls",
+                    "confidence": ConfidenceLevel.INFERRED,
+                    "sources": [file_source],
+                }
+            )
 
 
 def _extract_argument_calls(
