@@ -75,7 +75,19 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-11-27): clause (9) -- NEVER compacts a note it rewrote; every existing section is
+#   kept and new ones are added beside them.  WHY: measured in ~/.qwen the same day, a rewrite
+#   folded `memories/feedback/vacuous-gate-assertions.md` from 23 dated sections to 3 -- 492
+#   lines deleted -- while the frontmatter still advertised the lost classes (a control above
+#   its bar, a post-condition another path satisfies, an expected string that is a PREFIX, a
+#   version probe).  Its own maintainer doctrine reads a large deletion as a fold only when the
+#   recurring halves and the newest section survive; here 21 sections did not, so the note had
+#   to be restored from HEAD and the new section re-added.  The budget cannot catch this on its
+#   own: a folded note is SMALLER than its allowance, so every size gate stays green while the
+#   content is gone.  ACTIVATION: same as every version here -- the prompt is loaded per daemon,
+#   so a --check reading `applied` is not evidence the extractor has read it; a window reload is
+#   owed.
 #   v8 (2026-11-14): clause (8) — the frontmatter `name` is the index label and shares the
 #   150-char line with its own link, so keep it under 60 characters.  WHY: the extractor kept
 #   writing names of 88-89 chars, and on a 59-char reference target that leaves 89 for name +
@@ -143,7 +155,7 @@ EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
 # payload still contains reads every copy as "applied" and silently skips the upgrade —
 # measured 2026-11-09 landing clause (6), where the v4/v5 probe "NEVER begin a wrapped line"
 # is still inside v6, so all three copies reported ok and the new clause never arrived.
-RULE_NEWEST_CLAUSE="is the INDEX LABEL and shares the 150-character line"
+RULE_NEWEST_CLAUSE="NEVER compacts a note you rewrote"
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -262,9 +274,42 @@ rule_text = (
     "(8) The frontmatter `name` is the INDEX LABEL and shares the 150-character line with its "
     "own link, so keep it under 60 characters and let it state the one fact the note records. "
     "A name too long for its line cannot be rendered: the entry overruns the cap and the note "
-    "is refused at push time. Shorten the name, never the note."
+    "is refused at push time. Shorten the name, never the note. "
+    "(9) NEVER compacts a note you rewrote: keep every section the note already has and add "
+    "yours beside them. Deleting or merging an existing section loses measured cases the store "
+    "already holds -- on 2026-11-27 a rewrite cut a 23-section note to 3 while its frontmatter "
+    "still advertised the missing classes, and the sections had to be restored from the commit. "
+    "An over-long note is REPORTED, not folded: the store budget is the owner's to re-arm."
 )
 rule_literal = '"' + rule_text + '"'
+
+# v8 (clause 8 only) is now SUPERSEDED by v9, so a live copy carrying it is UPGRADED IN PLACE.
+# Without this literal such a copy is neither "applied" nor recognised as old, and clause (9)
+# would never arrive -- the same probe trap recorded for v6 on 2026-11-09.
+V8_RULE_TEXT = (
+    "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
+    "lints every note it holds, so: (1) EMPHASIS uses underscores ONLY, _like this_. The "
+    "asterisk must NEVER delimit emphasis -- re-read every span you emit and convert "
+    "*like this* to _like this_. STRONG text keeps its asterisks (**bold**); never convert "
+    "those to underscores. (2) A blank line before and after every list and heading. (3) The "
+    "single H1 repeats the frontmatter name value. (4) Every code block is fenced with a "
+    "language tag, never indented. (5) NEVER begin a wrapped line with +, -, * or #, and never "
+    "begin one with a number followed by a full stop: markdown reads a line-initial marker as a "
+    "list or heading, so keep a formula or a code span on ONE line even when it is long. "
+    "(6) The file ENDS with "
+
+    "EXACTLY ONE newline: no missing final newline (the linter reports MD047) and no blank "
+
+    "line after the last paragraph. "
+    "(7) NEVER adds a line to MEMORY.md: that index is BUILT from these notes, so a pointer "
+    "you write is removed by the next render. To surface a note in the index, give the note "
+    "the frontmatter `index: core`; without it the note is stored but not listed. "
+    "(8) The frontmatter `name` is the INDEX LABEL and shares the 150-character line with its "
+    "own link, so keep it under 60 characters and let it state the one fact the note records. "
+    "A name too long for its line cannot be rendered: the entry overruns the cap and the note "
+    "is refused at push time. Shorten the name, never the note."
+)
+v8_literal = '"' + V8_RULE_TEXT + '"'
 
 # The two SUPERSEDED payloads, kept so an already-patched copy is UPGRADED IN PLACE rather
 # than skipped: the marker records that some version of this patch ran, never which payload it
@@ -332,7 +377,7 @@ V7_RULE_TEXT = (
     "the frontmatter `index: core`; without it the note is stored but not listed."
 )
 v7_literal = '"' + V7_RULE_TEXT + '"'
-SUPERSEDED = (v7_literal, v6_literal, v5_literal, v3_literal, v2_literal, v1_literal)
+SUPERSEDED = (v8_literal, v7_literal, v6_literal, v5_literal, v3_literal, v2_literal, v1_literal)
 
 MIN_ANCHOR = '"Memory file format reference:",...MEMORY_FRONTMATTER_EXAMPLE]'
 SPACED_ANCHOR = '"Memory file format reference:",\n  ...MEMORY_FRONTMATTER_EXAMPLE\n]'
@@ -393,7 +438,7 @@ if src.index(marker) > src.index(MIN_ANCHOR if min_hits == 1 else SPACED_ANCHOR)
     raise SystemExit("refusing to patch: the rule landed after the format reference, not before it")
 
 p.write_text(src, encoding="utf-8")
-print("  upgraded extractor-style (superseded payload -> v8)" if upgraded else "  patched  extractor-style")
+print("  upgraded extractor-style (superseded payload -> v9)" if upgraded else "  patched  extractor-style")
 PY
     then
         echo "  MISMATCH $name — an anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
