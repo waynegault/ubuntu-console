@@ -134,6 +134,18 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
 
     # Query tools
     parser.add_argument("--query", help="Search nodes matching a pattern")
+    parser.add_argument("--diff-before", metavar="PATH", help="Snapshot before a change (JSON or store)")
+    parser.add_argument("--diff-after", metavar="PATH", help="Snapshot after a change (JSON or store)")
+    parser.add_argument(
+        "--fail-on-orphan",
+        action="store_true",
+        help="With --diff: exit 1 when a function that had a caller loses its last one",
+    )
+    parser.add_argument(
+        "--report-html",
+        metavar="PATH",
+        help="Also write the HTML viewer with the narrative report embedded in the page",
+    )
     parser.add_argument(
         "--path", nargs=2, metavar=("SOURCE", "TARGET"), help="Path between two nodes (see --path-mode)"
     )
@@ -269,6 +281,17 @@ def cmd_wiring(args: argparse.Namespace) -> None:
     report = analyze_wiring(args.repo)
     print(format_wiring_report(report, show_all=args.wiring_all))
     print(f"\nSUMMARY: {wiring_summary(report)}")
+
+
+def cmd_diff(args: argparse.Namespace) -> None:
+    """Structural diff between two snapshots — see scripts/kgraph/diff_report.py."""
+    from .diff_report import format_report, diff
+
+    before, after = Path(args.diff_before), Path(args.diff_after)
+    report = diff(before, after)
+    print(format_report(report))
+    if args.fail_on_orphan and report.has_orphaning:
+        sys.exit(f"FAIL — {len(report.lost_last_caller)} function(s) lost their last caller")
 
 
 def cmd_deadcode(args: argparse.Namespace) -> None:
@@ -572,6 +595,12 @@ def cmd_report(args: argparse.Namespace) -> None:
     text = generate_report(graph, outpath=args.report_path)
     if args.report_path:
         print(f"Wrote {args.report_path}")
+    # The narrative can travel WITH the viewer, which is what makes the summary, god
+    # nodes and suggested questions visible beside the graph instead of in a markdown
+    # file nobody opens next to it.
+    if args.report_html:
+        generate_html(graph, args.report_html, report_text=text)
+        print(f"Wrote {args.report_html}")
     print(text)
 
 
@@ -647,6 +676,7 @@ _COMMANDS: tuple[tuple[str, str], ...] = (
     ("ast", "Extract AST code concepts from a repo"),
     ("wiring", "Analyze source-tree wiring (stdlib AST import graph)"),
     ("deadcode", "Per-call code health: isolated symbols, unresolved calls, test coverage"),
+    ("diff", "Structural diff between two graph snapshots (what a change did to the wiring)"),
     ("communities", "Detect communities/clusters"),
     ("god-nodes", "List the most central nodes"),
     ("call-flow", "Generate call-flow HTML/Mermaid"),
@@ -673,6 +703,7 @@ _DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "ast": cmd_ast,
     "wiring": cmd_wiring,
     "deadcode": cmd_deadcode,
+    "diff": cmd_diff,
     "communities": cmd_communities,
     "god-nodes": cmd_god_nodes,
     "call-flow": cmd_call_flow,
