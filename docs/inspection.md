@@ -1046,9 +1046,17 @@ the same caveat.
 
 🔧 No dead/unused functions
 
-grep '^function' <file> then search usages
+kgraph — caller identity from the code graph (`kgraph deadcode --repo .`), **not** `grep '^function'`
 
-Delete unused functions to reduce bloat
+Delete unused functions to reduce bloat — after verifying each by hand. **Use the graph, not a
+text probe.** Measured 2026-11-27: a regex over the 80 shell files named **162** candidates, and
+three of four spot-checks had real call sites it could not see (`if chunk_is_live; then` puts the
+name after `if`, which a command-position regex misses) — so that count was a not-run, not a
+finding. kgraph, which resolves enclosing-caller identity, reports **2** bash functions with no
+caller: `_tac_cuda_lane_units` (named only in comments) and `ocstat` (replaced by `oc-status`; its
+only mention is an argument list of alias names). Both were confirmed dead by reading them, and
+its caller verdicts are certified at 197/200 on this repo's sample
+(`tools/kgraph_deadcode_audit.py --check tools/kgraph-deadcode-sample.tsv`).
 
 4.3.5
 
