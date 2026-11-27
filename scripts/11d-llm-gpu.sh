@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 60
+# Module Version: 61
+#   v61 (2026-11-27): __llm_stand_down_cuda_lanes checks the SELFTEST / TAC_TEST_TMPDIR guard
+#     BEFORE the foreign-owner probe.  With a GPU lock held on the box the probe answered
+#     first and returned, so a test run was told "card owned by another run" instead of
+#     naming the test environment, and its case failed on a box whose only difference was
+#     a live lock.  A test must not depend on which branch live state reaches first; the
+#     reaper already ordered the guard first and this aligns the two.
 #   v60 (2026-11-23): guard kill/stand-down paths with TAC_TEST_TMPDIR and spare .service
 #     cgroups in __llm_kill_cuda_llama_servers; honour shared-memory GPU-only draft placement in
 #     __spec_launch_flags; parse hybrid SSM/attention head_count_kv arrays in __gguf_metadata;
@@ -882,14 +888,15 @@ __LLM_LANES_STOPPED=()
 # the thing that decides whether the card is clear, and it fails closed.
 # ---------------------------------------------------------------------------
 function __llm_stand_down_cuda_lanes() {
-    if __llm_gpu_foreign_owner
-    then
-        warn "[lanes] card owned by another run (pid $(__llm_gpu_lock_holder)) — leaving the lanes alone"
-        return 0
-    fi
-    # A SELFTEST must not touch live state — the rule v37 gave the reaper, for the same
-    # reason: the /proc fallback below makes the live lanes VISIBLE, and standing one
-    # down to satisfy a canned run is how v103 stopped the production lane twice.
+    # A SELFTEST or a TEST ENVIRONMENT must not touch live state — the rule v37 gave the
+    # reaper, for the same reason: the /proc fallback below makes the live lanes VISIBLE,
+    # and standing one down to satisfy a canned run is how v103 stopped the production
+    # lane twice.  This check comes BEFORE the foreign-owner probe on purpose (measured
+    # 2026-11-27): with a GPU lock held on the box, `__llm_gpu_foreign_owner` answered
+    # first and returned, so the refusal never named the test environment and the case
+    # failed on a box whose only difference was a live lock.  A test must not depend on
+    # which branch live state happens to reach first — the reaper already ordered it this
+    # way, and this aligns the two.
     if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]
     then
         warn "[lanes] selftest — not standing any lane down"
@@ -898,6 +905,11 @@ function __llm_stand_down_cuda_lanes() {
     then
         declare -F warn >/dev/null 2>&1 \
             && warn "[lanes] test environment — not standing any lane down"
+        return 0
+    fi
+    if __llm_gpu_foreign_owner
+    then
+        warn "[lanes] card owned by another run (pid $(__llm_gpu_lock_holder)) — leaving the lanes alone"
         return 0
     fi
     local _unit _port _pid _waited _smi _mib _keep _cpid

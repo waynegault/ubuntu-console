@@ -7,6 +7,14 @@ setup() {
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
     mkdir -p "$TAC_CACHE_DIR"
 
+    # The purge's self-agent guard (v54) REFUSES an UNSET OC_PURGE_SELF_AGENT: the run
+    # cannot then tell whether it would reset its own driver.  Empty is the declared
+    # "no driver lane" value for a human at a terminal or a detached unit, which is what
+    # this suite is, so it pins the variable rather than inheriting whatever the
+    # environment holds — the same rule as pinning a keep-list in a census case.  The
+    # guard's own cases (hal / empty / unset) live in 09c-purge-scope.bats.
+    export OC_PURGE_SELF_AGENT=""
+
     # Source scripts FIRST so 01-constants.sh sets LLM_REGISTRY to the
     # real path, THEN override with a test-local path so no code writes
     # to the real ~/.llm/models.conf during tests.

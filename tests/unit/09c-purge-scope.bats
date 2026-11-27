@@ -819,6 +819,18 @@ stub_timeout() {
     # function uses in production.  If this box ever stops co-locating the run with the unit,
     # this case goes red rather than the guard silently never firing.
     command -v systemctl >/dev/null 2>&1 || skip "systemctl not available"
+    # The unit's ControlGroup is stubbed to THIS process's real cgroup, so the case asserts
+    # the comparison rather than a property of the harness.  Asserting the live pair made
+    # the case pass only where the tests run inside the gateway's cgroup: measured
+    # 2026-11-27, /proc/self/cgroup read `/non-systemd` under an agent exec, so the case went
+    # red on a box where nothing was wrong (the guard's own comment records the real
+    # co-location, which is a fact about that exec, not about this code).
+    systemctl() {
+        case "$*" in
+            *ControlGroup*) sed -n 's/^0:://p' /proc/self/cgroup | head -n 1 ;;
+            *) return 0 ;;
+        esac
+    }
     __oc_purge_owns_cgroup
 }
 
