@@ -523,6 +523,109 @@ _RUNTIME_NAME_PATTERNS = (
 )
 
 
+_DOCSTRING_CAP = 120
+
+
+def _first_sentence(text: str, cap: int = _DOCSTRING_CAP) -> str:
+    """The first sentence of a docstring, capped.
+
+    Wayne's rule (2026-11-27): "docstrings only, first sentence, cap 120".  A whole
+    docstring becomes an unreadable node label -- this repo's run to hundreds of words --
+    and the first sentence is what says what the symbol is FOR.
+
+    Sentence ends at the first `.`, `!` or `?` followed by whitespace or end of text, so
+    `scripts/kgraph/html.py` (a period inside a token) does not end a sentence early.
+    An over-cap sentence is truncated with an ellipsis rather than dropped.
+    """
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        return ""
+    match = re.search(r"(?<=[.!?])(?:\s|$)", collapsed)
+    sentence = collapsed[: match.end()].strip() if match else collapsed
+    if len(sentence) > cap:
+        sentence = sentence[: cap - 1].rstrip() + "…"
+    return sentence
+
+
+def _docstring_of(func_node, code: bytes) -> tuple[str, int] | None:
+    """(first sentence, line) of a function/class docstring, or None.
+
+    A docstring is the first STATEMENT of the body: tree-sitter parses leading comments
+    (shebangs, license headers) as siblings, and Python's docstring rule skips past
+    them, so `comment` children are skipped rather than terminating the search.
+    """
+    body = func_node.child_by_field_name("body")
+    if body is None:
+        return None
+    for child in body.children:
+        if child.type == "comment":
+            continue
+        if child.type != "expression_statement":
+            return None
+        for sub in child.children:
+            if sub.type in ("string", "concatenated_string"):
+                raw = _node_text(sub, code)
+                text = _strip_quotes(raw)
+                # No minimum length: graphify skips docstrings <=20 chars, and copying
+                # that dropped "Do it." and "A thing." entirely (measured 2026-11-27, two
+                # tests red).  The first-sentence rule and the cap are the noise control;
+                # length is not a reason to lose the only description a symbol has.
+                if not text.strip():
+                    return None
+                return _first_sentence(text), sub.start_point[0] + 1
+        return None
+    return None
+
+
+def _add_docstring_edge(
+    builder: GraphBuilder, node, code: bytes, rel_path: str, owner_nid: str, file_source: str
+) -> None:
+    """A `documents` edge from a docstring node to the function/class it describes.
+
+    DELIBERATELY NOT called `rationale_for`, and deliberately NOT a USE edge.  graphify
+    names this relation `rationale_for`, which oversells a one-line docstring, and a name
+    promising "why" invites exactly the misreading made on 2026-11-27.  It must never
+    count toward caller coverage: documenting an uncalled function does not make it
+    called, and counting it would let documentation mask the dead code the whole
+    certification bar exists to find.
+    """
+    # The query captures the NAME identifier, not the definition: resolving the
+    # definition here is what makes the body reachable (measured 2026-11-27 — the
+    # probe passed `node.parent` and worked, the extractor passed `node` and emitted
+    # nothing at all, silently).
+    definition = node.parent if node.type in ("identifier", "word") else node
+    if definition is None:
+        return
+    found = _docstring_of(definition, code)
+    if not found:
+        return
+    sentence, line = found
+    if not sentence:
+        return
+    doc_id = _symbol_id("docstring", "python", f"{rel_path}:{line}:{sentence[:40]}")
+    builder.add_node(
+        {
+            "id": doc_id,
+            "label": sentence,
+            "type": "docstring",
+            "language": "python",
+            "source": "ast",
+            "file": rel_path,
+            "confidence": ConfidenceLevel.EXTRACTED,
+            "sources": [file_source],
+        }
+    )
+    builder.add_edge(
+        {
+            "source": doc_id,
+            "target": owner_nid,
+            "label": "documents",
+            "confidence": ConfidenceLevel.EXTRACTED,
+            "sources": [file_source],
+        }
+    )
+
+
 def _registration_decorator(node, code: bytes) -> str:
     """The decorator that registers this function, or "" when none does.
 
@@ -594,6 +697,7 @@ def _extract_python_defs(
                     "sources": [file_source],
                 }
             )
+            _add_docstring_edge(builder, node, code, rel_path, nid, file_source)
             # DECORATOR REGISTRATION. `@mcp.tool()` (and `@app.route`, `@celery.task`,
             # `@pytest.fixture`, …) registers the function BY NAME into a runtime table,
             # so nothing in the source ever names it.  Measured 2026-11-26: investigator's
@@ -643,6 +747,7 @@ def _extract_python_defs(
                     "sources": [file_source],
                 }
             )
+            _add_docstring_edge(builder, node, code, rel_path, nid, file_source)
 
     for query_key in ("import", "import_from"):
         for node, tag in _query_captures(lang, PYTHON_QUERIES[query_key], root_node):
