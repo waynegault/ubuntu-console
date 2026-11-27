@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 62
+#   v62 (2026-11-27): ORDER in __llm_stand_down_cuda_lanes is now selftest, then the
+#     foreign-owner probe, then the TAC_TEST_TMPDIR guard.  v61 put the sandbox guard before
+#     the probe, which made "a foreign owner's card is never evicted" UNREACHABLE — that case
+#     runs under TAC_TEST_TMPDIR, so it was routed to the test branch before the lock was
+#     ever read, and a guard protecting another run's card went untested.  The probe is
+#     safety-neutral (it only decides whether to REFUSE), so it may run in a sandbox; what
+#     must stay ahead of one is the stand-down itself.  The case that needs the test branch
+#     now pins the probe instead of depending on live lock state.
 # Module Version: 61
 #   v61 (2026-11-27): __llm_stand_down_cuda_lanes checks the SELFTEST / TAC_TEST_TMPDIR guard
 #     BEFORE the foreign-owner probe.  With a GPU lock held on the box the probe answered
@@ -901,15 +910,22 @@ function __llm_stand_down_cuda_lanes() {
     then
         warn "[lanes] selftest — not standing any lane down"
         return 0
-    elif [[ -n "${TAC_TEST_TMPDIR:-}" && "${TAC_ALLOW_TEST_STANDDOWN:-0}" != "1" ]]
-    then
-        declare -F warn >/dev/null 2>&1 \
-            && warn "[lanes] test environment — not standing any lane down"
-        return 0
     fi
+    # The foreign-owner probe is SAFETY-NEUTRAL — it only decides whether to refuse — so it
+    # is reachable inside a test sandbox.  Ordering it after the test-environment guard made
+    # "a foreign owner's card is never evicted" unreachable (measured 2026-11-27: the case
+    # runs under TAC_TEST_TMPDIR and was routed to the test branch before the lock was ever
+    # read, so a guard protecting another run's card went untested).  What must stay ahead
+    # of a sandbox is the STAND-DOWN ITSELF, which is the next branch.
     if __llm_gpu_foreign_owner
     then
         warn "[lanes] card owned by another run (pid $(__llm_gpu_lock_holder)) — leaving the lanes alone"
+        return 0
+    fi
+    if [[ -n "${TAC_TEST_TMPDIR:-}" && "${TAC_ALLOW_TEST_STANDDOWN:-0}" != "1" ]]
+    then
+        declare -F warn >/dev/null 2>&1 \
+            && warn "[lanes] test environment — not standing any lane down"
         return 0
     fi
     local _unit _port _pid _waited _smi _mib _keep _cpid

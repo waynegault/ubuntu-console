@@ -292,6 +292,14 @@ EOF
     # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
 
+    # PIN the foreign-owner probe to "no because I own it", so this case asks a question
+    # about the CODE.  It reads the live GPU lock, and with a lock held on the box the
+    # stand-down correctly refuses for that reason first and never reaches the test-env
+    # branch — measured 2026-11-27, the case then failed on a box whose only difference was
+    # a live lock.  The lock path has its own cases in 12-gpu-exclusivity.bats; pinning here
+    # is the same rule as pinning a keep-list in a census case.
+    __llm_gpu_foreign_owner() { return 1; }
+
     AUTOTUNE_SELFTEST=0 TAC_TEST_TMPDIR="$SANDBOX" run __llm_kill_cuda_llama_servers
     [ "$status" -eq 0 ]
     [[ "$output" == *"test environment"* ]]
