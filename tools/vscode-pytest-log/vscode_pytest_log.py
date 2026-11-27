@@ -105,11 +105,37 @@ def _write(path: pathlib.Path, payload: dict) -> None:
     below, so a broken logger cannot look like a working one.
     """
     try:
-        from tools.fsutil import atomic_write_text
+        atomic_write_text = _atomic_write_text()
 
         atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=False))
     except (OSError, TypeError, ValueError, ImportError) as exc:
         _report_failure(f"cannot write {path}: {exc!r}")
+
+
+def _atomic_write_text():
+    """The repo's atomic writer, resolved from THIS file rather than `from tools.fsutil import ...`.
+
+    WHY (measured 2026-11-27). This module is loaded through the sys.path entry
+    `~/.local/lib/vscode-pytest-log` (a symlink into this repo), so it runs inside a pytest process
+    whose cwd is another repository entirely -- `~/.openclaw` -- where no `tools` package is on the
+    path. The local import then failed on EVERY write:
+
+        Error[vscode-pytest-log]: cannot write ~/.cache/vscode-pytest/<project>/<stamp>.json:
+        ModuleNotFoundError("No module named 'tools.fsutil'")
+
+    which is the reporter failing to report on a run whose tests were fine. `tools/fsutil.py` sits
+    one directory up from this file, so it is loaded by path: the module stops depending on the
+    caller's sys.path and behaves the same from a pytest run, a cron job or an interactive import.
+    """
+    import importlib.util as _ilu
+
+    fsutil = pathlib.Path(__file__).resolve().parent.parent / "fsutil.py"
+    spec = _ilu.spec_from_file_location("_vscode_pytest_log_fsutil", fsutil)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"no loader for {fsutil}")
+    module = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.atomic_write_text
 
 
 def _report_failure(what: str) -> None:
