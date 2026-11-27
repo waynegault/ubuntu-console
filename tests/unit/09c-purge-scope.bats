@@ -335,9 +335,18 @@ stub_timeout() {
 
 @test "gate: a fee-free promote body that says ok:false counts as a FAILED promote" {
     # Last night counted 14 exit codes of 0 while every body carried a secrets failure.
+    #
+    # THE CASE WAS GREEN BY ACCIDENT UNTIL v57 (measured 2026-11-26 23:58Z). It did not call
+    # stub_timeout, so `timeout -k 10 300 openclaw ...` ran the REAL CLI, which refused on
+    # admission; the pre-v57 early probe returned 1, `promote_all` returned 1, and the test
+    # read `status=1` -- the right answer for the wrong reason, and it never once reached the
+    # ok:false body this test exists to judge. Moving the probe inside the window removed the
+    # accidental refusal and the coincidence collapsed. The stub is now installed so the case
+    # tests what it says it tests.
     export TAC_TEST_TMPDIR
     source "$REPO_ROOT/scripts/09c-oc-core.sh"
     __tac_info() { :; }
+    stub_timeout
     __oc_purge_offline_window() { "$@"; }        # pretend the stop/start worked
     __oc_purge_promote_possible() { return 0; }  # pretend admission is possible
     openclaw() {

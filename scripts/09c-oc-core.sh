@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 56
+# Module Version: 57
 #   v55 (2026-11-26): classify ten swallow sites v54 left unclassified. The §18.3 gate read
 #       10 against a baseline of 8 and refused the push. Four of the ten already carried a
 #       `# swallow-ok:` line — but above the FIRST line of a two-line construct, while the
@@ -1061,16 +1061,33 @@ function __oc_purge_memory_promote_all() {
         return 0
     }
 
-    # ASK WHETHER PROMOTE CAN BE ADMITTED AT ALL before opening the window on a guess.
-    if ! __oc_purge_promote_possible "${_agents[0]}"
-    then
-        __tac_info "Memory" \
-            "[promote DID NOT RUN - memory.cli is offline-only, its secret cannot resolve" \
-            " offline; MEMORY.md unchanged]" "$C_Error"
-        return 1
-    fi
+    # ASK INSIDE THE WINDOW, NOT BEFORE IT (D9, measured 2026-11-26 23:54Z).
+    # The probe asks `memory promote`, which is REFUSED by admission while any Gateway serves.
+    # Called here -- before __oc_purge_offline_window stops it -- the probe therefore read
+    # "requires exclusive offline state ownership" on EVERY well-formed run and returned 1, so
+    # the window was never opened and promote never ran.  The function's own header says it is
+    # "called from INSIDE the offline window"; the call site contradicted it.  A probe that
+    # can only ever see the precondition it is about to satisfy is not a probe.
+    # So the window opens FIRST, and the admission question is asked where its answer means
+    # something: inside, a refusal can only be the secret failing to resolve locally.
+    _oc_promote_pass_with_probe() {
+        if ! __oc_purge_promote_possible "${_agents[0]}"
+        then
+            __tac_info "Memory" \
+                "[promote DID NOT RUN - memory.cli is offline-only and its secret did not resolve" \
+                " locally inside the window; MEMORY.md unchanged]" "$C_Error"
+            return 1
+        fi
+        # THE STATUS MUST BE RETURNED EXPLICITLY. A bare `_oc_promote_pass` as the last
+        # command returns its status, but this function has arm above it that can return 1 --
+        # and bats test 23 measured status 0 where 1 was required once the indirection was
+        # added, i.e. the gate's verdict stopped travelling. Name it.
+        local _prc=0
+        _oc_promote_pass || _prc=$?
+        return $_prc
+    }
 
-    __oc_purge_offline_window _oc_promote_pass
+    __oc_purge_offline_window _oc_promote_pass_with_probe
     local _rc=$?
     if (( _rc != 0 ))
     then
