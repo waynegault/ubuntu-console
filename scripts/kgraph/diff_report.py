@@ -117,7 +117,7 @@ def format_report(r: DiffReport) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> tuple[int, str]:
     ap = argparse.ArgumentParser(description="Structural diff between two kgraph snapshots")
     ap.add_argument("--before", type=Path, required=True, help="graph JSON, or a kgraph sqlite store")
     ap.add_argument("--after", type=Path, required=True, help="graph JSON, or a kgraph sqlite store")
@@ -127,16 +127,25 @@ def main(argv: list[str] | None = None) -> int:
         help="exit 1 when a function that had a caller in --before has none in --after",
     )
     args = ap.parse_args(argv)
-    report = diff(args.before, args.after)
-    print(format_report(report))
-    if args.fail_on_orphan and report.has_orphaning:
-        print(
-            f"\nFAIL — {len(report.lost_last_caller)} function(s) lost their last caller",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    return diff_text(args.before, args.after, args.fail_on_orphan)
+
+
+def diff_text(before: Path, after: Path, fail_on_orphan: bool = False) -> tuple[int, str]:
+    """(exit code, report text) — pure data, no printing.
+
+    The library rule (tests/test_kgraph_package.py) allows `print` only in `cli.py` or
+    inside a `__main__` block, so this module returns text and the entry point prints it.
+    Measured 2026-11-27: printing here was the only red in a 3,614-case run.
+    """
+    report = diff(before, after)
+    text = format_report(report)
+    if fail_on_orphan and report.has_orphaning:
+        text += f"\nFAIL — {len(report.lost_last_caller)} function(s) lost their last caller"
+        return 1, text
+    return 0, text
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc, _text = main()
+    print(_text)
+    sys.exit(_rc)
